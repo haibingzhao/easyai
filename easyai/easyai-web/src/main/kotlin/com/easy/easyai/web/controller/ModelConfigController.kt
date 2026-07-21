@@ -20,6 +20,23 @@ class ModelConfigController(
     private val modelConfigService: ModelConfigService
 ) {
 
+    companion object {
+        private fun maskApiKey(apiKey: String?): String? {
+            if (apiKey.isNullOrBlank()) return null
+            if (apiKey.length <= 8) return "****"
+            return apiKey.take(4) + "****" + apiKey.takeLast(4)
+        }
+
+        private fun ModelConfigGroup.masked(): ModelConfigGroup = copy(
+            apiKey = maskApiKey(apiKey),
+            models = models.map { it.masked() }
+        )
+
+        private fun ModelProviderConfig.masked(): ModelProviderConfig = copy(
+            apiKey = maskApiKey(apiKey)
+        )
+    }
+
     @GetMapping("/model-providers")
     fun getAvailableProviders(): Mono<List<ModelProviderInfo>> =
         mono {
@@ -48,15 +65,15 @@ class ModelConfigController(
     fun getUserConfigurations(): Mono<List<ModelProviderConfig>> =
         mono {
             val userId = getCurrentUserId()
-            modelConfigService.getUserConfigurations(userId)
+            modelConfigService.getUserConfigurations(userId).map { it.masked() }
         }
 
     @GetMapping("/model-configs/{id}")
     fun getUserConfiguration(@PathVariable id: String): Mono<ModelProviderConfig> =
         mono {
             val userId = getCurrentUserId()
-            modelConfigService.getUserConfiguration(id, userId)
-                ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Configuration not found: $id")
+            (modelConfigService.getUserConfiguration(id, userId)
+                ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Configuration not found: $id")).masked()
         }
 
     @PostMapping("/model-configs")
@@ -64,7 +81,7 @@ class ModelConfigController(
     fun saveUserConfiguration(@RequestBody request: SaveModelProviderConfigRequest): Mono<ModelProviderConfig> =
         mono {
             val userId = getCurrentUserId()
-            modelConfigService.saveUserConfiguration(request, userId)
+            modelConfigService.saveUserConfiguration(request, userId).masked()
         }
 
     @DeleteMapping("/model-configs/{id}")
@@ -84,7 +101,7 @@ class ModelConfigController(
     fun getGroups(): Mono<List<ModelConfigGroup>> =
         mono {
             val userId = getCurrentUserId()
-            modelConfigService.getGroups(userId)
+            modelConfigService.getGroups(userId).map { it.masked() }
         }
 
     @PostMapping("/model-groups")
@@ -92,14 +109,14 @@ class ModelConfigController(
     fun saveGroup(@RequestBody request: SaveModelConfigGroupRequest): Mono<ModelConfigGroup> =
         mono {
             val userId = getCurrentUserId()
-            modelConfigService.saveGroup(request, userId)
+            modelConfigService.saveGroup(request, userId).masked()
         }
 
     @PutMapping("/model-groups/{id}")
     fun updateGroup(@PathVariable id: String, @RequestBody request: SaveModelConfigGroupRequest): Mono<ModelConfigGroup> =
         mono {
             val userId = getCurrentUserId()
-            modelConfigService.updateGroup(id, request, userId)
+            modelConfigService.updateGroup(id, request, userId).masked()
         }
 
     @DeleteMapping("/model-groups/{id}")

@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { i18n } from '../../utils/i18n';
 import { modelConfigService } from '@/services/model-config-service';
-import { ChevronRight, ChevronDown } from 'lucide-react';
+import { ChevronRight, ChevronDown, Trash2 } from 'lucide-react';
 import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, Protocol, SaveModelProviderConfigRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
 
 interface InlineAddModelFormProps {
@@ -277,7 +277,16 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
 
         {/* ─── Model Settings (Per-model) ──────────────────────────────────── */}
         <fieldset className="rounded-md border border-border p-4 space-y-3">
-          <legend className="text-xs font-medium text-muted-foreground px-1">{i18n('Model Settings')}</legend>
+          <legend className="text-xs font-medium text-muted-foreground px-1 flex items-center gap-2">
+            {i18n('Model Settings')}
+            <button
+              onClick={resetModelFields}
+              title={i18n('Clear model settings')}
+              className="text-muted-foreground hover:text-red-500 transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </legend>
 
           <div>
             <label className="text-sm font-medium mb-1 block">{i18n('Configuration Name')}</label>

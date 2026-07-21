@@ -146,6 +146,10 @@ class R2dbcModelConfigGroupStore(
     override suspend fun updateGroupConnection(id: String, request: SaveModelConfigGroupRequest, userId: String): ModelConfigGroup {
         val now = System.currentTimeMillis()
 
+        // Resolve effective apiKey: null means "keep existing"
+        val existingGroup = getGroup(id, userId)
+        val effectiveApiKey = request.apiKey ?: existingGroup?.apiKey
+
         suspendTransaction(db) {
             // Update the group row
             Tables.ModelConfigGroupTable.update(
@@ -155,7 +159,7 @@ class R2dbcModelConfigGroupStore(
                 it[protocol] = request.protocol.name
                 it[isCustom] = request.isCustom
                 it[baseUrl] = request.baseUrl
-                it[apiKey] = request.apiKey
+                it[apiKey] = effectiveApiKey
                 it[timeoutSeconds] = request.timeoutSeconds
                 it[updatedAt] = now
             }
@@ -167,7 +171,7 @@ class R2dbcModelConfigGroupStore(
                 it[protocol] = request.protocol.name
                 it[isCustom] = request.isCustom
                 it[baseUrl] = request.baseUrl
-                it[apiKey] = request.apiKey
+                it[apiKey] = effectiveApiKey
                 it[timeoutSeconds] = request.timeoutSeconds
                 it[updatedAt] = now
             }

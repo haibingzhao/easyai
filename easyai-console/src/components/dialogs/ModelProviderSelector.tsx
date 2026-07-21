@@ -3,7 +3,7 @@ import { i18n } from '../../utils/i18n';
 import { modelConfigService } from '@/services/model-config-service';
 import { Box, Pencil, Trash2, ChevronRight, ChevronDown, Plus, FolderOpen, FolderX } from 'lucide-react';
 import { InlineAddModelForm } from '@/components/models/InlineAddModelForm';
-import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, ModelConfigGroup, Protocol, SaveModelProviderConfigRequest, SaveModelConfigGroupRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
+import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, ModelConfigGroup, SaveModelProviderConfigRequest, SaveModelConfigGroupRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
 
 interface ModelProviderSelectorProps {
   activeConfigId?: string;
@@ -262,7 +262,6 @@ export const ModelProviderSelector = forwardRef<ModelProviderSelectorRef, ModelP
         {editDialog.open && editDialog.config && (
           <EditModelDialog
             config={editDialog.config}
-            availableProviders={availableProviders}
             onSave={async (request) => {
               const savedConfig = await handleSaveFromForm(request);
               setEditDialog({ open: false });
@@ -374,7 +373,7 @@ interface EditGroupDialogProps {
 
 const EditGroupDialog: React.FC<EditGroupDialogProps> = ({ group, onSave, onClose }) => {
   const [name, setName] = useState(group.name);
-  const [apiKey, setApiKey] = useState(group.apiKey || '');
+  const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState(group.baseUrl || '');
   const [loading, setLoading] = useState(false);
 
@@ -434,6 +433,7 @@ const EditGroupDialog: React.FC<EditGroupDialogProps> = ({ group, onSave, onClos
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
+              placeholder={group.apiKey ? i18n('Leave blank to keep current key') : i18n('Enter API Key')}
               className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
             />
           </div>
@@ -465,21 +465,19 @@ const EditGroupDialog: React.FC<EditGroupDialogProps> = ({ group, onSave, onClos
 
 interface EditModelDialogProps {
   config: ModelProviderConfig;
-  availableProviders: ModelProviderInfo[];
   onSave: (request: SaveModelProviderConfigRequest) => Promise<ModelProviderConfig>;
   onClose: () => void;
 }
 
-const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, availableProviders, onSave, onClose }) => {
+const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClose }) => {
+  const hasGroup = !!config.groupId;
+
   const [configName, setConfigName] = useState(config.name);
-  const [selectedProtocol, setSelectedProtocol] = useState<Protocol>(config.protocol);
-  const [isCustomProvider, setIsCustomProvider] = useState(config.isCustom);
-  const [selectedProviderId, setSelectedProviderId] = useState(config.isCustom ? '' : config.modelId);
-  const [apiKey, setApiKey] = useState(config.apiKey || '');
-  const [baseUrl, setBaseUrl] = useState(config.baseUrl || '');
   const [selectedModelId, setSelectedModelId] = useState(config.isCustomModel ? '' : config.modelId);
   const [isCustomModel, setIsCustomModel] = useState(config.isCustomModel);
-  const [customModelName, setCustomModelName] = useState(config.isCustomModel ? config.modelName || '' : '');
+  const [customModelName, setCustomModelName] = useState(
+    (config.isCustomModel || config.isCustom) ? (config.modelName || config.modelId || '') : ''
+  );
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -506,23 +504,20 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, availableProv
     }
   }, []);
 
-  const handleProviderChange = (providerId: string, isCustom: boolean) => {
-    setSelectedProviderId(providerId);
-    setIsCustomProvider(isCustom);
-    if (!isCustom && providerId) {
-      loadModels(providerId);
-    }
-  };
-
   const handleSave = async () => {
     if (!configName.trim()) {
       alert(i18n('Please enter configuration name'));
       return;
     }
+    if ((isCustomModel || config.isCustom) && !customModelName.trim()) {
+      alert(i18n('Please enter Model Name'));
+      return;
+    }
 
-    const modelId = isCustomModel ? customModelName.trim() : selectedModelId;
+    const useCustomName = isCustomModel || config.isCustom;
+    const modelId = useCustomName ? customModelName.trim() : selectedModelId;
     let modelName: string | undefined;
-    if (isCustomModel) {
+    if (useCustomName) {
       modelName = customModelName.trim();
     } else if (selectedModelId) {
       const model = availableModels.find(m => m.id === selectedModelId);
@@ -532,10 +527,10 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, availableProv
     const request: SaveModelProviderConfigRequest = {
       id: config.id,
       name: configName.trim(),
-      protocol: selectedProtocol,
-      isCustom: isCustomProvider,
-      baseUrl: isCustomProvider ? baseUrl.trim() : undefined,
-      apiKey: apiKey.trim(),
+      protocol: config.protocol,
+      isCustom: config.isCustom,
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
       modelId,
       modelName,
       isCustomModel,
@@ -556,17 +551,22 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, availableProv
     }
   };
 
-  const filteredProviders = availableProviders.filter(p => p.protocol === selectedProtocol);
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="bg-card rounded-lg border border-border shadow-lg w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <div className="px-6 py-4 border-b border-border">
           <h2 className="text-lg font-semibold">{i18n('Edit Configuration')}</h2>
+          {hasGroup && (
+            <p className="text-xs text-muted-foreground mt-1">
+              {i18n('Connection settings are managed by the group. Edit the group to change protocol, provider, or API key.')}
+            </p>
+          )}
         </div>
         <div className="px-6 py-4 space-y-4">
           <div>
-            <label className="text-sm font-medium mb-1 block">{i18n('Configuration Name')}</label>
+            <label className="text-sm font-medium mb-1 block">
+              {i18n('Configuration Name')} <span className="text-red-500">*</span>
+            </label>
             <input
               type="text"
               value={configName}
@@ -576,82 +576,7 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, availableProv
             />
           </div>
 
-          <div>
-            <label className="text-sm font-medium mb-1 block">{i18n('Protocol')}</label>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setSelectedProtocol('OPENAI')}
-                className={`flex-1 px-3 py-2 text-sm rounded-md border transition-colors ${
-                  selectedProtocol === 'OPENAI'
-                    ? 'bg-primary text-primary-foreground border-primary'
-                    : 'border-input hover:bg-muted'
-                }`}
-              >
-                OpenAI
-              </button>
-              <button
-                onClick={() => setSelectedProtocol('ANTHROPIC')}
-                className={`flex-1 px-3 py-2 text-sm rounded-md border transition-colors ${
-                  selectedProtocol === 'ANTHROPIC'
-                    ? 'bg-primary text-primary-foreground border-primary'
-                    : 'border-input hover:bg-muted'
-                }`}
-              >
-                Anthropic
-              </button>
-            </div>
-          </div>
-
-          {selectedProtocol && (
-            <div>
-              <label className="text-sm font-medium mb-1 block">{i18n('Model Provider')}</label>
-              <select
-                value={isCustomProvider ? 'custom' : selectedProviderId}
-                onChange={(e) => {
-                  if (e.target.value === 'custom') {
-                    handleProviderChange('', true);
-                  } else {
-                    handleProviderChange(e.target.value, false);
-                  }
-                }}
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
-              >
-                <option value="" disabled hidden>{i18n('Select Provider')}</option>
-                {filteredProviders.filter(p => !p.isCustom).map(provider => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.name}
-                  </option>
-                ))}
-                <option value="custom">{i18n('Custom Provider')}</option>
-              </select>
-            </div>
-          )}
-
-          {isCustomProvider && (
-            <div>
-              <label className="text-sm font-medium mb-1 block">{i18n('Base URL')}</label>
-              <input
-                type="text"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder={i18n('Enter Base URL')}
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
-              />
-            </div>
-          )}
-
-          <div>
-            <label className="text-sm font-medium mb-1 block">{i18n('API Key')}</label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={i18n('Enter API Key')}
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
-            />
-          </div>
-
-          {(!isCustomProvider && selectedProviderId) && (
+          {(!config.isCustom && config.modelId) && (
             <div>
               <label className="text-sm font-medium mb-1 block">{i18n('Select Model')}</label>
               <select
@@ -679,9 +604,11 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, availableProv
             </div>
           )}
 
-          {isCustomModel && (
+          {(isCustomModel || config.isCustom) && (
             <div>
-              <label className="text-sm font-medium mb-1 block">{i18n('Model Name')}</label>
+              <label className="text-sm font-medium mb-1 block">
+                {i18n('Model Name')} <span className="text-red-500">*</span>
+              </label>
               <input
                 type="text"
                 value={customModelName}
