@@ -1,0 +1,347 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-background: oklch(1 0 0);
+  --color-foreground: oklch(0.145 0 0);
+  --color-card: oklch(1 0 0);
+  --color-card-foreground: oklch(0.145 0 0);
+  --color-popover: oklch(1 0 0);
+  --color-popover-foreground: oklch(0.145 0 0);
+  --color-primary: oklch(0.205 0 0);
+  --color-primary-foreground: oklch(0.985 0 0);
+  --color-secondary: oklch(0.97 0 0);
+  --color-secondary-foreground: oklch(0.205 0 0);
+  --color-muted: oklch(0.967 0.001 286.375);
+  --color-muted-foreground: oklch(0.551 0.016 285.938);
+  --color-accent: oklch(0.97 0 0);
+  --color-accent-foreground: oklch(0.205 0 0);
+  --color-destructive: oklch(0.577 0.245 27.325);
+  --color-destructive-foreground: oklch(0.577 0.245 27.325);
+  --color-border: oklch(0.922 0 0);
+  --color-input: oklch(0.922 0 0);
+  --color-ring: oklch(0.708 0 0);
+  --color-chart-1: oklch(0.646 0.222 41.116);
+  --color-chart-2: oklch(0.6 0.118 184.704);
+  --color-chart-3: oklch(0.398 0.07 227.392);
+  --color-chart-4: oklch(0.828 0.189 84.429);
+  --color-chart-5: oklch(0.769 0.188 70.08);
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+}
+
+.dark {
+  --color-background: oklch(0.145 0 0);
+  --color-foreground: oklch(0.985 0 0);
+  --color-card: oklch(0.145 0 0);
+  --color-card-foreground: oklch(0.985 0 0);
+  --color-popover: oklch(0.145 0 0);
+  --color-popover-foreground: oklch(0.985 0 0);
+  --color-primary: oklch(0.985 0 0);
+  --color-primary-foreground: oklch(0.205 0 0);
+  --color-secondary: oklch(0.269 0 0);
+  --color-secondary-foreground: oklch(0.985 0 0);
+  --color-muted: oklch(0.269 0 0);
+  --color-muted-foreground: oklch(0.708 0 0);
+  --color-accent: oklch(0.269 0 0);
+  --color-accent-foreground: oklch(0.985 0 0);
+  --color-destructive: oklch(0.396 0.141 25.723);
+  --color-destructive-foreground: oklch(0.637 0.237 25.331);
+  --color-border: oklch(0.269 0 0);
+  --color-input: oklch(0.269 0 0);
+  --color-ring: oklch(0.556 0 0);
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Markdown table styling */
+.prose table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+}
+
+.prose th,
+.prose td {
+  border: 1px solid var(--color-border);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+
+.prose th {
+  background-color: var(--color-muted);
+  font-weight: 600;
+}
+
+.prose tr:hover {
+  background-color: var(--color-muted);
+}
+
+/* Markdown list styling */
+.prose ul {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+  margin: 0.5rem 0;
+}
+
+.prose ol {
+  list-style-type: decimal;
+  padding-left: 1.5rem;
+  margin: 0.5rem 0;
+}
+
+.prose li {
+  margin: 0.25rem 0;
+  line-height: 1.6;
+}
+
+.prose li::marker {
+  color: var(--color-foreground);
+}
+
+/* Markdown heading styling */
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--color-foreground);
+}
+
+.prose h1 { font-size: 1.875rem; }
+.prose h2 { font-size: 1.5rem; }
+.prose h3 { font-size: 1.25rem; }
+.prose h4 { font-size: 1.125rem; }
+.prose h5 { font-size: 1rem; }
+.prose h6 { font-size: 0.875rem; }
+
+/* Markdown inline code styling */
+.prose code {
+  background-color: var(--color-muted);
+  color: var(--color-foreground);
+  padding: 0.2em 0.4em;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  border: 1px solid var(--color-border);
+}
+
+.prose pre {
+  background-color: var(--color-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+
+.prose pre code {
+  background-color: transparent;
+  border: none;
+  padding: 0;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+/* ===== App Layout ===== */
+.app-layout {
+  transition: grid-template-columns 0.2s ease;
+}
+
+/* Disable transitions during drag resize */
+.app-layout.resizing,
+.app-layout.resizing .app-sidebar,
+.app-layout.resizing .right-panel,
+.resizing .right-panel,
+.resizing .app-sidebar {
+  transition: none !important;
+}
+
+/* Resize drag handle */
+.resize-handle {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.resize-handle:hover,
+.resize-handle.active {
+  background: var(--color-primary);
+}
+
+/* Sidebar collapse/expand transition */
+.app-sidebar {
+  transition: width 0.2s ease;
+  overflow: hidden;
+}
+
+/* Mobile sidebar overlay */
+@media (max-width: 800px) {
+  .app-layout {
+    grid-template-columns: 1fr !important;
+    grid-template-areas: "topbar" "main" !important;
+  }
+  .app-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 50;
+    width: 220px !important;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+  }
+  .app-sidebar.open {
+    transform: translateX(0);
+  }
+  .app-sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 49;
+    background: rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* Prevent body scroll when sidebar is open on mobile */
+body.sidebar-open {
+  overflow: hidden;
+}
+
+/* Right panel transition */
+.right-panel {
+  transition: width 0.2s ease;
+  overflow: hidden;
+}
+
+/* ===== MessageEditor (contenteditable) ===== */
+
+/* Placeholder for empty contenteditable editor */
+.message-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-muted-foreground);
+  pointer-events: none;
+}
+
+/* Command chip (inline, non-editable) */
+.command-chip {
+  display: inline;
+  background-color: oklch(0.55 0.2 250 / 0.15);
+  color: oklch(0.55 0.2 250);
+  padding: 0.1em 0.4em;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+  font-weight: 500;
+  user-select: none;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.dark .command-chip {
+  background-color: oklch(0.7 0.15 250 / 0.2);
+  color: oklch(0.75 0.15 250);
+}
+
+/* Mention chip (file/folder reference, inline non-editable) */
+.mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  padding: 0.1em 0.5em;
+  border-radius: 0.375rem;
+  font-size: 0.8125em;
+  font-weight: 500;
+  user-select: none;
+  cursor: default;
+  white-space: nowrap;
+  vertical-align: baseline;
+  line-height: 1.4;
+}
+
+.mention-chip.mention-file {
+  background-color: oklch(0.55 0.18 240 / 0.12);
+  color: oklch(0.55 0.18 240);
+}
+
+.mention-chip.mention-folder {
+  background-color: oklch(0.55 0.15 80 / 0.12);
+  color: oklch(0.55 0.15 80);
+}
+
+.dark .mention-chip.mention-file {
+  background-color: oklch(0.7 0.12 240 / 0.18);
+  color: oklch(0.75 0.12 240);
+}
+
+.dark .mention-chip.mention-folder {
+  background-color: oklch(0.7 0.12 80 / 0.18);
+  color: oklch(0.75 0.12 80);
+}
+
+/* ===== Calc 工具代码高亮 ===== */
+
+.calc-code-highlight .line {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-all;
+  min-height: 1.4em;
+}
+
+/* ===== SubAgentPanel 工具卡片修复 ===== */
+
+/* 1. 强制卡片 header padding（修复高度坍塞） */
+.subagent-content .p-3 {
+  padding: 0.75rem !important;
+}
+
+/* 2. 强制卡片背景色与父容器形成对比，设置最小高度防止坍缩 */
+.subagent-content .bg-card {
+  background-color: var(--color-muted) !important;
+  min-height: 2.5rem !important;
+}
+
+/* 3. hover 状态适配 */
+.subagent-content .hover\:bg-muted\/50:hover {
+  background-color: oklch(0.32 0 0 / 0.5) !important;
+}
+
+/* Indeterminate progress bar animation for delete operations */
+@keyframes indeterminate {
+  0% {
+    transform: translateX(-100%);
+    width: 40%;
+  }
+  50% {
+    width: 60%;
+  }
+  100% {
+    transform: translateX(250%);
+    width: 40%;
+  }
+}

@@ -1,0 +1,7 @@
+node_modules/
+dist-electron/
+# electron-builder output (dmg/nsis/AppImage)
+dist/
+# Backend artifacts placed here by scripts/build-backend.sh and scripts/fetch-jre.sh
+backend/
+*.log

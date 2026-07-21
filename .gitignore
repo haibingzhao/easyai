@@ -1,0 +1,43 @@
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# AI tool directories
+.easyai/
+.qoder/
+.kilo/
+.sisyphus/
+.trae/
+.qwen/
+.playwright-mcp/
+.claude/
+
+# Internal docs (not for open-source)
+.doc/
+
+# Environment secrets
+.env
+
+# Build outputs
+target/
+dist/
+dist-electron/
+node_modules/
+.flattened-pom.xml
+
+# Desktop build artifacts
+easyai-desktop/backend/jre/
+easyai-desktop/backend/*.jar
+easyai-desktop/backend/db/
+
+# Logs
+logs/
+
+# OS files
+.DS_Store
+
+# Secret files
+*.pem
+*.key
+*.p12

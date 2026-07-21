@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.easy</groupId>
+        <artifactId>easyai-autoconfigure</artifactId>
+        <version>${revision}</version>
+    </parent>
+    <artifactId>easyai-swarm-autoconfigure</artifactId>
+    <packaging>jar</packaging>
+    <name>EasyAI Swarm Autoconfigure</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-swarm</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-repository</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-core-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+</project>

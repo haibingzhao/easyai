@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.easy</groupId>
+        <artifactId>easyai</artifactId>
+        <version>${revision}</version>
+    </parent>
+
+    <artifactId>easyai-web</artifactId>
+    <name>EasyAI Web</name>
+    <description>WebFlux-based SSE web module for web client integration with EasyAI agents</description>
+
+    <dependencies>
+        <!-- Core EasyAI dependencies -->
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-tools</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-agent-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-snapshot</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-skills</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-auth</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-swarm</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-swarm-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-r2dbc-autoconfigure</artifactId>
+        </dependency>
+
+        <!-- Spring WebFlux for reactive SSE support -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+
+        <!-- Netty macOS DNS native resolver (Apple Silicon) -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-resolver-dns-native-macos</artifactId>
+            <classifier>osx-aarch_64</classifier>
+        </dependency>
+
+        <!-- Spring Security Reactive for JWT filter + CORS -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.jetbrains.kotlinx</groupId>
+            <artifactId>kotlinx-coroutines-reactor</artifactId>
+        </dependency>
+
+        <!-- Reactor Kotlin extensions -->
+        <dependency>
+            <groupId>io.projectreactor.kotlin</groupId>
+            <artifactId>reactor-kotlin-extensions</artifactId>
+        </dependency>
+
+        <!-- Configuration processor -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

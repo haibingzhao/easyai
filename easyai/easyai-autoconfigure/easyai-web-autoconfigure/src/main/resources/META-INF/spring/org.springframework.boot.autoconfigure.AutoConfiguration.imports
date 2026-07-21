@@ -1,0 +1,2 @@
+com.easy.easyai.autoconfigure.web.WebAutoConfiguration
+com.easy.easyai.autoconfigure.web.SetupModeAutoConfiguration

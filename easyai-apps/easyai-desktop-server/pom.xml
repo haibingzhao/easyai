@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.easy</groupId>
+        <artifactId>easyai-apps</artifactId>
+        <version>${revision}</version>
+    </parent>
+    <artifactId>easyai-desktop-server</artifactId>
+    <packaging>jar</packaging>
+    <name>EasyAI Desktop Server</name>
+    <description>Self-contained backend for the EasyAI desktop client: serves the console UI
+        from classpath:/static and defaults to an embedded H2 file database.
+        Observability/OTel dependencies are intentionally excluded for a clean,
+        credential-free distribution artifact.</description>
+
+    <properties>
+        <kotlin.version>2.3.10</kotlin.version>
+        <!-- Frontend build output injected into the jar as static resources -->
+        <console.dist.dir>${project.basedir}/../../easyai-console/dist</console.dist.dir>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-web-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-r2dbc-autoconfigure</artifactId>
+        </dependency>
+        <!-- Ensure WebFlux is used instead of Spring MVC -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-openai-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-anthropic-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-compaction-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-anthropic</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-stdlib-jdk8</artifactId>
+            <version>${kotlin.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+              Inject the easyai-console build output (npm run build in easyai-console/)
+              into the jar as classpath:/static so the backend serves the frontend
+              same-origin. Run `npm run build` in easyai-console before packaging,
+              or use easyai-desktop/scripts/build-backend.sh which handles the order.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>${maven-resources-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>copy-console-dist</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}/static</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${console.dist.dir}</directory>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <version>${spring-boot.version}</version>
+                <configuration>
+                    <mainClass>com.easy.easyai.desktop.DesktopServerApplicationKt</mainClass>
+                    <skip>false</skip>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>repackage</id>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

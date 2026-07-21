@@ -1,0 +1,232 @@
+{
+  "properties": [
+    {
+      "name": "easyai.memory.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the memory system (MemoryStore, memory tools, MemoryFlushAgent) is enabled.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": false
+    },
+    {
+      "name": "easyai.memory.global-dir",
+      "type": "java.lang.String",
+      "description": "Root directory for global memories. Supports ~ for home directory.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": "~/.easyai/memory"
+    },
+    {
+      "name": "easyai.memory.project-dir",
+      "type": "java.lang.String",
+      "description": "Root directory for project-scoped memories (relative to workDir).",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": ".easyai/memory"
+    },
+    {
+      "name": "easyai.skills.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the skill system is enabled.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": true
+    },
+    {
+      "name": "easyai.skills.paths",
+      "type": "java.util.List<java.lang.String>",
+      "description": "Explicit skill file paths to load.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": []
+    },
+    {
+      "name": "easyai.skills.home-skill-dirs",
+      "type": "java.util.List<java.lang.String>",
+      "description": "Directories under workDir to scan for skills.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": [".agents/skills", ".easyai/skills"]
+    },
+    {
+      "name": "easyai.skills.inject-into-system-prompt",
+      "type": "java.lang.Boolean",
+      "description": "Whether to inject skill descriptions into the system prompt.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": true
+    },
+    {
+      "name": "easyai.skills.system-prompt-format",
+      "type": "com.easy.easyai.skills.SkillPromptFormat",
+      "description": "Format for skill descriptions in system prompt (CONCISE or FULL).",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": "CONCISE"
+    },
+    {
+      "name": "easyai.system.otel.resource.attributes",
+      "type": "java.lang.String",
+      "description": "OpenTelemetry resource attributes (e.g., service.name, service.version). These will be registered as System Properties for OTEL SDK.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor"
+    },
+    {
+      "name": "easyai.system.otel.exporter.otlp.protocol",
+      "type": "java.lang.String",
+      "description": "OpenTelemetry OTLP exporter protocol (http/protobuf or grpc). Registered as System Property: otel.exporter.otlp.protocol.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor",
+      "defaultValue": "http/protobuf"
+    },
+    {
+      "name": "easyai.system.otel.exporter.otlp.endpoint",
+      "type": "java.lang.String",
+      "description": "OpenTelemetry OTLP exporter endpoint URL. Registered as System Property: otel.exporter.otlp.endpoint.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor"
+    },
+    {
+      "name": "easyai.system.otel.exporter.otlp.traces.endpoint",
+      "type": "java.lang.String",
+      "description": "OpenTelemetry OTLP traces endpoint URL. Registered as System Property: otel.exporter.otlp.traces.endpoint.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor"
+    },
+    {
+      "name": "easyai.system.otel.exporter.otlp.metrics.endpoint",
+      "type": "java.lang.String",
+      "description": "OpenTelemetry OTLP metrics endpoint URL. Registered as System Property: otel.exporter.otlp.metrics.endpoint.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor"
+    },
+    {
+      "name": "easyai.system.otel.exporter.otlp.headers",
+      "type": "java.lang.String",
+      "description": "OpenTelemetry OTLP exporter headers (comma-separated key=value pairs). Registered as System Property: otel.exporter.otlp.headers.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor"
+    },
+    {
+      "name": "easyai.system.logging.level",
+      "type": "java.lang.String",
+      "description": "Application logging level (TRACE, DEBUG, INFO, WARN, ERROR). Registered as System Property: logging.level.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor",
+      "defaultValue": "INFO"
+    },
+    {
+      "name": "easyai.system.logging.format",
+      "type": "java.lang.String",
+      "description": "Logging output format (text or json). Registered as System Property: logging.format.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor",
+      "defaultValue": "text"
+    },
+    {
+      "name": "easyai.system.logging.file.path",
+      "type": "java.lang.String",
+      "description": "Log file path. Registered as System Property: logging.file.path.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor"
+    },
+    {
+      "name": "easyai.system.app.name",
+      "type": "java.lang.String",
+      "description": "Application name. Registered as System Property: app.name.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor"
+    },
+    {
+      "name": "easyai.system.app.version",
+      "type": "java.lang.String",
+      "description": "Application version. Registered as System Property: app.version.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor"
+    },
+    {
+      "name": "easyai.system.db.pool.size",
+      "type": "java.lang.String",
+      "description": "Database connection pool size. Registered as System Property: db.pool.size.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor"
+    },
+    {
+      "name": "easyai.system.db.pool.max-lifetime",
+      "type": "java.lang.String",
+      "description": "Database connection pool max lifetime in milliseconds. Registered as System Property: db.pool.max-lifetime.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor"
+    },
+    {
+      "name": "easyai.system.db.connection.timeout",
+      "type": "java.lang.String",
+      "description": "Database connection timeout in milliseconds. Registered as System Property: db.connection.timeout.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor"
+    },
+    {
+      "name": "easyai.system.EXA_API_KEY",
+      "type": "java.lang.String",
+      "description": "Exa search API key. Enables the Exa web search provider for WebSearchTool. Obtain from https://exa.ai.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor"
+    },
+    {
+      "name": "easyai.system.PARALLEL_API_KEY",
+      "type": "java.lang.String",
+      "description": "Parallel search API key. Enables the Parallel web search provider for WebSearchTool. Obtain from https://parallel.ai.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor"
+    },
+    {
+      "name": "easyai.system.EASYAI_WEBSEARCH_PROVIDER",
+      "type": "java.lang.String",
+      "description": "Default web search provider for WebSearchTool. Selects which provider to use when multiple are available.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor",
+      "defaultValue": "exa"
+    }
+  ],
+  "hints": [
+    {
+      "name": "easyai.system.otel.exporter.otlp.protocol",
+      "values": [
+        {
+          "value": "http/protobuf",
+          "description": "Use HTTP with Protocol Buffers encoding."
+        },
+        {
+          "value": "grpc",
+          "description": "Use gRPC protocol."
+        }
+      ]
+    },
+    {
+      "name": "easyai.system.logging.level",
+      "values": [
+        {
+          "value": "TRACE",
+          "description": "Finest-grained informational events."
+        },
+        {
+          "value": "DEBUG",
+          "description": "Fine-grained informational events."
+        },
+        {
+          "value": "INFO",
+          "description": "Informational messages highlighting progress."
+        },
+        {
+          "value": "WARN",
+          "description": "Potentially harmful situations."
+        },
+        {
+          "value": "ERROR",
+          "description": "Error events that might still allow the application to continue running."
+        }
+      ]
+    },
+    {
+      "name": "easyai.system.logging.format",
+      "values": [
+        {
+          "value": "text",
+          "description": "Plain text log format."
+        },
+        {
+          "value": "json",
+          "description": "JSON structured log format."
+        }
+      ]
+    },
+    {
+      "name": "easyai.system.EASYAI_WEBSEARCH_PROVIDER",
+      "values": [
+        {
+          "value": "exa",
+          "description": "Use Exa search provider (requires EXA_API_KEY)."
+        },
+        {
+          "value": "parallel",
+          "description": "Use Parallel search provider (requires PARALLEL_API_KEY)."
+        }
+      ]
+    }
+  ]
+}

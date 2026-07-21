@@ -1,0 +1,3 @@
+com.easy.easyai.autoconfigure.observability.config.OpenTelemetrySdkAutoConfiguration
+com.easy.easyai.autoconfigure.observability.config.MicrometerTracingAutoConfiguration
+com.easy.easyai.autoconfigure.observability.config.ObservabilityAutoConfiguration

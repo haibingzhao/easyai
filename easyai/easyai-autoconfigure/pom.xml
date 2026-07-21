@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.easy</groupId>
+        <artifactId>easyai</artifactId>
+        <version>${revision}</version>
+    </parent>
+    <artifactId>easyai-autoconfigure</artifactId>
+    <packaging>pom</packaging>
+    <name>EasyAI Autoconfigure</name>
+
+    <modules>
+        <module>easyai-core-autoconfigure</module>
+        <module>easyai-web-autoconfigure</module>
+        <module>easyai-observability-autoconfigure</module>
+        <module>easyai-openai-autoconfigure</module>
+        <module>easyai-anthropic-autoconfigure</module>
+        <module>easyai-r2dbc-autoconfigure</module>
+        <module>easyai-compaction-autoconfigure</module>
+        <module>easyai-swarm-autoconfigure</module>
+    </modules>
+</project>

@@ -1,0 +1,96 @@
+package com.easy.easyai.common.core.model
+
+/**
+ * Core criteria for similarity searching
+ */
+interface SimilarityCutoff {
+    /**
+     * Threshold for similarity search. 0 means include all results.
+     */
+    val similarityThreshold: ZeroToOne
+
+    /**
+     * Number of results to include
+     */
+    val topK: Int
+}
+
+interface SimilaritySearchRequest : SimilarityCutoff
+
+/**
+ * Search for results similar to a text query
+ */
+interface TextSimilaritySearchRequest : SimilaritySearchRequest {
+    /**
+     * Query text to search for
+     */
+    val query: String
+
+    companion object {
+
+        operator fun invoke(
+            query: String,
+            similarityThreshold: ZeroToOne,
+            topK: Int,
+        ): TextSimilaritySearchRequest {
+            return SimpleTextSimilaritySearchRequest(
+                query = query,
+                similarityThreshold = similarityThreshold,
+                topK = topK,
+            )
+        }
+
+        @JvmStatic
+        fun create(
+            query: String,
+            similarityThreshold: ZeroToOne,
+            topK: Int,
+        ): TextSimilaritySearchRequest {
+            return SimpleTextSimilaritySearchRequest(
+                query = query,
+                similarityThreshold = similarityThreshold,
+                topK = topK,
+            )
+        }
+    }
+}
+
+private data class SimpleTextSimilaritySearchRequest(
+    override val query: String,
+    override val similarityThreshold: ZeroToOne,
+    override val topK: Int,
+) : TextSimilaritySearchRequest
+
+/**
+ * Result from a similarity search
+ */
+interface SimilarityResult<M> {
+    /**
+     * Match
+     */
+    val match: M
+
+    /**
+     * Similarity score
+     */
+    val score: ZeroToOne
+
+    companion object {
+
+        operator fun <M> invoke(match: M, score: ZeroToOne): SimilarityResult<M> {
+            return SimpleSimilaritySearchResult(match, score)
+        }
+
+        @JvmStatic
+        fun <M> create(match: M, score: ZeroToOne): SimilarityResult<M> {
+            return SimpleSimilaritySearchResult(match, score)
+        }
+    }
+}
+
+data class SimpleSimilaritySearchResult<M>(
+    override val match: M,
+    override val score: ZeroToOne,
+) : SimilarityResult<M>
+
+interface SimilaritySearchResults<M> : SearchResults<SimilaritySearchRequest, SimilarityResult<M>>

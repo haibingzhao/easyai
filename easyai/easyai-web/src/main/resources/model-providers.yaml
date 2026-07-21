@@ -1,0 +1,48 @@
+- id: openai
+  name: OpenAI
+  protocol: OPENAI
+  isCustom: false
+  description: "OpenAI provides GPT series models"
+  models:
+    - id: gpt-4o
+      name: GPT-4o
+      description: "Most capable model for complex tasks"
+    - id: gpt-4o-mini
+      name: GPT-4o Mini
+      description: "Affordable and efficient small model"
+    - id: gpt-5.2
+      name: GPT-5.2
+      description: "Latest GPT model"
+    - id: gpt-5.2-codex
+      name: GPT-5.2 Codex
+      description: "Specialized for coding tasks"
+    - id: o3
+      name: o3
+      description: "Reasoning model"
+    - id: custom
+      name: Custom Model
+      isCustom: true
+      description: "Enter custom model name"
+
+- id: anthropic
+  name: Anthropic
+  protocol: ANTHROPIC
+  isCustom: false
+  description: "Anthropic provides Claude series models"
+  models:
+    - id: claude-sonnet-4-20250514
+      name: Claude Sonnet 4
+      description: "Fast and capable model"
+    - id: claude-opus-4-20250514
+      name: Claude Opus 4
+      description: "Most powerful Claude model"
+    - id: claude-3-5-sonnet-20241022
+      name: Claude 3.5 Sonnet
+      description: "Previous generation sonnet"
+    - id: claude-3-7-sonnet-20250219
+      name: Claude 3.7 Sonnet
+      description: "Latest sonnet model"
+    - id: custom
+      name: Custom Model
+      isCustom: true
+      description: "Enter custom model name"

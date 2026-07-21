@@ -1,0 +1,247 @@
+package com.easy.easyai.autoconfigure.core
+
+import com.easy.easyai.api.config.ChatModelFactory
+import com.easy.easyai.common.textio.template.JinjavaTemplateRenderer
+import com.easy.easyai.common.textio.template.TemplateRenderer
+import com.easy.easyai.core.agent.*
+import com.easy.easyai.core.command.AsyncUserCommandStore
+import com.easy.easyai.core.memory.MemoryStore
+import com.easy.easyai.core.message.DefaultMessageConverter
+import com.easy.easyai.core.message.MessageConverter
+import com.easy.easyai.core.permission.PermissionService
+import com.easy.easyai.core.prompt.DefaultProviderPromptLoader
+import com.easy.easyai.core.prompt.PromptTemplateService
+import com.easy.easyai.core.prompt.ProviderPromptLoader
+import com.easy.easyai.core.prompt.SystemPromptBuilder
+import com.easy.easyai.core.tool.DefaultToolExecutionEngine
+import com.easy.easyai.core.tool.ToolBuilder
+import com.easy.easyai.core.tool.ToolExecutionEngine
+import com.easy.easyai.core.tool.ToolFactory
+import com.easy.easyai.core.validation.InputSchemaValidator
+import com.easy.easyai.core.validation.OutputSchemaCompletionCheck
+import com.easy.easyai.core.validation.OutputSchemaValidator
+import com.easy.easyai.skills.*
+import com.easy.easyai.skills.a2a.AgentSkillFactory
+import com.easy.easyai.skills.a2a.DefaultAgentSkillFactory
+import com.easy.easyai.skills.command.*
+import com.easy.easyai.tools.SpringToolFactory
+import io.micrometer.observation.ObservationRegistry
+import org.springframework.ai.chat.model.ChatModel
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Value
+import org.springframework.boot.autoconfigure.AutoConfiguration
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
+import org.springframework.boot.context.properties.EnableConfigurationProperties
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.ComponentScan
+import org.springframework.context.annotation.Lazy
+import java.nio.file.Path
+
+@AutoConfiguration
+@ComponentScan(basePackages = ["com.easy.easyai.core", "com.easy.easyai.agent", "com.easy.easyai.tools", "com.easy.easyai.skills", "com.easy.easyai.repository"])
+@EnableConfigurationProperties(EasyAiProperties::class)
+open class EasyAiCoreAutoConfiguration {
+
+    @Bean
+    @ConditionalOnMissingBean
+    open fun messageConverter(): MessageConverter = DefaultMessageConverter()
+
+    @Bean
+    @ConditionalOnMissingBean
+    open fun toolExecutionEngine(properties: EasyAiProperties): ToolExecutionEngine =
+        DefaultToolExecutionEngine()
+
+    @Bean
+    @ConditionalOnMissingBean
+    open fun toolFactory(builders: List<ToolBuilder>): ToolFactory = SpringToolFactory(builders)
+
+    // ========== Memory Beans ==========
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "easyai.memory", name = ["enabled"], havingValue = "true", matchIfMissing = false)
+    open fun memoryStore(properties: EasyAiProperties): MemoryStore {
+        val homeDir = System.getProperty("user.home")
+            ?: throw IllegalStateException("user.home system property is not available")
+        val globalDir = properties.memory.globalDir.replaceFirst("~", homeDir)
+        val projectDir = properties.memory.projectDir
+        val store = MemoryStore.fileBased(
+            globalRoot = Path.of(globalDir),
+            projectDir = projectDir
+        )
+        return store
+    }
+
+    // ========== Agent System Prompt Beans ==========
+
+    @Bean
+    @ConditionalOnMissingBean
+    open fun providerPromptLoader(): ProviderPromptLoader = DefaultProviderPromptLoader()
+
+    @Bean
+    @ConditionalOnMissingBean
+    open fun systemPromptBuilder(loader: ProviderPromptLoader): SystemPromptBuilder =
+        SystemPromptBuilder(loader)
+
+    @Bean
+    @ConditionalOnMissingBean
+    open fun templateRenderer(): TemplateRenderer = JinjavaTemplateRenderer()
+
+    @Bean
+    @ConditionalOnMissingBean
+    open fun promptTemplateService(
+        renderer: TemplateRenderer,
+        systemPromptBuilder: SystemPromptBuilder
+    ): PromptTemplateService = PromptTemplateService(renderer, systemPromptBuilder)
+
+
+    // ========== Skill Beans ==========
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "easyai.skills", name = ["enabled"], havingValue = "true", matchIfMissing = true)
+    open fun skillDiscovery(): SkillDiscovery = DefaultSkillDiscovery()
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "easyai.skills", name = ["enabled"], havingValue = "true", matchIfMissing = true)
+    open fun skillRegistry(discovery: SkillDiscovery, properties: EasyAiProperties): SkillRegistry {
+        val config = SkillConfig(
+            enabled = properties.skills.enabled,
+            paths = properties.skills.paths,
+            homeSkillDirs = properties.skills.homeSkillDirs,
+            injectIntoSystemPrompt = properties.skills.injectIntoSystemPrompt,
+            systemPromptFormat = properties.skills.systemPromptFormat,
+            workDir = properties.workDir,
+        )
+        return DefaultSkillRegistry(discovery, config)
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "easyai.skills", name = ["enabled"], havingValue = "true", matchIfMissing = true)
+    open fun agentSkillFactory(): AgentSkillFactory = DefaultAgentSkillFactory()
+
+    // ========== Validation Beans ==========
+
+    @Bean
+    @ConditionalOnMissingBean
+    open fun outputSchemaValidator(): OutputSchemaValidator = OutputSchemaValidator()
+
+    @Bean
+    @ConditionalOnMissingBean
+    open fun inputSchemaValidator(): InputSchemaValidator = InputSchemaValidator()
+
+    @Bean
+    @ConditionalOnMissingBean
+    open fun outputSchemaCompletionCheck(validator: OutputSchemaValidator): OutputSchemaCompletionCheck =
+        OutputSchemaCompletionCheck(validator)
+
+    // ========== Command Beans ==========
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "easyai.commands", name = ["enabled"], havingValue = "true", matchIfMissing = true)
+    open fun commandRegistry(
+        @Autowired(required = false) skillRegistry: SkillRegistry? = null,
+        @Autowired(required = false) promptProvider: McpPromptProvider? = null,
+        @Autowired(required = false) builtinHandlers: List<BuiltinCommandHandler> = emptyList(),
+    ): CommandRegistry {
+        return DefaultCommandRegistry(skillRegistry, promptProvider, builtinHandlers)
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "easyai.commands", name = ["enabled"], havingValue = "true", matchIfMissing = true)
+    open fun commandService(
+        commandRegistry: CommandRegistry,
+        @Autowired(required = false) promptProvider: McpPromptProvider? = null,
+        @Autowired(required = false) userCommandStore: AsyncUserCommandStore? = null,
+        @Autowired(required = false) builtinHandlers: List<BuiltinCommandHandler> = emptyList(),
+    ): CommandService = CommandService(commandRegistry, promptProvider, userCommandStore, builtinHandlers)
+
+    @Bean
+    @ConditionalOnMissingBean(AgentService::class)
+    open fun agentService(
+        chatModelFactories: List<ChatModelFactory>,
+        chatModel: ChatModel,
+        messageConverter: MessageConverter,
+        toolExecutionEngine: ToolExecutionEngine,
+        promptTemplateService: PromptTemplateService,
+        transformContextService: TransformContextService?,
+        @Lazy toolFactory: ToolFactory,
+        properties: EasyAiProperties,
+        @Autowired(required = false)
+        memoryStore: MemoryStore? = null,
+        @Autowired(required = false)
+        permissionService: PermissionService? = null,
+        @Autowired(required = false)
+        eventListeners: List<AgentEventListener>? = emptyList(),
+        @Autowired(required = false)
+        completionChecks: List<AgentCompletionCheck>? = emptyList(),
+        @Autowired(required = false)
+        observationRegistry: ObservationRegistry? = null,
+        @Autowired(required = false)
+        outputSchemaValidator: OutputSchemaValidator? = null,
+        @Autowired(required = false)
+        waitForUserListener: WaitForUserListener? = null,
+        @Value("\${easyai.observability.enabled:true}")
+        observabilityEnabled: Boolean = true
+    ): AgentService {
+        val registry = if (observabilityEnabled) (observationRegistry ?: ObservationRegistry.NOOP) else ObservationRegistry.NOOP
+        return DefaultAgentService(
+            chatModelFactories = chatModelFactories,
+            messageConverter = messageConverter,
+            toolExecutor = toolExecutionEngine,
+            promptTemplateService = promptTemplateService,
+            defaultChatModel = chatModel,
+            transformContextService = transformContextService ?: DefaultTransformContextService(),
+            permissionService = permissionService,
+            toolFactory = toolFactory,
+            eventListeners = eventListeners ?: emptyList(),
+            completionChecks = completionChecks ?: emptyList(),
+            observationRegistry = registry,
+            memoryStore = memoryStore,
+            waitForUserListener = waitForUserListener,
+            outputSchemaValidator = outputSchemaValidator
+        )
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(Agent::class)
+    open fun agent(
+        agentService: AgentService,
+        properties: EasyAiProperties,
+        skillRegistry: SkillRegistry?,
+        toolFactory: ToolFactory
+    ): Agent {
+        val context = AgentContext(
+            agentId = "default-agent",
+            projectPath = Path.of(properties.workDir)
+        )
+        // All tools (including SkillTool) are created uniformly via ToolBuilder pattern
+        val allTools = toolFactory.createTools(context, agentService)
+
+        // Build skills data for prompt rendering (not pre-built into a string)
+        val skillsData = if (properties.skills.injectIntoSystemPrompt && skillRegistry != null) {
+            skillRegistry.all()
+                .filter { !it.description.isNullOrBlank() }
+                .map { mapOf<String, Any?>("name" to it.name, "description" to it.description) }
+        } else {
+            emptyList()
+        }
+
+        return Agent(
+            context = AgentContext(
+                agentId = "default-agent",
+                customInstructions = properties.systemPrompt,
+                skills = skillsData,
+                tools = allTools,
+                maxIterations = properties.maxIterations,
+                maxRetries = properties.maxRetries
+            ),
+            services = agentService
+        )
+    }
+}

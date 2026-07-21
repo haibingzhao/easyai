@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+  <title>EasyAI</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #0d1522;
+      --text: #e3ebf5;
+      --dim: #7e8ca1;
+      --faint: #4d5b72;
+      --amber: #ffb04a;
+      --teal: #46c8b2;
+      --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+      --display: "Avenir Next", "Segoe UI Variable Display", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 46px 54px 34px;
+      font-family: var(--display);
+      color: var(--text);
+      background:
+        radial-gradient(900px 480px at 88% -12%, rgba(255, 176, 74, 0.11), transparent 62%),
+        radial-gradient(820px 460px at -8% 108%, rgba(70, 200, 178, 0.10), transparent 58%),
+        var(--ink);
+      overflow: hidden;
+      -webkit-app-region: drag;
+      user-select: none;
+    }
+    /* Layered ambient: fine engineering grid + a slow drifting scan band */
+    .ambient {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+      background-size: 44px 44px;
+      mask-image: radial-gradient(120% 90% at 50% 40%, #000 30%, transparent 100%);
+    }
+    .ambient::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 140px;
+      background: linear-gradient(180deg, transparent, rgba(120, 190, 255, 0.045), transparent);
+      animation: scan 9s linear infinite;
+    }
+    @keyframes scan {
+      from { top: -20%; }
+      to { top: 110%; }
+    }
+
+    /* ---- Brand ---- */
+    .brand { animation: drop 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      letter-spacing: 0.32em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+    .led {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--amber);
+      box-shadow: 0 0 10px rgba(255, 176, 74, 0.8);
+      animation: pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.45; transform: scale(0.82); }
+    }
+    .wordmark {
+      margin-top: 14px;
+      font-size: 54px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1;
+    }
+    .wordmark .accent {
+      color: var(--amber);
+      text-shadow: 0 0 26px rgba(255, 176, 74, 0.35);
+    }
+    .rule {
+      margin-top: 18px;
+      height: 2px;
+      width: 64px;
+      background: linear-gradient(90deg, var(--amber), transparent);
+      animation: grow 0.9s 0.25s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    }
+    @keyframes grow { from { width: 0; opacity: 0; } to { width: 64px; opacity: 1; } }
+
+    /* ---- Boot log ---- */
+    .bootlog {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      gap: 7px;
+      margin: 26px 0 22px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.5;
+      overflow: hidden;
+      animation: fade 0.6s 0.35s ease both;
+    }
+    .line {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      color: var(--dim);
+      transition: color 0.25s ease, opacity 0.25s ease;
+    }
+    .line .tick { width: 12px; flex: none; }
+    .line.done .tick { color: var(--teal); }
+    .line.done { opacity: 0.55; }
+    .line.active { color: var(--text); }
+    .line.active .tick { color: var(--amber); }
+    .cursor {
+      display: inline-block;
+      width: 7px;
+      height: 13px;
+      margin-left: 2px;
+      background: var(--amber);
+      transform: translateY(2px);
+      animation: blink 0.9s steps(1) infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* ---- Progress rail ---- */
+    .rail { animation: fade 0.6s 0.5s ease both; }
+    .track {
+      position: relative;
+      height: 3px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.07);
+      overflow: hidden;
+    }
+    .sweep {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 34%;
+      border-radius: 2px;
+      background: linear-gradient(90deg, transparent, var(--amber) 55%, var(--teal));
+      animation: sweep 1.7s cubic-bezier(0.45, 0.05, 0.35, 0.95) infinite;
+    }
+    @keyframes sweep {
+      from { left: -36%; }
+      to { left: 102%; }
+    }
+    .meta {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 12px;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      letter-spacing: 0.08em;
+      color: var(--faint);
+    }
+
+    @keyframes drop { from { opacity: 0; transform: translateY(-14px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+  </style>
+</head>
+<body>
+  <div class="ambient"></div>
+
+  <header class="brand">
+    <div class="eyebrow"><span class="led"></span>EasyAI · Embedded Runtime</div>
+    <h1 class="wordmark">Easy<span class="accent">AI</span></h1>
+    <div class="rule"></div>
+  </header>
+
+  <section class="bootlog" id="bootlog"></section>
+
+  <footer class="rail">
+    <div class="track"><div class="sweep"></div></div>
+    <div class="meta">
+      <span>booting local backend</span>
+      <span>jvm 21 · 127.0.0.1 · first launch may take a minute</span>
+    </div>
+  </footer>
+
+  <script>
+    const log = document.getElementById('bootlog');
+    let current = null;
+
+    const baseOf = (msg) => msg.replace(/\s*\(\d+s\)\s*$/, '');
+
+    function addLine(msg) {
+      // Repeated "waiting… (Ns)" ticks update the active line in place.
+      if (current && current.dataset.base === baseOf(msg)) {
+        current.querySelector('.text').textContent = msg;
+        return;
+      }
+      if (current) {
+        current.classList.remove('active');
+        current.classList.add('done');
+        current.querySelector('.tick').textContent = '\u2713';
+        const cursor = current.querySelector('.cursor');
+        if (cursor) cursor.remove();
+      }
+      const line = document.createElement('div');
+      line.className = 'line active';
+      line.dataset.base = baseOf(msg);
+
+      const tick = document.createElement('span');
+      tick.className = 'tick';
+      tick.textContent = '\u25B8';
+      const text = document.createElement('span');
+      text.className = 'text';
+      text.textContent = msg;
+      const cursor = document.createElement('span');
+      cursor.className = 'cursor';
+
+      line.append(tick, text, cursor);
+      log.appendChild(line);
+      current = line;
+
+      while (log.children.length > 6) {
+        log.removeChild(log.firstChild);
+      }
+    }
+
+    addLine('Preparing workspace\u2026');
+
+    if (window.easyaiDesktop && window.easyaiDesktop.onStatus) {
+      window.easyaiDesktop.onStatus((s) => {
+        if (s && typeof s.message === 'string' && s.phase !== 'error') {
+          addLine(s.message);
+        }
+      });
+    }
+  </script>
+</body>
+</html>

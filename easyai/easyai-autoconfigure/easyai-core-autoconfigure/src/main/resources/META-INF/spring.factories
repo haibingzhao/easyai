@@ -1,0 +1,2 @@
+# Environment Post Processors
+org.springframework.boot.EnvironmentPostProcessor=com.easy.easyai.autoconfigure.core.EasyAiSystemPropertyEnvironmentPostProcessor

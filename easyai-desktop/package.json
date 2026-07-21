@@ -1,0 +1,64 @@
+{
+  "name": "easyai-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "EasyAI desktop client: Electron shell with an embedded JVM backend (Spring Boot fat jar + bundled JRE)",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "build:main": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --outdir=dist-electron --external:electron --external:electron-updater",
+    "typecheck": "tsc -b",
+    "desktop:dev": "npm run build:main && electron .",
+    "desktop:build": "bash scripts/build-backend.sh && bash scripts/fetch-jre.sh --if-missing && npm run build:main && electron-builder"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "build": {
+    "appId": "com.easy.easyai-desktop",
+    "productName": "EasyAI",
+    "files": [
+      {
+        "from": "dist-electron",
+        "to": "dist-electron"
+      },
+      {
+        "from": "electron",
+        "to": "electron",
+        "filter": [
+          "**/*.html"
+        ]
+      },
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend/jre",
+        "to": "backend/jre"
+      },
+      {
+        "from": "backend/easyai-desktop-server.jar",
+        "to": "backend/easyai-desktop-server.jar"
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}

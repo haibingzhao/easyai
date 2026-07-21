@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.easy</groupId>
+        <artifactId>easyai</artifactId>
+        <version>${revision}</version>
+    </parent>
+    <artifactId>easyai-swarm</artifactId>
+    <packaging>jar</packaging>
+    <name>EasyAI Swarm</name>
+    <description>Multi-agent swarm orchestration with DAG scheduling and deliberation groups</description>
+
+    <dependencies>
+        <!-- EasyAI Core (for AgentContext, AgentRunner, AgentService, BaseToolDefinition, etc.) -->
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-core</artifactId>
+        </dependency>
+
+        <!-- EasyAI API (for ModelProviderConfig) -->
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-api</artifactId>
+        </dependency>
+
+        <!-- EasyAI Common TextIO -->
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-common-textio</artifactId>
+        </dependency>
+
+        <!-- Jackson YAML for swarm preset parsing -->
+        <dependency>
+            <groupId>tools.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>tools.jackson.module</groupId>
+            <artifactId>jackson-module-kotlin</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
+        </dependency>
+
+        <!-- Test dependencies -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.module</groupId>
+            <artifactId>jackson-module-kotlin</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlinx</groupId>
+            <artifactId>kotlinx-coroutines-test</artifactId>
+            <version>1.11.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.mockk</groupId>
+            <artifactId>mockk</artifactId>
+            <version>1.13.16</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

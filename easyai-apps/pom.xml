@@ -1,0 +1,421 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.easy</groupId>
+    <artifactId>easyai-apps</artifactId>
+    <packaging>pom</packaging>
+    <name>EasyAI Apps</name>
+    <description>Runnable applications: web development server and desktop client backend</description>
+    <version>${revision}</version>
+
+    <properties>
+        <revision>2026.0.1-SNAPSHOT</revision>
+        <java.version>21</java.version>
+        <java.encoding>UTF-8</java.encoding>
+        <project.build.sourceEncoding>${java.encoding}</project.build.sourceEncoding>
+        <easyai-version>${revision}</easyai-version>
+        <spring-boot.version>4.1.0</spring-boot.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
+
+        <kotlin.co.version>1.11.0</kotlin.co.version>
+        <kotlin.version>2.3.10</kotlin.version>
+        <jackson.version>2.22.0</jackson.version>
+        <netty.version>4.1.132.Final</netty.version>
+        <spotbugs-maven-plugin.version>4.9.8.2</spotbugs-maven-plugin.version>
+
+        <!-- Build Plugins -->
+        <maven.compiler-plugin.version>3.14.0</maven.compiler-plugin.version>
+        <maven-install-plugin.version>3.1.4</maven-install-plugin.version>
+        <maven-resources-plugin.version>3.3.1</maven-resources-plugin.version>
+        <maven-jar-plugin.version>3.2.0</maven-jar-plugin.version>
+        <maven-surefire-plugin.version>3.1.2</maven-surefire-plugin.version>
+        <maven-dependency-plugin.version>3.8.1</maven-dependency-plugin.version>
+        <maven-enforcer-plugin.version>3.4.1</maven-enforcer-plugin.version>
+        <maven-source-plugin.version>3.3.1</maven-source-plugin.version>
+        <build-helper-maven-plugin.version>3.4.0</build-helper-maven-plugin.version>
+        <flatten-maven-plugin.version>1.7.0</flatten-maven-plugin.version>
+        <maven-deploy-plugin.version>3.1.1</maven-deploy-plugin.version>
+        <license-maven-plugin.version>2.5.0</license-maven-plugin.version>
+        <git-commit-id-plugin.version>4.9.10</git-commit-id-plugin.version>
+        <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
+        <spotless-maven-plugin.version>2.35.0</spotless-maven-plugin.version>
+        <dokka-maven-plugin.version>1.9.20</dokka-maven-plugin.version>
+
+
+        <springmockk.version>4.0.2</springmockk.version>
+    </properties>
+    <modules>
+        <module>easyai-web-server</module>
+        <module>easyai-desktop-server</module>
+    </modules>
+
+    <!-- EasyAI Common BOM -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-bom</artifactId>
+                <version>${kotlin.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.jetbrains.kotlinx</groupId>
+                <artifactId>kotlinx-coroutines-bom</artifactId>
+                <version>${kotlin.co.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- ================================================= -->
+            <!-- Spring框架 -->
+            <!-- ================================================= -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- easyai-common modules -->
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-common-core</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-common-util</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-common-textio</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <!-- Netty Version Upgrades - Security Vulnerability Fixes -->
+            <!--
+              Force safe netty versions to fix multiple CVEs:
+              https://github.com/advisories/GHSA-w9fj-cfpg-grvv
+              https://github.com/advisories/GHSA-pwqr-wmgm-9rr8
+              Added to common parent to override all transitive netty dependencies across all modules.
+            -->
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>${netty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- easyai依赖 -->
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-core</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-tools</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-core-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-starter</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-web-server</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-desktop-server</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <!-- easyai-observability -->
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-observability</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <!-- easyai-web -->
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-web</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <!-- easyai-web-autoconfigure -->
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-web-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-r2dbc-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <!-- easyai-observability-autoconfigure -->
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-observability-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-openai-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-compaction-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-anthropic-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Kotlin 依赖 -->
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-stdlib-jdk8</artifactId>
+            <version>${kotlin.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>tools.jackson.module</groupId>
+            <artifactId>jackson-module-kotlin</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlinx</groupId>
+            <artifactId>kotlinx-coroutines-core</artifactId>
+        </dependency>
+        <!-- Unit and Integration Testing -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+        https://mvnrepository.com/artifact/org.jetbrains/annotations
+        For Experimental annotation
+        -->
+        <dependency>
+            <groupId>org.jetbrains</groupId>
+            <artifactId>annotations</artifactId>
+            <version>26.0.2</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Consider kotlin-test-junit5 for enhanced JUnit 5 integration (test discovery, parameterized tests) -->
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-test</artifactId>
+            <version>${kotlin.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.ninja-squad</groupId>
+            <artifactId>springmockk</artifactId>
+            <version>${springmockk.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                    <version>${spring-boot.version}</version>
+                    <configuration>
+                        <skip>true</skip>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.jetbrains.kotlin</groupId>
+                    <artifactId>kotlin-maven-plugin</artifactId>
+                    <version>${kotlin.version}</version>
+                    <configuration>
+                        <jvmTarget>${java.version}</jvmTarget>
+                        <!-- Add other configurations here if necessary -->
+                        <compilerPlugins>
+                            <!-- <plugin>lombok</plugin>-->
+                            <!-- 让所有 class 都能被继承，方便 CGLib-->
+                            <plugin>spring</plugin>
+                        </compilerPlugins>
+                        <args>
+                            <!--默认开启 default Interface 方法-->
+                            <arg>-Xjvm-default=all</arg>
+                            <!--  indy 是 invokeDynamic，class 是生成匿名类-->
+                            <arg>-Xlambdas=indy</arg>
+                        </args>
+                    </configuration>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.jetbrains.kotlin</groupId>
+                            <artifactId>kotlin-maven-lombok</artifactId>
+                            <version>${kotlin.version}</version>
+                        </dependency>
+                        <dependency>
+                            <groupId>org.jetbrains.kotlin</groupId>
+                            <artifactId>kotlin-maven-allopen</artifactId>
+                            <version>${kotlin.version}</version>
+                        </dependency>
+                    </dependencies>
+                    <executions>
+                        <execution>
+                            <id>compile</id>
+                            <goals>
+                                <goal>compile</goal>
+                            </goals>
+                            <configuration>
+                                <sourceDirs>
+                                    <sourceDir>${project.basedir}/src/main/java</sourceDir>
+                                    <sourceDir>${project.basedir}/src/main/kotlin</sourceDir>
+                                </sourceDirs>
+                            </configuration>
+                        </execution>
+                        <execution>
+                            <id>test-compile</id>
+                            <goals>
+                                <goal>test-compile</goal>
+                            </goals>
+                            <configuration>
+                                <sourceDirs>
+                                    <sourceDir>${project.basedir}/src/test/java</sourceDir>
+                                    <sourceDir>${project.basedir}/src/test/kotlin</sourceDir>
+                                </sourceDirs>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <configuration>
+                        <!--
+                          Force US English locale for all test executions to ensure
+                          locale-sensitive tests produce consistent results regardless
+                          of the developer's system locale (e.g., date formatting).
+                        -->
+                        <argLine>@{argLine} -Duser.language=en -Duser.country=US</argLine>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <version>${build-helper-maven-plugin.version}</version>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>${maven-source-plugin.version}</version>
+            </plugin>
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <version>${spotbugs-maven-plugin.version}</version>
+                <configuration>
+                    <effort>Max</effort>
+                    <threshold>Medium</threshold>
+                    <xmlOutput>true</xmlOutput>
+                    <includeFilterFile>spotbugs-concurrency.xml</includeFilterFile>
+
+                    <!-- Optimized for Kotlin/Java performance -->
+                    <maxHeap>1024</maxHeap>
+                    <jvmArgs>-XX:+TieredCompilation -XX:TieredStopAtLevel=1</jvmArgs>
+
+                    <plugins>
+                        <plugin>
+                            <groupId>com.mebigfatguy.sb-contrib</groupId>
+                            <artifactId>sb-contrib</artifactId>
+                        </plugin>
+                    </plugins>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-maven-plugin</artifactId>
+                <version>${kotlin.version}</version>
+                <executions>
+                    <execution>
+                        <id>compile</id>
+                        <phase>compile</phase>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>test-compile</id>
+                        <phase>test-compile</phase>
+                        <goals>
+                            <goal>test-compile</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <jvmTarget>${java.version}</jvmTarget>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>flatten-maven-plugin</artifactId>
+                <version>${flatten-maven-plugin.version}</version>
+                <configuration>
+                    <updatePomFile>true</updatePomFile>
+                    <flattenMode>resolveCiFriendliesOnly</flattenMode>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>flatten</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>flatten</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>flatten.clean</id>
+                        <phase>clean</phase>
+                        <goals>
+                            <goal>clean</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+        </plugins>
+    </build>
+</project>
