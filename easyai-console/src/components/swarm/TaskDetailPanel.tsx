@@ -304,7 +304,6 @@ export const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       }
       update({ inputFrom: cleaned });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [localTask.dependsOn]);
 
   // Determine if prompt can be customized based on selected agent's agentContext

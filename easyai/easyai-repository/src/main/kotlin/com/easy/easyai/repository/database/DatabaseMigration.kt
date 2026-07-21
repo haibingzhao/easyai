@@ -7,8 +7,11 @@ import org.jetbrains.exposed.v1.r2dbc.transactions.suspendTransaction
 import org.slf4j.LoggerFactory
 
 /**
- * Database migration utility using Exposed R2DBC.
- * Responsible for creating/verifying database tables.
+ * Database migration utility using Exposed R2DBC SchemaUtils.
+ *
+ * Scope: H2 in-memory databases only (tests/dev — always fresh on startup).
+ * For persistent databases (H2 file, PostgreSQL), schema is managed by Flyway
+ * via [com.easy.easyai.autoconfigure.r2dbc.FlywayMigrationRunner].
  */
 class DatabaseMigration(
     private val tables: Array<Table>
@@ -40,6 +43,7 @@ class DatabaseMigration(
                 Tables.Project,
                 Tables.Session,
                 Tables.Message,
+                Tables.ModelConfigGroupTable,
                 Tables.ModelProviderConfigTable,
                 Tables.TodoTable,
                 Tables.PermissionRuleTable,

@@ -31,6 +31,7 @@
         <spotbugs-maven-plugin.version>4.9.8.2</spotbugs-maven-plugin.version>
 
         <exposed.version>1.2.0</exposed.version>
+        <flyway.version>10.21.0</flyway.version>
         <!-- Build Plugins -->
         <maven.compiler-plugin.version>3.14.0</maven.compiler-plugin.version>
         <maven-install-plugin.version>3.1.4</maven-install-plugin.version>
@@ -311,6 +312,17 @@
             <dependency>
                 <groupId>io.r2dbc</groupId>
                 <artifactId>r2dbc-h2</artifactId>
+            </dependency>
+            <!-- Flyway (versioned schema migration for persistent DBs) -->
+            <dependency>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-core</artifactId>
+                <version>${flyway.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-database-postgresql</artifactId>
+                <version>${flyway.version}</version>
             </dependency>
             <!-- Reactive -->
             <dependency>

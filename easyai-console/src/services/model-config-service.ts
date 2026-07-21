@@ -1,4 +1,4 @@
-import type { ModelProviderInfo, ModelProviderConfig, SaveModelProviderConfigRequest } from '@/types/settings';
+import type { ModelProviderInfo, ModelProviderConfig, ModelConfigGroup, SaveModelProviderConfigRequest, SaveModelConfigGroupRequest } from '@/types/settings';
 import { authFetch } from '@/services/api-client';
 
 const API_BASE = '/api/chat';
@@ -61,6 +61,61 @@ export const modelConfigService = {
     });
     if (!response.ok) {
       throw new Error(`Failed to delete configuration: ${response.statusText}`);
+    }
+  },
+
+  // ─── Model Config Groups ─────────────────────────────────────────────────────
+
+  /**
+   * Get all model config groups with their member models.
+   */
+  async getGroups(): Promise<ModelConfigGroup[]> {
+    const response = await authFetch(`${API_BASE}/model-groups`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch model groups: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  /**
+   * Create a new model config group.
+   */
+  async saveGroup(request: SaveModelConfigGroupRequest): Promise<ModelConfigGroup> {
+    const response = await authFetch(`${API_BASE}/model-groups`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to save model group: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  /**
+   * Update a group's connection settings (cascades to member configs).
+   */
+  async updateGroup(id: string, request: SaveModelConfigGroupRequest): Promise<ModelConfigGroup> {
+    const response = await authFetch(`${API_BASE}/model-groups/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to update model group: ${response.statusText}`);
+    }
+    return response.json();
+  },
+
+  /**
+   * Delete a group and all its member model configs.
+   */
+  async deleteGroup(id: string): Promise<void> {
+    const response = await authFetch(`${API_BASE}/model-groups/${id}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to delete model group: ${response.statusText}`);
     }
   },
 };

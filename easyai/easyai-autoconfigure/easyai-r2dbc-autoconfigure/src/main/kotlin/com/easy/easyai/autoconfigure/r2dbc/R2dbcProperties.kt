@@ -20,5 +20,7 @@ data class R2dbcProperties(
     var enabled: Boolean = true,
     var url: String = "r2dbc:h2:mem:///easyai;MODE=MYSQL",
     var username: String = "sa",
-    var password: String = ""
+    var password: String = "",
+    /** Enable Flyway versioned migration for persistent DBs. Set false to fall back to SchemaUtils. */
+    var flywayEnabled: Boolean = true
 )

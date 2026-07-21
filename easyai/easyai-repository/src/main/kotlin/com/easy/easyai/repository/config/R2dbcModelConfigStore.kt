@@ -36,7 +36,7 @@ class R2dbcModelConfigStore(
         return suspendTransaction(db) {
             val query = Tables.ModelProviderConfigTable
                 .selectAll()
-                .where { (Tables.ModelProviderConfigTable.id eq id) and UserScope.filterStrict(Tables.ModelProviderConfigTable.userId, userId) }
+                .where { (Tables.ModelProviderConfigTable.id eq id) and UserScope.filter(Tables.ModelProviderConfigTable.userId, userId) }
                 .limit(1)
             query.firstOrNull()?.let { row ->
                 this@R2dbcModelConfigStore.toConfig(row)
@@ -71,6 +71,7 @@ class R2dbcModelConfigStore(
                     it[options] = optionsJson
                     it[capabilities] = capabilitiesJson
                     it[timeoutSeconds] = config.timeoutSeconds
+                    it[groupId] = config.groupId
                     it[updatedAt] = now
                 }
                 logger.info("Updated model config: {}", config.id)
@@ -89,6 +90,7 @@ class R2dbcModelConfigStore(
                     it[options] = optionsJson
                     it[capabilities] = capabilitiesJson
                     it[timeoutSeconds] = config.timeoutSeconds
+                    it[groupId] = config.groupId
                     it[Tables.ModelProviderConfigTable.userId] = userId
                     it[createdAt] = now
                     it[updatedAt] = now
@@ -121,7 +123,7 @@ class R2dbcModelConfigStore(
         return suspendTransaction(db) {
             Tables.ModelProviderConfigTable
                 .selectAll()
-                .where(UserScope.filterStrict(Tables.ModelProviderConfigTable.userId, userId))
+                .where(UserScope.filter(Tables.ModelProviderConfigTable.userId, userId))
                 .map { row -> this@R2dbcModelConfigStore.toConfig(row) }
                 .toList()
         }
@@ -149,7 +151,8 @@ class R2dbcModelConfigStore(
             enabled = row[Tables.ModelProviderConfigTable.enabled],
             options = options,
             timeoutSeconds = row[Tables.ModelProviderConfigTable.timeoutSeconds],
-            capabilities = capabilities
+            capabilities = capabilities,
+            groupId = row[Tables.ModelProviderConfigTable.groupId]
         )
     }
 }

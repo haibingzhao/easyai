@@ -5,6 +5,14 @@ import org.jetbrains.exposed.v1.core.Table
 /**
  * Exposed table definitions for EasyAI storage.
  * Using Exposed 1.2.0 with v1 API.
+ *
+ * IMPORTANT: For persistent databases (H2 file, PostgreSQL), DDL is managed by
+ * Flyway migration scripts at `db/migration/V*.sql` in easyai-r2dbc-autoconfigure.
+ * This file serves as the Exposed query mapping only.
+ *
+ * Convention: When adding/modifying columns, you MUST:
+ * 1. Update this file (query mapping)
+ * 2. Create a new `V{n}__description.sql` migration script (DDL authority)
  */
 object Tables {
 
@@ -185,6 +193,25 @@ object Tables {
     }
 
     /**
+     * Model config group table for grouping model configurations with shared connection settings.
+     * A group stores protocol/baseUrl/apiKey; member configs denormalize these fields for zero-JOIN reads.
+     */
+    object ModelConfigGroupTable : Table("model_config_group") {
+        val id = varchar("id", 255)
+        val name = varchar("name", 255)
+        val protocol = varchar("protocol", 64)
+        val isCustom = bool("is_custom")
+        val baseUrl = varchar("base_url", 512).nullable()
+        val apiKey = text("api_key").nullable()
+        val timeoutSeconds = long("timeout_seconds").default(600L)
+        val userId = varchar("user_id", 255).default("system")
+        val createdAt = long("created_at")
+        val updatedAt = long("updated_at")
+
+        override val primaryKey = PrimaryKey(id)
+    }
+
+    /**
      * Model provider configuration table for user-saved and pre-defined providers.
      * isCustom=false: pre-defined provider (OpenAI, Anthropic, etc.)
      * isCustom=true: user-saved provider configuration.
@@ -203,6 +230,7 @@ object Tables {
         val options = text("options").nullable()  // JSON storage for ModelOptions
         val capabilities = text("capabilities").nullable()  // JSON storage for ModelCapabilities
         val timeoutSeconds = long("timeout_seconds").default(600L)
+        val groupId = varchar("group_id", 255).nullable()  // FK → model_config_group.id
         val userId = varchar("user_id", 255).default("system")
         val createdAt = long("created_at")
         val updatedAt = long("updated_at")

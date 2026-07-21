@@ -1,8 +1,10 @@
 package com.easy.easyai.api.config
 
+import com.easy.easyai.api.model.ModelConfigGroup
 import com.easy.easyai.api.model.ModelInfo
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo
+import com.easy.easyai.api.model.SaveModelConfigGroupRequest
 import com.easy.easyai.api.model.SaveModelProviderConfigRequest
 import java.util.UUID
 
@@ -13,7 +15,8 @@ import java.util.UUID
  * All methods are suspend functions - fully async, no runBlocking.
  */
 class DefaultModelConfigService(
-    private val configStore: ModelProviderConfigStore
+    private val configStore: ModelProviderConfigStore,
+    private val groupStore: ModelConfigGroupStore? = null
 ) : ModelConfigService {
 
     override suspend fun getAvailableProviders(userId: String): List<ModelProviderInfo> {
@@ -60,7 +63,8 @@ class DefaultModelConfigService(
             enabled = request.enabled,
             options = request.options,
             timeoutSeconds = request.timeoutSeconds,
-            capabilities = request.capabilities
+            capabilities = request.capabilities,
+            groupId = request.groupId
         )
         configStore.saveConfig(config, userId)
         return config
@@ -71,6 +75,27 @@ class DefaultModelConfigService(
             ?.takeIf { it.isCustom }
             ?.let { configStore.deleteConfig(id, userId) }
             ?: false
+    }
+
+    // ─── Group operations ────────────────────────────────────────────────────────
+
+    override suspend fun getGroups(userId: String): List<ModelConfigGroup> {
+        return groupStore?.getAllGroups(userId) ?: emptyList()
+    }
+
+    override suspend fun saveGroup(request: SaveModelConfigGroupRequest, userId: String): ModelConfigGroup {
+        val store = groupStore ?: throw UnsupportedOperationException("ModelConfigGroupStore not available")
+        return store.saveGroup(request, userId)
+    }
+
+    override suspend fun updateGroup(id: String, request: SaveModelConfigGroupRequest, userId: String): ModelConfigGroup {
+        val store = groupStore ?: throw UnsupportedOperationException("ModelConfigGroupStore not available")
+        return store.updateGroupConnection(id, request, userId)
+    }
+
+    override suspend fun deleteGroup(id: String, userId: String): Boolean {
+        val store = groupStore ?: throw UnsupportedOperationException("ModelConfigGroupStore not available")
+        return store.deleteGroup(id, userId)
     }
 
     private fun toProviderInfo(config: ModelProviderConfig): ModelProviderInfo {

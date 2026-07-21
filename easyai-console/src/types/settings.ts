@@ -58,6 +58,8 @@ export interface ModelProviderConfig {
   /** HTTP timeout in seconds for LLM API calls. Defaults to 600 (10 minutes). */
   timeoutSeconds?: number;
   capabilities?: ModelCapabilities;
+  /** Group ID this config belongs to. Null for ungrouped configs. */
+  groupId?: string;
 }
 
 export interface SaveModelProviderConfigRequest {
@@ -75,4 +77,27 @@ export interface SaveModelProviderConfigRequest {
   /** HTTP timeout in seconds for LLM API calls. Defaults to 600 (10 minutes). */
   timeoutSeconds?: number;
   capabilities?: ModelCapabilities;
+  /** Group ID to associate this config with. */
+  groupId?: string;
+}
+
+export interface ModelConfigGroup {
+  id: string;
+  name: string;
+  protocol: Protocol;
+  isCustom: boolean;
+  baseUrl?: string;
+  apiKey?: string;
+  timeoutSeconds?: number;
+  models: ModelProviderConfig[];
+}
+
+export interface SaveModelConfigGroupRequest {
+  id?: string;
+  name: string;
+  protocol: Protocol;
+  isCustom: boolean;
+  baseUrl?: string;
+  apiKey?: string;
+  timeoutSeconds?: number;
 }

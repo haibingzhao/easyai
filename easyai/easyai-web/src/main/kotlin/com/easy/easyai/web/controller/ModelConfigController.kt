@@ -1,9 +1,11 @@
 package com.easy.easyai.web.controller
 
 import com.easy.easyai.api.config.ModelConfigService
+import com.easy.easyai.api.model.ModelConfigGroup
 import com.easy.easyai.api.model.ModelInfo
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo
+import com.easy.easyai.api.model.SaveModelConfigGroupRequest
 import com.easy.easyai.api.model.SaveModelProviderConfigRequest
 import com.easy.easyai.web.security.getCurrentUserId
 import kotlinx.coroutines.reactor.mono
@@ -73,6 +75,41 @@ class ModelConfigController(
             val deleted = modelConfigService.deleteUserConfiguration(id, userId)
             if (!deleted) {
                 throw ResponseStatusException(HttpStatus.NOT_FOUND, "Configuration not found: $id")
+            }
+        }.then()
+
+    // ─── Model Config Groups ─────────────────────────────────────────────────────
+
+    @GetMapping("/model-groups")
+    fun getGroups(): Mono<List<ModelConfigGroup>> =
+        mono {
+            val userId = getCurrentUserId()
+            modelConfigService.getGroups(userId)
+        }
+
+    @PostMapping("/model-groups")
+    @ResponseStatus(HttpStatus.CREATED)
+    fun saveGroup(@RequestBody request: SaveModelConfigGroupRequest): Mono<ModelConfigGroup> =
+        mono {
+            val userId = getCurrentUserId()
+            modelConfigService.saveGroup(request, userId)
+        }
+
+    @PutMapping("/model-groups/{id}")
+    fun updateGroup(@PathVariable id: String, @RequestBody request: SaveModelConfigGroupRequest): Mono<ModelConfigGroup> =
+        mono {
+            val userId = getCurrentUserId()
+            modelConfigService.updateGroup(id, request, userId)
+        }
+
+    @DeleteMapping("/model-groups/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    fun deleteGroup(@PathVariable id: String): Mono<Void> =
+        mono {
+            val userId = getCurrentUserId()
+            val deleted = modelConfigService.deleteGroup(id, userId)
+            if (!deleted) {
+                throw ResponseStatusException(HttpStatus.NOT_FOUND, "Group not found: $id")
             }
         }.then()
 }

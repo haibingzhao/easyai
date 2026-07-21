@@ -13,22 +13,31 @@ import org.springframework.stereotype.Component
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Initializes R2DBC database connection and runs migrations asynchronously.
+ * Initializes R2DBC database connection and runs migrations.
  *
- * Database connection is created eagerly during bean initialization.
- * Migrations run asynchronously via SmartLifecycle after context is ready.
+ * For persistent databases (H2 file, PostgreSQL): Flyway runs synchronously BEFORE
+ * the R2DBC connection is established, guaranteeing schema is ready before any access.
+ * For H2 in-memory (tests/dev): SchemaUtils runs asynchronously via SmartLifecycle.
  */
 class R2dbcDatabaseInitializer(
     properties: R2dbcProperties,
-    private val migration: DatabaseMigration = DatabaseMigration.defaultTables()
+    private val migration: DatabaseMigration = DatabaseMigration.defaultTables(),
+    private val flywayRunner: FlywayMigrationRunner? = null
 ) : SmartLifecycle {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val database: R2dbcDatabase
     private val running = AtomicBoolean(false)
     private val initialized = AtomicBoolean(false)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val persistentDb: Boolean = flywayRunner?.isPersistentDb() ?: false
 
     init {
+        // Persistent DB: run Flyway migration synchronously before R2DBC connect.
+        // First run: ~100-500ms (creates tables). Subsequent: <10ms (history check only).
+        if (flywayRunner != null && persistentDb) {
+            flywayRunner.migrate()
+        }
+
         logger.info("Initializing R2DBC database at URL: {}", properties.url)
         database = R2dbcDatabase.connect(
             url = properties.url,
@@ -42,10 +51,13 @@ class R2dbcDatabaseInitializer(
 
     /**
      * Suspend function to run migrations.
+     * Only H2 in-memory uses SchemaUtils; persistent DBs are fully managed by Flyway.
      */
     private suspend fun runMigration() {
-        migration.execute(database)
-        logger.info("Database migration completed")
+        if (!persistentDb) {
+            migration.execute(database)
+            logger.info("Database migration completed (SchemaUtils)")
+        }
         initialized.set(true)
     }
 

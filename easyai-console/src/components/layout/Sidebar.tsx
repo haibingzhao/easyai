@@ -1,6 +1,6 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { MessageSquare, GitBranch, Settings, Bot, Database, Blocks, Brain, Terminal, PanelLeftClose, PanelLeft } from 'lucide-react';
+import { MessageSquare, GitBranch, Settings, Bot, Database, Blocks, Brain, Terminal, Cpu, PanelLeftClose, PanelLeft } from 'lucide-react';
 import { useChatStore } from '@/services/stores/chat-store';
 import { NAV_ITEMS } from '@/constants/navigation';
 import { useNavStore } from '@/services/stores/nav-store';
@@ -14,6 +14,7 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Terminal,
   Blocks,
   Brain,
+  Cpu,
   Database,
   Settings,
 };

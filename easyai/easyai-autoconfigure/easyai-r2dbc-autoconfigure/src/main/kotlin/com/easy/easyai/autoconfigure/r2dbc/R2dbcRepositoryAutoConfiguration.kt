@@ -1,6 +1,7 @@
 package com.easy.easyai.autoconfigure.r2dbc
 
 import com.easy.easyai.api.config.DefaultModelConfigService
+import com.easy.easyai.api.config.ModelConfigGroupStore
 import com.easy.easyai.api.config.ModelConfigService
 import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.auth.RefreshTokenStore
@@ -22,6 +23,7 @@ import com.easy.easyai.repository.agent.R2dbcAgentStore
 import com.easy.easyai.skills.command.BuiltinCommandHandler
 import com.easy.easyai.repository.auth.R2dbcRefreshTokenStore
 import com.easy.easyai.repository.command.R2dbcAsyncUserCommandStore
+import com.easy.easyai.repository.config.R2dbcModelConfigGroupStore
 import com.easy.easyai.repository.config.R2dbcModelConfigStore
 import com.easy.easyai.repository.database.DatabaseMigration
 import com.easy.easyai.repository.goal.SqlGoalStore
@@ -77,8 +79,16 @@ class R2dbcRepositoryAutoConfiguration(
     fun databaseMigration(): DatabaseMigration = DatabaseMigration.defaultTables()
 
     @Bean
-    fun r2dbcDatabaseInitializer(migration: DatabaseMigration): R2dbcDatabaseInitializer {
-        return R2dbcDatabaseInitializer(r2dbcProperties, migration)
+    fun flywayMigrationRunner(): FlywayMigrationRunner? {
+        return if (r2dbcProperties.flywayEnabled) FlywayMigrationRunner(r2dbcProperties) else null
+    }
+
+    @Bean
+    fun r2dbcDatabaseInitializer(
+        migration: DatabaseMigration,
+        flywayRunner: FlywayMigrationRunner?
+    ): R2dbcDatabaseInitializer {
+        return R2dbcDatabaseInitializer(r2dbcProperties, migration, flywayRunner)
     }
 
     @Bean
@@ -226,6 +236,14 @@ class R2dbcRepositoryAutoConfiguration(
     }
 
     @Bean
+    @ConditionalOnMissingBean(ModelConfigGroupStore::class)
+    fun modelConfigGroupStore(initializer: R2dbcDatabaseInitializer): ModelConfigGroupStore {
+        return R2dbcModelConfigGroupStore(
+            db = initializer.getDatabase()
+        )
+    }
+
+    @Bean
     @ConditionalOnMissingBean(AsyncAgentStore::class)
     fun asyncAgentStore(initializer: R2dbcDatabaseInitializer): AsyncAgentStore {
         return R2dbcAgentStore(
@@ -268,8 +286,8 @@ class R2dbcRepositoryAutoConfiguration(
 
     @Bean
     @ConditionalOnMissingBean(ModelConfigService::class)
-    fun modelConfigService(configStore: ModelProviderConfigStore): ModelConfigService {
-        return DefaultModelConfigService(configStore)
+    fun modelConfigService(configStore: ModelProviderConfigStore, groupStore: ModelConfigGroupStore): ModelConfigService {
+        return DefaultModelConfigService(configStore, groupStore)
     }
 
     @Bean
