@@ -382,6 +382,10 @@ const EditGroupDialog: React.FC<EditGroupDialogProps> = ({ group, onSave, onClos
       alert(i18n('Please enter group name'));
       return;
     }
+    if (group.isCustom && !baseUrl.trim()) {
+      alert(i18n('Please enter Base URL'));
+      return;
+    }
     try {
       setLoading(true);
       await onSave({
@@ -408,7 +412,9 @@ const EditGroupDialog: React.FC<EditGroupDialogProps> = ({ group, onSave, onClos
         </div>
         <div className="px-6 py-4 space-y-4">
           <div>
-            <label className="text-sm font-medium mb-1 block">{i18n('Group Name')}</label>
+            <label className="text-sm font-medium mb-1 block">
+              {i18n('Group Name')} <span className="text-red-500">*</span>
+            </label>
             <input
               type="text"
               value={name}
@@ -418,7 +424,9 @@ const EditGroupDialog: React.FC<EditGroupDialogProps> = ({ group, onSave, onClos
           </div>
           {group.isCustom && (
             <div>
-              <label className="text-sm font-medium mb-1 block">{i18n('Base URL')}</label>
+              <label className="text-sm font-medium mb-1 block">
+                {i18n('Base URL')} <span className="text-red-500">*</span>
+              </label>
               <input
                 type="text"
                 value={baseUrl}

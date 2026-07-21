@@ -30,6 +30,7 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({ preset, onBack }) => {
   const [showVarDialog, setShowVarDialog] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, boolean>>({});
   const [modelConfigs, setModelConfigs] = useState<ModelProviderConfig[]>([]);
+  const [groupNames, setGroupNames] = useState<Record<string, string>>({});
   const [selectedModelConfigId, setSelectedModelConfigId] = useState<string>(
     () => storageService.getSwarmPresetModel(preset.name),
   );
@@ -75,10 +76,15 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({ preset, onBack }) => {
   const isRunning = activeRunDetail?.status === 'RUNNING' || activeRunDetail?.status === 'PENDING';
   const isPaused = activeRunDetail?.status === 'PAUSED';
 
-  // Load model configs when variable dialog opens
+  // Load model configs and group names when variable dialog opens
   useEffect(() => {
     if (showVarDialog) {
       modelConfigService.getUserConfigurations().then(setModelConfigs).catch(() => {/* ignore */});
+      modelConfigService.getGroups().then((groups) => {
+        const map: Record<string, string> = {};
+        groups.forEach((g) => { map[g.id] = g.name; });
+        setGroupNames(map);
+      }).catch(() => {/* ignore */});
     }
   }, [showVarDialog]);
 
@@ -480,7 +486,7 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({ preset, onBack }) => {
                   <option value="">{i18n('Default')}</option>
                   {modelConfigs.map((mc) => (
                     <option key={mc.id} value={mc.id}>
-                      {mc.name} ({mc.modelName || mc.modelId})
+                      {mc.name}{mc.groupId && groupNames[mc.groupId] ? ` (${groupNames[mc.groupId]})` : ''}
                     </option>
                   ))}
                 </select>

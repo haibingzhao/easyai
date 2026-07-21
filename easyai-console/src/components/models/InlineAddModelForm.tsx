@@ -104,20 +104,14 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
       alert(i18n('Please enter configuration name'));
       return;
     }
-    if (isCustomModel && !customModelName.trim()) {
+    if (!customModelName.trim()) {
       alert(i18n('Please enter Model Name'));
       return;
     }
 
-    let modelId = selectedModelId;
-    let modelName: string | undefined;
-    if (isCustomModel) {
-      modelId = customModelName.trim();
-      modelName = customModelName.trim();
-    } else if (selectedModelId) {
-      const model = availableModels.find(m => m.id === selectedModelId);
-      modelName = model?.name;
-    }
+    const effectiveIsCustomModel = isCustomModel || isCustomProvider || !selectedModelId;
+    let modelId = effectiveIsCustomModel ? customModelName.trim() : selectedModelId;
+    let modelName: string | undefined = customModelName.trim();
 
     try {
       setLoading(true);
@@ -144,7 +138,7 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
         apiKey: apiKey.trim(),
         modelId,
         modelName,
-        isCustomModel,
+        isCustomModel: effectiveIsCustomModel,
         enabled: true,
         options: Object.keys(options).length > 0 ? options : undefined,
         capabilities: capabilities.vision ? capabilities : undefined,
@@ -189,7 +183,9 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
           <legend className="text-xs font-medium text-muted-foreground px-1">{i18n('Connection Settings')}</legend>
 
           <div>
-            <label className="text-sm font-medium mb-1 block">{i18n('Group Name')}</label>
+            <label className="text-sm font-medium mb-1 block">
+              {i18n('Group Name')} <span className="text-red-500">*</span>
+            </label>
             <input
               type="text"
               value={groupName}
@@ -200,7 +196,9 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
           </div>
 
           <div>
-            <label className="text-sm font-medium mb-1 block">{i18n('Protocol')}</label>
+            <label className="text-sm font-medium mb-1 block">
+              {i18n('Protocol')} <span className="text-red-500">*</span>
+            </label>
             <div className="flex gap-2">
               <button
                 onClick={() => handleProtocolChange('OPENAI')}
@@ -264,7 +262,9 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
           )}
 
           <div>
-            <label className="text-sm font-medium mb-1 block">{i18n('API Key')}</label>
+            <label className="text-sm font-medium mb-1 block">
+              {i18n('API Key')} <span className="text-red-500">*</span>
+            </label>
             <input
               type="password"
               value={apiKey}
@@ -289,7 +289,9 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
           </legend>
 
           <div>
-            <label className="text-sm font-medium mb-1 block">{i18n('Configuration Name')}</label>
+            <label className="text-sm font-medium mb-1 block">
+              {i18n('Configuration Name')} <span className="text-red-500">*</span>
+            </label>
             <input
               ref={modelNameRef}
               type="text"
@@ -312,7 +314,8 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
                   } else {
                     setIsCustomModel(false);
                     setSelectedModelId(e.target.value);
-                    setCustomModelName('');
+                    const model = availableModels.find(m => m.id === e.target.value);
+                    setCustomModelName(model?.name || e.target.value);
                   }
                 }}
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
@@ -328,18 +331,18 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
             </div>
           )}
 
-          {(isCustomModel || isCustomProvider) && (
-            <div>
-              <label className="text-sm font-medium mb-1 block">{i18n('Model Name')}</label>
-              <input
-                type="text"
-                value={customModelName}
-                onChange={(e) => setCustomModelName(e.target.value)}
-                placeholder={i18n('Enter Model Name')}
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
-              />
-            </div>
-          )}
+          <div>
+            <label className="text-sm font-medium mb-1 block">
+              {i18n('Model Name')} <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={customModelName}
+              onChange={(e) => setCustomModelName(e.target.value)}
+              placeholder={i18n('Enter Model Name')}
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+            />
+          </div>
 
           <div>
             <button
