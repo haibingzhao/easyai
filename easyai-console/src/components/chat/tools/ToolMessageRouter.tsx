@@ -17,6 +17,8 @@ import { SubAgentToolMessage } from './SubAgentToolMessage';
 import { GoalToolMessage } from './GoalToolMessage';
 import { MemoryToolMessage } from './MemoryToolMessage';
 import { CalcToolMessage } from './CalcToolMessage';
+import { WebFetchToolMessage } from './WebFetchToolMessage';
+import { LoadSkillToolMessage } from './LoadSkillToolMessage';
 import { GenericToolMessage } from './GenericToolMessage';
 import { McpToolCard } from './McpToolCard';
 
@@ -38,6 +40,8 @@ const TOOL_RENDERERS: Record<string, React.ComponentType<ToolMessageProps>> = {
   memory_write: MemoryToolMessage,
   memory_list: MemoryToolMessage,
   calc: CalcToolMessage,
+  webfetch: WebFetchToolMessage,
+  load_skill: LoadSkillToolMessage,
 };
 
 export function ToolMessageRouter(props: ToolMessageProps) {

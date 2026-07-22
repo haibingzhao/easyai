@@ -74,6 +74,7 @@ class ChatEventConverterTest {
             val end = result[0] as SSEvent.ToolExecutionEnd
             assertEquals("tc-1", end.toolCallId)
             assertFalse(end.isError)
+            assertEquals("content", end.result)
         }
 
         @Test
@@ -84,6 +85,24 @@ class ChatEventConverterTest {
             assertEquals(1, result.size)
             val end = result[0] as SSEvent.ToolExecutionEnd
             assertTrue(end.isError)
+            // TextContent fallback: error text must be carried in the SSE event
+            assertEquals("error", end.result)
+        }
+
+        @Test
+        fun `prefers ToolResultContent output over TextContent`() {
+            val toolResult = ToolResult(
+                content = listOf(
+                    TextContent("ignored"),
+                    ToolResultContent(toolCallId = "tc-1", toolName = "bash", output = "tool output", isError = false, exitCode = 0)
+                ),
+                isError = false
+            )
+            val event = ToolExecutionEndEvent("tc-1", "bash", toolResult, turnId = 0, sessionId = "session-1")
+            val result = ChatEventConverter.convert(event)
+            val end = result[0] as SSEvent.ToolExecutionEnd
+            assertEquals("tool output", end.result)
+            assertEquals(0, end.exitCode)
         }
     }
 

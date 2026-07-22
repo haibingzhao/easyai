@@ -148,6 +148,7 @@ export function dispatchSubAgentEvent(
         const tb = subBlocks[toolIdx] as ToolBlockData;
         subBlocks[toolIdx] = {
           ...tb,
+          toolCall: { ...tb.toolCall, status: event.isError ? 'FAILED' : 'COMPLETED' },
           toolResult: {
             id: event.toolCallId,
             toolName: event.toolName,

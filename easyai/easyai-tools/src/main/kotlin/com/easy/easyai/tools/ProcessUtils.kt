@@ -4,9 +4,11 @@ import com.easy.easyai.common.util.destroyProcessTree
 import com.easy.easyai.core.model.ToolResultContent
 import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.tool.ToolUpdate
-import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.future.await
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.file.Path
 import kotlin.time.Duration
 
@@ -46,7 +48,7 @@ internal suspend fun executeProcess(
     maxOutputBytes: Int = DEFAULT_MAX_OUTPUT_BYTES,
     env: Map<String, String>? = null,
     onUpdate: suspend (ToolUpdate) -> Unit = {}
-): ProcessExecutionResult {
+): ProcessExecutionResult = coroutineScope {
     val process = ProcessBuilder(command)
         .apply {
             if (workDir != null) directory(workDir.toFile())
@@ -59,50 +61,60 @@ internal suspend fun executeProcess(
     val chunks = ArrayDeque<Pair<String, Int>>()
     var used = 0
     var truncated = false
-    var exited = false
 
-    try {
-        withTimeout(timeout) {
-            val reader = process.inputStream.bufferedReader()
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                val lineStr = line!!
-                val size = lineStr.toByteArray(Charsets.UTF_8).size + 1 // +1 for newline
-                chunks.addLast(lineStr to size)
-                used += size
-                // Evict oldest lines when over the limit
-                while (used > maxOutputBytes && chunks.size > 1) {
-                    val removed = chunks.removeFirst()
-                    used -= removed.second
-                    truncated = true
-                }
-                onUpdate(ToolUpdate.PartialContent("$lineStr\n"))
+    // Reader coroutine: drains stdout line-by-line, streaming partial output via onUpdate.
+    // MUST run on Dispatchers.IO: readLine() is blocking Java I/O, and running it on the
+    // caller's dispatcher (e.g. a single-threaded event loop) would block the timeout timer
+    // from firing. On Dispatchers.IO the blocked read occupies one pool thread while the
+    // timeout below is free to fire. It is unblocked when the process is destroyed
+    // (destroyForcibly closes the stdout pipe → readLine() returns null).
+    val reader = process.inputStream.bufferedReader()
+    val readerJob = launch(Dispatchers.IO) {
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            val lineStr = line!!
+            val size = lineStr.toByteArray(Charsets.UTF_8).size + 1 // +1 for newline
+            chunks.addLast(lineStr to size)
+            used += size
+            // Evict oldest lines when over the limit
+            while (used > maxOutputBytes && chunks.size > 1) {
+                val removed = chunks.removeFirst()
+                used -= removed.second
+                truncated = true
             }
-            reader.close()
-
-            process.onExit().await()
-            exited = true
-        }
-    } catch (_: TimeoutCancellationException) {
-        destroyProcessTree(process)
-        try {
-            withTimeout(Duration.parse("1s")) {
-                process.onExit().await()
-            }
-        } catch (_: Exception) {
-            // Process already terminated or waited timed out, ignore
+            onUpdate(ToolUpdate.PartialContent("$lineStr\n"))
         }
     }
+
+    // Wait for process exit within the timeout. process.onExit().await() is a proper
+    // suspension point, so the timeout can actually fire here — unlike a blocked readLine().
+    // On timeout OR external cancellation, destroy the process in finally so the reader
+    // coroutine is always unblocked and never leaks a running process.
+    var exitedWithinTimeout = false
+    try {
+        exitedWithinTimeout = withTimeoutOrNull(timeout) {
+            process.onExit().await()
+            true
+        } ?: false
+    } finally {
+        if (!exitedWithinTimeout) {
+            destroyProcessTree(process)
+        }
+    }
+
+    // Wait for the reader to finish consuming any buffered output before building the result.
+    // The process has exited or been destroyed, so readLine() reaches EOF promptly.
+    readerJob.join()
 
     val output = buildString {
         if (truncated) append("...output truncated, kept last $maxOutputBytes bytes...\n\n")
         chunks.forEach { appendLine(it.first) }
     }
 
-    return ProcessExecutionResult(
+    ProcessExecutionResult(
         output = output,
-        exitCode = if (exited) process.exitValue() else null,
-        timedOut = !exited,
+        exitCode = if (exitedWithinTimeout) process.exitValue() else null,
+        timedOut = !exitedWithinTimeout,
         truncated = truncated
     )
 }

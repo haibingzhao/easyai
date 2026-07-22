@@ -88,11 +88,15 @@ object ChatEventConverter {
         )
         is ToolExecutionEndEvent -> {
             val toolResultBlock = event.result.content.filterIsInstance<ToolResultContent>().firstOrNull()
+            // Fallback: tools may return errors as TextContent (e.g. errorResult() helper)
+            val resultText = toolResultBlock?.output
+                ?: event.result.content.filterIsInstance<TextContent>()
+                    .joinToString("\n") { it.text }.takeIf { it.isNotEmpty() }
             listOf(
                 ChatStreamEvent.ToolExecutionEnd(
                     toolCallId = event.toolCallId,
                     toolName = event.toolName,
-                    result = toolResultBlock?.output,
+                    result = resultText,
                     isError = toolResultBlock?.isError ?: event.isError,
                     exitCode = toolResultBlock?.exitCode,
                     mimeType = toolResultBlock?.mimeType,

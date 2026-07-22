@@ -38,7 +38,8 @@ export function CalcToolMessage({
   streamingOutput
 }: ToolMessageProps) {
   const script = extractScript(toolCall.args);
-  const isStreaming = status === 'RUNNING' || status === 'PENDING';
+  // Once result is committed the tool is finished, regardless of status field
+  const isStreaming = (status === 'RUNNING' || status === 'PENDING') && !result;
   const isError = (result?.isError ?? false) || status === 'FAILED';
   const output = extractOutput({ result, streamingOutput });
 

@@ -16,6 +16,8 @@ export { SubAgentToolMessage } from './SubAgentToolMessage';
 export { GoalToolMessage } from './GoalToolMessage';
 export { MemoryToolMessage } from './MemoryToolMessage';
 export { CalcToolMessage } from './CalcToolMessage';
+export { WebFetchToolMessage } from './WebFetchToolMessage';
+export { LoadSkillToolMessage } from './LoadSkillToolMessage';
 export { SubAgentPanel } from './SubAgentPanel';
 export { GenericToolMessage } from './GenericToolMessage';
 export { ReadLsGroupedMessage } from './ReadLsGroupedMessage';

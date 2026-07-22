@@ -282,6 +282,8 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       blocks[toolBlockIndex] = {
         ...block,
         toolResult,
+        // Sync terminal status so renderers don't stay in streaming state
+        toolCall: { ...block.toolCall, status: isError ? 'FAILED' : 'COMPLETED' },
       };
     }
     const remainingOutputs = { ...state.streamingToolOutputs };

@@ -2,6 +2,8 @@ package com.easy.easyai.skills
 
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.AgentService
+import com.easy.easyai.core.permission.PermissionAction
+import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.tool.ToolBuilder
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
@@ -24,6 +26,11 @@ class SkillToolBuilder(
             "Call with the skill name to retrieve its full content.",
         permissionCategory = "skill",
         isDefaultTool = false
+    )
+
+    // Loading skills is read-only (reads SKILL.md content), auto-approve by default
+    override val defaultPermissionRules = listOf(
+        PermissionRule("tool.execute.skill", "*", PermissionAction.ALLOW)
     )
 
     override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {

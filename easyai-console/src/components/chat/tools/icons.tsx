@@ -14,7 +14,9 @@ import {
   File,
   Target,
   Brain,
-  Calculator
+  Calculator,
+  Globe,
+  Sparkles
 } from 'lucide-react';
 
 export const TOOL_ICONS: Record<string, LucideIcon> = {
@@ -31,6 +33,8 @@ export const TOOL_ICONS: Record<string, LucideIcon> = {
   memory_write: Brain,
   memory_list: Brain,
   calc: Calculator,
+  webfetch: Globe,
+  load_skill: Sparkles,
 };
 
 /**
@@ -62,6 +66,8 @@ export function getToolDisplayName(toolName: string): string {
     memory_write: 'Memory Write',
     memory_list: 'Memory List',
     calc: 'Calculator',
+    webfetch: 'Web Fetch',
+    load_skill: 'Load Skill',
   };
   return displayNames[toolName] || toolName;
 }
