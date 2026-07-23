@@ -44,14 +44,14 @@ internal class AgentLoopRunner(
          * because the LLM needs time to process the prompt (and potentially perform
          * extended thinking) before emitting the first token.
          */
-        private const val FIRST_CHUNK_TIMEOUT_SECONDS = 120L
+        private const val FIRST_CHUNK_TIMEOUT_SECONDS = 240L
 
         /**
          * Maximum seconds to wait between consecutive stream chunks before considering
          * the LLM stalled. This is an application-level idle detection timeout, independent
          * of the HTTP read timeout configured on the model provider.
          */
-        private const val STREAM_STALL_TIMEOUT_SECONDS = 60L
+        private const val STREAM_STALL_TIMEOUT_SECONDS = 120L
     }
 
     /** Cached memory content loaded once per session to avoid repeated file I/O on every turn. */
@@ -164,7 +164,7 @@ internal class AgentLoopRunner(
                         // Only chunks with actual content indicate the LLM is still making progress.
                         // However, capture usage metadata before skipping — the Anthropic message_delta
                         // event carries token usage but has empty text content.
-                        if (results.isEmpty() || results.all { r -> r.output.text.isNullOrEmpty() && r.output.toolCalls.isNullOrEmpty() }) {
+                        if (results.isEmpty() || results.all { r -> r.output.text.isNullOrEmpty() && r.output.toolCalls.isEmpty() }) {
                             lastResponseWithUsage = chunk
                             continue
                         }

@@ -13,19 +13,26 @@ import com.easy.easyai.web.model.ConfigValidationError
 import com.easy.easyai.web.model.ConfigValidationResult
 import com.easy.easyai.web.service.ConfigGeneratorService.Companion.MAX_RETRIES
 import com.easy.easyai.web.service.validation.TemplateConsistencyValidator
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.reactive.asFlow
+import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.messages.AssistantMessage
 import org.springframework.ai.chat.messages.Message
 import org.springframework.ai.chat.messages.SystemMessage
 import org.springframework.ai.chat.messages.UserMessage
 import org.springframework.ai.chat.model.ChatModel
+import org.springframework.ai.chat.model.ChatResponse
 import org.springframework.ai.chat.prompt.Prompt
 import org.springframework.ai.model.tool.StructuredOutputChatOptions
 import org.springframework.http.codec.ServerSentEvent
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.node.ObjectNode
+import java.util.concurrent.TimeoutException
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Service for AI-powered config generation.
@@ -83,7 +90,7 @@ class ConfigGeneratorService(
             // Emit retry_start for retries (attempt > 1), including the reason
             if (attempt > 1) {
                 val reasonJson = objectMapper.writeValueAsString(retryReason)
-                collector.emit(sseEvent("retry_start", """{"attempt":$attempt,"reason":$reasonJson}"""))
+                collector.emit(sseEvent("retry_start", """{"attempt":$attempt,"maxRetries":${MAX_RETRIES + 1},"reason":$reasonJson}"""))
             }
 
             // Emit stream_start
@@ -97,47 +104,95 @@ class ConfigGeneratorService(
 
             try {
                 val chatPrompt = buildPromptWithSchema(chatModel, messages, getJsonSchema(request.configType))
-                chatModel.stream(chatPrompt).asFlow().collect { chunk ->
-                    val results = chunk.results
-                    if (results.isEmpty()) return@collect
 
-                    results.forEach { result ->
-                        val output = result.output
-                        val text = output.text
-                        if (text.isNullOrEmpty()) return@forEach
-                        val metadata = output.metadata
+                // Channel-based streaming with per-chunk stall detection
+                // (same pattern as AgentLoopRunner). The producer coroutine feeds
+                // LLM chunks into the channel; the consumer receives with a timeout
+                // to detect stalled streams independently of the HTTP read timeout.
+                coroutineScope {
+                    val channel = Channel<ChatResponse>(Channel.UNLIMITED)
+                    val producerJob = launch {
+                        try {
+                            chatModel.stream(chatPrompt).asFlow().collect { chunk ->
+                                channel.send(chunk)
+                            }
+                        } finally {
+                            channel.close()
+                        }
+                    }
 
-                        val isThinkingContent = metadata.containsKey("signature") || metadata.containsKey("thinking")
+                    var receivedContentChunk = false
+                    var chunkCount = 0
 
-                        if (isThinkingContent) {
-                            // Flush any pending text buffer before switching to thinking
-                            if (batchBuffer.isNotEmpty()) {
-                                collector.emit(sseEvent("text_delta", encodeSseData(batchBuffer.toString())))
-                                batchBuffer.clear()
-                            }
-                            if (!isThinkingPhase) {
-                                isThinkingPhase = true
-                            }
-                            thinkingBatchBuffer.append(text)
-                            if (thinkingBatchBuffer.length >= BATCH_SIZE) {
-                                collector.emit(sseEvent("thinking_delta", encodeSseData(thinkingBatchBuffer.toString())))
-                                thinkingBatchBuffer.clear()
-                            }
+                    while (true) {
+                        // Longer timeout for the first chunk (TTFT) since the LLM
+                        // needs time to process the prompt before emitting tokens.
+                        val timeout = if (!receivedContentChunk && chunkCount == 0) {
+                            (FIRST_CHUNK_TIMEOUT_SECONDS * 1000L).milliseconds
                         } else {
-                            // Flush any pending thinking buffer before switching to text
-                            if (isThinkingPhase) {
-                                if (thinkingBatchBuffer.isNotEmpty()) {
+                            (STREAM_STALL_TIMEOUT_SECONDS * 1000L).milliseconds
+                        }
+                        val received = withTimeoutOrNull(timeout) {
+                            channel.receiveCatching()
+                        }
+                        if (received == null) {
+                            val phase = if (chunkCount == 0) "first token (TTFT)" else "subsequent chunk"
+                            val timeoutSec = if (chunkCount == 0) FIRST_CHUNK_TIMEOUT_SECONDS else STREAM_STALL_TIMEOUT_SECONDS
+                            producerJob.cancel()
+                            throw TimeoutException(
+                                "LLM stream stalled: no $phase received within ${timeoutSec}s"
+                            )
+                        }
+                        val chunk = received.getOrNull() ?: break // Channel closed (normal or error)
+                        val results = chunk.results
+
+                        // Skip empty chunks (SSE keepalive/ping) without resetting the stall timer
+                        if (results.isEmpty() || results.all { r -> r.output.text.isNullOrEmpty() }) {
+                            continue
+                        }
+
+                        // Content-bearing chunk: reset stall detection state
+                        receivedContentChunk = true
+                        chunkCount++
+
+                        results.forEach { result ->
+                            val output = result.output
+                            val text = output.text
+                            if (text.isNullOrEmpty()) return@forEach
+                            val metadata = output.metadata
+
+                            val isThinkingContent = metadata.containsKey("signature") || metadata.containsKey("thinking")
+
+                            if (isThinkingContent) {
+                                // Flush any pending text buffer before switching to thinking
+                                if (batchBuffer.isNotEmpty()) {
+                                    collector.emit(sseEvent("text_delta", encodeSseData(batchBuffer.toString())))
+                                    batchBuffer.clear()
+                                }
+                                if (!isThinkingPhase) {
+                                    isThinkingPhase = true
+                                }
+                                thinkingBatchBuffer.append(text)
+                                if (thinkingBatchBuffer.length >= BATCH_SIZE) {
                                     collector.emit(sseEvent("thinking_delta", encodeSseData(thinkingBatchBuffer.toString())))
                                     thinkingBatchBuffer.clear()
                                 }
-                                collector.emit(sseEvent("thinking_end", ""))
-                                isThinkingPhase = false
-                            }
-                            accumulated.append(text)
-                            batchBuffer.append(text)
-                            if (batchBuffer.length >= BATCH_SIZE) {
-                                collector.emit(sseEvent("text_delta", encodeSseData(batchBuffer.toString())))
-                                batchBuffer.clear()
+                            } else {
+                                // Flush any pending thinking buffer before switching to text
+                                if (isThinkingPhase) {
+                                    if (thinkingBatchBuffer.isNotEmpty()) {
+                                        collector.emit(sseEvent("thinking_delta", encodeSseData(thinkingBatchBuffer.toString())))
+                                        thinkingBatchBuffer.clear()
+                                    }
+                                    collector.emit(sseEvent("thinking_end", ""))
+                                    isThinkingPhase = false
+                                }
+                                accumulated.append(text)
+                                batchBuffer.append(text)
+                                if (batchBuffer.length >= BATCH_SIZE) {
+                                    collector.emit(sseEvent("text_delta", encodeSseData(batchBuffer.toString())))
+                                    batchBuffer.clear()
+                                }
                             }
                         }
                     }
@@ -496,6 +551,18 @@ Generate a corrected JSON configuration. Output ONLY the corrected JSON."""
     companion object {
         private const val MAX_RETRIES = 2
         private const val BATCH_SIZE = 20
+
+        /**
+         * Maximum seconds to wait for the first chunk (Time-To-First-Token) before
+         * considering the LLM stalled. Same value as AgentLoopRunner for consistency.
+         */
+        private const val FIRST_CHUNK_TIMEOUT_SECONDS = 120L
+
+        /**
+         * Maximum seconds to wait between consecutive stream chunks before
+         * considering the LLM stalled. Same value as AgentLoopRunner.
+         */
+        private const val STREAM_STALL_TIMEOUT_SECONDS = 60L
 
         private val AGENT_JSON_SCHEMA = """
 {

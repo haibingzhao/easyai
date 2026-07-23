@@ -11,6 +11,7 @@ import type {
   UserMessageAckEvent,
   GoalStatusEvent,
   CompactionEndEvent,
+  RetryEvent,
 } from '@/types/socket-event';
 import type { Message, ToolResult, ToolResultContentBlock, ContextReferences, QueuedMessage } from '@/types/message';
 import type { TodoInfo, SubAgentTodoGroup } from '@/types/todo';
@@ -22,6 +23,7 @@ import {
   type ThinkingBlockData,
   type TextBlockData,
   type ToolBlockData,
+  type RetryInfo,
 } from './types';
 import { dispatchSubAgentEvent } from './sub-agent-handler';
 
@@ -47,6 +49,7 @@ export interface ChatStateShape {
   todos: TodoInfo[];
   subAgentTodos: Record<string, SubAgentTodoGroup>;
   isCompacting: boolean;
+  retryInfo: RetryInfo | null;
   checkpointsByMessageId: Record<string, CheckpointInfo>;
   revertState: RevertStateInfo | null;
   fileReviewOverrides: Record<string, 'accepted' | 'rejected'>;
@@ -111,6 +114,12 @@ export function handleChatEvent(
 ): void {
   const state = get();
 
+  // Clear retry indicator as soon as new content arrives (retry succeeded).
+  // Placed before sub-agent dispatch so sub-agent content deltas also clear it.
+  if (state.retryInfo && ['text_delta', 'thinking_delta', 'toolcall_start', 'tool_execution_start'].includes(event.type)) {
+    set({ retryInfo: null });
+  }
+
   // Check if this is a sub-agent event (has subAgentToolCallId)
   const subAgentToolCallId = (event as unknown as Record<string, unknown>).subAgentToolCallId as string | undefined;
   const subAgentName = (event as unknown as Record<string, unknown>).subAgentName as string | undefined;
@@ -132,7 +141,7 @@ export function handleChatEvent(
         set((s) => ({ sessionId: s.sessionId || event.sessionId }));
       }
       // Clear any stale cancelReason when a new run starts
-      set({ cancelReason: null });
+      set({ cancelReason: null, retryInfo: null });
       break;
     case 'text_delta':
       state.appendToTextBlock(event.delta, event.messageId);
@@ -271,6 +280,7 @@ export function handleChatEvent(
       set({
         isStreaming: false,
         isFileWriting: false,
+        retryInfo: null,
         pendingPermission: shouldClearPendingPermission ? null : get().pendingPermission,
         // Show a continuation banner when the agent stopped due to max iterations
         cancelReason: doneEvent.endReason === 'max_iterations' ? 'Max Iterations Reached' : get().cancelReason,
@@ -290,15 +300,30 @@ export function handleChatEvent(
       set({
         isStreaming: false,
         isFileWriting: false,
+        retryInfo: null,
         cancelReason: event.reason === 'user_cancelled' ? 'Manually Cancelled' : event.reason,
         pendingPermission: null,
         // Clear queued messages — they will not be consumed after cancellation
         queuedMessages: [],
       });
       break;
-    case 'retry':
-      // Retry events are informational; no state update needed
+    case 'retry': {
+      const retryEvent = event as RetryEvent;
+      // Strip trailing text/thinking blocks from the failed attempt.
+      // Invariant: retry only occurs during LLM streaming; tool events arrive
+      // after the stream completes, so the current turn's partial content is
+      // always the trailing consecutive text/thinking blocks. The backend
+      // clears its accumulators and re-streams the full response with the same
+      // messageId, so keeping partial blocks would cause duplicated content.
+      const blocks = [...state.streamingBlocks];
+      while (blocks.length > 0) {
+        const last = blocks[blocks.length - 1];
+        if (last.type === 'text' || last.type === 'thinking') blocks.pop();
+        else break;
+      }
+      set({ retryInfo: { attempt: retryEvent.attempt, maxRetries: retryEvent.maxRetries }, streamingBlocks: blocks });
       break;
+    }
     case 'compaction_start':
       set({ isCompacting: true });
       break;
@@ -520,6 +545,7 @@ function handleStreamError(
   set({
     isStreaming: false,
     isFileWriting: false,
+    retryInfo: null,
     pendingPermission: isConnectionLost ? state.pendingPermission : null,
     cancelReason: isConnectionLost ? 'Connection Lost' : null,
     // Backend abort clears queues on any terminal error; frontend must match.

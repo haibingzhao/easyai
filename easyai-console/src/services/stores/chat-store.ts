@@ -14,6 +14,7 @@ import {
   type TextBlockData,
   type StreamingToolCall,
   type ToolBlockData,
+  type RetryInfo,
 } from './chat/types';
 import { handleChatEvent, setLastRespondedPermissionToolCallId } from './chat/event-handler';
 import { commitStreamingMessageImpl, loadSessionMessagesImpl } from './chat/session-loader';
@@ -43,6 +44,8 @@ interface ChatState {
   subAgentTodos: Record<string, SubAgentTodoGroup>;
   pendingPermission: PermissionRequestEvent | null;
   isCompacting: boolean;
+  /** LLM timeout retry state (set on retry event, cleared when content resumes or stream ends) */
+  retryInfo: RetryInfo | null;
   /** Checkpoint data keyed by messageId */
   checkpointsByMessageId: Record<string, CheckpointInfo>;
   /** Current revert state for the session */
@@ -131,6 +134,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   subAgentTodos: {},
   pendingPermission: null,
   isCompacting: false,
+  retryInfo: null,
   pendingMessageData: {},
   checkpointsByMessageId: {},
   revertState: null,
@@ -403,6 +407,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     cumulativeUsage: null,
     contextTokens: 0,
     isCompacting: false,
+    retryInfo: null,
     cancelReason: null,
     agentId: 'default',
     todos: [],

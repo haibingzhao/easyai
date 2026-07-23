@@ -25,6 +25,7 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
   const cancelReason = useChatStore((state) => state.cancelReason);
   const runningSessionId = useChatStore((state) => state.runningSessionId);
   const pendingPermission = useChatStore((state) => state.pendingPermission);
+  const retryInfo = useChatStore((state) => state.retryInfo);
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
 
   const handleEditClick = useCallback((index: number) => {
@@ -105,8 +106,10 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
           streamingToolOutputs={streamingToolOutputs}
         />
       )}
+
+      {isStreaming && retryInfo && !runningSessionId && <StreamingIndicator retryInfo={retryInfo} />}
       
-      {isStreaming && streamingBlocks.length === 0 && !runningSessionId && <StreamingIndicator />}
+      {isStreaming && streamingBlocks.length === 0 && !runningSessionId && !retryInfo && <StreamingIndicator />}
 
       {!isStreaming && cancelReason && !runningSessionId && (
         <div className="px-4 flex items-center gap-2">

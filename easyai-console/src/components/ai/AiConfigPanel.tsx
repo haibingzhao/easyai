@@ -30,7 +30,7 @@ type PanelState = 'idle' | 'streaming' | 'result' | 'error';
 type StreamingSegment =
   | { type: 'thinking'; content: string; isFinished: boolean }
   | { type: 'text'; content: string }
-  | { type: 'retry_marker'; attempt: number; reason?: string }
+  | { type: 'retry_marker'; attempt: number; maxAttempts?: number; reason?: string }
   | { type: 'status_update'; tool: string; status: string; message?: string; toolCallId?: string };
 
 /**
@@ -157,11 +157,11 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
             return [...prev, { type: 'text', content: delta }];
           });
         },
-        onRetryStart: (attempt, reason) => {
+        onRetryStart: (attempt, maxAttempts, reason) => {
           // Add retry marker and a new text segment — don't clear history
           setSegments(prev => [
             ...prev,
-            { type: 'retry_marker', attempt, reason },
+            { type: 'retry_marker', attempt, maxAttempts, reason },
             { type: 'text', content: '' },
           ]);
         },
@@ -381,12 +381,28 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
                   );
                 }
 
-                case 'retry_marker':
+                case 'retry_marker': {
+                  const isTimeout = /time[d]? out|stalled|timeout/i.test(segment.reason ?? '');
+                  const maxAttempts = segment.maxAttempts ?? 3;
+                  if (isTimeout) {
+                    const timeoutText = i18n('Request timed out, retrying ({attempt}/{maxRetries})...')
+                      .replace('{attempt}', String(segment.attempt))
+                      .replace('{maxRetries}', String(maxAttempts));
+                    return (
+                      <div key={`retry-${index}`} className="flex items-start gap-2 py-2 px-3 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-md">
+                        <Loader2 className="w-3.5 h-3.5 shrink-0 mt-0.5 animate-spin" />
+                        <span>{timeoutText}</span>
+                      </div>
+                    );
+                  }
+                  const retryText = i18n('Retrying ({attempt}/{maxRetries})...')
+                    .replace('{attempt}', String(segment.attempt))
+                    .replace('{maxRetries}', String(maxAttempts));
                   return (
                     <div key={`retry-${index}`} className="flex items-start gap-2 py-2 px-3 text-xs text-muted-foreground bg-muted rounded-md">
                       <RefreshCw className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                       <div>
-                        <span>{i18n('Retrying (attempt')} {segment.attempt}...</span>
+                        <span>{retryText}</span>
                         {segment.reason && (
                           <div className="mt-1 text-yellow-600 dark:text-yellow-500">
                             {segment.reason}
@@ -395,6 +411,7 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
                       </div>
                     </div>
                   );
+                }
 
                 case 'status_update':
                   return (

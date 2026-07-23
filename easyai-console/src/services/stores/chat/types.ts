@@ -80,3 +80,9 @@ export interface ToolBlockData {
 }
 
 export type StreamingBlock = ThinkingBlockData | TextBlockData | ToolBlockData;
+
+/** LLM timeout retry state for UI indicator display */
+export interface RetryInfo {
+  attempt: number;
+  maxRetries: number;
+}

@@ -36,7 +36,7 @@ class AiConfigService {
       onThinkingDelta: (text: string) => void;
       onThinkingEnd: () => void;
       onTextDelta: (text: string) => void;
-      onRetryStart: (attempt: number, reason: string) => void;
+      onRetryStart: (attempt: number, maxAttempts: number, reason: string) => void;
       onStreamEnd: () => void;
       onDone: (result: AiConfigGenerateResponse) => void;
       onError: (message: string) => void;
@@ -95,9 +95,9 @@ class AiConfigService {
               case 'retry_start': {
                 try {
                   const parsed = JSON.parse(raw.data);
-                  callbacks.onRetryStart(parsed.attempt ?? 1, parsed.reason ?? '');
+                  callbacks.onRetryStart(parsed.attempt ?? 1, parsed.maxRetries ?? 3, parsed.reason ?? '');
                 } catch {
-                  callbacks.onRetryStart(1, '');
+                  callbacks.onRetryStart(1, 3, '');
                 }
                 break;
               }

@@ -30,6 +30,7 @@ function createMockState(overrides: Partial<ChatStateShape> = {}): ChatStateShap
     todos: [],
     subAgentTodos: {},
     isCompacting: false,
+    retryInfo: null,
     checkpointsByMessageId: {},
     revertState: null,
     fileReviewOverrides: {},
@@ -314,6 +315,81 @@ describe('handleChatEvent', () => {
           customType: 'compaction',
         })
       );
+    });
+  });
+
+  describe('retry event', () => {
+    it('should set retryInfo on retry event', () => {
+      const event: SocketEvent = {
+        type: 'retry',
+        attempt: 1,
+        maxRetries: 3,
+        backoffMs: 1000,
+      };
+
+      handleChatEvent(event, get, set);
+
+      expect(set).toHaveBeenCalledWith(
+        expect.objectContaining({ retryInfo: { attempt: 1, maxRetries: 3 } })
+      );
+    });
+
+    it('should strip trailing text/thinking blocks but keep tool blocks', () => {
+      const toolBlock: StreamingBlock = {
+        type: 'tool',
+        toolCall: { id: 'tc-1', toolName: 'bash', args: '', status: 'COMPLETED' },
+      };
+      const thinkingBlock: StreamingBlock = {
+        type: 'thinking',
+        content: 'partial thinking',
+        id: 'thinking-1',
+      };
+      const textBlock: StreamingBlock = {
+        type: 'text',
+        content: 'partial text',
+        id: 'text-1',
+      };
+      mockState.streamingBlocks = [toolBlock, thinkingBlock, textBlock];
+
+      const event: SocketEvent = {
+        type: 'retry',
+        attempt: 2,
+        maxRetries: 3,
+        backoffMs: 2000,
+      };
+
+      handleChatEvent(event, get, set);
+
+      // Tool block preserved; trailing thinking/text stripped
+      expect(mockState.streamingBlocks).toEqual([toolBlock]);
+      expect(set).toHaveBeenCalledWith(
+        expect.objectContaining({ retryInfo: { attempt: 2, maxRetries: 3 } })
+      );
+    });
+
+    it('should clear retryInfo when content delta arrives', () => {
+      mockState.retryInfo = { attempt: 1, maxRetries: 3 };
+
+      const event: SocketEvent = {
+        type: 'text_delta',
+        contentIndex: 0,
+        delta: 'hello',
+        messageId: 'msg-1',
+      };
+
+      handleChatEvent(event, get, set);
+
+      expect(set).toHaveBeenCalledWith({ retryInfo: null });
+    });
+
+    it('should clear retryInfo on done event', () => {
+      mockState.retryInfo = { attempt: 1, maxRetries: 3 };
+
+      const event: SocketEvent = { type: 'done', reason: 'completed' };
+
+      handleChatEvent(event, get, set);
+
+      expect(set).toHaveBeenCalledWith(expect.objectContaining({ retryInfo: null }));
     });
   });
 
