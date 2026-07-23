@@ -3,6 +3,7 @@ import { i18n } from '../../utils/i18n';
 import { modelConfigService } from '@/services/model-config-service';
 import { Box, Pencil, Trash2, ChevronRight, ChevronDown, Plus, FolderOpen, FolderX } from 'lucide-react';
 import { InlineAddModelForm } from '@/components/models/InlineAddModelForm';
+import { AddModelToGroupForm } from '@/components/models/AddModelToGroupForm';
 import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, ModelConfigGroup, SaveModelProviderConfigRequest, SaveModelConfigGroupRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
 
 interface ModelProviderSelectorProps {
@@ -38,6 +39,7 @@ export const ModelProviderSelector = forwardRef<ModelProviderSelectorRef, ModelP
     const [editDialog, setEditDialog] = useState<EditDialogState>({ open: false });
     const [editGroup, setEditGroup] = useState<EditGroupState>({ open: false });
     const [showAddForm, setShowAddForm] = useState(false);
+    const [addingGroupId, setAddingGroupId] = useState<string | null>(null);
 
     useEffect(() => {
       if (activeConfigId) {
@@ -187,6 +189,13 @@ export const ModelProviderSelector = forwardRef<ModelProviderSelectorRef, ModelP
               </div>
               <div className="flex items-center gap-1">
                 <button
+                  onClick={() => setAddingGroupId(prev => prev === group.id ? null : group.id)}
+                  className="p-1 text-muted-foreground hover:text-green-500 transition-colors"
+                  title={i18n('Add Model to Group')}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+                <button
                   onClick={() => setEditGroup({ open: true, group })}
                   className="p-1 text-muted-foreground hover:text-foreground transition-colors"
                   title={i18n('Edit Group')}
@@ -202,6 +211,16 @@ export const ModelProviderSelector = forwardRef<ModelProviderSelectorRef, ModelP
                 </button>
               </div>
             </div>
+
+            {/* Inline add-model-to-group form */}
+            {addingGroupId === group.id && (
+              <AddModelToGroupForm
+                group={group}
+                availableProviders={availableProviders}
+                onSave={handleSaveFromForm}
+                onDone={() => setAddingGroupId(null)}
+              />
+            )}
 
             {/* Group models table */}
             <div className="grid grid-cols-3 bg-muted/30 px-4 py-1.5 text-xs font-medium text-muted-foreground">

@@ -13,4 +13,7 @@ interface AsyncMcpServerStore {
 
     /** Find all enabled configs across all users (for startup initialization). */
     suspend fun findAllEnabled(): List<McpServerConfig>
+
+    /** Find all enabled configs for a specific user (for lazy per-user initialization). */
+    suspend fun findAllEnabled(userId: String): List<McpServerConfig>
 }

@@ -22,7 +22,8 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Manages MCP server connections and tool caches.
- * - On startup (afterSingletonsInstantiated), loads ALL enabled configs across all users and connects
+ * - On startup, only connects system-level shared MCP servers (userId = "system")
+ * - User-specific MCP servers are lazily connected on first access via [ensureUserConnected]
  * - Uses McpAsyncClient for non-blocking MCP communication (Reactor Mono → coroutine await)
  * - Maintains per-user-per-server tool caches using composite keys (userId:serverName)
  */
@@ -42,6 +43,12 @@ class McpClientManager(
     private val promptCache = ConcurrentHashMap<String, List<McpSchema.Prompt>>()
     private val connectLocks = ConcurrentHashMap<String, Mutex>()
 
+    /** Tracks users whose MCP servers have been lazily initialized. */
+    private val initializedUsers = ConcurrentHashMap.newKeySet<String>()
+
+    /** Per-user mutex to prevent concurrent lazy initialization races. */
+    private val userInitLocks = ConcurrentHashMap<String, Mutex>()
+
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     /** Build composite key for per-user-per-server isolation. */
@@ -50,13 +57,48 @@ class McpClientManager(
     override fun afterSingletonsInstantiated() {
         scope.launch {
             try {
-                val configs = mcpServerStore.findAllEnabled()
-                logger.info("Initializing {} MCP server connections across all users", configs.size)
-                for (config in configs) {
-                    connect(config, config.userId)
+                val configs = mcpServerStore.findAllEnabled(SYSTEM_USER_ID)
+                if (configs.isEmpty()) {
+                    logger.info("No system-level MCP servers to initialize")
+                    return@launch
                 }
+                logger.info("Initializing {} system-level MCP server connections", configs.size)
+                for (config in configs) {
+                    connect(config, SYSTEM_USER_ID)
+                }
+                initializedUsers.add(SYSTEM_USER_ID)
             } catch (e: Exception) {
-                logger.error("Failed to initialize MCP servers", e)
+                logger.error("Failed to initialize system MCP servers", e)
+            }
+        }
+    }
+
+    /**
+     * Ensures all enabled MCP servers for the given user are connected.
+     * Called lazily on first access (e.g., when resolving tools for a chat session).
+     * System-level servers are already connected at startup; this only connects user-specific ones.
+     * Uses a per-user mutex to prevent concurrent initialization races.
+     */
+    suspend fun ensureUserConnected(userId: String) {
+        if (userId in initializedUsers) return
+        val mutex = userInitLocks.computeIfAbsent(userId) { Mutex() }
+        mutex.withLock {
+            // Double-check after acquiring lock
+            if (userId in initializedUsers) return
+            try {
+                val configs = mcpServerStore.findAllEnabled(userId)
+                if (configs.isNotEmpty()) {
+                    logger.info("Lazily initializing {} MCP server connections for user '{}'", configs.size, userId)
+                    for (config in configs) {
+                        connect(config, userId)
+                    }
+                }
+                initializedUsers.add(userId)
+                logger.debug("MCP lazy initialization complete for user '{}'", userId)
+            } catch (e: Exception) {
+                logger.error("Failed to lazily initialize MCP servers for user '{}'", userId, e)
+                // Mark as initialized even on failure to avoid repeated attempts
+                initializedUsers.add(userId)
             }
         }
     }

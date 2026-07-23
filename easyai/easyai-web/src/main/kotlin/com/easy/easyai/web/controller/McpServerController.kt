@@ -124,6 +124,8 @@ class McpServerController(
     @GetMapping
     fun listAll(): Mono<List<McpServerDto>> = mono {
         val userId = getCurrentUserId()
+        // Trigger lazy connection for this user's MCP servers
+        mcpClientManager.ensureUserConnected(userId)
         val configs = mcpServerStore.findAll(userId)
         val statuses = mcpClientManager.getAllStatuses(userId)
         val toolDefs = mcpClientManager.getAllToolDefs(userId)

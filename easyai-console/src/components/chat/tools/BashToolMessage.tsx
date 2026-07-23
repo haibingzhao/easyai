@@ -23,6 +23,24 @@ function extractBashCommand(args: string): string {
   return args;
 }
 
+/** Default idle timeout (seconds) — must match BashTool's DEFAULT_TIMEOUT_SEC */
+const DEFAULT_TIMEOUT_SEC = 200;
+
+/**
+ * 从参数中提取超时秒数（LLM传入的timeout参数，未传则使用默认值）
+ */
+function extractTimeoutSec(args: string): number {
+  try {
+    const parsed = JSON.parse(args);
+    if (typeof parsed.timeout === 'number' && parsed.timeout > 0) {
+      return parsed.timeout;
+    }
+  } catch {
+    // ignore parse error
+  }
+  return DEFAULT_TIMEOUT_SEC;
+}
+
 /**
  * 计算文本的行数
  */
@@ -40,6 +58,7 @@ export function BashToolMessage({
   streamingOutput
 }: ToolMessageProps) {
   const displayCommand = extractBashCommand(toolCall.args);
+  const timeoutSec = extractTimeoutSec(toolCall.args);
   const isStreaming = status === 'RUNNING' || status === 'PENDING';
   const output = extractOutput({ result, streamingOutput });
   const isError = (result?.isError ?? false) || status === 'FAILED';
@@ -47,6 +66,26 @@ export function BashToolMessage({
   const commandLines = countLines(displayCommand);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isCommandExpanded, setIsCommandExpanded] = useState(false);
+
+  // 执行计时（参考 ThinkingBlock）：streaming 期间每秒更新已执行秒数
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const startTimeRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (isStreaming && startTimeRef.current === null) {
+      startTimeRef.current = Date.now();
+    }
+  }, [isStreaming]);
+
+  useEffect(() => {
+    if (!isStreaming) return;
+    const interval = setInterval(() => {
+      if (startTimeRef.current !== null) {
+        setElapsedSec(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isStreaming]);
 
   // 工具输出自动滚动相关
   const outputRef = useRef<HTMLDivElement>(null);
@@ -134,7 +173,7 @@ export function BashToolMessage({
   const shouldShowOutputExpand = outputLines > 5;
 
   const statusText = status === 'RUNNING'
-    ? 'Running...'
+    ? `Running... ${elapsedSec}s / ${timeoutSec}s`
     : status === 'PENDING'
       ? 'Pending...'
       : status === 'FAILED'

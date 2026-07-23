@@ -32,6 +32,7 @@ import com.easy.easyai.web.handler.CustomEventConverter
 import com.easy.easyai.web.handler.GoalStatusCustomEventConverter
 import com.easy.easyai.web.security.AuthProperties
 import com.easy.easyai.web.security.AuthService
+import com.easy.easyai.web.security.McpPreConnectFilter
 import com.easy.easyai.web.service.ConfigGeneratorService
 import com.easy.easyai.web.service.ConfigValidator
 import com.easy.easyai.web.service.GoalPauseListener
@@ -258,6 +259,16 @@ open class WebAutoConfiguration {
         authProperties: AuthProperties
     ): AuthService {
         return AuthService(userStore, refreshTokenStore, jwtTokenProvider, authProperties)
+    }
+
+    @Bean
+    open fun mcpPreConnectFilter(
+        jwtTokenProvider: JwtTokenProvider,
+        authProperties: AuthProperties,
+        @Autowired(required = false) mcpClientManager: McpClientManager? = null
+    ): McpPreConnectFilter? {
+        if (mcpClientManager == null) return null
+        return McpPreConnectFilter(mcpClientManager, jwtTokenProvider, authProperties.enabled)
     }
 
     @Bean

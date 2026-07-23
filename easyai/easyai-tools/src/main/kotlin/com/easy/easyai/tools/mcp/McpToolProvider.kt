@@ -26,10 +26,12 @@ class McpToolProvider(
     /**
      * Returns all available MCP tools across all connected servers visible to the user.
      * Includes both user-owned and system-level servers (UserScope semantics).
+     * Lazily connects user-specific MCP servers on first access.
      * Called from SessionToolResolver.createSessionTools().
      */
-    fun getTools(agentContext: AgentContext): List<ToolDefinition> {
+    suspend fun getTools(agentContext: AgentContext): List<ToolDefinition> {
         val userId = agentContext.userId ?: McpClientManager.SYSTEM_USER_ID
+        manager.ensureUserConnected(userId)
         return manager.getConnectedServers(userId).flatMap { server ->
             server.tools.map { tool ->
                 McpToolDefinition(server.serverName, tool, manager, server.userId)
@@ -39,15 +41,17 @@ class McpToolProvider(
 
     /**
      * Returns MCP tools filtered by agent's MCP configs.
+     * Lazily connects user-specific MCP servers on first access.
      * - Empty configs = no MCP tools available (whitelist mode)
      * - Non-empty configs = only tools from bound servers, further filtered by metadata tool whitelist
      */
-    fun getTools(agentContext: AgentContext, mcpConfigs: List<AgentToolConfig>): List<ToolDefinition> {
+    suspend fun getTools(agentContext: AgentContext, mcpConfigs: List<AgentToolConfig>): List<ToolDefinition> {
         if (mcpConfigs.isEmpty()) {
             return emptyList()
         }
 
         val userId = agentContext.userId ?: McpClientManager.SYSTEM_USER_ID
+        manager.ensureUserConnected(userId)
         val configByServer = mcpConfigs.associateBy { it.targetName }
         return manager.getConnectedServers(userId).flatMap { server ->
             val config = configByServer[server.serverName] ?: return@flatMap emptyList()

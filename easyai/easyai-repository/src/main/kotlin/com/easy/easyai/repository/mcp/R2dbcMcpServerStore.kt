@@ -92,6 +92,14 @@ class R2dbcMcpServerStore(
             .map { it.toConfig() }
     }
 
+    override suspend fun findAllEnabled(userId: String): List<McpServerConfig> = suspendTransaction(db) {
+        Tables.McpServerConfigTable.selectAll()
+            .where { (Tables.McpServerConfigTable.enabled eq true) and UserScope.filterStrict(Tables.McpServerConfigTable.userId, userId) }
+            .orderBy(Tables.McpServerConfigTable.createdAt to SortOrder.ASC)
+            .toList()
+            .map { it.toConfig() }
+    }
+
     private fun ResultRow.toConfig(): McpServerConfig {
         val t = Tables.McpServerConfigTable
         val commandJson = this[t.command]
