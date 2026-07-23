@@ -549,7 +549,7 @@ Generate a corrected JSON configuration. Output ONLY the corrected JSON."""
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["id", "agentDefinitionId"],
+        "required": ["id", "role"],
         "properties": {
           "id": { "type": "string" },
           "agentDefinitionId": { "type": "string" },
@@ -557,7 +557,23 @@ Generate a corrected JSON configuration. Output ONLY the corrected JSON."""
           "maxIterations": { "type": "integer", "minimum": 1 },
           "timeoutSeconds": { "type": "integer", "minimum": 1 },
           "modelName": { "type": ["string", "null"] },
-          "maxRetries": { "type": "integer", "minimum": 0 }
+          "maxRetries": { "type": "integer", "minimum": 0 },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "systemPrompt": { "type": "string" },
+          "toolNames": { "type": "array", "items": { "type": "string" } },
+          "mcpConfigs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["serverName"],
+              "properties": {
+                "serverName": { "type": "string" },
+                "toolNames": { "type": "array", "items": { "type": "string" } },
+                "promptNames": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          }
         },
         "additionalProperties": false
       }

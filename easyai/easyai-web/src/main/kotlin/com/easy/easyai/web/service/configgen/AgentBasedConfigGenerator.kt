@@ -300,10 +300,11 @@ class AgentBasedConfigGenerator(
 - Minimalism: only include tools/skills/MCP the agent will actually use""".trimIndent()
             else -> """
 ## Critical Rules
+- Agents support two modes: Global (agentDefinitionId references existing agent) or Inline (agentDefinitionId blank, provide name/systemPrompt/toolNames/mcpConfigs)
 - toolNames: ONLY built-in tools (from list_resources type="tools")
-- MCP tools: via mcpConfigs field, NEVER in toolNames
-- Skills: via skillNames field, NEVER in toolNames
-- agentDefinitionId: MUST reference an existing agent (from list_resources type="agents")
+- MCP tools: via mcpConfigs field, NEVER in toolNames. Format: [{"serverName":"xxx","toolNames":["t1"],"promptNames":[]}]
+- mcpConfigs.toolNames empty = all tools from that server allowed
+- agentDefinitionId: MUST reference an existing agent for global mode (from list_resources type="agents")
 - dependsOn: forms a valid DAG (no cycles)
 - inputFrom: variable routing from upstream tasks""".trimIndent()
         }

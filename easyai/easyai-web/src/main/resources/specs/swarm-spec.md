@@ -17,24 +17,59 @@ Use this as the authoritative reference when generating swarm JSON configuration
 
 ## SwarmAgentSpec — Agent Role Definitions
 
-Each entry defines an agent **role** within the swarm. The actual agent behavior (tools, skills, system prompt) is loaded from an existing `AgentDefinition` in the database.
+Each entry defines an agent **role** within the swarm. Supports two modes:
+
+- **Global agent**: `agentDefinitionId` is non-blank; tools, skills, system prompt, and model config are loaded from an existing `AgentDefinition` in the database.
+- **Inline custom agent**: `agentDefinitionId` is blank (or omitted); `name`, `description`, `systemPrompt`, `toolNames`, and `mcpConfigs` define the agent behavior directly within the preset.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `id` | string | **yes** | — | Unique role identifier within this swarm (e.g. `reviewer`, `writer`). Referenced by tasks. |
-| `agentDefinitionId` | string | **yes** | — | **Must reference an existing Agent ID.** Tools, skills, prompts, and model config are loaded from this definition. |
+| `agentDefinitionId` | string | conditional | `""` | **Must reference an existing Agent ID** for global agents. Leave blank/empty for inline custom agents. |
 | `role` | string | **yes** | — | Descriptive role label (e.g. `Senior Code Reviewer`). Used in event reporting. |
 | `maxIterations` | integer | no | 50 | Max ReAct loop iterations for this agent per task execution. |
 | `timeoutSeconds` | integer | no | 300 | Per-task execution timeout in seconds. Exceeding this aborts the task. |
 | `modelName` | string or null | no | null | Override the model (e.g. `gpt-4o`). `null` = inherit from AgentDefinition or system default. |
 | `maxRetries` | integer | no | 2 | Max retry attempts on task failure. Retries use exponential backoff (1s, 2s, 4s... capped at 30s). |
+| `name` | string | conditional | `""` | Display name for the inline agent. **Required when `agentDefinitionId` is blank.** |
+| `description` | string | no | `""` | Description of the inline agent's purpose. |
+| `systemPrompt` | string | no | `""` | System prompt template (Jinja2). Becomes the agent's promptTemplate. Only used for inline agents. |
+| `toolNames` | string[] | no | `[]` | Built-in tool names available to this inline agent. Only used for inline agents. |
+| `mcpConfigs` | SwarmMcpBinding[] | no | `[]` | MCP server bindings available to this inline agent. Only used for inline agents. See **SwarmMcpBinding** below. |
+
+### SwarmMcpBinding — MCP Server Binding
+
+Defines which MCP server tools/prompts are available to an inline agent.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `serverName` | string | **yes** | — | Name of a connected MCP server (must match an existing MCP server config). |
+| `toolNames` | string[] | no | `[]` | Specific tool names to expose from this server. **Empty = all tools from this server are allowed.** |
+| `promptNames` | string[] | no | `[]` | Specific prompt names to expose from this server. **Empty = all prompts from this server are allowed.** |
+
+#### mcpConfigs Example
+
+```json
+{
+  "mcpConfigs": [
+    { "serverName": "github", "toolNames": ["search_code", "get_file_contents"], "promptNames": [] },
+    { "serverName": "trading", "toolNames": [], "promptNames": [] }
+  ]
+}
+```
+
+In this example:
+- The `github` server exposes only `search_code` and `get_file_contents` tools.
+- The `trading` server exposes **all** its tools (empty `toolNames` = no filtering).
 
 ### Key Points
 
-- **`agentDefinitionId` is the link to agent configuration**: The referenced agent's `promptTemplate`, `toolNames`, `skillNames`, `mcpConfigs`, etc. are all loaded automatically.
+- **Global mode** (`agentDefinitionId` non-blank): The referenced agent's `promptTemplate`, `toolNames`, `skillNames`, `mcpConfigs`, etc. are all loaded automatically from the database.
+- **Inline mode** (`agentDefinitionId` blank): You must provide `name` and optionally `systemPrompt`, `toolNames`, `mcpConfigs` to define the agent behavior directly.
 - **`id` is local to the swarm**: Tasks reference agents by this local `id`, NOT by `agentDefinitionId`.
 - **`modelName` overrides the model**: Useful when you want a specific agent to use a more capable or cheaper model than the default.
 - Multiple swarm agents can reference the same `agentDefinitionId` with different roles/parameters.
+- **MCP tools go in `mcpConfigs`, NEVER in `toolNames`**: The `toolNames` field is only for built-in tools.
 
 ## SwarmTask — DAG Task Definitions
 

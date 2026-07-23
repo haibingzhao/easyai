@@ -342,11 +342,6 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
               </div>
             )}
 
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              {i18n('AI is generating...')}
-            </div>
-
             {segments.map((segment, index) => {
               switch (segment.type) {
                 case 'thinking':
@@ -421,6 +416,11 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
                   return null;
               }
             })}
+
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              {i18n('AI is generating...')}
+            </div>
 
             <button
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-border hover:bg-muted transition-colors"

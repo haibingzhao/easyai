@@ -112,11 +112,20 @@ class ConfigValidator(
             }
         }
 
-        // 3. Validate agent references exist in DB
+        // 3. Validate agent references exist in DB (skip inline agents)
         val agentIds = agents.map { it.id }.toSet()
         val store = agentStore
         if (store != null) {
             for (agent in agents) {
+                if (agent.isInline) {
+                    // Inline custom agents: validate that name is provided
+                    if (agent.name.isBlank()) {
+                        errors.add(ConfigValidationError(
+                            "agents", "Inline agent '${agent.id}' must have a non-blank 'name' field"
+                        ))
+                    }
+                    continue
+                }
                 val exists = store.findById(agent.agentDefinitionId, userId) != null
                 if (!exists) {
                     errors.add(ConfigValidationError(
