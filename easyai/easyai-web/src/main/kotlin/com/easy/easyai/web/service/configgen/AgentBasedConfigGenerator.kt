@@ -166,7 +166,7 @@ class AgentBasedConfigGenerator(
                             else -> "Executing ${event.toolName}..."
                         }
                         val payload = objectMapper.writeValueAsString(
-                            mapOf("tool" to event.toolName, "status" to "running", "message" to statusMsg)
+                            mapOf("toolCallId" to event.toolCallId, "tool" to event.toolName, "status" to "running", "message" to statusMsg)
                         )
                         collector.emit(sseEvent("status_update", payload))
                     }
@@ -184,7 +184,7 @@ class AgentBasedConfigGenerator(
                         }
                         val status = if (event.isError) "error" else "completed"
                         val payload = objectMapper.writeValueAsString(
-                            mapOf("tool" to event.toolName, "status" to status)
+                            mapOf("toolCallId" to event.toolCallId, "tool" to event.toolName, "status" to status)
                         )
                         collector.emit(sseEvent("status_update", payload))
                     }

@@ -4,21 +4,7 @@ import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.swarm.event.SwarmEvent
 import com.easy.easyai.swarm.event.SwarmEventBridge
-import com.easy.easyai.swarm.model.SwarmAgentSpec
-import com.easy.easyai.swarm.model.SwarmPreset
-import com.easy.easyai.swarm.model.SwarmRun
-import com.easy.easyai.swarm.model.SwarmRunStatus
-import com.easy.easyai.swarm.model.SwarmTask
-import com.easy.easyai.swarm.model.SwarmTaskStatus
-import com.easy.easyai.swarm.model.SwarmVariable
-import com.easy.easyai.swarm.model.TaskType
-import com.easy.easyai.swarm.model.DeliberationEntry
-import com.easy.easyai.swarm.model.DeliberationHistoryResponse
-import com.easy.easyai.swarm.model.DeliberationSpec
-import com.easy.easyai.swarm.model.EscalationEntry
-import com.easy.easyai.swarm.model.TeamMemberExecution
-import com.easy.easyai.swarm.model.TeamRoundRecord
-import com.easy.easyai.swarm.model.TeamSpec
+import com.easy.easyai.swarm.model.*
 import com.easy.easyai.swarm.preset.SwarmPresetStore
 import com.easy.easyai.swarm.runtime.SwarmRuntime
 import com.easy.easyai.swarm.store.SwarmRunStore
@@ -36,8 +22,8 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.http.HttpStatus
-import org.springframework.http.ResponseEntity
 import org.springframework.http.MediaType
+import org.springframework.http.ResponseEntity
 import org.springframework.http.codec.ServerSentEvent
 import org.springframework.web.bind.annotation.*
 import org.springframework.web.server.ResponseStatusException
@@ -352,7 +338,7 @@ class SwarmController(
                     activeJobs.remove(id)
                 } else if (run.status == SwarmRunStatus.PAUSED) {
                     // Paused run: no active coroutine — update DB directly
-                    val tasks = store?.getTasks(id) ?: emptyList()
+                    val tasks = store.getTasks(id) ?: emptyList()
                     val now = Instant.now()
                     for (task in tasks) {
                         if (task.status != SwarmTaskStatus.COMPLETED &&
@@ -366,8 +352,8 @@ class SwarmController(
                     run.status = SwarmRunStatus.CANCELLED
                     run.error = "Cancelled by user"
                     run.completedAt = now
-                    store?.updateRun(run, userId)
-                    store?.saveTasks(id, tasks)
+                    store.updateRun(run, userId)
+                    store.saveTasks(id, tasks)
                     eventBridge.onRunCancelled(id)
                     logger.info("Cancelled paused swarm run '{}'", id)
                 }
@@ -509,7 +495,7 @@ class SwarmController(
             val userId = getCurrentUserId()
             val store = store
                 ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Run store not available")
-            val run = store.getRun(id, userId)
+            store.getRun(id, userId)
                 ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Swarm run not found: $id")
 
             // Cancel active run if still executing
@@ -658,12 +644,16 @@ class SwarmController(
                 } else {
                     val agentDef = agentStore?.findById(spec.agentDefinitionId, userId)
                     if (agentDef != null) {
+                        // Query MCP configs from DB and convert to SwarmMcpBinding
+                        val mcpBindings = agentStore.getAgentMcpConfigs(spec.agentDefinitionId)
+                            .map { config -> config.toSwarmMcpBinding() }
                         spec.copy(
                             agentDefinitionId = "",
                             name = agentDef.name,
                             description = agentDef.description ?: "",
                             systemPrompt = agentDef.promptTemplate ?: "",
                             toolNames = agentDef.toolNames,
+                            mcpConfigs = mcpBindings,
                         )
                     } else {
                         logger.warn("AgentDefinition '{}' not found during export, keeping reference", spec.agentDefinitionId)
@@ -1049,4 +1039,29 @@ class SwarmController(
         variables = variables.map { v -> VariableBrief(name = v.name, description = v.description, required = v.required, defaultValue = v.defaultValue, updatable = v.updatable) },
         language = language
     )
+
+    /** Convert an [AgentToolConfig] (targetType=MCP) to a [SwarmMcpBinding] for export. */
+    private fun com.easy.easyai.core.agent.AgentToolConfig.toSwarmMcpBinding(): SwarmMcpBinding {
+        val (toolNames, promptNames) = metadata?.let { meta ->
+            try {
+                val node = SharedObjectMapper.instance.readTree(meta)
+                if (node.isArray) {
+                    val names = mutableListOf<String>()
+                    for (el in node) { names.add(el.asText()) }
+                    names to emptyList()
+                } else {
+                    val tools = mutableListOf<String>()
+                    val toolNode = node.get("toolNames")
+                    if (toolNode != null && toolNode.isArray) { for (el in toolNode) { tools.add(el.asText()) } }
+                    val prompts = mutableListOf<String>()
+                    val promptNode = node.get("promptNames")
+                    if (promptNode != null && promptNode.isArray) { for (el in promptNode) { prompts.add(el.asText()) } }
+                    tools to prompts
+                }
+            } catch (_: Exception) {
+                emptyList<String>() to emptyList<String>()
+            }
+        } ?: (emptyList<String>() to emptyList<String>())
+        return SwarmMcpBinding(serverName = targetName, toolNames = toolNames, promptNames = promptNames)
+    }
 }

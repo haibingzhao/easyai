@@ -31,7 +31,7 @@ type StreamingSegment =
   | { type: 'thinking'; content: string; isFinished: boolean }
   | { type: 'text'; content: string }
   | { type: 'retry_marker'; attempt: number; reason?: string }
-  | { type: 'status_update'; tool: string; status: string; message?: string };
+  | { type: 'status_update'; tool: string; status: string; message?: string; toolCallId?: string };
 
 /**
  * Check if a string looks like JSON (starts with { or [).
@@ -173,8 +173,28 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
           setState('result');
           abortRef.current = null;
         },
-        onStatusUpdate: (tool, status, message) => {
-          setSegments(prev => [...prev, { type: 'status_update', tool, status, message }]);
+        onStatusUpdate: (tool, status, message, toolCallId) => {
+          setSegments(prev => {
+            // Terminal status: update the matching running segment in-place
+            if (status !== 'running') {
+              let idx = -1;
+              for (let i = prev.length - 1; i >= 0; i--) {
+                const s = prev[i];
+                if (s.type !== 'status_update' || s.status !== 'running') continue;
+                if (toolCallId ? s.toolCallId === toolCallId : s.tool === tool) {
+                  idx = i;
+                  break;
+                }
+              }
+              if (idx !== -1) {
+                const updated = [...prev];
+                const seg = updated[idx] as Extract<StreamingSegment, { type: 'status_update' }>;
+                updated[idx] = { ...seg, status };
+                return updated;
+              }
+            }
+            return [...prev, { type: 'status_update', tool, status, message, toolCallId }];
+          });
         },
         onError: (message) => {
           setError(message);

@@ -41,7 +41,7 @@ class AiConfigService {
       onDone: (result: AiConfigGenerateResponse) => void;
       onError: (message: string) => void;
       /** Status update from tool execution */
-      onStatusUpdate?: (tool: string, status: string, message?: string) => void;
+      onStatusUpdate?: (tool: string, status: string, message?: string, toolCallId?: string) => void;
     }
   ): { abort: () => void } {
     const abortController = new AbortController();
@@ -108,7 +108,7 @@ class AiConfigService {
                 // Tool execution status update
                 try {
                   const parsed = JSON.parse(raw.data);
-                  callbacks.onStatusUpdate?.(parsed.tool, parsed.status, parsed.message);
+                  callbacks.onStatusUpdate?.(parsed.tool, parsed.status, parsed.message, parsed.toolCallId);
                 } catch {
                   // Ignore malformed status updates
                 }
