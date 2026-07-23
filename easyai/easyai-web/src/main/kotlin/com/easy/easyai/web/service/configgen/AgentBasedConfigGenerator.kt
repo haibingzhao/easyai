@@ -16,6 +16,7 @@ import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.skills.SkillRegistry
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.web.model.AiConfigGenerateRequest
+import com.easy.easyai.web.model.ConfigValidationResult
 import com.easy.easyai.web.service.ConfigValidator
 import com.easy.easyai.web.service.validation.TemplateConsistencyValidator
 import tools.jackson.databind.node.ObjectNode
@@ -26,12 +27,23 @@ import org.springframework.http.codec.ServerSentEvent
 import tools.jackson.databind.JsonNode
 
 /**
+ * A single configuration block submitted via submit_config_block tool.
+ */
+internal data class ConfigBlock(
+    val blockType: String,
+    val blockIndex: Int,
+    val data: JsonNode
+)
+
+/**
  * Agent-based configuration generator that uses AgentLoop for multi-step generation.
  *
  * Instead of a single LLM call, this generator:
  * 1. Provides tools for resource discovery (list_resources)
- * 2. Allows self-validation (validate_config)
- * 3. Enables explicit submission (submit_config)
+ * 2. Allows self-validation (validate_config) for agent configs
+ * 3. Enables explicit submission (submit_config) for agent configs
+ * 4. Supports chunked submission for swarm configs (submit_config_block + finalize_config)
+ *    — the LLM never outputs the full config JSON as a tool parameter, preventing stream stalls
  *
  * The AgentLoop naturally handles the "generate → validate → fix" cycle.
  */
@@ -49,6 +61,7 @@ class AgentBasedConfigGenerator(
 
     companion object {
         private const val MAX_ITERATIONS = 8
+        private const val MAX_ITERATIONS_SWARM = 20
         private const val BATCH_SIZE = 20
     }
 
@@ -63,8 +76,63 @@ class AgentBasedConfigGenerator(
     ) {
         logger.info("Starting agent-based config generation for type={}, user={}", request.configType, userId)
 
+        // Mutable generation state (declared early so the finalize tool lambda can capture it)
+        var submittedConfig: JsonNode? = null
+        var explanation = "Configuration generated successfully."
+        var submittedViaTool = false  // Whether config was finalized/submitted explicitly
+        var validationResult: ConfigValidationResult? = null
+        val configBlocks = mutableListOf<ConfigBlock>()  // Chunked block accumulation
+
+        // Finalize action for swarm chunked mode: assemble blocks + existingConfig → validate → submit.
+        // This eliminates the need for the LLM to output the full config JSON as a tool parameter.
+        val finalizeAction: suspend (String?) -> String = action@{ designExplanation ->
+            if (configBlocks.isEmpty()) {
+                return@action "FINALIZE_FAILED: No configuration blocks received yet. Submit blocks via submit_config_block first."
+            }
+            val assembled = assembleConfigFromBlocks(configBlocks, request.existingConfig)
+            if (assembled == null) {
+                return@action "FINALIZE_FAILED: Could not assemble configuration from ${configBlocks.size} submitted blocks."
+            }
+            val validation = try {
+                configValidator.validateSwarmConfig(assembled, userId)
+            } catch (e: Exception) {
+                logger.warn("Validation during finalize failed: {}", e.message)
+                null
+            }
+            if (validation != null && !validation.valid) {
+                buildString {
+                    appendLine("✗ VALIDATION FAILED")
+                    appendLine("Errors:")
+                    validation.errors.filter { it.severity == "error" }.forEach {
+                        appendLine("  - [${it.field}] ${it.message}")
+                    }
+                    if (validation.errors.any { it.severity == "warning" }) {
+                        appendLine("Warnings:")
+                        validation.errors.filter { it.severity == "warning" }.forEach {
+                            appendLine("  - [${it.field}] ${it.message}")
+                        }
+                    }
+                    appendLine("Fix the issues by re-submitting corrected blocks via submit_config_block, then call finalize_config again.")
+                }
+            } else {
+                submittedConfig = assembled
+                submittedViaTool = true
+                validationResult = validation
+                designExplanation?.let { explanation = it }
+                logger.info("Config finalized from {} blocks", configBlocks.size)
+                buildString {
+                    appendLine("✓ CONFIG_FINALIZED: Configuration assembled from ${configBlocks.size} blocks and validated successfully.")
+                    if (validation != null && validation.errors.isNotEmpty()) {
+                        appendLine("Warnings:")
+                        validation.errors.forEach { appendLine("  - [${it.field}] ${it.message}") }
+                    }
+                    appendLine("The configuration has been submitted. Output a brief summary to the user (do NOT call any more tools).")
+                }
+            }
+        }
+
         // 1. Build specialized tools
-        val tools = buildTools(request.configType, userId)
+        val tools = buildTools(request.configType, userId, finalizeAction)
 
         // 2. Resolve model config
         val modelConfig = resolveModelConfig(request.modelConfigId, userId)
@@ -75,7 +143,7 @@ class AgentBasedConfigGenerator(
             sessionId = null,  // No session persistence
             userId = userId,
             tools = tools,
-            maxIterations = MAX_ITERATIONS,
+            maxIterations = if (request.configType == "swarm") MAX_ITERATIONS_SWARM else MAX_ITERATIONS,
             modelConfig = modelConfig,
             promptTemplate = "",  // Suppress default system prompt; we provide our own in initialMessages
             dryRun = true,
@@ -101,8 +169,6 @@ class AgentBasedConfigGenerator(
         collector.emit(sseEvent("stream_start", """{"mode":"agent"}"""))
 
         val stream = runner.prompt(initialMessages)
-        var submittedConfig: JsonNode? = null
-        var explanation = "Configuration generated successfully."
         val textBuffer = StringBuilder()
         val fullTextBuffer = StringBuilder()  // Full accumulation for fallback JSON extraction
         val thinkingBuffer = StringBuilder()
@@ -163,6 +229,8 @@ class AgentBasedConfigGenerator(
                             "validate_config" -> "Validating configuration..."
                             "list_resources" -> "Fetching available ${event.args["type"] ?: "resources"}..."
                             "submit_config" -> "Submitting final configuration..."
+                            "submit_config_block" -> "Generating ${event.args["blockType"] ?: "block"} #${event.args["blockIndex"] ?: 0}..."
+                            "finalize_config" -> "Assembling and validating configuration..."
                             else -> "Executing ${event.toolName}..."
                         }
                         val payload = objectMapper.writeValueAsString(
@@ -179,7 +247,22 @@ class AgentBasedConfigGenerator(
                                 .joinToString("") { it.text }
                             parseSubmittedConfig(resultText)?.let { (config, expl) ->
                                 submittedConfig = config
+                                submittedViaTool = true
                                 explanation = expl
+                            }
+                        }
+                        // Handle chunked block submission
+                        if (event.toolName == "submit_config_block" && !event.isError) {
+                            val resultText = event.result.content
+                                .filterIsInstance<TextContent>()
+                                .joinToString("") { it.text }
+                            parseConfigBlock(resultText)?.let { block ->
+                                configBlocks.add(block)
+                                // Emit config_block SSE event immediately
+                                val chunkJson = objectMapper.writeValueAsString(
+                                    mapOf("blockType" to block.blockType, "blockIndex" to block.blockIndex, "data" to block.data)
+                                )
+                                collector.emit(sseEvent("config_block", chunkJson))
                             }
                         }
                         val status = if (event.isError) "error" else "completed"
@@ -216,9 +299,27 @@ class AgentBasedConfigGenerator(
             // If error occurred, don't emit config_done (error event already sent)
             if (hasError) return
 
-            // If no submit_config was called, try to extract JSON from the full text output
+            // Fallback priority: blocks (structured) > text extraction (heuristic)
+            if (submittedConfig == null && configBlocks.isNotEmpty()) {
+                submittedConfig = assembleConfigFromBlocks(configBlocks, request.existingConfig)
+                logger.info("Assembled config from {} blocks", configBlocks.size)
+            }
             if (submittedConfig == null) {
                 submittedConfig = extractJsonFromText(fullTextBuffer.toString())
+            }
+
+            // Validate assembled/extracted config (fallback paths bypass validate_config tool)
+            if (submittedConfig != null && !submittedViaTool) {
+                validationResult = try {
+                    when (request.configType) {
+                        "swarm" -> configValidator.validateSwarmConfig(submittedConfig!!, userId)
+                        "agent" -> configValidator.validateAgentConfig(submittedConfig!!, userId)
+                        else -> null
+                    }
+                } catch (e: Exception) {
+                    logger.warn("Post-assembly validation failed: {}", e.message)
+                    null
+                }
             }
 
             // Post-process: strip customInstructions if template doesn't reference it
@@ -234,7 +335,7 @@ class AgentBasedConfigGenerator(
             collector.emit(sseEvent("stream_end", ""))
 
             // Emit final result
-            val resultJson = buildDoneJson(submittedConfig, explanation)
+            val resultJson = buildDoneJson(submittedConfig, explanation, validationResult)
             collector.emit(sseEvent("config_done", resultJson))
 
         } catch (e: Exception) {
@@ -243,12 +344,15 @@ class AgentBasedConfigGenerator(
         }
     }
 
-    private fun buildTools(configType: String, userId: String): List<ToolDefinition> {
-        return listOf(
-            ValidateConfigTool(configValidator, configType, userId),
-            ListResourcesTool(toolRegistry, agentStore, skillRegistry, mcpClientManager, modelConfigStore, userId, configType),
-            SubmitConfigTool()
-        )
+    private fun buildTools(configType: String, userId: String, finalizeAction: suspend (String?) -> String): List<ToolDefinition> {
+        val listResources = ListResourcesTool(toolRegistry, agentStore, skillRegistry, mcpClientManager, modelConfigStore, userId, configType)
+        return if (configType == "swarm") {
+            // Chunked mode: blocks + finalize. No validate_config/submit_config to prevent
+            // the LLM from outputting the full config JSON as a tool parameter (causes stream stalls).
+            listOf(listResources, SubmitConfigBlockTool(), FinalizeConfigTool(finalizeAction))
+        } else {
+            listOf(ValidateConfigTool(configValidator, configType, userId), listResources, SubmitConfigTool())
+        }
     }
 
     private suspend fun resolveModelConfig(modelConfigId: String?, userId: String): ModelProviderConfig? {
@@ -262,12 +366,14 @@ class AgentBasedConfigGenerator(
     }
 
     private fun buildAgentSystemPrompt(configType: String): String {
-        val specBrief = loadSpecResource("specs/${configType}-spec-brief.md")
-            ?: loadSpecResource("specs/${configType}-spec.md")
-            ?: ""
+        return when (configType) {
+            "agent" -> {
+                val specBrief = loadSpecResource("specs/agent-spec-brief.md")
+                    ?: loadSpecResource("specs/agent-spec.md")
+                    ?: ""
+                """
+You are an expert EasyAI configuration generator specializing in agent configurations.
 
-        val workflow = when (configType) {
-            "agent" -> """
 ## Your Workflow
 1. Analyze the user's requirements carefully
 2. Call `list_resources` to discover available tools, skills, and MCP servers
@@ -276,20 +382,8 @@ class AgentBasedConfigGenerator(
 5. Generate the JSON configuration
 6. Call `validate_config` to verify correctness
 7. If validation fails, fix the errors and validate again
-8. Call `submit_config` with the final validated configuration""".trimIndent()
-            else -> """
-## Your Workflow
-1. Analyze the user's requirements carefully
-2. Call `list_resources` to discover available agents, tools, and MCP servers
-3. Design the configuration structure
-4. Generate the JSON configuration
-5. Call `validate_config` to verify correctness
-6. If validation fails, fix the errors and validate again
-7. Call `submit_config` with the final validated configuration""".trimIndent()
-        }
+8. Call `submit_config` with the final validated configuration
 
-        val rules = when (configType) {
-            "agent" -> """
 ## Critical Rules
 - toolNames: ONLY built-in tools (from list_resources type="tools"); empty array = ALL tools
 - MCP tools: via mcpConfigs field, NEVER in toolNames
@@ -297,8 +391,36 @@ class AgentBasedConfigGenerator(
 - promptTemplate: MUST be valid Jinja2 and include {{ custom_instructions }}
 - subAgentIds: MUST reference existing agents (from list_resources type="agents")
 - inputSchema: required when using {{ input.xxx }} in promptTemplate
-- Minimalism: only include tools/skills/MCP the agent will actually use""".trimIndent()
-            else -> """
+- Minimalism: only include tools/skills/MCP the agent will actually use
+
+## Configuration Specification
+$specBrief
+
+## Output Format
+When calling submit_config, provide the complete JSON configuration and a brief explanation of your design decisions.
+""".trimIndent()
+            }
+            "swarm" -> """
+You are an expert EasyAI Swarm workflow configuration generator.
+
+## Your Workflow
+1. Analyze requirements and output a brief design overview (agents, tasks, data flow)
+2. Call `list_resources` to discover available agents/tools/MCP servers
+3. Call `submit_config_block` with blockType="meta" for name/title/description
+4. For EACH agent, call `submit_config_block` with blockType="agent" (one call per agent)
+5. For EACH task, call `submit_config_block` with blockType="task" (one call per task)
+6. Optionally submit variables with blockType="variable"
+7. Call `finalize_config` with a brief explanation — the system automatically assembles all
+   your blocks (merged with the existing config if editing), validates, and submits.
+   If validation fails, fix by re-submitting corrected blocks, then call finalize_config again.
+8. After finalize_config succeeds, output a brief summary to the user. Done.
+
+CRITICAL RULES — NEVER output the full configuration JSON as a tool parameter:
+- Each submit_config_block call contains ONLY ONE small section (~200-500 tokens)
+- finalize_config takes ONLY an explanation string — assembly is automatic
+- You do NOT have validate_config or submit_config tools — do not attempt to call them
+If you need the full specification, call `list_resources type="spec"`.
+
 ## Critical Rules
 - Agents support two modes: Global (agentDefinitionId references existing agent) or Inline (agentDefinitionId blank, provide name/systemPrompt/toolNames/mcpConfigs)
 - toolNames: ONLY built-in tools (from list_resources type="tools")
@@ -306,15 +428,26 @@ class AgentBasedConfigGenerator(
 - mcpConfigs.toolNames empty = all tools from that server allowed
 - agentDefinitionId: MUST reference an existing agent for global mode (from list_resources type="agents")
 - dependsOn: forms a valid DAG (no cycles)
-- inputFrom: variable routing from upstream tasks""".trimIndent()
+- inputFrom: variable routing from upstream tasks
+""".trimIndent()
+            else -> buildGenericSystemPrompt(configType)
         }
+    }
 
+    private fun buildGenericSystemPrompt(configType: String): String {
+        val specBrief = loadSpecResource("specs/${configType}-spec-brief.md")
+            ?: loadSpecResource("specs/${configType}-spec.md")
+            ?: ""
         return """
-You are an expert EasyAI configuration generator specializing in $configType configurations.
+You are an expert EasyAI configuration generator.
 
-$workflow
-
-$rules
+## Your Workflow
+1. Analyze the user's requirements carefully
+2. Call `list_resources` to discover available resources
+3. Generate the JSON configuration
+4. Call `validate_config` to verify correctness
+5. If validation fails, fix the errors and validate again
+6. Call `submit_config` with the final validated configuration
 
 ## Configuration Specification
 $specBrief
@@ -339,6 +472,17 @@ When calling submit_config, provide the complete JSON configuration and a brief 
             sb.appendLine(objectMapper.writeValueAsString(request.existingConfig))
             sb.appendLine("</existing_config>")
             sb.appendLine()
+
+            // Partial edit instructions for swarm chunked mode
+            if (request.configType == "swarm") {
+                sb.appendLine("## Partial Edit Mode")
+                sb.appendLine("Only submit blocks that need changes. Use blockIndex to identify which agent/task to update.")
+                sb.appendLine("Unchanged sections will be preserved from the existing configuration.")
+                sb.appendLine("Example: if only agent #2 needs modification, submit just one block:")
+                sb.appendLine("submit_config_block(blockType=\"agent\", blockIndex=2, data={...updated agent...})")
+                sb.appendLine("Then call finalize_config — the system merges your changes into the existing configuration automatically.")
+                sb.appendLine()
+            }
         }
 
         sb.appendLine("## Instructions")
@@ -350,11 +494,17 @@ When calling submit_config, provide the complete JSON configuration and a brief 
                 sb.appendLine("4. Design the promptTemplate with {{ custom_instructions }} included")
                 sb.appendLine("5. Generate, validate, and submit the configuration")
             }
+            "swarm" -> {
+                sb.appendLine("1. Call `list_resources type=\"agents\"` to see available agents")
+                sb.appendLine("2. Call `list_resources type=\"mcp_servers\"` if MCP tools are needed")
+                sb.appendLine("3. Submit each section via `submit_config_block` (meta → each agent → each task → variables)")
+                sb.appendLine("4. Call `finalize_config` with a brief explanation — assembly, validation, and submission are automatic")
+            }
             else -> {
-                sb.appendLine("1. First call `list_resources type=\"agents\"` to see available agents")
-                sb.appendLine("2. Design the configuration based on requirements")
-                sb.appendLine("3. Generate and validate the JSON")
-                sb.appendLine("4. Submit the final configuration")
+                sb.appendLine("1. Call `list_resources` to discover available resources")
+                sb.appendLine("2. Generate the JSON configuration")
+                sb.appendLine("3. Call `validate_config` to verify correctness")
+                sb.appendLine("4. Call `submit_config` with the final validated configuration")
             }
         }
 
@@ -413,10 +563,114 @@ When calling submit_config, provide the complete JSON configuration and a brief 
         }
     }
 
-    private fun buildDoneJson(config: JsonNode?, explanation: String): String {
+    /**
+     * Parse a config block from the tool result text.
+     * Expected format: "BLOCK_RECEIVED: agent #0 | DATA: {...}"
+     */
+    private fun parseConfigBlock(resultText: String): ConfigBlock? {
+        return try {
+            val marker = "BLOCK_RECEIVED: "
+            val dataMarker = " | DATA: "
+            val markerStart = resultText.indexOf(marker)
+            if (markerStart < 0) return null
+
+            val afterMarker = resultText.substring(markerStart + marker.length)
+            val dataStart = afterMarker.indexOf(dataMarker)
+            if (dataStart < 0) return null
+
+            val header = afterMarker.substring(0, dataStart) // e.g. "agent #0"
+            val dataJson = afterMarker.substring(dataStart + dataMarker.length).trim()
+
+            val parts = header.split(" #")
+            if (parts.size != 2) return null
+            val blockType = parts[0].trim()
+            val blockIndex = parts[1].trim().toIntOrNull() ?: return null
+
+            val dataNode = objectMapper.readTree(dataJson)
+            ConfigBlock(blockType = blockType, blockIndex = blockIndex, data = dataNode)
+        } catch (e: Exception) {
+            logger.warn("Failed to parse config block: {}", e.message)
+            null
+        }
+    }
+
+    /**
+     * Assemble a complete swarm config JSON from individual blocks.
+     * When [existingConfig] is provided, uses it as the base and merges blocks
+     * by their blockIndex (partial edit mode).
+     */
+    private fun assembleConfigFromBlocks(blocks: List<ConfigBlock>, existingConfig: JsonNode?): JsonNode? {
+        return try {
+            val root = if (existingConfig is ObjectNode) existingConfig.deepCopy() else objectMapper.createObjectNode()
+
+            // Meta block: overlay non-null fields (last submission wins)
+            blocks.filter { it.blockType == "meta" }.lastOrNull()?.let { meta ->
+                meta.data.path("name").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("name", it) }
+                meta.data.path("title").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("title", it) }
+                meta.data.path("description").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("description", it) }
+            }
+
+            // Agent blocks: merge by blockIndex into existing array
+            val agentBlocks = blocks.filter { it.blockType == "agent" }.sortedBy { it.blockIndex }
+            if (agentBlocks.isNotEmpty()) {
+                val agentsArr = (root.get("agents") as? tools.jackson.databind.node.ArrayNode)?.deepCopy()
+                    ?: objectMapper.createArrayNode()
+                agentBlocks.forEach { block ->
+                    if (block.blockIndex in 0 until agentsArr.size()) {
+                        agentsArr.set(block.blockIndex, block.data)
+                    } else {
+                        agentsArr.add(block.data)
+                    }
+                }
+                root.set("agents", agentsArr)
+            }
+
+            // Task blocks: merge by blockIndex into existing array
+            val taskBlocks = blocks.filter { it.blockType == "task" }.sortedBy { it.blockIndex }
+            if (taskBlocks.isNotEmpty()) {
+                val tasksArr = (root.get("tasks") as? tools.jackson.databind.node.ArrayNode)?.deepCopy()
+                    ?: objectMapper.createArrayNode()
+                taskBlocks.forEach { block ->
+                    if (block.blockIndex in 0 until tasksArr.size()) {
+                        tasksArr.set(block.blockIndex, block.data)
+                    } else {
+                        tasksArr.add(block.data)
+                    }
+                }
+                root.set("tasks", tasksArr)
+            }
+
+            // Variable blocks: merge by blockIndex into existing array
+            val varBlocks = blocks.filter { it.blockType == "variable" }.sortedBy { it.blockIndex }
+            if (varBlocks.isNotEmpty()) {
+                val varsArr = (root.get("variables") as? tools.jackson.databind.node.ArrayNode)?.deepCopy()
+                    ?: objectMapper.createArrayNode()
+                varBlocks.forEach { block ->
+                    if (block.blockIndex in 0 until varsArr.size()) {
+                        varsArr.set(block.blockIndex, block.data)
+                    } else {
+                        varsArr.add(block.data)
+                    }
+                }
+                root.set("variables", varsArr)
+            }
+
+            root
+        } catch (e: Exception) {
+            logger.warn("Failed to assemble config from blocks: {}", e.message)
+            null
+        }
+    }
+
+    private fun buildDoneJson(config: JsonNode?, explanation: String, validation: ConfigValidationResult? = null): String {
         val configStr = if (config != null) objectMapper.writeValueAsString(config) else "{}"
-        val valid = config != null
-        return """{"generatedConfig":$configStr,"validation":{"valid":$valid,"errors":[]},"explanation":"${escapeJson(explanation)}","retryCount":0,"mode":"agent"}"""
+        val valid = if (validation != null) validation.valid else config != null
+        val errorsJson = if (validation != null && validation.errors.isNotEmpty()) {
+            objectMapper.writeValueAsString(validation.errors.map { mapOf("field" to it.field, "message" to it.message, "severity" to it.severity) })
+        } else {
+            "[]"
+        }
+        return """{"generatedConfig":$configStr,"validation":{"valid":$valid,"errors":$errorsJson},"explanation":"${escapeJson(explanation)}","retryCount":0,"mode":"agent"}"""
     }
 
     private fun sseEvent(event: String, data: String): ServerSentEvent<String> =

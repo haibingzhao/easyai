@@ -3,6 +3,7 @@ import { parseSSEStream, SSEConnectionError } from '@/services/sse-parser';
 import type {
   AiConfigGenerateRequest,
   AiConfigGenerateResponse,
+  ConfigBlockEvent,
   ConfigValidationResult,
 } from '@/types/ai-config';
 
@@ -42,6 +43,8 @@ class AiConfigService {
       onError: (message: string) => void;
       /** Status update from tool execution */
       onStatusUpdate?: (tool: string, status: string, message?: string, toolCallId?: string) => void;
+      /** Config block received during chunked generation */
+      onConfigBlock?: (block: ConfigBlockEvent) => void;
     }
   ): { abort: () => void } {
     const abortController = new AbortController();
@@ -111,6 +114,16 @@ class AiConfigService {
                   callbacks.onStatusUpdate?.(parsed.tool, parsed.status, parsed.message, parsed.toolCallId);
                 } catch {
                   // Ignore malformed status updates
+                }
+                break;
+              }
+              case 'config_block': {
+                // Chunked config block received
+                try {
+                  const block: ConfigBlockEvent = JSON.parse(raw.data);
+                  callbacks.onConfigBlock?.(block);
+                } catch {
+                  // Ignore malformed config blocks
                 }
                 break;
               }

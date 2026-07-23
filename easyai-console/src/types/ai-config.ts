@@ -39,3 +39,13 @@ export interface ConfigValidationError {
   message: string;
   severity: 'error' | 'warning';
 }
+
+/**
+ * A single configuration block event from chunked generation.
+ * Emitted via SSE 'config_block' event during swarm config generation.
+ */
+export interface ConfigBlockEvent {
+  blockType: 'meta' | 'agent' | 'task' | 'variable';
+  blockIndex: number;
+  data: Record<string, unknown>;
+}

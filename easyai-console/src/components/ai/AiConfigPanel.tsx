@@ -31,7 +31,8 @@ type StreamingSegment =
   | { type: 'thinking'; content: string; isFinished: boolean }
   | { type: 'text'; content: string }
   | { type: 'retry_marker'; attempt: number; maxAttempts?: number; reason?: string }
-  | { type: 'status_update'; tool: string; status: string; message?: string; toolCallId?: string };
+  | { type: 'status_update'; tool: string; status: string; message?: string; toolCallId?: string }
+  | { type: 'config_block'; blockType: string; blockIndex: number; label: string };
 
 /**
  * Check if a string looks like JSON (starts with { or [).
@@ -195,6 +196,16 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
             }
             return [...prev, { type: 'status_update', tool, status, message, toolCallId }];
           });
+        },
+        onConfigBlock: (block) => {
+          const labelMap: Record<string, string> = {
+            meta: 'Meta',
+            agent: `Agent ${block.blockIndex + 1}`,
+            task: `Task ${block.blockIndex + 1}`,
+            variable: `Variable ${block.blockIndex + 1}`,
+          };
+          const label = `${labelMap[block.blockType] ?? block.blockType} ✓`;
+          setSegments(prev => [...prev, { type: 'config_block', blockType: block.blockType, blockIndex: block.blockIndex, label }]);
         },
         onError: (message) => {
           setError(message);
@@ -429,6 +440,14 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
                     </div>
                   );
 
+                case 'config_block':
+                  return (
+                    <div key={`block-${index}`} className="flex items-center gap-2 py-1.5 px-3 text-xs text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-md">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-green-500" />
+                      <span>{segment.label}</span>
+                    </div>
+                  );
+
                 default:
                   return null;
               }
@@ -522,6 +541,14 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
                             <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-blue-500" />
                           )}
                           <span>{segment.message ?? `${segment.tool}: ${segment.status}`}</span>
+                        </div>
+                      );
+
+                    case 'config_block':
+                      return (
+                        <div key={`err-block-${index}`} className="flex items-center gap-2 py-1.5 px-3 text-xs text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-md">
+                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-green-500" />
+                          <span>{segment.label}</span>
                         </div>
                       );
 
@@ -622,6 +649,14 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
                             <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-blue-500" />
                           )}
                           <span>{segment.message ?? `${segment.tool}: ${segment.status}`}</span>
+                        </div>
+                      );
+
+                    case 'config_block':
+                      return (
+                        <div key={`hist-block-${index}`} className="flex items-center gap-2 py-1.5 px-3 text-xs text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-md">
+                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-green-500" />
+                          <span>{segment.label}</span>
                         </div>
                       );
 

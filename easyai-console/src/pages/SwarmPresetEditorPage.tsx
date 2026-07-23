@@ -113,7 +113,7 @@ export const SwarmPresetEditorPage: React.FC = () => {
     const hasExisting = agents.length > 0 || tasks.length > 0;
     if (hasExisting) {
       const proceed = window.confirm(
-        i18n('AI generated config will replace your current configuration. Continue?')
+        i18n('AI generated config will be applied to your current configuration. Continue?')
       );
       if (!proceed) return;
     }

@@ -289,3 +289,135 @@ data class SubmitConfigParameter(
     val config: Map<String, Any?>,
     val explanation: String
 )
+
+// ============================================================================
+// Tool 4: submit_config_block (chunked submission for swarm configs)
+// ============================================================================
+
+/**
+ * Submits a single block of the swarm configuration for chunked generation.
+ * Unlike [SubmitConfigTool], this does NOT terminate the agent loop,
+ * allowing the LLM to submit multiple blocks incrementally.
+ */
+class SubmitConfigBlockTool : BaseToolDefinition(
+    ToolMetadata(
+        name = "submit_config_block",
+        description = """
+            Submit a single block of the swarm configuration. Call multiple times, once per logical section.
+            Blocks are assembled by the system into the final configuration.
+
+            Block types and their schemas:
+            - "meta": {"name": string, "title": string, "description": string}
+            - "agent": {"id": string, "agentDefinitionId": string (blank for inline), "name": string,
+              "description": string, "role": string, "systemPrompt": string, "toolNames": string[],
+              "mcpConfigs": [{"serverName": string, "toolNames": string[], "promptNames": string[]}],
+              "modelName": string (optional), "maxIterations": int (optional, default 50)}
+            - "task": {"id": string, "agentId": string (for SINGLE), "type": "SINGLE"|"TEAM"|"DELIBERATION",
+              "promptTemplate": string, "dependsOn": string[], "inputFrom": {"varName": "upstreamTaskId"},
+              "deliberation": {"participants": string[], "judge": string, "maxRounds": int} (required if type=DELIBERATION),
+              "team": {"leader": string, "members": string[], "maxIterations": int} (required if type=TEAM)}
+            - "variable": {"name": string, "description": string, "defaultValue": string}
+
+            Input: {"blockType": "meta"|"agent"|"task"|"variable", "blockIndex": number, "data": object}
+            - blockIndex: 0-based index within the block type (e.g., second agent = blockIndex 1)
+            - data: the JSON object for this block (must match the schema above)
+        """.trimIndent(),
+        permissionCategory = "config_gen",
+        isDefaultTool = false
+    )
+) {
+    private val objectMapper = SharedObjectMapper.instance
+
+    override fun parameterType(): Class<*> = SubmitConfigBlockParameter::class.java
+
+    override suspend fun doExecute(
+        agentContext: AgentContext,
+        toolCallId: String,
+        messageId: String?,
+        args: Map<String, Any?>,
+        coroutineScope: CoroutineScope,
+        onUpdate: suspend (ToolUpdate) -> Unit
+    ): ToolResult {
+        val blockType = args["blockType"] as? String
+            ?: return errorResult("Missing 'blockType' parameter. Must be: meta, agent, task, or variable.")
+        val blockIndex = (args["blockIndex"] as? Number)?.toInt()
+            ?: return errorResult("Missing 'blockIndex' parameter. Use 0-based index.")
+        if (blockIndex < 0) {
+            return errorResult("'blockIndex' must be >= 0. Use 0-based index within the block type.")
+        }
+        val data = args["data"]
+            ?: return errorResult("Missing 'data' parameter. Provide the block JSON object.")
+        if (data !is Map<*, *>) {
+            return errorResult("'data' must be a JSON object matching the block schema.")
+        }
+
+        val validTypes = setOf("meta", "agent", "task", "variable")
+        if (blockType !in validTypes) {
+            return errorResult("Invalid blockType: '$blockType'. Must be one of: $validTypes")
+        }
+
+        val dataJson = objectMapper.writeValueAsString(data)
+
+        // Return confirmation without terminate — allows agent loop to continue
+        return ToolResult(
+            content = listOf(TextContent("BLOCK_RECEIVED: $blockType #$blockIndex | DATA: $dataJson"))
+        )
+    }
+}
+
+/** Parameter class for submit_config_block tool schema generation. */
+data class SubmitConfigBlockParameter(
+    val blockType: String,
+    val blockIndex: Int,
+    val data: Map<String, Any?>
+)
+
+// ============================================================================
+// Tool 5: finalize_config (zero-config finalization for chunked swarm configs)
+// ============================================================================
+
+/**
+ * Finalizes the swarm configuration assembled from submitted blocks.
+ * The backend automatically assembles all submitted blocks (merged with the
+ * existing config if editing), validates the result, and submits it.
+ * This eliminates the need for the LLM to output the full config JSON again,
+ * which is the root cause of stream stalls with large configurations.
+ *
+ * @param finalizeAction suspend lambda provided by the generator that performs
+ *   assembly + validation + submission and returns a human/LLM-readable result.
+ */
+class FinalizeConfigTool(
+    private val finalizeAction: suspend (String?) -> String
+) : BaseToolDefinition(
+    ToolMetadata(
+        name = "finalize_config",
+        description = """
+            Finalize and submit the configuration. Call this AFTER submitting all blocks via submit_config_block.
+            No configuration parameter needed — the system automatically assembles all submitted blocks
+            (merged with the existing configuration if editing), validates the result, and submits it.
+            Input: {"explanation": "<brief explanation of your design decisions>"}
+            If validation fails, error details are returned — fix by re-submitting corrected blocks, then call finalize_config again.
+        """.trimIndent(),
+        permissionCategory = "config_gen",
+        isDefaultTool = false
+    )
+) {
+    override fun parameterType(): Class<*> = FinalizeConfigParameter::class.java
+
+    override suspend fun doExecute(
+        agentContext: AgentContext,
+        toolCallId: String,
+        messageId: String?,
+        args: Map<String, Any?>,
+        coroutineScope: CoroutineScope,
+        onUpdate: suspend (ToolUpdate) -> Unit
+    ): ToolResult {
+        val designExplanation = args["explanation"] as? String
+        return ToolResult(content = listOf(TextContent(finalizeAction(designExplanation))))
+    }
+}
+
+/** Parameter class for finalize_config tool schema generation. */
+data class FinalizeConfigParameter(
+    val explanation: String? = null
+)
