@@ -2,15 +2,11 @@ package com.easy.easyai.tools.shell
 
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.model.ToolResultContent
-import com.easy.easyai.core.tool.BaseToolDefinition
-import com.easy.easyai.core.tool.ToolExecutionMode
-import com.easy.easyai.core.tool.ToolMetadata
-import com.easy.easyai.core.tool.ToolResult
-import com.easy.easyai.core.tool.ToolUpdate
+import com.easy.easyai.core.tool.*
 import com.easy.easyai.tools.executeProcessWithTimeout
+import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.file.Path
@@ -18,8 +14,19 @@ import kotlin.time.Duration.Companion.seconds
 
 data class BashCommandParams(
     val command: String,
+    @param:JsonPropertyDescription(
+        "Idle timeout in seconds (resets on each output line). Range: 10-600, default: 300. " +
+        "Process is killed only if no output is received for this duration."
+    )
     val timeout: Long? = null
 )
+
+/** Minimum idle timeout the LLM may request (seconds). */
+private const val MIN_TIMEOUT_SEC = 10L
+/** Maximum idle timeout the LLM may request (seconds). */
+private const val MAX_TIMEOUT_SEC = 600L
+/** Default idle timeout when the LLM omits the parameter (seconds). */
+private const val DEFAULT_TIMEOUT_SEC = 200L
 
 /**
  * Execute shell commands via OS subprocess.
@@ -49,7 +56,8 @@ class BashTool(
             content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "Error: missing 'command' parameter", isError = true)),
             isError = true
         )
-        val timeoutSec = (args["timeout"] as? Number)?.toLong() ?: 300L
+        val timeoutSec = ((args["timeout"] as? Number)?.toLong() ?: DEFAULT_TIMEOUT_SEC)
+            .coerceIn(MIN_TIMEOUT_SEC, MAX_TIMEOUT_SEC)
         val shell = resolveBashShell()
         executeProcessWithTimeout(
             command = listOf(shell, "-c", command),

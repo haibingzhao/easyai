@@ -1,5 +1,6 @@
 package com.easy.easyai.tools
 
+import com.easy.easyai.core.model.ToolResultContent
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -97,6 +98,84 @@ class ProcessUtilsTest {
 
             assertTrue(result.timedOut)
             assertTrue(result.output.contains("partial"), "partial output before timeout should be retained")
+        }
+    }
+
+    @Nested
+    inner class `Idle timeout resets on output` {
+
+        @Test
+        fun `process producing continuous output is NOT killed by idle timeout`() = runBlocking {
+            // Outputs a line every 200ms for ~2s total; idle timeout is 800ms.
+            // Because output keeps flowing (interval < 800ms), the process must NOT be killed.
+            val result = executeProcess(
+                command = listOf("/bin/sh", "-c",
+                    "for i in 1 2 3 4 5 6 7 8 9 10; do echo tick\$i; sleep 0.2; done"),
+                timeout = 800.milliseconds
+            )
+
+            assertFalse(result.timedOut, "actively producing process should not be killed")
+            assertEquals(0, result.exitCode)
+            assertTrue(result.output.contains("tick10"), "all output lines should be captured")
+        }
+
+        @Test
+        fun `process killed after output stops and idle timeout elapses`() = runBlocking {
+            // Outputs one line then goes silent for 30s; idle timeout 500ms.
+            // The timer resets on the first line, then fires 500ms after the last output.
+            val started = System.currentTimeMillis()
+            val result = executeProcess(
+                command = listOf("/bin/sh", "-c", "echo start; sleep 30"),
+                timeout = 500.milliseconds
+            )
+            val elapsed = System.currentTimeMillis() - started
+
+            assertTrue(result.timedOut, "process should be killed after going idle")
+            assertTrue(result.output.contains("start"), "output before stall should be retained")
+            assertTrue(elapsed < 10_000, "idle timeout did not fire promptly, took ${elapsed}ms")
+        }
+    }
+
+    @Nested
+    inner class `executeProcessWithTimeout error propagation` {
+
+        @Test
+        fun `timeout sets top-level isError and includes timeout message in output`() = runBlocking {
+            val toolResult = executeProcessWithTimeout(
+                command = listOf("/bin/sh", "-c", "echo before_hang; sleep 30"),
+                toolCallId = "tc-test",
+                toolName = "bash",
+                timeout = 500.milliseconds,
+                onUpdate = {}
+            )
+
+            // Top-level isError must be true so ToolExecutionEngine propagates it correctly
+            assertTrue(toolResult.isError, "top-level ToolResult.isError must be true on timeout")
+
+            val content = toolResult.content.filterIsInstance<ToolResultContent>().first()
+            assertTrue(content.isError, "ToolResultContent.isError must be true on timeout")
+            assertNull(content.exitCode, "timed-out process should have no exit code")
+            // Output must contain an explicit stall error message
+            assertTrue(content.output.contains("stalled"), "output must contain stall error message")
+            // Partial output before hang is still preserved
+            assertTrue(content.output.contains("before_hang"), "partial output should be retained")
+        }
+
+        @Test
+        fun `non-zero exit code sets isError via includeExitCode`() = runBlocking {
+            val toolResult = executeProcessWithTimeout(
+                command = listOf("/bin/sh", "-c", "echo err_msg; exit 1"),
+                toolCallId = "tc-test2",
+                toolName = "bash",
+                timeout = 5.seconds,
+                includeExitCode = true,
+                onUpdate = {}
+            )
+
+            assertTrue(toolResult.isError, "non-zero exit code with includeExitCode should set isError")
+            val content = toolResult.content.filterIsInstance<ToolResultContent>().first()
+            assertEquals(1, content.exitCode)
+            assertTrue(content.output.contains("err_msg"))
         }
     }
 }

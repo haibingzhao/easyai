@@ -58,7 +58,7 @@ class GrepTool(metadata: ToolMetadata, private val workDir: Path) : BaseToolDefi
 
         if (result.timedOut) {
             return@withContext ToolResult(
-                content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "grep timeout after 30s", isError = true)),
+                content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "grep stalled: no output for 30s", isError = true)),
                 isError = true
             )
         }

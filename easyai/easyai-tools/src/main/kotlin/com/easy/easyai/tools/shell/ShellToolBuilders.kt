@@ -24,7 +24,9 @@ Do NOT use this tool for:
 - File name matching (find): use glob instead
 - Directory listing (ls): use ls instead
 - Reading files (cat/head/tail): use read instead
-- Calculations (math/date/time/arithmetic): use calc instead""",
+- Calculations (math/date/time/arithmetic): use calc instead
+Parameters:
+- timeout (optional): Idle timeout in seconds (10-600, default 300). Timer resets on output; process is killed only when idle for this duration.""",
         permissionCategory = "shell",
         tracksFileChanges = true,
         uiRenderer = "bash",

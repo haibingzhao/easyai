@@ -99,7 +99,7 @@
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <version>${spring-boot.version}</version>
                 <configuration>
-                    <mainClass>com.easy.easyai.example.WebExampleApplicationKt</mainClass>
+                    <mainClass>com.easy.easyai.apps.web.WebApplicationKt</mainClass>
                     <skip>false</skip>
                 </configuration>
             </plugin>
