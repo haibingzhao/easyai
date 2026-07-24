@@ -87,8 +87,24 @@ internal class DeliberationTaskExecutor(
 
         eventBridge.onDeliberationStarted(run, task, deliberation)
 
+        // Detect resume: deliberationHistory populated by SwarmRuntime.resume() from DB
+        val isResume = task.deliberationHistory.isNotEmpty()
         val history = mutableListOf<DeliberationEntry>()
         val total = TokenCounters()
+
+        if (isResume) {
+            history.addAll(task.deliberationHistory)
+            // Rebuild token counters from persisted history (same pattern as TEAM rebuildStateFromHistory)
+            for (entry in history) {
+                total.input += entry.inputTokens
+                total.output += entry.outputTokens
+                total.cacheRead += entry.cacheReadTokens
+                total.cacheWrite += entry.cacheWriteTokens
+                total.duration += entry.durationMs
+            }
+            logger.info("DELIBERATION task '{}' resuming ({} entries restored, max round {})",
+                task.id, history.size, history.maxOfOrNull { it.round } ?: 0)
+        }
 
         val inputFromVars = workerExecutor.resolveInputFrom(task, taskSummaries)
         val allParticipants = deliberation.participants.map { pid ->
@@ -117,40 +133,65 @@ internal class DeliberationTaskExecutor(
         // Build participant profiles for the Judge
         val participantProfiles = buildParticipantProfiles(allParticipants, runContext, run)
 
-        // --- Opening Round: Judge generates opening prompt ---
-        logger.info("Deliberation '{}' — Judge generating opening prompt", task.id)
+        // Determine resume point: find the last consecutively completed round
+        val lastCompletedRound = if (isResume) {
+            val roundCounts = history.groupBy { it.round }.mapValues { (_, entries) -> entries.size }
+            val participantCount = deliberation.participants.size
+            var last = 0
+            for (round in 1..deliberation.maxRounds) {
+                if ((roundCounts[round] ?: 0) >= participantCount) last = round
+                else break // Stop at first incomplete round to avoid skipping gaps
+            }
+            last
+        } else 0
 
-        val openingPromptForJudge = buildOpeningGenerationPrompt(
-            deliberationContext, participantProfiles
-        )
-        val openingResult = workerExecutor.executeWorker(
-            judgeSpec, openingPromptForJudge, run, task, runContext, abortSignal,
-            systemPromptOverride = ORCHESTRATOR_SYSTEM_PROMPT
-        )
-        total += openingResult
-
-        if (openingResult.status == SwarmTaskStatus.FAILED) {
-            logger.error("Deliberation '{}' — Judge failed to generate opening prompt: {}", task.id, openingResult.error)
-            val snapshot = total.snapshot()
-            return WorkerResult(
-                SwarmTaskStatus.FAILED, "",
-                inputTokens = snapshot.input, outputTokens = snapshot.output,
-                cacheReadTokens = snapshot.cacheRead, cacheWriteTokens = snapshot.cacheWrite,
-                durationMs = snapshot.duration, error = "Judge failed to generate opening prompt: ${openingResult.error}",
-                deliberationHistory = history
-            )
-        }
-
-        val rawOpeningPrompt = openingResult.summary
-        val openingPrompt = if (run.language.isNotBlank()) {
-            rawOpeningPrompt + buildLanguageSegment(run.language)
+        // --- Opening Round: Judge generates opening prompt (skip on resume if already in history) ---
+        val openingPrompt: String
+        val recoveredOpening = if (isResume) history.firstOrNull { it.openingPrompt != null }?.openingPrompt else null
+        if (recoveredOpening != null) {
+            // Opening prompt already persisted in history — recover directly (handles partial round 1)
+            openingPrompt = recoveredOpening
+            logger.info("Deliberation '{}' — skipping opening (recovered from history)", task.id)
         } else {
-            rawOpeningPrompt
-        }
-        logger.info("Deliberation '{}' — Opening prompt generated ({} chars)", task.id, openingPrompt.length)
+            logger.info("Deliberation '{}' — Judge generating opening prompt", task.id)
 
-        // --- Main deliberation loop ---
-        for (round in 1..deliberation.maxRounds) {
+            val openingPromptForJudge = buildOpeningGenerationPrompt(
+                deliberationContext, participantProfiles
+            )
+            val openingResult = workerExecutor.executeWorker(
+                judgeSpec, openingPromptForJudge, run, task, runContext, abortSignal,
+                systemPromptOverride = ORCHESTRATOR_SYSTEM_PROMPT
+            )
+            total += openingResult
+
+            if (openingResult.status == SwarmTaskStatus.FAILED) {
+                logger.error("Deliberation '{}' — Judge failed to generate opening prompt: {}", task.id, openingResult.error)
+                val snapshot = total.snapshot()
+                return WorkerResult(
+                    SwarmTaskStatus.FAILED, "",
+                    inputTokens = snapshot.input, outputTokens = snapshot.output,
+                    cacheReadTokens = snapshot.cacheRead, cacheWriteTokens = snapshot.cacheWrite,
+                    durationMs = snapshot.duration, error = "Judge failed to generate opening prompt: ${openingResult.error}",
+                    deliberationHistory = history
+                )
+            }
+
+            val rawOpeningPrompt = openingResult.summary
+            openingPrompt = if (run.language.isNotBlank()) {
+                rawOpeningPrompt + buildLanguageSegment(run.language)
+            } else {
+                rawOpeningPrompt
+            }
+            logger.info("Deliberation '{}' — Opening prompt generated ({} chars)", task.id, openingPrompt.length)
+        }
+
+        // --- Main deliberation loop (resume from the appropriate round) ---
+        val startRound = (lastCompletedRound + 1).coerceAtLeast(1)
+        if (startRound > deliberation.maxRounds) {
+            logger.info("Deliberation '{}' — all rounds complete, proceeding to verdict", task.id)
+        }
+
+        for (round in startRound..deliberation.maxRounds) {
             if (abortSignal()) {
                 logger.info("Deliberation '{}' aborted at round {} by abort signal", task.id, round)
                 break
@@ -173,29 +214,51 @@ internal class DeliberationTaskExecutor(
                 // Opening round: all participants get the same judge-generated opening prompt
                 speakers.associateWith { openingPrompt }
             } else {
-                // Subsequent rounds: Judge generates personalized prompts
-                logger.info("Deliberation '{}' — Judge generating round {} prompts", task.id, round)
-                val generatedPrompts = generateRoundPrompts(
-                    judgeSpec, run, task, runContext, abortSignal, total,
-                    history, round, participantProfiles, allParticipants,
-                )
-                if (generatedPrompts == null) {
-                    // Judge decided to converge — break to verdict
-                    logger.info("Deliberation '{}' — Judge signaled convergence at round {}", task.id, round)
-                    break
-                }
-                // Inject language instruction into each participant prompt
-                if (run.language.isNotBlank()) {
-                    val langSegment = buildLanguageSegment(run.language)
-                    generatedPrompts.mapValues { (_, p) -> p + langSegment }
+                // Try to recover persisted prompts for partial round resume
+                val persistedPrompts = if (isResume) {
+                    history.firstOrNull { it.round == round && it.roundPrompts != null }?.roundPrompts
+                } else null
+
+                if (persistedPrompts != null) {
+                    logger.info("Deliberation '{}' — recovered round {} prompts from history", task.id, round)
+                    persistedPrompts
                 } else {
-                    generatedPrompts
+                    // Subsequent rounds: Judge generates personalized prompts
+                    logger.info("Deliberation '{}' — Judge generating round {} prompts", task.id, round)
+                    val generatedPrompts = generateRoundPrompts(
+                        judgeSpec, run, task, runContext, abortSignal, total,
+                        history, round, participantProfiles, allParticipants,
+                    )
+                    if (generatedPrompts == null) {
+                        // Judge decided to converge — break to verdict
+                        logger.info("Deliberation '{}' — Judge signaled convergence at round {}", task.id, round)
+                        break
+                    }
+                    // Inject language instruction into each participant prompt
+                    if (run.language.isNotBlank()) {
+                        val langSegment = buildLanguageSegment(run.language)
+                        generatedPrompts.mapValues { (_, p) -> p + langSegment }
+                    } else {
+                        generatedPrompts
+                    }
                 }
             }
+
+            // Handle partial round on resume: skip speakers who already responded
+            val completedSpeakers = if (isResume) {
+                history.filter { it.round == round }.map { it.agentId }.toSet()
+            } else emptySet()
 
             // Each participant responds
             var isFirstSpeaker = true
             for (participantId in speakers) {
+                if (participantId in completedSpeakers) {
+                    logger.debug("Deliberation '{}' — skipping already-completed speaker '{}' in round {}",
+                        task.id, participantId, round)
+                    isFirstSpeaker = false
+                    continue
+                }
+
                 val agentSpec = run.agents.find { it.id == participantId } ?: continue
                 val prompt = roundPrompts[participantId] ?: openingPrompt
 

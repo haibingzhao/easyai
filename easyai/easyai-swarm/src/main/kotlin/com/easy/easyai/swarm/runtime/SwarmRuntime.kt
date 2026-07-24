@@ -208,6 +208,20 @@ class SwarmRuntime(
                     inMemory.roundRecords = rounds
                     inMemory.escalationHistory = store.getEscalationHistory(run.id, inMemory.id)
                 }
+                // Restore SINGLE task session for resume support
+                if (inMemory.type == TaskType.SINGLE &&
+                    inMemory.status != SwarmTaskStatus.COMPLETED &&
+                    inMemory.status != SwarmTaskStatus.FAILED) {
+                    workerExecutor.findSessionForTask(run.id, inMemory.id)?.let { sid ->
+                        inMemory.sessionId = sid
+                    }
+                }
+                // Restore DELIBERATION task history for resume support
+                if (inMemory.type == TaskType.DELIBERATION && store != null &&
+                    inMemory.status != SwarmTaskStatus.COMPLETED &&
+                    inMemory.status != SwarmTaskStatus.FAILED) {
+                    inMemory.deliberationHistory = store.getDeliberationHistory(run.id, inMemory.id)
+                }
             }
         }
 

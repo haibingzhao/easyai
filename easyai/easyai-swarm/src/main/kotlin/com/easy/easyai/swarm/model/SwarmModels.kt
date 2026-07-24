@@ -177,6 +177,9 @@ data class SwarmTask(
     var cacheReadTokens: Long = 0,
     var cacheWriteTokens: Long = 0,
     var durationMs: Long = 0,
+    /** Session ID recovered from DB — populated by SwarmRuntime.resume() for SINGLE task resume. */
+    @JsonIgnore
+    var sessionId: String? = null,
     /** Deliberation history — populated during execution for DELIBERATION tasks. */
     @JsonIgnore
     var deliberationHistory: List<DeliberationEntry> = emptyList(),
@@ -285,7 +288,7 @@ data class DeliberationHistoryResponse(
 data class TeamSpec(
     val leader: String,
     val members: List<String>,
-    val maxIterations: Int = 5,
+    val maxIterations: Int = 20,
     val maxDynamicTasks: Int = 10,
     val roundTimeoutSeconds: Int = 600,
     val memberTimeoutSeconds: Int = 0,

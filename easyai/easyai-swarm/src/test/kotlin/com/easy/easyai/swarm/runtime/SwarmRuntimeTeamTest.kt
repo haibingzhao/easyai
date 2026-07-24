@@ -244,7 +244,7 @@ class SwarmRuntimeTeamTest {
         fun `TeamSpec default values are correct`() {
             val spec = TeamSpec(leader = "ldr", members = listOf("m1"))
 
-            assertEquals(5, spec.maxIterations)
+            assertEquals(20, spec.maxIterations)
             assertEquals(10, spec.maxDynamicTasks)
             assertEquals(600, spec.roundTimeoutSeconds)
             assertEquals(0, spec.memberTimeoutSeconds)

@@ -121,5 +121,9 @@ class SwarmSessionAutoConfiguration {
         override suspend fun loadMessages(sessionId: String): List<EasyAiMessage> {
             return sessionStore.loadActiveMessages(sessionId)
         }
+
+        override suspend fun findSessionByTask(swarmRunId: String, swarmTaskId: String): String? {
+            return sessionStore.findSessionIdBySwarmTask(swarmRunId, swarmTaskId)
+        }
     }
 }

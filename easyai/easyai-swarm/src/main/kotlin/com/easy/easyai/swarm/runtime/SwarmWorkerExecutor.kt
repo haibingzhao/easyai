@@ -73,7 +73,72 @@ class SwarmWorkerExecutor(
         } else {
             renderPrompt(task.promptTemplate, taskSummaries, run.userVars, extraVars = inputFromVars, agentDef = agentDef)
         }
+
+        // Detect resume: sessionId populated by SwarmRuntime.resume() from DB
+        val sessionId = task.sessionId
+        if (sessionId != null) {
+            logger.info("SINGLE task '{}' resuming from session '{}'", task.id, sessionId)
+            val resumeMessage = buildResumeContinuationMessage(prompt)
+
+            // Rebuild same tools as executeWorker for consistency
+            val extraTools = mutableListOf<ToolDefinition>()
+            val extraChecks = mutableListOf<AgentCompletionCheck>()
+            if (runContext.variableGuard != null && task.updatableVariables.isNotEmpty()) {
+                extraTools += UpdateVariableTool(
+                    metadata = ToolMetadata(
+                        name = "update_variable",
+                        description = UpdateVariableTool.buildDescription(task.updatableVariables),
+                        permissionCategory = "swarm",
+                        isDefaultTool = false
+                    ),
+                    userVars = run.userVars,
+                    guard = runContext.variableGuard,
+                    taskId = task.id
+                )
+            }
+            val reportRef = AtomicReference<TaskReportResult>()
+            if (task.reportEnabled) {
+                extraTools += TaskCompletionReportTool(
+                    metadata = ToolMetadata(
+                        name = TaskCompletionReportTool.TOOL_NAME,
+                        description = TaskCompletionReportTool.buildDescription(),
+                        permissionCategory = "swarm",
+                        isDefaultTool = false
+                    ),
+                    reportRef = reportRef,
+                )
+                extraChecks += TaskCompletionReportCheck(reportRef)
+            }
+
+            val result = resumeWorker(
+                agentSpec, sessionId, resumeMessage,
+                run, task, runContext, abortSignal,
+                additionalTools = extraTools,
+                additionalCompletionChecks = extraChecks,
+                inputFromVars = inputFromVars,
+            )
+            // Clear sessionId on failure so retries fall back to fresh execution
+            if (result.status != SwarmTaskStatus.COMPLETED) {
+                task.sessionId = null
+            }
+            return result
+        }
+
         return executeWorker(agentSpec, prompt, run, task, runContext, abortSignal, inputFromVars = inputFromVars)
+    }
+
+    /**
+     * Build a continuation message for resumed SINGLE tasks.
+     * The full conversation history is loaded from the session;
+     * this message simply instructs the agent to continue.
+     */
+    private fun buildResumeContinuationMessage(originalPrompt: String): String {
+        return buildString {
+            appendLine("Your previous execution was interrupted. Continue the task from where you left off.")
+            appendLine()
+            appendLine("Original task:")
+            appendLine(originalPrompt)
+        }
     }
 
     /**
@@ -291,6 +356,7 @@ class SwarmWorkerExecutor(
         abortSignal: () -> Boolean = { false },
         additionalTools: List<ToolDefinition> = emptyList(),
         additionalCompletionChecks: List<AgentCompletionCheck> = emptyList(),
+        inputFromVars: Map<String, String> = emptyMap(),
     ): WorkerResult {
         // Resolve agent context (same as executeWorker)
         val (baseContext, resolvedTools) = try {
@@ -301,6 +367,7 @@ class SwarmWorkerExecutor(
                 modelConfigId = runContext.modelConfigId,
                 agentDefCache = runContext.agentDefCache,
                 modelConfigCache = runContext.modelConfigCache,
+                inputFromVars = inputFromVars,
             )
         } catch (e: Exception) {
             logger.error("Failed to resolve agent '{}' for resume: {}", agentSpec.id, e.message, e)
@@ -323,10 +390,17 @@ class SwarmWorkerExecutor(
         }
 
         val toolsWithAdditional = resolvedTools + additionalTools
+        // Merge inputFrom vars into inputVariables so the system prompt can also render them
+        val mergedInputVariables = if (inputFromVars.isNotEmpty()) {
+            baseContext.inputVariables + inputFromVars
+        } else {
+            baseContext.inputVariables
+        }
         val context = baseContext.copy(
             tools = toolsWithAdditional,
             sessionId = sessionId,
             abortSignal = abortSignal,
+            inputVariables = mergedInputVariables,
         )
 
         val workerService = wrapServiceWithListener(
@@ -335,12 +409,39 @@ class SwarmWorkerExecutor(
         )
         val finalService = wrapServiceWithCompletionChecks(workerService, additionalCompletionChecks)
 
+        // Track accumulated usage for task_progress events
+        var progressUsage = Usage()
+
         val output = executeAgentWithProtection(
             agent = Agent(context, finalService),
             prompt = resumeMessage,
             timeoutMs = agentSpec.timeoutSeconds * 1000L,
             abortSignal = abortSignal,
             onEvent = { event ->
+                // Accumulate usage from MessageEndEvent for progress tracking
+                if (event is MessageEndEvent) {
+                    event.usage?.let { u ->
+                        progressUsage = Usage(
+                            inputTokens = progressUsage.inputTokens + u.inputTokens,
+                            outputTokens = progressUsage.outputTokens + u.outputTokens,
+                            cacheReadTokens = progressUsage.cacheReadTokens + u.cacheReadTokens,
+                            cacheWriteTokens = progressUsage.cacheWriteTokens + u.cacheWriteTokens,
+                        )
+                    }
+                }
+
+                // Emit task_progress on each ReAct iteration end
+                if (event is TurnEndEvent) {
+                    eventBridge.onTaskProgress(
+                        run = run,
+                        task = task,
+                        iteration = event.turnId,
+                        inputTokens = progressUsage.inputTokens.toLong(),
+                        outputTokens = progressUsage.outputTokens.toLong()
+                    )
+                }
+
+                // Forward worker internal events based on eventVerbosity
                 if (eventVerbosity != "task") {
                     val shouldForward = eventVerbosity == "all" ||
                         (eventVerbosity == "tool" && event.type.startsWith("tool_"))
@@ -455,6 +556,13 @@ class SwarmWorkerExecutor(
         }
         return resolved
     }
+
+    /**
+     * Find an existing session for a swarm task.
+     * Delegates to [SwarmSessionManager.findSessionByTask] if a session manager is configured.
+     */
+    internal suspend fun findSessionForTask(runId: String, taskId: String): String? =
+        sessionManager?.findSessionByTask(runId, taskId)
 
     /**
      * Create a copy of this executor with ephemeral in-memory sessions (for dry-run mode).

@@ -7,17 +7,8 @@ import com.easy.easyai.swarm.store.SwarmRunStore
 import com.easy.easyai.swarm.tool.EscalationCompletionCheck
 import com.easy.easyai.swarm.tool.EscalationResult
 import com.easy.easyai.swarm.tool.EscalationTool
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.supervisorScope
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Duration.Companion.milliseconds
@@ -205,7 +196,7 @@ internal class TeamTaskExecutor(
                     }
 
                     // Drain: wait brief window to aggregate more results
-                    delay(2000)
+                    delay(2000.milliseconds)
                     val batch = mutableListOf(first)
                     while (true) {
                         val next = resultChannel.tryReceive().getOrNull() ?: break
@@ -214,7 +205,8 @@ internal class TeamTaskExecutor(
 
                     // Process batch: update state, emit events, update taskSummaries
                     processResultBatch(batch, state, run, task, taskSummaries,
-                        resultChannel, runContext, abortSignal, inputFromVars)
+                        resultChannel, runContext, abortSignal
+                    )
 
                     val decision = invokeLeaderCoordination(
                         batch, state, teamSpec, leaderSpec, run, task,
@@ -395,15 +387,10 @@ internal class TeamTaskExecutor(
         for (dynamicTask in decision.newTasks) {
             eventBridge.onTeamDelegated(run, task, dynamicTask.memberId, dynamicTask.assignment)
             val job = launch {
-                val result = withTimeoutOrNull(memberTimeoutMs) {
-                    executeTeamMember(
-                        dynamicTask.memberId, dynamicTask.assignment,
-                        iteration, run, task, taskSummaries, inputFromVars,
-                        abortSignal, runContext, state
-                    )
-                } ?: timeoutMemberResult(dynamicTask.memberId, iteration, memberTimeoutMs)
-                state.runningJobs.remove(dynamicTask.memberId)
-                state.runningMemberIds.remove(dynamicTask.memberId)
+                val result = executeMemberWithTimeout(
+                    dynamicTask.memberId, dynamicTask.assignment, iteration, memberTimeoutMs,
+                    run, task, taskSummaries, inputFromVars, abortSignal, runContext, state
+                )
                 channel.send(result)
             }
             state.runningJobs[dynamicTask.memberId] = job
@@ -426,15 +413,10 @@ internal class TeamTaskExecutor(
 
             val reassignAssignment = "Reassigned from ${reassignment.fromMemberId}: ${reassignment.reason}"
             val job = launch {
-                val result = withTimeoutOrNull(memberTimeoutMs) {
-                    executeTeamMember(
-                        reassignment.toMemberId, reassignAssignment,
-                        iteration, run, task, taskSummaries, inputFromVars,
-                        abortSignal, runContext, state
-                    )
-                } ?: timeoutMemberResult(reassignment.toMemberId, iteration, memberTimeoutMs)
-                state.runningJobs.remove(reassignment.toMemberId)
-                state.runningMemberIds.remove(reassignment.toMemberId)
+                val result = executeMemberWithTimeout(
+                    reassignment.toMemberId, reassignAssignment, iteration, memberTimeoutMs,
+                    run, task, taskSummaries, inputFromVars, abortSignal, runContext, state
+                )
                 channel.send(result)
             }
             state.runningJobs[reassignment.toMemberId] = job
@@ -454,22 +436,10 @@ internal class TeamTaskExecutor(
                     task.id, spec.blockedMemberId)
                 continue
             }
-            // Cancel the blocked member's running job
-            val blockedJob = state.runningJobs[spec.blockedMemberId]
-            if (blockedJob != null && blockedJob.isActive) {
-                blockedJob.cancelAndJoin()
-            }
-            state.runningJobs.remove(spec.blockedMemberId)
-            state.runningMemberIds.remove(spec.blockedMemberId)
-            val originalAssignment = state.memberAssignments[spec.blockedMemberId] ?: ""
-            state.suspendedMembers[spec.blockedMemberId] = SuspendedMemberInfo(
-                memberId = spec.blockedMemberId,
-                sessionId = sessionId,
-                originalAssignment = originalAssignment,
-                blockReason = spec.assistTask,
-                suspendedAtRound = iteration,
+            // Suspend the blocked member (cancel job, record state, emit event)
+            val originalAssignment = suspendBlockedMember(
+                state, spec.blockedMemberId, sessionId, spec.assistTask, iteration, run, task
             )
-            eventBridge.onTeamMemberSuspended(run, task, spec.blockedMemberId, spec.assistTask)
             state.memberExecutions.add(TeamMemberExecution(
                 memberId = spec.blockedMemberId,
                 round = iteration,
@@ -481,15 +451,10 @@ internal class TeamTaskExecutor(
             // Launch helper member to resolve the blocking issue
             eventBridge.onTeamDelegated(run, task, spec.helperMemberId, spec.assistTask)
             val helperJob = launch {
-                val helperResult = withTimeoutOrNull(memberTimeoutMs) {
-                    executeTeamMember(
-                        spec.helperMemberId, spec.assistTask,
-                        iteration, run, task, taskSummaries, inputFromVars,
-                        abortSignal, runContext, state
-                    )
-                } ?: timeoutMemberResult(spec.helperMemberId, iteration, memberTimeoutMs)
-                state.runningJobs.remove(spec.helperMemberId)
-                state.runningMemberIds.remove(spec.helperMemberId)
+                val helperResult = executeMemberWithTimeout(
+                    spec.helperMemberId, spec.assistTask, iteration, memberTimeoutMs,
+                    run, task, taskSummaries, inputFromVars, abortSignal, runContext, state
+                )
                 // Tag result so processResultBatch knows to trigger resume
                 channel.send(helperResult.copy(assistForMemberId = spec.blockedMemberId))
             }
@@ -510,24 +475,10 @@ internal class TeamTaskExecutor(
                     task.id, spec.blockedMemberId)
                 continue
             }
-            // Cancel the blocked member's running job
-            val blockedJob = state.runningJobs[spec.blockedMemberId]
-            if (blockedJob != null && blockedJob.isActive) {
-                blockedJob.cancelAndJoin()
-            }
-            state.runningJobs.remove(spec.blockedMemberId)
-            state.runningMemberIds.remove(spec.blockedMemberId)
-            val originalAssignment = state.memberAssignments[spec.blockedMemberId] ?: ""
-            state.suspendedMembers[spec.blockedMemberId] = SuspendedMemberInfo(
-                memberId = spec.blockedMemberId,
-                sessionId = sessionId,
-                originalAssignment = originalAssignment,
-                blockReason = spec.question,
-                suspendedAtRound = iteration,
+            // Suspend the blocked member (cancel job, record state, emit event)
+            val originalAssignment = suspendBlockedMember(
+                state, spec.blockedMemberId, sessionId, spec.question, iteration, run, task
             )
-
-            // Emit consultation event
-            eventBridge.onTeamMemberSuspended(run, task, spec.blockedMemberId, spec.question)
             eventBridge.onTeamUserConsultationNeeded(run, task, spec.blockedMemberId, spec.question, spec.options)
             state.memberExecutions.add(TeamMemberExecution(
                 memberId = spec.blockedMemberId,
@@ -544,7 +495,7 @@ internal class TeamTaskExecutor(
 
             val consultTimeoutMs = ((teamSpec?.consultationTimeoutSeconds ?: 0).takeIf { it > 0 } ?: 300) * 1000L
             val watcherJob = launch {
-                val answer = withTimeoutOrNull(consultTimeoutMs) { deferred.await() }
+                val answer = withTimeoutOrNull(consultTimeoutMs.milliseconds) { deferred.await() }
                 state.pendingConsultations.remove(spec.blockedMemberId)
                 consultationRegistry.remove(run.id, task.id, spec.blockedMemberId)
                 val suspended = state.suspendedMembers[spec.blockedMemberId] ?: return@launch
@@ -552,7 +503,7 @@ internal class TeamTaskExecutor(
                 if (answer != null && answer != TeamConsultationRegistry.REJECT_MARKER) {
                     // User answered — resume the member
                     val resumeResult = resumeSuspendedMember(
-                        suspended, answer, run, task, runContext, abortSignal, taskSummaries, inputFromVars, state
+                        suspended, answer, run, task, runContext, abortSignal, state
                     )
                     trySendToChannel(channel, resumeResult)
                 } else {
@@ -595,7 +546,6 @@ internal class TeamTaskExecutor(
         channel: Channel<MemberExecutionResult>? = null,
         runContext: RunContext? = null,
         abortSignal: (() -> Boolean)? = null,
-        inputFromVars: Map<String, String> = emptyMap(),
     ) {
         for (result in batch) {
             val (memberId, memberExec) = result
@@ -617,7 +567,7 @@ internal class TeamTaskExecutor(
                         val resumeJob = launch {
                             val resumeResult = resumeSuspendedMember(
                                 suspended, resolutionInfo, run, task, runContext, abortSignal,
-                                taskSummaries, inputFromVars, state
+                                state
                             )
                             trySendToChannel(channel, resumeResult)
                         }
@@ -742,6 +692,34 @@ internal class TeamTaskExecutor(
     }
 
     /**
+     * Execute a team member with timeout and clean up running state afterwards.
+     * Combines [executeTeamMember] + [timeoutMemberResult] fallback + running state removal.
+     */
+    private suspend fun executeMemberWithTimeout(
+        memberId: String,
+        assignment: String,
+        iteration: Int,
+        memberTimeoutMs: Long,
+        run: SwarmRun,
+        task: SwarmTask,
+        taskSummaries: MutableMap<String, String>,
+        inputFromVars: Map<String, String>,
+        abortSignal: () -> Boolean,
+        runContext: RunContext,
+        state: TeamExecutionState,
+    ): MemberExecutionResult {
+        val result = withTimeoutOrNull(memberTimeoutMs.milliseconds) {
+            executeTeamMember(
+                memberId, assignment, iteration, run, task,
+                taskSummaries, inputFromVars, abortSignal, runContext, state
+            )
+        } ?: timeoutMemberResult(memberId, iteration, memberTimeoutMs)
+        state.runningJobs.remove(memberId)
+        state.runningMemberIds.remove(memberId)
+        return result
+    }
+
+    /**
      * Resume a suspended member by loading its session history and continuing execution.
      * Called after a helper completes (SUSPEND_AND_ASSIST) or user answers (SUSPEND_AND_CONSULT_USER).
      */
@@ -752,8 +730,6 @@ internal class TeamTaskExecutor(
         task: SwarmTask,
         runContext: RunContext,
         abortSignal: () -> Boolean,
-        taskSummaries: MutableMap<String, String>,
-        inputFromVars: Map<String, String>,
         state: TeamExecutionState? = null,
     ): MemberExecutionResult {
         val memberSpec = run.agents.find { it.id == suspended.memberId }
@@ -1138,6 +1114,37 @@ internal class TeamTaskExecutor(
         }
 
         return sb.toString()
+    }
+
+    /**
+     * Suspend a blocked member: cancel its running job, record suspension state, and emit event.
+     * Returns the member's original assignment.
+     */
+    private suspend fun suspendBlockedMember(
+        state: TeamExecutionState,
+        memberId: String,
+        sessionId: String,
+        blockReason: String,
+        iteration: Int,
+        run: SwarmRun,
+        task: SwarmTask,
+    ): String {
+        val blockedJob = state.runningJobs[memberId]
+        if (blockedJob != null && blockedJob.isActive) {
+            blockedJob.cancelAndJoin()
+        }
+        state.runningJobs.remove(memberId)
+        state.runningMemberIds.remove(memberId)
+        val originalAssignment = state.memberAssignments[memberId] ?: ""
+        state.suspendedMembers[memberId] = SuspendedMemberInfo(
+            memberId = memberId,
+            sessionId = sessionId,
+            originalAssignment = originalAssignment,
+            blockReason = blockReason,
+            suspendedAtRound = iteration,
+        )
+        eventBridge.onTeamMemberSuspended(run, task, memberId, blockReason)
+        return originalAssignment
     }
 
     /**

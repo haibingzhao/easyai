@@ -51,4 +51,15 @@ interface SwarmSessionManager {
      * @return List of messages ordered by creation time, or empty list if not supported
      */
     suspend fun loadMessages(sessionId: String): List<EasyAiMessage> = emptyList()
+
+    /**
+     * Find an existing session ID for a swarm task (by run + task ID).
+     * Used by [SwarmRuntime.resume] to recover SINGLE task sessions.
+     * Returns null if no session exists or lookup is not supported.
+     *
+     * @param swarmRunId The ID of the swarm run
+     * @param swarmTaskId The ID of the task within the run
+     * @return The session ID if found, null otherwise
+     */
+    suspend fun findSessionByTask(swarmRunId: String, swarmTaskId: String): String? = null
 }
