@@ -39,17 +39,7 @@ cd easyai
 ./mvnw clean install
 ```
 
-### 2. Configure environment
-
-Copy the example environment file and fill in your API keys:
-
-```bash
-cd easyai-apps/easyai-web-server
-cp .env.example .env
-# Edit .env with your API keys
-```
-
-### 3. Run the web server
+### 2. Run the web server
 
 ```bash
 cd easyai-apps
@@ -58,7 +48,7 @@ cd easyai-apps
 
 The server starts on `http://localhost:8080`.
 
-### 4. Run the frontend (development)
+### 3. Run the frontend (development)
 
 ```bash
 cd easyai-console
@@ -67,6 +57,10 @@ npm run dev
 ```
 
 The Vite dev server proxies `/api` requests to `http://localhost:8080`.
+
+### 4. Configure via Web UI
+
+Open `http://localhost:5173` in your browser. Navigate to **Settings** to configure your LLM API keys, database connections, and other options — no manual file editing required.
 
 ### 5. Desktop client
 
@@ -78,14 +72,13 @@ npm run desktop:dev         # Launch Electron
 
 ## Configuration
 
-All sensitive configuration is managed via environment variables. See `.env.example` files for available options:
+All configuration is managed through the **web UI** (Settings page). After starting the server and frontend, open the Settings page to configure:
 
-| Variable | Description |
-|----------|-------------|
-| `ANTHROPIC_API_KEY` | LLM API key (DashScope/Anthropic compatible) |
-| `DB_USERNAME` | PostgreSQL username |
-| `DB_PASSWORD` | PostgreSQL password |
-| `EXA_API_KEY` | EXA search API key (optional) |
+| Setting | Description |
+|---------|-------------|
+| LLM API Key | Model provider API key (DashScope/Anthropic/OpenAI compatible) |
+| Database | PostgreSQL connection (or use embedded H2 for desktop mode) |
+| Search API Key | EXA search API key (optional) |
 
 ## Tech Stack
 

@@ -25,6 +25,7 @@ dist/
 dist-electron/
 node_modules/
 .flattened-pom.xml
+/META-INF/
 
 # Desktop build artifacts
 easyai-desktop/backend/jre/
