@@ -3,12 +3,15 @@ import { useNavigate } from 'react-router-dom';
 import { GitBranch, Loader2, Sparkles, Pencil, Trash2, Download, Upload } from 'lucide-react';
 import { useSwarmStore } from '@/services/stores/swarm-store';
 import { swarmService } from '@/services/swarm-service';
+import type { PresetRequest } from '@/services/swarm-service';
 import { i18n } from '@/utils/i18n';
+import { SwarmImportDialog } from '@/components/swarm/SwarmImportDialog';
 
 export const WorkflowPage: React.FC = () => {
   const navigate = useNavigate();
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [importDialogPreset, setImportDialogPreset] = useState<PresetRequest | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { presets, loading, loadPresets, deletePreset, swarmEnabled } = useSwarmStore();
 
@@ -34,8 +37,8 @@ export const WorkflowPage: React.FC = () => {
     if (!file) return;
     setImportError(null);
     try {
-      await swarmService.importPreset(file);
-      await loadPresets();
+      const preset = await swarmService.parsePresetFile(file);
+      setImportDialogPreset(preset);
     } catch (err) {
       setImportError(err instanceof Error ? err.message : 'Import failed');
     }
@@ -165,6 +168,18 @@ export const WorkflowPage: React.FC = () => {
             </div>
           ))}
         </div>
+      )}
+
+      {/* Import preview dialog */}
+      {importDialogPreset && (
+        <SwarmImportDialog
+          preset={importDialogPreset}
+          onClose={() => setImportDialogPreset(null)}
+          onImported={() => {
+            setImportDialogPreset(null);
+            loadPresets();
+          }}
+        />
       )}
     </div>
   );

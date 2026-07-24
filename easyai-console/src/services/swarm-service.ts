@@ -392,11 +392,20 @@ class SwarmService {
   }
 
   async importPreset(file: File): Promise<PresetInfo> {
+    const data = await this.parsePresetFile(file);
+    return this.importPresetData(data);
+  }
+
+  async parsePresetFile(file: File): Promise<PresetRequest> {
     const text = await file.text();
     const data = JSON.parse(text);
     if (!data.name || !data.agents || !data.tasks) {
       throw new Error('Invalid preset file: missing name, agents, or tasks');
     }
+    return data as PresetRequest;
+  }
+
+  async importPresetData(data: PresetRequest): Promise<PresetInfo> {
     const resp = await authFetch(`${API_BASE}/presets/import`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

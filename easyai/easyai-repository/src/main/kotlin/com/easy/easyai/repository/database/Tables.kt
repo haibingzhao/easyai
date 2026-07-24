@@ -75,7 +75,7 @@ object Tables {
         val createdAt = long("created_at")
         val updatedAt = long("updated_at")
 
-        override val primaryKey = PrimaryKey(id)
+        override val primaryKey = PrimaryKey(id, userId)
     }
 
     /**

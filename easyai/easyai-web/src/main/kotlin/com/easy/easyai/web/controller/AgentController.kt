@@ -18,6 +18,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.reactor.mono
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpStatus
+import org.springframework.http.MediaType
+import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import org.springframework.web.server.ResponseStatusException
 import reactor.core.publisher.Mono
@@ -74,6 +76,24 @@ class AgentController(
         loadAgentDto(agent, id)
     }
 
+    /**
+     * Export an agent configuration as a self-contained JSON file.
+     */
+    @GetMapping("/{id}/export")
+    fun exportAgent(@PathVariable id: String): Mono<ResponseEntity<String>> = mono {
+        val userId = getCurrentUserId()
+        val agent = agentStore.findById(id, userId)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found: $id")
+        val dto = loadAgentDto(agent, id)
+        val exportDto = mapOf("formatVersion" to 1, "agent" to dto)
+        val json = objectMapper.writeValueAsString(exportDto)
+        val safeId = id.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        ResponseEntity.ok()
+            .header("Content-Disposition", "attachment; filename=\"${safeId}.agent.json\"")
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(json)
+    }
+
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     fun create(@RequestBody request: AgentCreateRequest): Mono<AgentDto> = mono {
@@ -81,6 +101,15 @@ class AgentController(
             "Description must be $MAX_DESCRIPTION_LENGTH characters or less"
         }
         val userId = getCurrentUserId()
+        // Check conflict with built-in system agent first (clearer error message)
+        val systemAgent = agentStore.findById(request.id, AuthConstants.SYSTEM_USER_ID)
+        if (systemAgent != null && systemAgent.userId == AuthConstants.SYSTEM_USER_ID) {
+            throw ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Agent ID '${request.id}' is reserved by a built-in system agent. Please choose a different ID."
+            )
+        }
+        // Check if current user already has an agent with this ID
         val existing = agentStore.findById(request.id, userId)
         if (existing != null) {
             throw ResponseStatusException(HttpStatus.CONFLICT, "Agent already exists: ${request.id}")

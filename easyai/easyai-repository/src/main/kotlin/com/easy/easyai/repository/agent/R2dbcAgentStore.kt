@@ -28,13 +28,13 @@ class R2dbcAgentStore(private val db: R2dbcDatabase) : AsyncAgentStore {
         suspendTransaction(db) {
             val existingCount = Tables.AgentTable
                 .selectAll()
-                .where { Tables.AgentTable.id eq agent.id }
+                .where { (Tables.AgentTable.id eq agent.id) and (Tables.AgentTable.userId eq userId) }
                 .count()
 
             val now = Instant.now().epochSecond
             if (existingCount > 0) {
                 Tables.AgentTable.update(
-                    where = { (Tables.AgentTable.id eq agent.id) and UserScope.filter(Tables.AgentTable.userId, userId) }
+                    where = { (Tables.AgentTable.id eq agent.id) and (Tables.AgentTable.userId eq userId) }
                 ) {
                     it[name] = agent.name
                     it[agentType] = agent.agentType.name

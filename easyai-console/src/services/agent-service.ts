@@ -35,7 +35,8 @@ export class AgentService {
       body: JSON.stringify(request),
     });
     if (!response.ok) {
-      throw new Error('Failed to create agent');
+      const msg = await response.text();
+      throw new Error(msg || `Failed to create agent: ${response.status}`);
     }
     return response.json();
   }
@@ -110,6 +111,30 @@ export class AgentService {
       throw new Error('Failed to validate template');
     }
     return response.json();
+  }
+
+  async exportAgent(id: string): Promise<void> {
+    const resp = await authFetch(`${API_BASE}/${encodeURIComponent(id)}/export`);
+    if (!resp.ok) throw new Error(`Export failed: ${resp.status}`);
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${id}.agent.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  async parseAgentFile(file: File): Promise<AgentDto> {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    const agent = data.agent ?? data;
+    if (!agent.id || !agent.name) {
+      throw new Error('Invalid agent file: missing id or name');
+    }
+    return agent as AgentDto;
   }
 }
 

@@ -34,6 +34,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange }) =
           const currentId = storedId || enabled[0].id;
           const currentConfig = enabled.find(c => c.id === currentId) || enabled[0];
           if (currentConfig?.id) {
+            // Sync store & localStorage so the UI reflects the resolved model
+            // (handles stale IDs left over from a different user's session).
+            setSelectedModelConfig(currentConfig.id);
             onModelChange(currentConfig.id, currentConfig.options, currentConfig.capabilities);
           }
         }

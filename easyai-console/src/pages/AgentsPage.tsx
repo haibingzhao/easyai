@@ -1,9 +1,11 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAgentStore } from '@/services/stores/agent-store';
 import type { AgentDto, AgentType, AgentEnv } from '@/types/agent';
-import { Plus, Search, Pencil, Trash2, Bot, Loader2, Eye } from 'lucide-react';
+import { Plus, Search, Pencil, Trash2, Bot, Loader2, Eye, Download, Upload } from 'lucide-react';
 import { i18n } from '@/utils/i18n';
+import { agentService } from '@/services/agent-service';
+import { AgentImportDialog } from '@/components/agent/AgentImportDialog';
 
 const AGENT_TYPE_OPTIONS: { value: AgentType | 'ALL_TYPES'; label: string }[] = [
   { value: 'ALL_TYPES', label: 'All Types' },
@@ -28,6 +30,9 @@ export const AgentsPage: React.FC = () => {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [importDialogAgent, setImportDialogAgent] = useState<AgentDto | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     loadAgents();
@@ -60,18 +65,60 @@ export const AgentsPage: React.FC = () => {
     }
   };
 
+  const handleExport = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    try {
+      await agentService.exportAgent(id);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportError(null);
+    try {
+      const agent = await agentService.parseAgentFile(file);
+      setImportDialogAgent(agent);
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : 'Import failed');
+    }
+    e.target.value = '';
+  };
+
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
         <h1 className="text-xl font-semibold">{i18n('Agents')}</h1>
-        <button
-          onClick={() => navigate('/agents/create')}
-          className="flex items-center gap-2 px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          {i18n('Create Agent')}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleImportClick}
+            className="flex items-center gap-2 px-4 py-2 rounded-md border border-border text-foreground text-sm font-medium hover:bg-muted transition-colors"
+          >
+            <Upload className="w-4 h-4" />
+            {i18n('Import')}
+          </button>
+          <button
+            onClick={() => navigate('/agents/create')}
+            className="flex items-center gap-2 px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            {i18n('Create Agent')}
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,.agent.json"
+            className="hidden"
+            onChange={handleImportFile}
+          />
+        </div>
       </div>
 
       {/* Toolbar: search + filter */}
@@ -105,6 +152,13 @@ export const AgentsPage: React.FC = () => {
           ))}
         </select>
       </div>
+
+      {/* Import error banner */}
+      {importError && (
+        <div className="mx-6 mt-3 p-3 rounded-md bg-destructive/10 text-destructive text-sm">
+          {importError}
+        </div>
+      )}
 
       {/* Agent list */}
       <div className="flex-1 overflow-y-auto p-6">
@@ -181,6 +235,14 @@ export const AgentsPage: React.FC = () => {
                       <><Pencil className="w-3 h-3" />{i18n('Edit')}</>
                     )}
                   </button>
+                  <button
+                    onClick={(e) => handleExport(e, agent.id)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md hover:bg-muted transition-colors"
+                    title={i18n('Export')}
+                  >
+                    <Download className="w-3 h-3" />
+                    {i18n('Export')}
+                  </button>
                   {!agent.builtin && (
                     <>
                       {confirmDeleteId === agent.id ? (
@@ -222,6 +284,18 @@ export const AgentsPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Import dialog */}
+      {importDialogAgent && (
+        <AgentImportDialog
+          agent={importDialogAgent}
+          onClose={() => setImportDialogAgent(null)}
+          onImported={() => {
+            setImportDialogAgent(null);
+            loadAgents();
+          }}
+        />
+      )}
     </div>
   );
 };
