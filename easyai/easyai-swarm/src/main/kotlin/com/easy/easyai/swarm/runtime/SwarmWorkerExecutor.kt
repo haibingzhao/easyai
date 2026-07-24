@@ -457,14 +457,15 @@ class SwarmWorkerExecutor(
     }
 
     /**
-     * Create a copy of this executor without session persistence (for dry-run mode).
+     * Create a copy of this executor with ephemeral in-memory sessions (for dry-run mode).
+     * Enables member suspend/resume logic without any DB writes.
      */
     internal fun withoutSession(): SwarmWorkerExecutor = SwarmWorkerExecutor(
         agentServiceProvider = { agentService },
         agentResolver = agentResolver,
         templateRenderer = templateRenderer,
         eventBridge = eventBridge,
-        sessionManager = null,
+        sessionManager = InMemorySwarmSessionManager(),
         eventVerbosity = eventVerbosity,
     )
 }

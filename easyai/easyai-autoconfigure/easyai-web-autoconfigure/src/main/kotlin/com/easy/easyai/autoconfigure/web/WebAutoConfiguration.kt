@@ -33,7 +33,6 @@ import com.easy.easyai.web.handler.GoalStatusCustomEventConverter
 import com.easy.easyai.web.security.AuthProperties
 import com.easy.easyai.web.security.AuthService
 import com.easy.easyai.web.security.McpPreConnectFilter
-import com.easy.easyai.web.service.ConfigGeneratorService
 import com.easy.easyai.web.service.ConfigValidator
 import com.easy.easyai.web.service.GoalPauseListener
 import com.easy.easyai.web.service.ChatStreamService
@@ -223,28 +222,6 @@ open class WebAutoConfiguration {
             skillRegistry = skillRegistry,
             mcpClientManager = mcpClientManager,
             templateRenderer = templateRenderer,
-        )
-    }
-
-    @Bean
-    @ConditionalOnMissingBean(ConfigGeneratorService::class)
-    open fun configGeneratorService(
-        toolRegistry: ToolRegistry,
-        agentStore: AsyncAgentStore,
-        agentService: AgentService,
-        modelConfigStore: ModelProviderConfigStore,
-        configValidator: ConfigValidator,
-        @Autowired(required = false) skillRegistry: SkillRegistry? = null,
-        @Autowired(required = false) mcpClientManager: McpClientManager? = null,
-    ): ConfigGeneratorService {
-        return ConfigGeneratorService(
-            toolRegistry = toolRegistry,
-            agentStore = agentStore,
-            agentService = agentService,
-            modelConfigStore = modelConfigStore,
-            configValidator = configValidator,
-            skillRegistry = skillRegistry,
-            mcpClientManager = mcpClientManager,
         )
     }
 

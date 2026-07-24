@@ -6,6 +6,7 @@ import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.event.*
+import com.easy.easyai.core.model.SystemMessage
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.model.UserMessage
 import com.easy.easyai.core.tool.ToolDefinition
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.FlowCollector
 import org.slf4j.LoggerFactory
 import org.springframework.http.codec.ServerSentEvent
 import tools.jackson.databind.JsonNode
+import tools.jackson.databind.node.ArrayNode
 import tools.jackson.databind.node.ObjectNode
 
 /**
@@ -145,7 +147,7 @@ class AgentBasedConfigGenerator(
         val userMessageText = buildAgentUserMessage(request)
 
         val initialMessages = listOf(
-            com.easy.easyai.core.model.SystemMessage(text = systemPrompt),
+            SystemMessage(text = systemPrompt),
             UserMessage(content = listOf(TextContent(userMessageText)))
         )
 
@@ -369,7 +371,7 @@ You are an expert EasyAI configuration generator specializing in agent configura
 8. Call `submit_config` with the final validated configuration
 
 ## Critical Rules
-- toolNames: ONLY built-in tools (from list_resources type="tools"); empty array = ALL tools
+- toolNames: ONLY built-in tools (from list_resources type="tools"); empty array = No tools
 - MCP tools: via mcpConfigs field, NEVER in toolNames
 - Skills: via skillNames field, NEVER in toolNames
 - promptTemplate: MUST be valid Jinja2 and include {{ custom_instructions }}
@@ -400,7 +402,7 @@ You are an expert EasyAI Swarm workflow configuration generator.
 8. After finalize_config succeeds, output a brief summary to the user. Done.
 
 CRITICAL RULES — NEVER output the full configuration JSON as a tool parameter:
-- Each submit_config_block call contains ONLY ONE small section (~200-500 tokens)
+- Each submit_config_block call contains ONLY ONE small section (~200-800 tokens)
 - finalize_config takes ONLY an explanation string — assembly is automatic
 - You do NOT have validate_config or submit_config tools — do not attempt to call them
 If you need the full specification, call `list_resources type="spec"`.
@@ -535,7 +537,7 @@ When calling submit_config, provide the complete JSON configuration and a brief 
             // Try to find JSON object in the text
             val jsonStart = text.indexOf('{')
             val jsonEnd = text.lastIndexOf('}')
-            if (jsonStart >= 0 && jsonEnd > jsonStart) {
+            if (jsonStart in 0..<jsonEnd) {
                 val jsonStr = text.substring(jsonStart, jsonEnd + 1)
                 objectMapper.readTree(jsonStr)
             } else {
@@ -588,7 +590,7 @@ When calling submit_config, provide the complete JSON configuration and a brief 
             val root = if (existingConfig is ObjectNode) existingConfig.deepCopy() else objectMapper.createObjectNode()
 
             // Meta block: overlay non-null fields (last submission wins)
-            blocks.filter { it.blockType == "meta" }.lastOrNull()?.let { meta ->
+            blocks.lastOrNull { it.blockType == "meta" }?.let { meta ->
                 meta.data.path("name").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("name", it) }
                 meta.data.path("title").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("title", it) }
                 meta.data.path("description").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("description", it) }
@@ -597,7 +599,7 @@ When calling submit_config, provide the complete JSON configuration and a brief 
             // Agent blocks: merge by blockIndex into existing array
             val agentBlocks = blocks.filter { it.blockType == "agent" }.sortedBy { it.blockIndex }
             if (agentBlocks.isNotEmpty()) {
-                val agentsArr = (root.get("agents") as? tools.jackson.databind.node.ArrayNode)?.deepCopy()
+                val agentsArr = (root.get("agents") as? ArrayNode)?.deepCopy()
                     ?: objectMapper.createArrayNode()
                 agentBlocks.forEach { block ->
                     if (block.blockIndex in 0 until agentsArr.size()) {
@@ -612,7 +614,7 @@ When calling submit_config, provide the complete JSON configuration and a brief 
             // Task blocks: merge by blockIndex into existing array
             val taskBlocks = blocks.filter { it.blockType == "task" }.sortedBy { it.blockIndex }
             if (taskBlocks.isNotEmpty()) {
-                val tasksArr = (root.get("tasks") as? tools.jackson.databind.node.ArrayNode)?.deepCopy()
+                val tasksArr = (root.get("tasks") as? ArrayNode)?.deepCopy()
                     ?: objectMapper.createArrayNode()
                 taskBlocks.forEach { block ->
                     if (block.blockIndex in 0 until tasksArr.size()) {

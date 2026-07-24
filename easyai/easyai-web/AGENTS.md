@@ -37,7 +37,6 @@ easyai-web/src/main/kotlin/com/easy/easyai/web/
 └── service/
     ├── ChatStreamService.kt       # Core: AgentLoop → Flux<ServerSentEvent> bridge
     ├── SessionService.kt          # Session lifecycle, message loading
-    ├── ConfigGeneratorService.kt  # AI-powered agent config generation
     ├── ConfigValidator.kt         # Prompt template + config validation
     ├── FileStorageService.kt      # File upload handling
     ├── GoalCommandHandler.kt      # /goal slash command

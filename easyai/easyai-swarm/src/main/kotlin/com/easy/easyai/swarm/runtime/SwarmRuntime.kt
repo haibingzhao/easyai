@@ -52,6 +52,7 @@ class SwarmRuntime(
     private val teamExecutor = TeamTaskExecutor(
         workerExecutor = workerExecutor,
         eventBridge = eventBridge,
+        store = store,
     )
 
     /** Registry for pending team consultations — used by REST API to complete/reject user consultations. */
@@ -199,6 +200,13 @@ class SwarmRuntime(
                 inMemory.completedAt = persisted.completedAt
                 if (persisted.status == SwarmTaskStatus.COMPLETED && persisted.summary != null) {
                     taskSummaries[persisted.id] = persisted.summary!!
+                }
+                // Restore TEAM task history for resume support
+                if (inMemory.type == TaskType.TEAM && store != null) {
+                    val (execs, rounds) = store.getTeamHistory(run.id, inMemory.id)
+                    inMemory.memberExecutions = execs
+                    inMemory.roundRecords = rounds
+                    inMemory.escalationHistory = store.getEscalationHistory(run.id, inMemory.id)
                 }
             }
         }

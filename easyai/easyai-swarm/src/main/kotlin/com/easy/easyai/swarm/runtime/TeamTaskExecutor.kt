@@ -3,17 +3,20 @@ package com.easy.easyai.swarm.runtime
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.swarm.event.SwarmEventBridge
 import com.easy.easyai.swarm.model.*
+import com.easy.easyai.swarm.store.SwarmRunStore
 import com.easy.easyai.swarm.tool.EscalationCompletionCheck
 import com.easy.easyai.swarm.tool.EscalationResult
 import com.easy.easyai.swarm.tool.EscalationTool
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.util.concurrent.atomic.AtomicReference
@@ -36,6 +39,7 @@ internal class TeamTaskExecutor(
     private val workerExecutor: SwarmWorkerExecutor,
     private val eventBridge: SwarmEventBridge,
     val consultationRegistry: TeamConsultationRegistry = TeamConsultationRegistry(),
+    private val store: SwarmRunStore? = null,
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
 
@@ -111,8 +115,8 @@ internal class TeamTaskExecutor(
     /**
      * Execute a TEAM task: Leader-Member reactive event loop.
      *
-     * Resume degradation: TEAM tasks cannot be resumed mid-execution.
-     * If the run is in RESUMING state, the task is marked FAILED.
+     * Resume support: When task.roundRecords is non-empty (loaded by SwarmRuntime.resume()),
+     * rebuilds state from history and continues from the last completed round.
      */
     suspend fun runTeam(
         task: SwarmTask,
@@ -124,16 +128,22 @@ internal class TeamTaskExecutor(
         val teamSpec = task.team
             ?: return WorkerResult(SwarmTaskStatus.FAILED, "", error = "No team spec for TEAM task")
 
-        // Resume degradation: TEAM tasks cannot be resumed mid-execution
-        if (run.status == SwarmRunStatus.RESUMING) {
-            logger.warn("TEAM task '{}' cannot be resumed; marking FAILED", task.id)
-            return WorkerResult(SwarmTaskStatus.FAILED, "", error = "TEAM tasks do not support resume")
-        }
-
         val leaderSpec = run.agents.find { it.id == teamSpec.leader }
             ?: return WorkerResult(SwarmTaskStatus.FAILED, "", error = "Leader '${teamSpec.leader}' not found in run agents")
 
+        // Detect resume: roundRecords populated by SwarmRuntime.resume() from DB
+        val isResume = task.roundRecords.isNotEmpty()
         val state = TeamExecutionState()
+        if (isResume) {
+            rebuildStateFromHistory(state, task)
+            // Restore taskSummaries from completed member executions for downstream tasks
+            for (exec in task.memberExecutions.filter { it.status == MemberStatus.COMPLETED && it.summary != null }) {
+                taskSummaries["${task.id}.${exec.memberId}"] = exec.summary!!
+            }
+            logger.info("TEAM task '{}' resuming from round {} ({} member executions restored)",
+                task.id, state.iterations, state.memberExecutions.size)
+        }
+
         val resultChannel = Channel<MemberExecutionResult>(Channel.UNLIMITED)
         val memberTimeoutMs = resolveMemberTimeoutMs(teamSpec)
         val inputFromVars = workerExecutor.resolveInputFrom(task, taskSummaries)
@@ -142,18 +152,43 @@ internal class TeamTaskExecutor(
 
         supervisorScope {
             try {
-                // Phase 1: Leader initial planning
-                val initialDecision = invokeLeaderPlanning(
-                    teamSpec, leaderSpec, run, task, taskSummaries, inputFromVars, runContext, state
-                )
+                var resumeCompleted = false
+                if (!isResume) {
+                    // Phase 1: Leader initial planning (skip on resume)
+                    val initialDecision = invokeLeaderPlanning(
+                        teamSpec, leaderSpec, run, task, taskSummaries, inputFromVars, runContext, state
+                    )
 
-                launchMembers(
-                    initialDecision, resultChannel, state, memberTimeoutMs,
-                    run, task, taskSummaries, inputFromVars, abortSignal, runContext, teamSpec
-                )
+                    launchMembers(
+                        initialDecision, resultChannel, state, memberTimeoutMs,
+                        run, task, taskSummaries, inputFromVars, abortSignal, runContext, teamSpec
+                    )
+                } else {
+                    // Resume: invoke Leader coordination with empty batch to re-evaluate and continue
+                    val resumeDecision = invokeLeaderCoordination(
+                        emptyList(), state, teamSpec, leaderSpec, run, task,
+                        taskSummaries, inputFromVars, runContext
+                    )
+                    val resumeRound = state.iterations + 1
+                    val record = buildIterationRecord(resumeRound, resumeDecision, emptyList(), state)
+                    state.roundRecords.add(record)
+                    persistTeamHistorySafely(run, task, state)
 
-                // Phase 2: Reactive Loop
-                while (state.iterations < teamSpec.maxIterations && !abortSignal()) {
+                    if (resumeDecision.isComplete) {
+                        logger.info("Team task '{}' completed on resume (leader confirmed all objectives met)", task.id)
+                        resumeCompleted = true
+                    } else {
+                        launchMembers(
+                            resumeDecision, resultChannel, state, memberTimeoutMs,
+                            run, task, taskSummaries, inputFromVars, abortSignal, runContext, teamSpec,
+                            iteration = resumeRound + 1
+                        )
+                    }
+                    state.iterations = resumeRound
+                }
+
+                // Phase 2: Reactive Loop (skipped when resume leader signals immediate completion)
+                while (!resumeCompleted && state.iterations < teamSpec.maxIterations && !abortSignal()) {
                     val first = withTimeoutOrNull((teamSpec.roundTimeoutSeconds * 1000L).milliseconds) {
                         resultChannel.receive()
                     }
@@ -181,36 +216,39 @@ internal class TeamTaskExecutor(
                     processResultBatch(batch, state, run, task, taskSummaries,
                         resultChannel, runContext, abortSignal, inputFromVars)
 
-                    state.iterations++
-                    eventBridge.onTeamRoundStarted(run, task, state.iterations)
-
                     val decision = invokeLeaderCoordination(
                         batch, state, teamSpec, leaderSpec, run, task,
                         taskSummaries, inputFromVars, runContext
                     )
 
-                    // Build and persist iteration record
-                    val record = buildIterationRecord(state.iterations, decision, batch, state)
+                    // Build and persist iteration record (round = iterations + 1, matching launchMembers)
+                    val roundNumber = state.iterations + 1
+                    val record = buildIterationRecord(roundNumber, decision, batch, state)
                     state.roundRecords.add(record)
-                    eventBridge.onTeamRoundCompleted(run, task, state.iterations, record)
+                    eventBridge.onTeamRoundCompleted(run, task, roundNumber, record)
+
+                    // Incremental persistence: save team history after each round for resume support
+                    persistTeamHistorySafely(run, task, state)
 
                     if (decision.isComplete) {
                         logger.info("Team task '{}' completed at iteration {} (leader signaled complete)",
-                            task.id, state.iterations)
+                            task.id, roundNumber)
                         break
                     }
                     if (state.runningMemberIds.isEmpty() && decision.newTasks.isEmpty() &&
                         decision.reassignments.isEmpty() && state.suspendedMembers.isEmpty() &&
                         state.pendingConsultations.isEmpty()) {
                         logger.info("Team task '{}' stalled at iteration {} (no running members, no new tasks, no suspended)",
-                            task.id, state.iterations)
+                            task.id, roundNumber)
                         break
                     }
 
                     launchMembers(
                         decision, resultChannel, state, memberTimeoutMs,
-                        run, task, taskSummaries, inputFromVars, abortSignal, runContext, teamSpec
+                        run, task, taskSummaries, inputFromVars, abortSignal, runContext, teamSpec,
+                        iteration = roundNumber + 1
                     )
+                    state.iterations = roundNumber
                 }
             } finally {
                 // Phase 3: Cancel running members, pending consultations, and close channel
@@ -222,6 +260,10 @@ internal class TeamTaskExecutor(
                 }
                 state.pendingConsultations.clear()
                 resultChannel.close()
+                // Final persistence: ensure team history is saved even on cancellation/abnormal exit
+                withContext(NonCancellable) {
+                    persistTeamHistorySafely(run, task, state)
+                }
             }
         }
 
@@ -346,8 +388,8 @@ internal class TeamTaskExecutor(
         abortSignal: () -> Boolean,
         runContext: RunContext,
         teamSpec: TeamSpec? = null,
+        iteration: Int = state.iterations + 1,
     ) {
-        val iteration = state.iterations + 1
 
         // Emit delegation events and launch new tasks
         for (dynamicTask in decision.newTasks) {
@@ -915,6 +957,8 @@ internal class TeamTaskExecutor(
                 appendLine("  </event>")
             }
             appendLine("</trigger_events>")
+        } else if (state.iterations > 0) {
+            appendLine("(Resumed session — previous execution was interrupted. Review history below and decide next steps.)")
         } else {
             appendLine("(No trigger events)")
         }
@@ -1105,6 +1149,65 @@ internal class TeamTaskExecutor(
             channel.send(result)
         } catch (_: kotlinx.coroutines.channels.ClosedSendChannelException) {
             logger.warn("Channel closed, discarding result for member '{}'", result.memberId)
+        }
+    }
+
+    /**
+     * Persist team history (member executions, round records, escalation history) safely.
+     * Ignores exceptions to avoid disrupting the execution loop.
+     * Called incrementally after each round and in the finally block for crash resilience.
+     */
+    private suspend fun persistTeamHistorySafely(run: SwarmRun, task: SwarmTask, state: TeamExecutionState) {
+        if (store == null) return
+        try {
+            // Sync state to task fields for persistence
+            task.memberExecutions = state.memberExecutions.toList()
+            task.roundRecords = state.roundRecords.toList()
+            task.escalationHistory = state.escalationHistory.toList()
+            store.saveTeamHistory(run.id, task.id, task.memberExecutions, task.roundRecords)
+            if (state.escalationHistory.isNotEmpty()) {
+                store.saveEscalationHistory(run.id, task.id, task.escalationHistory)
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to persist team history for task '{}': {}", task.id, e.message)
+        }
+    }
+
+    /**
+     * Rebuild [TeamExecutionState] from persisted task history for resume support.
+     *
+     * Restores: iterations, memberExecutions, roundRecords, escalationHistory,
+     * leaderAnalyses, leaderPrompts, delegationHistory, memberAssignments, token counters.
+     *
+     * Not restorable (transient/coroutine-bound): runningJobs, runningMemberIds,
+     * suspendedMembers, pendingConsultations, memberSessionIds.
+     */
+    private fun rebuildStateFromHistory(state: TeamExecutionState, task: SwarmTask) {
+        // Restore round records and derive iteration count
+        state.roundRecords.addAll(task.roundRecords)
+        state.iterations = task.roundRecords.maxOfOrNull { it.round } ?: 0
+
+        // Restore member executions and token counters
+        state.memberExecutions.addAll(task.memberExecutions)
+        for (exec in task.memberExecutions) {
+            state.total.input += exec.inputTokens
+            state.total.output += exec.outputTokens
+            // Restore last known assignment per member
+            state.memberAssignments[exec.memberId] = exec.assignment
+        }
+
+        // Restore escalation history
+        state.escalationHistory.addAll(task.escalationHistory)
+
+        // Restore leader analyses and prompts from round records
+        for (record in task.roundRecords) {
+            state.leaderAnalyses.add("Round ${record.round}: ${record.leaderAnalysis.take(500)}")
+            // Use placeholder for null prompts to maintain index alignment with round numbers
+            state.leaderPrompts.add(record.leaderPrompt ?: "(prompt not available)")
+            // Rebuild delegation history from round records
+            for (memberId in record.delegatedMembers) {
+                state.delegationHistory.add(DelegationRecord(record.round, memberId, "(from history)"))
+            }
         }
     }
 

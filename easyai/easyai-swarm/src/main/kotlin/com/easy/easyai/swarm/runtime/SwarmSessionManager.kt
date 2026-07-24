@@ -11,8 +11,9 @@ import com.easy.easyai.core.model.EasyAiMessage
  * for each swarm worker execution, enabling message persistence and
  * real-time streaming.
  *
- * When no persistence is configured, pass `null` for the [SwarmSessionManager]
- * parameter in [SwarmRuntime] instead of providing a no-op implementation.
+ * For dry-run mode, use [InMemorySwarmSessionManager] which generates ephemeral
+ * session IDs without DB writes, enabling member suspend/resume to function normally.
+ * Pass `null` only when session management is entirely unnecessary.
  */
 interface SwarmSessionManager {
 

@@ -3,7 +3,6 @@ package com.easy.easyai.tools.search
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.model.ToolResultContent
 import com.easy.easyai.tools.executeProcess
-import com.easy.easyai.tools.resolveSafe
 import com.easy.easyai.core.tool.BaseToolDefinition
 import com.easy.easyai.core.tool.ToolExecutionMode
 import com.easy.easyai.core.tool.ToolMetadata
@@ -33,11 +32,8 @@ class GlobTool(metadata: ToolMetadata, private val workDir: Path) : BaseToolDefi
         coroutineScope: CoroutineScope,
         onUpdate: suspend (ToolUpdate) -> Unit
     ): ToolResult = withContext(Dispatchers.IO) {
-        val pattern = args["pattern"] as? String ?: return@withContext ToolResult(
-            content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "Error: missing 'pattern' parameter", isError = true)),
-            isError = true
-        )
-        val searchPath = (args["path"] as? String)?.let { workDir.resolveSafe(it) } ?: workDir
+        val (pattern, searchPath) = parsePatternArgs(args, workDir)
+            ?: return@withContext missingPatternError(toolCallId, name)
 
         val cmd = listOf(
             "rg",
