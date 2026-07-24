@@ -42,3 +42,7 @@ logs/
 *.pem
 *.key
 *.p12
+*.jks
+*.keystore
+*.pfx
+desktop-config.json

@@ -49,7 +49,7 @@ export function ReadToolMessage({
   return (
     <>
     <div className="border border-border rounded-lg bg-card overflow-hidden">
-      {/* 标题栏 */}
+      {/* Title bar */}
       <div 
         className="p-3 flex items-center justify-between gap-2 border-b border-border cursor-pointer hover:bg-muted/50"
         onClick={() => setIsCollapsed(!isCollapsed)}
@@ -74,7 +74,7 @@ export function ReadToolMessage({
         )}
       </div>
 
-      {/* 错误信息或文件内容 */}
+      {/* Error message or file content */}
       {!isCollapsed && hasError && displayLines.length > 0 && (
         <>
           <div className="border-t border-border" />

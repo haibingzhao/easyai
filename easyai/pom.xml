@@ -98,7 +98,7 @@
                 <scope>import</scope>
             </dependency>
             <!-- ================================================= -->
-            <!-- Spring框架 -->
+            <!-- Spring Framework -->
             <!-- ================================================= -->
             <dependency>
                 <groupId>org.springframework.boot</groupId>
@@ -164,7 +164,7 @@
                 <version>${netty.version}</version>
                 <classifier>osx-aarch_64</classifier>
             </dependency>
-            <!-- easyai依赖 -->
+            <!-- EasyAI dependencies -->
             <dependency>
                 <groupId>com.easy</groupId>
                 <artifactId>easyai-core</artifactId>
@@ -346,7 +346,7 @@
     </dependencyManagement>
 
     <dependencies>
-        <!-- Kotlin 依赖 -->
+        <!-- Kotlin dependencies -->
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-stdlib-jdk8</artifactId>
@@ -416,13 +416,13 @@
                         <!-- Add other configurations here if necessary -->
                         <compilerPlugins>
                             <!-- <plugin>lombok</plugin>-->
-                            <!-- 让所有 class 都能被继承，方便 CGLib-->
+                            <!-- Make all classes open for CGLib proxying -->
                             <plugin>spring</plugin>
                         </compilerPlugins>
                         <args>
-                            <!--默认开启 default Interface 方法-->
+                            <!-- Enable default interface methods -->
                             <arg>-Xjvm-default=all</arg>
-                            <!--  indy 是 invokeDynamic，class 是生成匿名类-->
+                            <!-- indy = invokeDynamic, class = anonymous class generation -->
                             <arg>-Xlambdas=indy</arg>
                         </args>
                     </configuration>

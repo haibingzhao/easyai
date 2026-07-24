@@ -32,24 +32,24 @@ interface ThinkingBlockProps {
 }
 
 export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({ content, isStreaming, isFinished, durationMs }) => {
-  // 历史消息（isStreaming=false/undefined）默认折叠
-  // Streaming消息（isStreaming=true）默认展开
+  // History messages (isStreaming=false/undefined) collapsed by default
+  // Streaming messages (isStreaming=true) expanded by default
   const [expanded, setExpanded] = useState(isStreaming === true);
   const [elapsed, setElapsed] = useState(0);
   const startTimeRef = React.useRef<number | null>(null);
 
-  // 开始计时
+  // Start timer
   useEffect(() => {
     if (isStreaming && !isFinished && startTimeRef.current === null) {
       startTimeRef.current = Date.now();
     }
   }, [isStreaming, isFinished]);
 
-  // 实时更新耗时
+  // Update elapsed time in real-time
   useEffect(() => {
     if (!isStreaming) return;
     if (isFinished) {
-      // 结束时计算最终耗时
+      // Calculate final duration when finished
       if (startTimeRef.current !== null) {
         setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000));
       }

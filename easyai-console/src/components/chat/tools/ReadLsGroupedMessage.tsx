@@ -1,7 +1,7 @@
 /**
- * ReadLsGroupedMessage — 将连续的 read/ls 工具调用合并展示
- * 标题显示 "Read X files, Y folders:" 摘要
- * 展开后展示每个 Read/Ls 的具体内容
+ * ReadLsGroupedMessage — Merge consecutive read/ls tool calls into a grouped display.
+ * Title shows "Read X files, Y folders:" summary.
+ * Expanded view shows details for each Read/Ls item.
  */
 
 import { useState, useMemo, useEffect } from 'react';
@@ -25,7 +25,7 @@ interface ReadLsGroupedMessageProps {
 }
 
 /**
- * 统计文件和文件夹数量
+ * Count files and folders
  */
 function useCountStats(items: ReadLsGroupedItem[]) {
   return useMemo(() => {
@@ -45,14 +45,14 @@ function useCountStats(items: ReadLsGroupedItem[]) {
 }
 
 /**
- * 判断分组是否处于 streaming 状态（任一 item 仍在运行）
+ * Determine if the group is in streaming state (any item still running)
  */
 function isAnyStreaming(items: ReadLsGroupedItem[]): boolean {
   return items.some(item => item.status === 'RUNNING' || item.status === 'PENDING');
 }
 
 /**
- * 渲染单个 read 项的详情（展开时）
+ * Render detail for a single read item (when expanded)
  */
 const DETAIL_PREVIEW_LINES = 5;
 
@@ -92,7 +92,7 @@ function ReadItemDetail({ item }: { item: ReadLsGroupedItem }) {
 }
 
 /**
- * 渲染单个 ls 项的详情（展开时）
+ * Render detail for a single ls item (when expanded)
  */
 function LsItemDetail({ item }: { item: ReadLsGroupedItem }) {
   const rawOutput = extractOutput({ result: item.result, streamingOutput: item.streamingOutput });
@@ -151,7 +151,7 @@ export function ReadLsGroupedMessage({ items, defaultExpanded = false }: ReadLsG
 
   return (
     <div className="border border-border rounded-lg bg-card overflow-hidden">
-      {/* 标题栏 */}
+      {/* Title bar */}
       <div
         className="p-3 flex items-center justify-between gap-2 border-b border-border cursor-pointer hover:bg-muted/50"
         onClick={() => setIsExpanded(!isExpanded)}
@@ -177,12 +177,12 @@ export function ReadLsGroupedMessage({ items, defaultExpanded = false }: ReadLsG
         </div>
       </div>
 
-      {/* 展开内容 */}
+      {/* Expanded content */}
       {isExpanded && (
         <div>
           {items.map((item) => (
             <div key={item.toolCall.id}>
-              {/* 每个 item 的子标题 */}
+              {/* Sub-title for each item */}
               <div className="px-3 py-2 flex items-center gap-2 bg-muted/30 border-t border-border">
                 {item.toolCall.toolName === 'read' ? (
                   <FileText className="w-3.5 h-3.5 text-muted-foreground" />
@@ -206,7 +206,7 @@ export function ReadLsGroupedMessage({ items, defaultExpanded = false }: ReadLsG
                   );
                 })()}
               </div>
-              {/* 详情 */}
+              {/* Detail */}
               {item.toolCall.toolName === 'read' ? (
                 <ReadItemDetail item={item} />
               ) : (

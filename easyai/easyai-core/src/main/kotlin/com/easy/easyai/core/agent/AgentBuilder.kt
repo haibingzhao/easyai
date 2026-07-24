@@ -6,8 +6,8 @@ import com.easy.easyai.core.tool.ToolDefinition
 /**
  * Factory interface for building Agent instances from database definitions.
  *
- * Agent 现在只接收两个参数：AgentContext 和 AgentService。
- * 构建 Agent 时通过 AgentService 提供所有系统级依赖。
+ * Agent now receives only two parameters: AgentContext and AgentService.
+ * All system-level dependencies are provided via AgentService during construction.
  */
 interface AgentBuilder {
     /**

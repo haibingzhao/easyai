@@ -1,5 +1,5 @@
 /**
- * Tool渲染组件的类型定义
+ * Type definitions for tool rendering components.
  */
 
 import type { ToolCall, ToolResult } from '@/types/message';
@@ -7,7 +7,7 @@ import type { ToolCallStatus } from '@/types/socket-event';
 import type { TodoInfo } from '@/types/todo';
 import type { SubAgentInnerBlock } from './SubAgentPanel';
 
-/** 解析后的read工具结果 */
+/** Parsed read tool result */
 export interface ParsedReadResult {
   filePath: string;
   content: string;
@@ -17,35 +17,35 @@ export interface ParsedReadResult {
   limit?: number;
 }
 
-/** 解析后的grep匹配结果 */
+/** Parsed grep match entry */
 export interface GrepMatch {
   filePath: string;
   lineNum: number;
   content: string;
 }
 
-/** 解析后的grep结果 */
+/** Parsed grep result */
 export interface ParsedGrepResult {
   pattern: string;
   matches: GrepMatch[];
   searchPath?: string;
 }
 
-/** 解析后的find/ls结果项 */
+/** Parsed find/ls result entry */
 export interface FileEntry {
   name: string;
   isDirectory: boolean;
   path: string;
 }
 
-/** 解析后的find/ls结果 */
+/** Parsed find/ls result */
 export interface ParsedFileListResult {
   entries: FileEntry[];
   searchPath: string;
   toolType: 'glob' | 'ls';
 }
 
-/** 解析后的文件编辑结果 */
+/** Parsed file edit result */
 export interface ParsedFileEditResult {
   filePath: string;
   operation: 'write' | 'edit';
@@ -53,7 +53,7 @@ export interface ParsedFileEditResult {
   deletions?: number;
 }
 
-/** 解析后的工具参数 */
+/** Parsed tool parameters */
 export interface ParsedToolParams {
   read?: { path: string; offset?: number; limit?: number };
   write?: { path: string; content: string };
@@ -65,7 +65,7 @@ export interface ParsedToolParams {
   calc?: { script: string };
 }
 
-/** Tool消息组件的通用props */
+/** Common props for tool message components */
 export interface ToolMessageProps {
   toolCall: ToolCall;
   result?: ToolResult;
@@ -88,7 +88,7 @@ export interface ToolMessageProps {
   };
 }
 
-/** 折叠组件的props */
+/** Props for collapsible section component */
 export interface CollapsibleSectionProps {
   title: React.ReactNode;
   children: React.ReactNode;

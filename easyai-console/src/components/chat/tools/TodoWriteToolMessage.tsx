@@ -1,5 +1,5 @@
 /**
- * TodoWrite 工具消息渲染组件
+ * TodoWrite tool message rendering component.
  */
 
 import { useState } from 'react';
@@ -7,7 +7,7 @@ import { ListTodo, AlertTriangle, ChevronDown } from 'lucide-react';
 import type { ToolMessageProps } from './types';
 
 /**
- * 解析 todo_write 工具的参数
+ * Parse todo_write tool arguments.
  */
 interface ParsedTodoArgs {
   todos: Array<{
@@ -91,7 +91,7 @@ export function TodoWriteToolMessage({
 
   return (
     <div className="border border-border rounded-lg bg-card overflow-hidden">
-      {/* 标题栏 */}
+      {/* Title bar */}
       <div 
         className="p-3 flex items-center justify-between gap-2 border-b border-border cursor-pointer hover:bg-muted/50"
         onClick={() => setIsCollapsed(!isCollapsed)}
@@ -116,7 +116,7 @@ export function TodoWriteToolMessage({
         </div>
       </div>
 
-      {/* TODO 列表 */}
+      {/* TODO list */}
       {!isCollapsed && todos.length > 0 && (
         <div className="p-3 space-y-1.5">
           {todos.map((todo, index) => (
@@ -147,7 +147,7 @@ export function TodoWriteToolMessage({
         </div>
       )}
 
-      {/* 错误输出 - 仅在出错时显示 */}
+      {/* Error output - only shown on error */}
       {(isError || isFailed) && output && (
         <>
           <div className="border-t border-border" />

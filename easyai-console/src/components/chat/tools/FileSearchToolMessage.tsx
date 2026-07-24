@@ -1,5 +1,5 @@
 /**
- * FileSearch工具消息渲染组件（glob和ls共用）
+ * FileSearch tool message rendering component (shared by glob and ls).
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
@@ -11,7 +11,7 @@ import { CopyableText } from './CopyableText';
 import { useCopyToast } from './useCopyToast';
 import { useNavStore } from '@/services/stores/nav-store';
 
-/** 判定文件列表是否在底部的阈值（px） */
+/** Threshold (px) to determine if file list is at the bottom */
 const FILE_LIST_SCROLL_THRESHOLD = 30;
 
 export function FileSearchToolMessage({
@@ -31,7 +31,7 @@ export function FileSearchToolMessage({
 
   const rawOutput = extractOutput({ result, streamingOutput });
 
-  // 根据工具类型解析输出
+  // Parse output based on tool type
   const entries: FileEntry[] = isGlob
     ? parseGlobOutput(rawOutput)
     : parseLsOutput(rawOutput);
@@ -54,19 +54,19 @@ export function FileSearchToolMessage({
     return searchPath ? `${searchPath.replace(/\/+$/, '')}/${entry.path}` : entry.path;
   };
 
-  // 文件列表自动滚动相关
+  // File list auto-scroll
   const fileListRef = useRef<HTMLDivElement>(null);
   const fileListAutoScrollEnabledRef = useRef(true);
   const prevScrollTopRef = useRef(0);
 
-  /** 检查文件列表是否在底部 */
+  /** Check if file list is at the bottom */
   const isFileListAtBottom = useCallback(() => {
     const el = fileListRef.current;
     if (!el) return true;
     return el.scrollHeight - el.scrollTop - el.clientHeight <= FILE_LIST_SCROLL_THRESHOLD;
   }, []);
 
-  /** 滚动文件列表到底部 */
+  /** Scroll file list to bottom */
   const scrollFileListToBottom = useCallback(() => {
     const el = fileListRef.current;
     if (!el || !fileListAutoScrollEnabledRef.current) return;
@@ -74,7 +74,7 @@ export function FileSearchToolMessage({
     el.scrollTop = el.scrollHeight;
   }, []);
 
-  /** 处理文件列表滚动事件 */
+  /** Handle file list scroll event */
   const handleFileListScroll = useCallback(() => {
     const el = fileListRef.current;
     if (!el) return;
@@ -95,7 +95,7 @@ export function FileSearchToolMessage({
     fileListAutoScrollEnabledRef.current = isFileListAtBottom();
   }, [isStreaming, isFileListAtBottom]);
 
-  // wheel事件：streaming期间用户向上滚轮时立即禁用自动滚动
+  // Wheel event: immediately disable auto-scroll when user scrolls up during streaming
   useEffect(() => {
     const el = fileListRef.current;
     if (!el) return;
@@ -108,14 +108,14 @@ export function FileSearchToolMessage({
     return () => el.removeEventListener('wheel', handleWheel);
   }, [isStreaming]);
 
-  // streaming时自动滚动文件列表到底部
+  // Auto-scroll file list to bottom during streaming
   useEffect(() => {
     if (isStreaming && fileListAutoScrollEnabledRef.current && !isCollapsed) {
       scrollFileListToBottom();
     }
   }, [entries.length, streamingOutput, isStreaming, isCollapsed, scrollFileListToBottom]);
 
-  // streaming结束时，根据当前位置重新判断是否启用自动滚动
+  // When streaming ends, re-evaluate whether to enable auto-scroll based on current position
   useEffect(() => {
     if (!isStreaming) {
       fileListAutoScrollEnabledRef.current = isFileListAtBottom();
@@ -124,7 +124,7 @@ export function FileSearchToolMessage({
 
   return (
     <div className="border border-border rounded-lg bg-card overflow-hidden">
-      {/* 标题栏 */}
+      {/* Title bar */}
       <div 
         className="p-3 flex items-center justify-between gap-2 border-b border-border cursor-pointer hover:bg-muted/50"
         onClick={() => setIsCollapsed(!isCollapsed)}
@@ -175,7 +175,7 @@ export function FileSearchToolMessage({
 
       {toast}
 
-      {/* 文件列表 */}
+      {/* File list */}
       {!isCollapsed && entryCount > 0 && (
         <>
           <div className="border-t border-border" />
@@ -209,7 +209,7 @@ export function FileSearchToolMessage({
         </>
       )}
 
-      {/* 无结果 */}
+      {/* No results */}
       {!isStreaming && entryCount === 0 && rawOutput && (
         <div className="p-3 text-sm text-muted-foreground">
           {rawOutput}

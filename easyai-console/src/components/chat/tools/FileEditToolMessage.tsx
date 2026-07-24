@@ -1,5 +1,5 @@
 /**
- * FileEdit工具消息渲染组件（write和edit共用）
+ * FileEdit tool message rendering component (shared by write and edit).
  */
 
 import { useState } from 'react';
@@ -28,7 +28,7 @@ export function FileEditToolMessage({
   
   const rawOutput = extractOutput({ result, streamingOutput });
   
-  // 状态文本
+  // Status text
   const getStatusText = () => {
     if (isStreaming) {
       return isWrite ? 'Creating...' : 'Editing...';
@@ -44,7 +44,7 @@ export function FileEditToolMessage({
 
   return (
     <div className="border border-border rounded-lg bg-card overflow-hidden">
-      {/* 标题栏 */}
+      {/* Title bar */}
       <div 
         className="p-3 flex items-center justify-between gap-2 border-b border-border cursor-pointer hover:bg-muted/50"
         onClick={() => setIsCollapsed(!isCollapsed)}
@@ -68,7 +68,7 @@ export function FileEditToolMessage({
 
       {toast}
 
-      {/* 输出信息 */}
+      {/* Output info */}
       {!isCollapsed && rawOutput && (
         <>
           <div className="border-t border-border" />

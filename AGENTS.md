@@ -103,7 +103,7 @@ Detailed guidance lives in sub-AGENTS.md files. Consult these when working in sp
 
 ## BUILD/CI NOTES
 
-- **No CI/CD**: no `.github/workflows/`, no Makefile
+- **CI**: GitHub Actions in `.github/workflows/ci.yml` (backend build+test, frontend lint+typecheck+vitest)
 - **Maven Wrapper**: use `./mvnw` in `easyai/` and `easyai-apps/`
 - **Netty BOM override**: `4.1.132.Final` (CVE fix) in `easyai/pom.xml`
 - **xlsx from CDN**: `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz` (not npm registry)

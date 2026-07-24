@@ -23,7 +23,7 @@ import {
 import type { ToolMessageProps } from './types';
 
 // ---------------------------------------------------------------------------
-// 参数解析
+// Argument parsing
 // ---------------------------------------------------------------------------
 
 interface ParsedGoalArgs {
@@ -43,7 +43,7 @@ function parseGoalArgs(args: string): ParsedGoalArgs | null {
 }
 
 // ---------------------------------------------------------------------------
-// 状态 Badge 配色（与 GoalCard 视觉体系保持一致）
+// Status badge colors (consistent with GoalCard visual system)
 // ---------------------------------------------------------------------------
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; dotColor: string; icon: React.ReactNode }> = {
@@ -74,7 +74,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; dotColor: st
 };
 
 // ---------------------------------------------------------------------------
-// Action 标签映射
+// Action label mapping
 // ---------------------------------------------------------------------------
 
 const ACTION_META: Record<string, { label: string; icon: React.ReactNode }> = {
@@ -84,7 +84,7 @@ const ACTION_META: Record<string, { label: string; icon: React.ReactNode }> = {
 };
 
 // ---------------------------------------------------------------------------
-// 工具执行状态 Badge（Running / Pending / Failed）
+// Tool execution status badge (Running / Pending / Failed)
 // ---------------------------------------------------------------------------
 
 function ExecStatusDot({ status }: { status: ToolMessageProps['status'] }) {
@@ -98,7 +98,7 @@ function ExecStatusDot({ status }: { status: ToolMessageProps['status'] }) {
 }
 
 // ---------------------------------------------------------------------------
-// 详情预览（截断长文本）
+// Detail preview (truncate long text)
 // ---------------------------------------------------------------------------
 
 function DetailPreview({ text, maxLen = 160 }: { text: string; maxLen?: number }) {
@@ -111,7 +111,7 @@ function DetailPreview({ text, maxLen = 160 }: { text: string; maxLen?: number }
 }
 
 // ---------------------------------------------------------------------------
-// 主组件
+// Main component
 // ---------------------------------------------------------------------------
 
 export function GoalToolMessage({ toolCall, result, status }: ToolMessageProps) {
@@ -119,7 +119,7 @@ export function GoalToolMessage({ toolCall, result, status }: ToolMessageProps) 
   const parsed = parseGoalArgs(toolCall.args);
   const isFailed = status === 'FAILED';
 
-  // ---------- 无有效参数时降级到通用展示 ----------
+  // ---------- Fallback to generic display when no valid args ----------
   if (!parsed) {
     return (
       <div className="border border-border rounded-lg bg-card overflow-hidden">
@@ -135,13 +135,13 @@ export function GoalToolMessage({ toolCall, result, status }: ToolMessageProps) 
   const actionMeta = ACTION_META[parsed.action] ?? { label: parsed.action, icon: <Target className="size-3.5 text-muted-foreground" /> };
   const statusCfg  = parsed.status ? STATUS_CONFIG[parsed.status] : null;
 
-  // 详情文本：根据不同 action 决定主体内容
+  // Detail text: determine main content based on action type
   const detailText =
     parsed.action === 'update_objective' ? parsed.objective :
     parsed.action === 'add_evidence'     ? parsed.evidence  :
     parsed.reason ?? parsed.evidence ?? null;
 
-  // 标题行摘要文本（折叠时可见的简短描述）
+  // Title summary text (short description visible when collapsed)
   const summaryText =
     parsed.action === 'update_objective' && parsed.objective
       ? parsed.objective.length > 80 ? parsed.objective.slice(0, 80) + '…' : parsed.objective
@@ -151,25 +151,25 @@ export function GoalToolMessage({ toolCall, result, status }: ToolMessageProps) 
 
   return (
     <div className="border border-border rounded-lg bg-card overflow-hidden">
-      {/* 标题行 */}
+      {/* Title row */}
       <div
         className="p-3 flex items-center justify-between gap-2 cursor-pointer hover:bg-muted/50 transition-colors"
         onClick={() => detailText ? setIsExpanded(!isExpanded) : undefined}
       >
         <div className="flex items-center gap-2 min-w-0">
-          {/* Goal 图标 */}
+          {/* Goal icon */}
           <Target className="size-4 text-violet-500 dark:text-violet-400 shrink-0" />
 
-          {/* 工具名 */}
+          {/* Tool name */}
           <span className="text-sm font-medium text-foreground shrink-0">Goal</span>
 
-          {/* Action 图标 + 标签 */}
+          {/* Action icon + label */}
           <span className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
             {actionMeta.icon}
             {actionMeta.label}
           </span>
 
-          {/* 状态 Badge（仅 update_status 时显示） */}
+          {/* Status badge (only shown for update_status) */}
           {statusCfg && (
             <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium ${statusCfg.color}`}>
               {statusCfg.icon}
@@ -177,7 +177,7 @@ export function GoalToolMessage({ toolCall, result, status }: ToolMessageProps) 
             </span>
           )}
 
-          {/* 摘要文本（update_objective / add_evidence 折叠时内联预览） */}
+          {/* Summary text (inline preview when collapsed for update_objective / add_evidence) */}
           {summaryText && !isExpanded && (
             <span className="text-xs text-muted-foreground truncate min-w-0">
               — <DetailPreview text={summaryText} maxLen={60} />
@@ -195,12 +195,12 @@ export function GoalToolMessage({ toolCall, result, status }: ToolMessageProps) 
         </div>
       </div>
 
-      {/* 展开详情 */}
+      {/* Expanded detail */}
       {isExpanded && detailText && (
         <>
           <div className="border-t border-border" />
           <div className="p-3 space-y-2">
-            {/* Action 描述头 */}
+            {/* Action description header */}
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               {actionMeta.icon}
               <span className="font-medium">{actionMeta.label}</span>
@@ -212,14 +212,14 @@ export function GoalToolMessage({ toolCall, result, status }: ToolMessageProps) 
               )}
             </div>
 
-            {/* 主体文本 */}
+            {/* Main text */}
             <div className="text-sm bg-muted/40 rounded px-3 py-2 prose prose-sm dark:prose-invert max-w-none">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {detailText.length > 500 ? detailText.slice(0, 500) + '…' : detailText}
               </ReactMarkdown>
             </div>
 
-            {/* 附加 reason（update_status + reason 时额外显示） */}
+            {/* Additional reason (shown for update_status + reason) */}
             {parsed.action === 'update_status' && parsed.reason && parsed.evidence && (
               <div className="text-xs text-muted-foreground space-y-1">
                 <div className="prose prose-xs dark:prose-invert max-w-none">
@@ -236,7 +236,7 @@ export function GoalToolMessage({ toolCall, result, status }: ToolMessageProps) 
         </>
       )}
 
-      {/* 错误输出 */}
+      {/* Error output */}
       {isFailed && result && (
         <>
           <div className="border-t border-border" />

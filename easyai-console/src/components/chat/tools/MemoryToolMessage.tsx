@@ -1,9 +1,9 @@
 /**
- * Memory 工具消息渲染组件
+ * Memory tool message rendering component.
  *
- * 统一渲染 memory_search / memory_read / memory_write / memory_list 四种工具调用。
- * - 标题行：Brain 图标 + 工具名 + 操作摘要
- * - 可展开：显示写入内容 / 搜索结果 / 列表输出 / 读取内容
+ * Unified rendering for memory_search / memory_read / memory_write / memory_list tool calls.
+ * - Title row: Brain icon + tool name + operation summary
+ * - Expandable: shows write content / search results / list output / read content
  */
 
 import { useState } from 'react';
@@ -22,7 +22,7 @@ import {
 import type { ToolMessageProps } from './types';
 
 // ---------------------------------------------------------------------------
-// 参数类型
+// Argument types
 // ---------------------------------------------------------------------------
 
 interface MemoryWriteOp {
@@ -46,7 +46,7 @@ interface MemoryWriteArgs {
 }
 
 // ---------------------------------------------------------------------------
-// 参数解析
+// Argument parsing
 // ---------------------------------------------------------------------------
 
 function parseArgs<T>(args: string): T | null {
@@ -58,7 +58,7 @@ function parseArgs<T>(args: string): T | null {
 }
 
 // ---------------------------------------------------------------------------
-// Write action 配色与图标
+// Write action colors and icons
 // ---------------------------------------------------------------------------
 
 const WRITE_ACTION_META: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
@@ -85,7 +85,7 @@ const WRITE_ACTION_META: Record<string, { label: string; color: string; icon: Re
 };
 
 // ---------------------------------------------------------------------------
-// 工具级图标映射
+// Tool-level icon mapping
 // ---------------------------------------------------------------------------
 
 const TOOL_ICON: Record<string, React.ReactNode> = {
@@ -103,7 +103,7 @@ const TOOL_LABEL: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// 通用子组件
+// Shared sub-components
 // ---------------------------------------------------------------------------
 
 function ExecStatusDot({ status }: { status: ToolMessageProps['status'] }) {
@@ -120,7 +120,7 @@ function truncate(text: string, maxLen: number): string {
   return text.length > maxLen ? text.slice(0, maxLen) + '…' : text;
 }
 
-/** 从 result 或 streamingOutput 中提取纯文本输出 */
+/** Extract plain text output from result or streamingOutput */
 function extractResultOutput(result?: ToolMessageProps['result'], streamingOutput?: string): string {
   if (streamingOutput !== undefined) return streamingOutput;
   if (!result) return '';
@@ -137,7 +137,7 @@ function extractResultOutput(result?: ToolMessageProps['result'], streamingOutpu
 }
 
 // ---------------------------------------------------------------------------
-// 卡片容器（统一的边框、header 布局）
+// Card container (unified border, header layout)
 // ---------------------------------------------------------------------------
 
 interface MemoryCardProps {
@@ -158,7 +158,7 @@ function MemoryCard({ toolName, summary, status, expandable, isExpanded, onToggl
 
   return (
     <div className="border border-border rounded-lg bg-card overflow-hidden">
-      {/* 标题行 */}
+      {/* Title row */}
       <div
         className={`p-3 flex items-center justify-between gap-2 transition-colors ${expandable ? 'cursor-pointer hover:bg-muted/50' : ''}`}
         onClick={expandable ? onToggle : undefined}
@@ -181,7 +181,7 @@ function MemoryCard({ toolName, summary, status, expandable, isExpanded, onToggl
         </div>
       </div>
 
-      {/* 展开内容 */}
+      {/* Expanded content */}
       {isExpanded && children && (
         <>
           <div className="border-t border-border" />
@@ -189,7 +189,7 @@ function MemoryCard({ toolName, summary, status, expandable, isExpanded, onToggl
         </>
       )}
 
-      {/* 错误输出 */}
+      {/* Error output */}
       {isFailed && output && (
         <>
           <div className="border-t border-border" />
@@ -217,7 +217,7 @@ function MemorySearchView({ toolCall, result, status, streamingOutput }: ToolMes
   const parsed = parseArgs<{ query: string }>(toolCall.args);
   const output = extractResultOutput(result, streamingOutput);
 
-  // 从输出文本中解析搜索结果数量
+  // Parse search result count from output text
   const matchCount = output.match(/Found (\d+) memories/)?.[1];
 
   return (
@@ -306,15 +306,15 @@ function MemoryWriteView({ toolCall, result, status, streamingOutput }: ToolMess
   const parsed = parseArgs<MemoryWriteArgs>(toolCall.args);
   const isFailed = status === 'FAILED';
 
-  // 判断是否为批量模式
+  // Determine if batch mode
   const isBatch = !!(parsed?.operations && parsed.operations.length > 0);
   const ops = parsed?.operations ?? [];
 
-  // 单条模式的 action
+  // Single mode action
   const singleAction = parsed?.action ?? '';
   const singleName = parsed?.name ?? '';
 
-  // 判断是否可展开：有 content / description / operations 内容时
+  // Determine if expandable: when content / description / operations exist
   const detailContent = isBatch
     ? true
     : parsed?.content || parsed?.description;
@@ -350,7 +350,7 @@ function MemoryWriteView({ toolCall, result, status, streamingOutput }: ToolMess
       {expanded && (
         <div className="p-3 space-y-2">
           {isBatch ? (
-            /* 批量操作列表 */
+            /* Batch operations list */
             <div className="space-y-1.5">
               {ops.map((op, i) => {
                 const meta = WRITE_ACTION_META[op.action] ?? WRITE_ACTION_META.add;
@@ -379,9 +379,9 @@ function MemoryWriteView({ toolCall, result, status, streamingOutput }: ToolMess
               })}
             </div>
           ) : (
-            /* 单条操作详情 */
+            /* Single operation detail */
             <>
-              {/* 类型 + 描述 */}
+              {/* Type + description */}
               {parsed?.type && (
                 <div className="text-xs text-muted-foreground">
                   <span className="font-medium">Type: </span>
@@ -401,7 +401,7 @@ function MemoryWriteView({ toolCall, result, status, streamingOutput }: ToolMess
                   {parsed.description}
                 </div>
               )}
-              {/* 主体内容 */}
+              {/* Main content */}
               {parsed?.content && (
                 <div className="text-sm whitespace-pre-wrap break-words text-foreground bg-muted/40 rounded px-3 py-2 max-h-[15em] overflow-y-auto">
                   {truncate(parsed.content, 1000)}
@@ -424,7 +424,7 @@ function MemoryListView({ toolCall, result, status, streamingOutput }: ToolMessa
   const parsed = parseArgs<{ type?: string }>(toolCall.args);
   const output = extractResultOutput(result, streamingOutput);
 
-  // 从输出中解析条目总数
+  // Parse total entry count from output
   const scopeMatches = output.match(/\((\d+) entries\)/g);
   const totalEntries = scopeMatches
     ? scopeMatches.reduce((sum, m) => sum + (parseInt(m.match(/\d+/)?.[0] ?? '0', 10)), 0)
@@ -466,7 +466,7 @@ function MemoryListView({ toolCall, result, status, streamingOutput }: ToolMessa
 }
 
 // ---------------------------------------------------------------------------
-// 主组件：按 toolName 路由
+// Main component: route by toolName
 // ---------------------------------------------------------------------------
 
 export function MemoryToolMessage(props: ToolMessageProps) {

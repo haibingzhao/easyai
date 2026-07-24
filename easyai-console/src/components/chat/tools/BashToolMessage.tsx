@@ -1,5 +1,5 @@
 /**
- * Bash工具消息渲染组件
+ * Bash tool message rendering component.
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
@@ -9,7 +9,7 @@ import { extractOutput } from './parsers';
 import { getToolDisplayName } from './icons';
 
 /**
- * 从参数中提取bash命令
+ * Extract bash command from arguments.
  */
 function extractBashCommand(args: string): string {
   try {
@@ -27,7 +27,7 @@ function extractBashCommand(args: string): string {
 const DEFAULT_TIMEOUT_SEC = 200;
 
 /**
- * 从参数中提取超时秒数（LLM传入的timeout参数，未传则使用默认值）
+ * Extract timeout seconds from arguments (LLM-provided timeout param, falls back to default).
  */
 function extractTimeoutSec(args: string): number {
   try {
@@ -42,13 +42,13 @@ function extractTimeoutSec(args: string): number {
 }
 
 /**
- * 计算文本的行数
+ * Count the number of lines in text.
  */
 function countLines(text: string): number {
   return text.split('\n').length;
 }
 
-/** 判定工具输出是否在底部的阈值（px） */
+/** Threshold (px) to determine if tool output is at the bottom */
 const TOOL_SCROLL_BOTTOM_THRESHOLD = 30;
 
 export function BashToolMessage({
@@ -67,7 +67,7 @@ export function BashToolMessage({
   const [isExpanded, setIsExpanded] = useState(false);
   const [isCommandExpanded, setIsCommandExpanded] = useState(false);
 
-  // 执行计时（参考 ThinkingBlock）：streaming 期间每秒更新已执行秒数
+  // Execution timer (ref: ThinkingBlock): update elapsed seconds every second during streaming
   const [elapsedSec, setElapsedSec] = useState(0);
   const startTimeRef = useRef<number | null>(null);
 
@@ -87,19 +87,19 @@ export function BashToolMessage({
     return () => clearInterval(interval);
   }, [isStreaming]);
 
-  // 工具输出自动滚动相关
+  // Tool output auto-scroll
   const outputRef = useRef<HTMLDivElement>(null);
   const toolAutoScrollEnabledRef = useRef(true);
   const prevScrollTopRef = useRef(0);
 
-  /** 检查工具输出是否在底部 */
+  /** Check if tool output is at the bottom */
   const isToolOutputAtBottom = useCallback(() => {
     const el = outputRef.current;
     if (!el) return true;
     return el.scrollHeight - el.scrollTop - el.clientHeight <= TOOL_SCROLL_BOTTOM_THRESHOLD;
   }, []);
 
-  /** 滚动工具输出到底部 */
+  /** Scroll tool output to bottom */
   const scrollToolOutputToBottom = useCallback(() => {
     const el = outputRef.current;
     if (!el || !toolAutoScrollEnabledRef.current) return;
@@ -110,7 +110,7 @@ export function BashToolMessage({
     });
   }, []);
 
-  /** 处理工具输出滚动事件 */
+  /** Handle tool output scroll event */
   const handleToolOutputScroll = useCallback(() => {
     const el = outputRef.current;
     if (!el) return;
@@ -131,7 +131,7 @@ export function BashToolMessage({
     toolAutoScrollEnabledRef.current = isToolOutputAtBottom();
   }, [isStreaming, isToolOutputAtBottom]);
 
-  // wheel事件：streaming期间用户向上滚轮时立即禁用自动滚动
+  // Wheel event: immediately disable auto-scroll when user scrolls up during streaming
   useEffect(() => {
     const el = outputRef.current;
     if (!el) return;
@@ -144,7 +144,7 @@ export function BashToolMessage({
     return () => el.removeEventListener('wheel', handleWheel);
   }, [isStreaming]);
 
-  // streaming时自动滚动工具输出到底部
+  // Auto-scroll tool output to bottom during streaming
   useEffect(() => {
     if (isStreaming && toolAutoScrollEnabledRef.current) {
       requestAnimationFrame(() => {
@@ -153,14 +153,14 @@ export function BashToolMessage({
     }
   }, [streamingOutput, isStreaming, scrollToolOutputToBottom]);
 
-  // streaming结束时，根据当前位置重新判断是否启用自动滚动
+  // When streaming ends, re-evaluate whether to enable auto-scroll based on current position
   useEffect(() => {
     if (!isStreaming) {
       toolAutoScrollEnabledRef.current = isToolOutputAtBottom();
     }
   }, [isStreaming, isToolOutputAtBottom]);
 
-  // 命令展开时滚动到底部
+  // Scroll to bottom when command is expanded
   useEffect(() => {
     if (isCommandExpanded && toolAutoScrollEnabledRef.current) {
       requestAnimationFrame(() => {
@@ -198,7 +198,7 @@ export function BashToolMessage({
 
   return (
     <div className="border border-border rounded-lg bg-card overflow-hidden">
-      {/* 标题栏 */}
+      {/* Title bar */}
       <div className="p-3 flex items-center justify-between gap-2 border-b border-border">
         <div className="flex items-center gap-2">
           <Terminal className="w-4 h-4 text-muted-foreground" />
@@ -212,7 +212,7 @@ export function BashToolMessage({
         </div>
       </div>
 
-      {/* 命令区域 */}
+      {/* Command area */}
       <div className="p-3 flex items-center">
         <div className="text-sm font-mono text-muted-foreground break-all p-2 bg-muted rounded w-full overflow-hidden">
           <div
@@ -228,12 +228,12 @@ export function BashToolMessage({
               {isCommandExpanded ? (
                 <>
                   <ChevronsUp className="w-3 h-3" />
-                  <span>收起</span>
+                  <span>Collapse</span>
                 </>
               ) : (
                 <>
                   <ChevronsDown className="w-3 h-3" />
-                  <span>更多 ({commandLines} 行)</span>
+                  <span>More ({commandLines} lines)</span>
                 </>
               )}
             </button>
@@ -241,7 +241,7 @@ export function BashToolMessage({
         </div>
       </div>
 
-      {/* 输出区域 */}
+      {/* Output area */}
       {(output || isStreaming) && (
         <>
           <div className="border-t border-border" />
@@ -266,12 +266,12 @@ export function BashToolMessage({
                 {isExpanded ? (
                   <>
                     <ChevronsUp className="w-3 h-3" />
-                    <span>收起</span>
+                    <span>Collapse</span>
                   </>
                 ) : (
                   <>
                     <ChevronsDown className="w-3 h-3" />
-                    <span>更多 ({outputLines} 行)</span>
+                    <span>More ({outputLines} lines)</span>
                   </>
                 )}
               </button>

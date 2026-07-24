@@ -78,6 +78,10 @@ npx tsc -b     # Type check
 - **No `transaction { }`** in repository — only `asyncTransaction { }` (Exposed R2DBC).
 - **No `.block()`, `.blockFirst()`, `runBlocking { }`** in repository layer.
 
+## AGENTS.md Files
+
+You'll notice `AGENTS.md` files throughout the repository. These provide architectural context and coding guidance for AI-assisted development tools. They contain useful information about module boundaries, patterns, and conventions that may also help human contributors understand the codebase structure.
+
 ## Pull Request Process
 
 1. Fork the repository and create a feature branch from `main`.

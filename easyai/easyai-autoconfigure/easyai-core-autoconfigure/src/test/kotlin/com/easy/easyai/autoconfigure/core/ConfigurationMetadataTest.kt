@@ -7,7 +7,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * 测试 Spring Boot Configuration Metadata 文件的格式和内容
+ * Tests the format and content of the Spring Boot Configuration Metadata file.
  */
 class ConfigurationMetadataTest {
 
@@ -24,11 +24,11 @@ class ConfigurationMetadataTest {
     fun `test metadata file is valid JSON`() {
         val content = metadataFile.readText()
         
-        // 简单的 JSON 验证：检查是否以 { 开始，以 } 结束
+        // Simple JSON validation: check it starts with { and ends with }
         assertTrue(content.trim().startsWith("{"), "JSON should start with {")
         assertTrue(content.trim().endsWith("}"), "JSON should end with }")
         
-        // 检查必需的关键字
+        // Check required keys
         assertTrue(content.contains("\"properties\""), "JSON should contain 'properties' key")
         assertTrue(content.contains("\"hints\""), "JSON should contain 'hints' key")
     }
@@ -37,7 +37,7 @@ class ConfigurationMetadataTest {
     fun `test metadata contains easyai system properties`() {
         val content = metadataFile.readText()
         
-        // 检查是否包含一些关键的配置项
+        // Check that key configuration properties are present
         assertTrue(
             content.contains("easyai.system.otel.exporter.otlp.protocol"),
             "Should contain otel protocol property"
@@ -56,7 +56,7 @@ class ConfigurationMetadataTest {
     fun `test metadata properties have required fields`() {
         val content = metadataFile.readText()
         
-        // 检查每个 property 是否有必需的字段
+        // Check each property has required fields
         val propertyPattern = Regex("\\{[^}]*\"name\"[^}]*\"type\"[^}]*\"description\"[^}]*\\}")
         val matches = propertyPattern.findAll(content)
         
@@ -67,7 +67,7 @@ class ConfigurationMetadataTest {
     fun `test metadata hints have required fields`() {
         val content = metadataFile.readText()
         
-        // 检查 hints 部分是否存在且有 values
+        // Check hints section exists and has values
         assertTrue(
             content.contains("\"values\""),
             "Hints should contain 'values' field"
@@ -78,7 +78,7 @@ class ConfigurationMetadataTest {
     fun `test otel protocol has value hints`() {
         val content = metadataFile.readText()
         
-        // 检查 otel protocol 是否有值提示
+        // Check otel protocol has value hints
         assertTrue(
             content.contains("http/protobuf") && content.contains("grpc"),
             "OTEL protocol should have http/protobuf and grpc as hint values"
@@ -89,7 +89,7 @@ class ConfigurationMetadataTest {
     fun `test logging level has value hints`() {
         val content = metadataFile.readText()
         
-        // 检查 logging level 是否有值提示
+        // Check logging level has value hints
         val logLevels = listOf("TRACE", "DEBUG", "INFO", "WARN", "ERROR")
         logLevels.forEach { level ->
             assertTrue(
@@ -103,7 +103,7 @@ class ConfigurationMetadataTest {
     fun `test metadata file size is reasonable`() {
         val fileSize = metadataFile.length()
         
-        // 文件大小应该在合理范围内（1KB - 100KB）
+        // File size should be within reasonable range (1KB - 100KB)
         assertTrue(fileSize > 1024, "Metadata file should be larger than 1KB")
         assertTrue(fileSize < 102400, "Metadata file should be smaller than 100KB")
     }

@@ -26,7 +26,7 @@ import { Copy } from 'lucide-react';
 
 interface CopyableTextProps {
   text: string;
-  /** 点击复制时实际写入剪贴板的内容，不传则默认使用 text */
+  /** Actual content written to clipboard on copy click; defaults to text if not provided */
   copyText?: string;
   title?: string;
   className?: string;

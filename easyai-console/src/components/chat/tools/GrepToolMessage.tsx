@@ -1,5 +1,5 @@
 /**
- * Grep工具消息渲染组件
+ * Grep tool message rendering component.
  */
 
 import { useState } from 'react';
@@ -35,7 +35,7 @@ export function GrepToolMessage({
 
   return (
     <div className="border border-border rounded-lg bg-card overflow-hidden">
-      {/* 标题栏 */}
+      {/* Title bar */}
       <div 
         className="p-3 flex items-center justify-between gap-2 border-b border-border cursor-pointer hover:bg-muted/50"
         onClick={() => setIsCollapsed(!isCollapsed)}
@@ -59,7 +59,7 @@ export function GrepToolMessage({
         ) : null}
       </div>
 
-      {/* 搜索模式 */}
+      {/* Search pattern */}
       {pattern && (
         <div className="px-3 py-2 bg-muted/30 border-b border-border">
           <div className="text-sm font-mono text-muted-foreground truncate">
@@ -68,7 +68,7 @@ export function GrepToolMessage({
         </div>
       )}
 
-      {/* 匹配结果 */}
+      {/* Match results */}
       {!isCollapsed && matchCount > 0 && (
         <>
           <div className="border-t border-border" />
@@ -107,7 +107,7 @@ export function GrepToolMessage({
         </>
       )}
 
-      {/* 无匹配结果 */}
+      {/* No matches */}
       {!isStreaming && matchCount === 0 && rawOutput && (
         <div className="p-3 text-sm text-muted-foreground">
           {rawOutput}

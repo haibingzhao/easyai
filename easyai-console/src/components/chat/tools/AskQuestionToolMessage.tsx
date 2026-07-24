@@ -1,7 +1,7 @@
 /**
- * AskQuestion 工具消息渲染组件
- * 直接在 tool card 内联展示多步问答表单
- * 适配后端 AskQuestionParameter 类格式
+ * AskQuestion tool message rendering component.
+ * Displays a multi-step Q&A form inline within the tool card.
+ * Aligned with backend AskQuestionParameter class format.
  */
 
 import { useState, useCallback, Fragment } from 'react';
@@ -11,14 +11,14 @@ import { answerQuestion } from '@/services/chat-service';
 import { authFetch } from '@/services/api-client';
 import type { ToolMessageProps } from './types';
 
-/** 问答选项（对齐后端 QuestionOption） */
+/** Question option (aligned with backend QuestionOption) */
 interface QuestionOption {
   label: string;
   description?: string;
   isOther?: boolean;
 }
 
-/** 单个问题（对齐后端 QuestionParameter） */
+/** Single question (aligned with backend QuestionParameter) */
 interface Question {
   question: string;
   header?: string;
@@ -29,7 +29,7 @@ interface Question {
   otherLabel?: string;
 }
 
-/** 解析后的问答参数（对齐后端 AskQuestionParameter） */
+/** Parsed ask-question arguments (aligned with backend AskQuestionParameter) */
 interface ParsedAskQuestionArgs {
   questions: Question[];
   allowSupplement: boolean;
@@ -38,44 +38,44 @@ interface ParsedAskQuestionArgs {
   supplementHeader?: string;
 }
 
-/** 用户的答案 */
+/** User's answers */
 interface Answers {
-  [questionIndex: number]: string[]; // 存储选中的 option label
+  [questionIndex: number]: string[]; // stores selected option labels
 }
 
-/** 自定义回答（allowOther 选中时） */
+/** Custom answer (when allowOther is selected) */
 interface CustomAnswers {
   [questionIndex: number]: string;
 }
 
-/** 补充信息 */
+/** Supplement information */
 interface SupplementAnswer {
   text: string;
 }
 
-/** 解析后的问题回答对 */
+/** Parsed question-answer pair */
 interface ParsedQA {
   header?: string;
   question: string;
   answers: string[];
 }
 
-/** 解析工具结果中的问答数据 */
+/** Parse Q&A data from tool result */
 function parseCompletedQA(argsStr: string, resultStr: string): ParsedQA[] {
   const parsedArgs = parseAskQuestionArgs(argsStr);
   const qas: ParsedQA[] = [];
 
   if (!parsedArgs || !resultStr) return qas;
 
-  // 解析结果格式: [Question answered]\nQ1: answer1, answer2\nQ2: answer3
+  // Result format: [Question answered]\nQ1: answer1, answer2\nQ2: answer3
   const lines = resultStr.split('\n').filter(line => line.trim());
   const answerLines = lines.filter(line => line.startsWith('Q'));
 
   const questions = parsedArgs.questions;
   const supplementQuestion = parsedArgs.allowSupplement
     ? {
-        header: parsedArgs.supplementHeader ?? '补充信息',
-        question: parsedArgs.supplementQuestion ?? '补充信息',
+        header: parsedArgs.supplementHeader ?? 'Additional Information',
+        question: parsedArgs.supplementQuestion ?? 'Additional Information',
         options: [],
         multiple: false,
         allowOther: false,
@@ -135,23 +135,23 @@ function parseAskQuestionArgs(args: string): ParsedAskQuestionArgs | null {
 export function AskQuestionToolMessage({ toolCall, result, status, streamingOutput }: ToolMessageProps) {
   const sessionId = useChatStore((state) => state.sessionId);
   const globalIsStreaming = useChatStore((state) => state.isStreaming);
-  // 综合判断：全局 streaming 结束且工具状态不是 COMPLETED/FAILED，说明在等待用户输入
+  // Combined check: global streaming ended and tool status is not COMPLETED/FAILED means awaiting user input
   const isAwaitingUserResponse = !globalIsStreaming && !result && status !== 'COMPLETED' && status !== 'FAILED';
   const args = streamingOutput ?? toolCall.args;
   const parsedArgs = args ? parseAskQuestionArgs(args) : null;
   const questions = parsedArgs?.questions ?? [];
   const allowSupplement = parsedArgs?.allowSupplement ?? false;
-  const supplementQuestion = parsedArgs?.supplementQuestion ?? '你有什么补充信息吗？';
-  const supplementPlaceholder = parsedArgs?.supplementPlaceholder ?? '描述你的具体想法...';
-  const supplementHeader = parsedArgs?.supplementHeader ?? '补充信息';
+  const supplementQuestion = parsedArgs?.supplementQuestion ?? 'Do you have any additional information?';
+  const supplementPlaceholder = parsedArgs?.supplementPlaceholder ?? 'Describe your specific thoughts...';
+  const supplementHeader = parsedArgs?.supplementHeader ?? 'Additional Information';
   const isCompleted = status === 'COMPLETED';
   const isFailed = status === 'FAILED';
   const isRejected = result?.result === 'REJECTED';
-  // 总步骤数 = 问题数 + 可选的补充信息
+  // Total steps = number of questions + optional supplement
   const totalSteps = questions.length + (allowSupplement ? 1 : 0);
-  // 解析是否成功（用于区分 streaming 中的不完整 JSON 和真正的空问题）
+  // Whether parsing succeeded (to distinguish incomplete JSON during streaming from truly empty questions)
   const isArgsParsingComplete = parsedArgs !== null;
-  // 是否正在等待用户输入：全局 streaming 已结束 + args 已解析 + 有问题 + 未提交
+  // Whether awaiting user input: global streaming ended + args parsed + has questions + not submitted
   const isAwaitingUserInput = isAwaitingUserResponse && isArgsParsingComplete && questions.length > 0;
 
   const [isOpen, setIsOpen] = useState(true);
@@ -163,9 +163,9 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // 当前步骤是否是补充信息
+  // Whether current step is the supplement step
   const isSupplementStep = allowSupplement && currentStepIndex === questions.length;
-  // 当前问题（如果不是补充信息步骤）
+  // Current question (if not supplement step)
   const currentQuestion = isSupplementStep ? null : questions[currentStepIndex];
 
   const handleSelectOption = useCallback((questionIndex: number, optionLabel: string, multiple: boolean, isOtherOption: boolean) => {
@@ -180,7 +180,7 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
         return { ...prev, [questionIndex]: [optionLabel] };
       }
     });
-    // 如果选中的是"其它"选项，清空之前的自定义回答
+    // If "Other" option is selected, clear previous custom answer
     if (isOtherOption) {
       setCustomAnswers((prev) => ({ ...prev, [questionIndex]: '' }));
     }
@@ -193,21 +193,21 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
 
   const handleNext = useCallback(() => {
     if (isSupplementStep) {
-      // 补充信息步骤不需要验证，直接提交
+      // Supplement step doesn't need validation, submit directly
       return;
     }
     const currentAnswers = answers[currentStepIndex] ?? [];
     if (currentAnswers.length === 0) {
-      setError('请选择一个选项');
+      setError('Please select an option');
       return;
     }
-    // 验证"其它"选项是否填写了自定义内容
+    // Validate "Other" option has custom content filled
     const currentQuestion = questions[currentStepIndex];
     if (currentQuestion?.allowOther) {
-      const otherLabel = currentQuestion.otherLabel ?? '其它';
+      const otherLabel = currentQuestion.otherLabel ?? 'Other';
       const hasOtherSelected = currentAnswers.includes(otherLabel);
       if (hasOtherSelected && !customAnswers[currentStepIndex]?.trim()) {
-        setError('请输入自定义内容');
+        setError('Please enter custom content');
         return;
       }
     }
@@ -226,45 +226,45 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
   }, [currentStepIndex]);
 
   const handleSubmit = useCallback(async () => {
-    // 验证所有问题都已回答
+    // Validate all questions are answered
     for (let i = 0; i < questions.length; i++) {
       const currentAnswers = answers[i] ?? [];
       if (currentAnswers.length === 0) {
         setCurrentStepIndex(i);
-        setError('请回答所有问题');
+        setError('Please answer all questions');
         return;
       }
-      // 验证"其它"选项是否填写了自定义内容
+      // Validate "Other" option has custom content filled
       const question = questions[i];
       if (question.allowOther) {
-        const otherLabel = question.otherLabel ?? '其它';
+        const otherLabel = question.otherLabel ?? 'Other';
         const hasOtherSelected = currentAnswers.includes(otherLabel);
         if (hasOtherSelected && !customAnswers[i]?.trim()) {
           setCurrentStepIndex(i);
-          setError('请填写"其它"选项的内容');
+          setError('Please fill in the "Other" option content');
           return;
         }
       }
     }
     setError(null);
 
-    // 构建提交载荷 - 后端期望 List<List<String>> 格式
+    // Build submission payload - backend expects List<List<String>> format
     const answerPayload: string[][] = questions.map((_, i) => {
       const selectedAnswers = answers[i] ?? [];
-      // 如果有自定义回答（"其它"选项），追加到答案中
+      // If custom answer exists ("Other" option), append to answers
       const customAnswer = customAnswers[i];
       return customAnswer && customAnswer.trim()
         ? [...selectedAnswers, customAnswer.trim()]
         : selectedAnswers;
     });
 
-    // 如果有补充信息，添加到载荷中
+    // If supplement info exists, add to payload
     if (allowSupplement && supplement.text.trim()) {
       answerPayload.push([supplement.text.trim()]);
     }
 
     if (!sessionId) {
-      setError('缺少 sessionId');
+      setError('Missing sessionId');
       setIsSubmitting(false);
       return;
     }
@@ -272,10 +272,10 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
     setIsSubmitting(true);
 
     const chatState = useChatStore.getState();
-    // 先关闭问答表单
+    // Close the Q&A form first
     setIsOpen(false);
 
-    // 调用 SSE 接口，监听流式事件进入 streaming 状态
+    // Call SSE endpoint, listen for streaming events to enter streaming state
     answerQuestion(sessionId, toolCall.id, answerPayload, {
       onEvent: (event) => chatState.handleEvent(event),
       onDone: (event) => chatState.handleEvent(event),
@@ -290,17 +290,17 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
       });
       setIsOpen(false);
     } catch {
-      setError('操作失败，请重试');
+      setError('Operation failed, please retry');
     }
   }, [sessionId, toolCall.id]);
 
   // Already completed or rejected - show static result with Q&A
   if (isCompleted || isFailed || isRejected) {
     const statusText = isRejected
-      ? '已取消'
+      ? 'Cancelled'
       : isFailed
-        ? '失败'
-        : '已完成';
+        ? 'Failed'
+        : 'Completed';
 
     const statusColor = isRejected
       ? 'text-muted-foreground'
@@ -345,7 +345,7 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
               <div key={index} className="space-y-2">
                 {/* Question header */}
                 <div className="text-xs text-muted-foreground">
-                  [{index + 1}] {qa.header ?? `问题 ${index + 1}`}
+                  [{index + 1}] {qa.header ?? `Question ${index + 1}`}
                 </div>
                 {/* Question text */}
                 <div className="text-sm text-foreground">
@@ -353,7 +353,7 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
                 </div>
                 {/* Answer */}
                 <div className="text-sm text-muted-foreground">
-                  {qa.answers.length > 0 ? qa.answers.join(', ') : '未回答'}
+                  {qa.answers.length > 0 ? qa.answers.join(', ') : 'Not answered'}
                 </div>
               </div>
             ))}
@@ -363,9 +363,9 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
     );
   }
 
-  // 确保有内容可显示
+  // Ensure there's content to display
   if (questions.length === 0 && !allowSupplement) {
-    // Streaming 中但 args 还未完整解析 — 显示加载状态
+    // Streaming but args not yet fully parsed — show loading state
     if (globalIsStreaming && !isArgsParsingComplete) {
       return (
         <div className="border border-border rounded-lg bg-card overflow-hidden">
@@ -394,7 +394,7 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
     );
   }
 
-  // 获取当前步骤的显示文本
+  // Get display text for current step
   const currentHeaderText = isSupplementStep
     ? supplementHeader
     : currentQuestion?.header ?? `Question ${currentStepIndex + 1}`;
@@ -531,9 +531,9 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
                   </Fragment>
                 );
               })}
-              {/* "其它"选项：当 allowOther 为 true 时自动添加 */}
+              {/* "Other" option: automatically added when allowOther is true */}
               {currentQuestion!.allowOther && (() => {
-                const otherLabel = currentQuestion!.otherLabel ?? '其它';
+                const otherLabel = currentQuestion!.otherLabel ?? 'Other';
                 const isSelected = (answers[currentStepIndex] ?? []).includes(otherLabel);
                 return (
                   <Fragment key="other-option">
@@ -575,13 +575,13 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
                         </div>
                       </div>
                     </button>
-                    {/* 其它选项的自定义输入框 */}
+                    {/* Custom input for Other option */}
                     {isSelected && (
                       <div className="px-1">
                         <input
                           type="text"
                           className="w-full p-2 text-sm border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                          placeholder={currentQuestion!.otherPlaceholder ?? '请输入自定义内容...'}
+                          placeholder={currentQuestion!.otherPlaceholder ?? 'Enter custom content...'}
                           value={customAnswers[currentStepIndex] ?? ''}
                           onChange={(e) => handleCustomAnswerChange(currentStepIndex, e.target.value)}
                         />
@@ -611,7 +611,7 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
               disabled={isSubmitting}
             >
               <X className="w-4 h-4" />
-              取消
+              Cancel
             </button>
             <div className="flex items-center gap-2">
               {currentStepIndex > 0 && (
@@ -621,7 +621,7 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
                   disabled={isSubmitting}
                 >
                   <ChevronLeft className="w-4 h-4" />
-                  上一个
+                  Previous
                 </button>
               )}
               {currentStepIndex < totalSteps - 1 ? (
@@ -630,7 +630,7 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
                   onClick={handleNext}
                   disabled={isSupplementStep ? false : (answers[currentStepIndex] ?? []).length === 0 || isSubmitting}
                 >
-                  下一个
+                  Next
                   <ChevronRight className="w-4 h-4" />
                 </button>
               ) : (
@@ -639,7 +639,7 @@ export function AskQuestionToolMessage({ toolCall, result, status, streamingOutp
                   onClick={handleSubmit}
                   disabled={isSubmitting}
                 >
-                  {isSubmitting ? '提交中...' : '提交'}
+                  {isSubmitting ? 'Submitting...' : 'Submit'}
                   {!isSubmitting && <Check className="w-4 h-4" />}
                 </button>
               )}

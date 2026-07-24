@@ -73,7 +73,7 @@ export function EditedGroupedMessage({ items, defaultExpanded = false }: EditedG
 
   return (
     <div className="border border-border rounded-lg bg-card overflow-hidden">
-      {/* 标题栏 */}
+      {/* Title bar */}
       <div
         className="p-3 flex items-center gap-2 cursor-pointer hover:bg-muted/50"
         onClick={() => setIsExpanded(!isExpanded)}
@@ -90,7 +90,7 @@ export function EditedGroupedMessage({ items, defaultExpanded = false }: EditedG
         </div>
       </div>
 
-      {/* 展开内容 */}
+      {/* Expanded content */}
       {isExpanded && (
         <div>
           {items.map((item) => {
@@ -102,7 +102,7 @@ export function EditedGroupedMessage({ items, defaultExpanded = false }: EditedG
 
             return (
               <div key={item.toolCall.id}>
-                {/* 每个 item 的子标题 */}
+                {/* Sub-title for each item */}
                 <div className="px-3 py-2 flex items-center gap-2 bg-muted/30 border-t border-border">
                   <FileEdit className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                   <span
@@ -117,7 +117,7 @@ export function EditedGroupedMessage({ items, defaultExpanded = false }: EditedG
                       : hasError ? 'Failed' : 'Edited'}
                   </span>
                 </div>
-                {/* 详情 */}
+                {/* Detail */}
                 {rawOutput && !isItemStreaming && (
                   <div className="border-t border-border p-3">
                     <div className="text-sm font-mono text-muted-foreground whitespace-pre-wrap break-all bg-muted rounded p-2">
