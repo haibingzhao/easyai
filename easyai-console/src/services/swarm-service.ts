@@ -214,6 +214,7 @@ export interface RunDetailResponse {
   error: string | null;
   tasks: TaskSummary[];
   language?: string;
+  dryRun?: boolean;
 }
 
 /** Normalize backend lowercase task type to frontend uppercase convention */
@@ -296,7 +297,8 @@ class SwarmService {
   async launchRun(
     presetName: string,
     variables?: Record<string, string>,
-    modelConfigId?: string
+    modelConfigId?: string,
+    dryRun?: boolean
   ): Promise<{ runId: string } | null> {
     const res = await authFetch(`${API_BASE}/runs`, {
       method: 'POST',
@@ -305,6 +307,7 @@ class SwarmService {
         presetName,
         variables: variables || {},
         ...(modelConfigId ? { modelConfigId } : {}),
+        ...(dryRun ? { dryRun: true } : {}),
       }),
     });
     if (!res.ok) return null;

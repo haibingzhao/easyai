@@ -189,22 +189,40 @@ export const AgentCreatePage: React.FC = () => {
     }
   }, [isEdit, id, fetchAgent]);
 
+  const isSwarmContext = agentContext === 'SWARM';
+  const isChatContext = agentContext === 'CHAT';
+
   const sections: NavSection[] = [
     { id: 'basic', label: i18n('Basic'), icon: <Settings className="w-4 h-4" /> },
     { id: 'tools', label: i18n('Tools'), icon: <Terminal className="w-4 h-4" /> },
-    { id: 'skills', label: i18n('Skills'), icon: <BookOpen className="w-4 h-4" /> },
-    { id: 'subagents', label: i18n('Sub Agents'), icon: <Users className="w-4 h-4" />, hidden: agentType === 'SUBAGENT' },
+    { id: 'skills', label: i18n('Skills'), icon: <BookOpen className="w-4 h-4" />, hidden: isSwarmContext },
+    { id: 'subagents', label: i18n('Sub Agents'), icon: <Users className="w-4 h-4" />, hidden: agentType === 'SUBAGENT' || isSwarmContext },
     { id: 'mcp', label: i18n('MCP'), icon: <Server className="w-4 h-4" /> },
-    { id: 'commands', label: i18n('Commands'), icon: <Zap className="w-4 h-4" /> },
-    { id: 'schema', label: i18n('Schema'), icon: <Braces className="w-4 h-4" /> },
+    { id: 'commands', label: i18n('Commands'), icon: <Zap className="w-4 h-4" />, hidden: isSwarmContext },
+    { id: 'schema', label: i18n('Schema'), icon: <Braces className="w-4 h-4" />, hidden: isChatContext },
   ];
+
+  // Reset active section when it becomes hidden due to context/type change
+  useEffect(() => {
+    const current = sections.find(s => s.id === activeSection);
+    if (current?.hidden) {
+      setActiveSection('basic');
+    }
+  }, [agentContext, agentType]);
+
+  // Swarm agents are always PRIMARY — the PRIMARY/SUBAGENT distinction only applies to Chat
+  useEffect(() => {
+    if (agentContext === 'SWARM' && agentType !== 'PRIMARY') {
+      setAgentType('PRIMARY');
+    }
+  }, [agentContext, agentType]);
 
   const handleAiApply = useCallback((config: Record<string, unknown>) => {
     if (typeof config.name === 'string') setName(config.name);
     if (typeof config.description === 'string') setDescription(config.description);
     if (typeof config.id === 'string') setCallsign(config.id);
     if (config.agentType === 'PRIMARY' || config.agentType === 'SUBAGENT') setAgentType(config.agentType);
-    if (config.agentContext === 'CHAT' || config.agentContext === 'SWARM' || config.agentContext === 'BOTH') setAgentContext(config.agentContext);
+    if (config.agentContext === 'CHAT' || config.agentContext === 'SWARM') setAgentContext(config.agentContext);
     if (typeof config.promptTemplate === 'string') setPromptTemplate(config.promptTemplate);
     if (Array.isArray(config.toolNames)) setSelectedTools(config.toolNames as string[]);
     if (Array.isArray(config.subAgentIds)) setSelectedSubAgents(config.subAgentIds as string[]);
@@ -440,7 +458,8 @@ export const AgentCreatePage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Agent Type */}
+                {/* Agent Type — hidden for Swarm agents (always PRIMARY) */}
+                {!isSwarmContext && (
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Agent Type</label>
                   <p className="text-xs text-muted-foreground mb-2">
@@ -485,6 +504,7 @@ export const AgentCreatePage: React.FC = () => {
                     </button>
                   </div>
                 </div>
+                )}
 
                 {/* Agent Context */}
                 <div className="space-y-2">
@@ -516,18 +536,6 @@ export const AgentCreatePage: React.FC = () => {
                       } ${readOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                     >
                       Swarm
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAgentContext('BOTH')}
-                      disabled={readOnly}
-                      className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                        agentContext === 'BOTH'
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-muted hover:bg-muted/80'
-                      } ${readOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                    >
-                      Both
                     </button>
                   </div>
                 </div>

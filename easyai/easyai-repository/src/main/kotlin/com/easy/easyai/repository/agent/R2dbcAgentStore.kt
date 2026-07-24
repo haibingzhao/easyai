@@ -142,8 +142,10 @@ class R2dbcAgentStore(private val db: R2dbcDatabase) : AsyncAgentStore {
     override suspend fun findSubAgents(userId: String): List<AgentDefinition> = queryAgentsWithTools(
         userId = userId
     ) {
-        (Tables.AgentTable.agentType eq AgentType.SUBAGENT.name) or
-        (Tables.AgentTable.agentType eq AgentType.ALL.name)
+        ((Tables.AgentTable.agentType eq AgentType.SUBAGENT.name) or
+            (Tables.AgentTable.agentType eq AgentType.ALL.name)) and
+            ((Tables.AgentTable.agentContext eq AgentEnv.CHAT.name) or
+                (Tables.AgentTable.agentContext eq AgentEnv.BOTH.name))
     }
 
     override suspend fun findChatAgents(userId: String): List<AgentDefinition> = queryAgentsWithTools(

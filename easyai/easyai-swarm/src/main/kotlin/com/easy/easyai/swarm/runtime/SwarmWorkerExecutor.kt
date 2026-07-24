@@ -328,5 +328,17 @@ class SwarmWorkerExecutor(
         }
         return resolved
     }
+
+    /**
+     * Create a copy of this executor without session persistence (for dry-run mode).
+     */
+    internal fun withoutSession(): SwarmWorkerExecutor = SwarmWorkerExecutor(
+        agentServiceProvider = { agentService },
+        agentResolver = agentResolver,
+        templateRenderer = templateRenderer,
+        eventBridge = eventBridge,
+        sessionManager = null,
+        eventVerbosity = eventVerbosity,
+    )
 }
 

@@ -523,6 +523,19 @@ class SwarmRuntime(
         }
     }
 
+    /**
+     * Create an ephemeral runtime variant for dry-run execution.
+     * Same executors and event bridge, but with all persistence disabled
+     * (no run/task/session writes to DB).
+     */
+    fun forDryRun(): SwarmRuntime = SwarmRuntime(
+        workerExecutor = workerExecutor.withoutSession(),
+        agentResolver = agentResolver,
+        eventBridge = eventBridge,
+        maxConcurrency = maxConcurrency,
+        store = null,
+    )
+
     companion object {
         /** Maximum characters for worker summaries to prevent context overflow. */
         const val MAX_SUMMARY_LENGTH = 10_000

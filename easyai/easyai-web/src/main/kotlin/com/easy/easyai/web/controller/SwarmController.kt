@@ -86,7 +86,9 @@ class SwarmController(
         val runtime: SwarmRuntime,
         val run: SwarmRun,
         val userId: String,
-        val modelConfigId: String? = null
+        val modelConfigId: String? = null,
+        /** Dry runs are ephemeral: never persisted to DB, kept in memory only for status queries. */
+        val dryRun: Boolean = false
     )
 
     data class LaunchRequest(
@@ -94,7 +96,9 @@ class SwarmController(
         val variables: Map<String, String> = emptyMap(),
         val modelConfigId: String? = null,
         /** Optional language override for this run. Empty/null = use preset default. */
-        val language: String? = null
+        val language: String? = null,
+        /** When true, the run executes without any DB persistence and never appears in run history. */
+        val dryRun: Boolean = false
     )
 
     data class ResumeRequest(
@@ -216,6 +220,9 @@ class SwarmController(
     /**
      * Launch a new swarm run. Returns immediately with the run ID;
      * execution proceeds asynchronously.
+     *
+     * When [LaunchRequest.dryRun] is true, the run executes with all persistence
+     * disabled (no run/task/session writes) and never appears in run history.
      */
     @PostMapping("/runs")
     fun launchRun(@RequestBody request: LaunchRequest): Mono<Map<String, String>> {
@@ -228,7 +235,16 @@ class SwarmController(
             val effectiveRun = if (!request.language.isNullOrBlank()) {
                 run.copy(language = request.language)
             } else run
-            store?.saveRun(effectiveRun, userId)
+
+            // Dry run: use ephemeral runtime with no store/session persistence
+            val effectiveRuntime = if (request.dryRun) {
+                cleanupCompletedDryRuns()
+                logger.info("Launching dry run '{}' for preset '{}' — no DB persistence", effectiveRun.id, request.presetName)
+                runtime.forDryRun()
+            } else {
+                store?.saveRun(effectiveRun, userId)
+                runtime
+            }
 
             val abortFlag = AtomicBoolean(false)
             val pauseFlag = AtomicBoolean(false)
@@ -236,7 +252,7 @@ class SwarmController(
             // Launch in background
             val job = backgroundScope.launch {
                 try {
-                    runtime.execute(
+                    effectiveRuntime.execute(
                         effectiveRun,
                         abortSignal = { abortFlag.get() },
                         pauseRequested = pauseFlag,
@@ -245,20 +261,31 @@ class SwarmController(
                 } catch (_: CancellationException) {
                     // Execution was cancelled — SwarmRuntime finally block handles persistence
                 } finally {
-                    activeJobs.remove(effectiveRun.id)
+                    // Dry runs stay in activeJobs so their final state remains queryable
+                    if (!request.dryRun) {
+                        activeJobs.remove(effectiveRun.id)
+                    }
                 }
             }
             activeJobs[effectiveRun.id] = ActiveRunState(
                 job = job,
                 abortSignal = abortFlag,
                 pauseRequested = pauseFlag,
-                runtime = runtime,
+                runtime = effectiveRuntime,
                 run = effectiveRun,
                 userId = userId,
-                modelConfigId = request.modelConfigId
+                modelConfigId = request.modelConfigId,
+                dryRun = request.dryRun
             )
 
             mapOf("runId" to effectiveRun.id, "status" to effectiveRun.status.name)
+        }
+    }
+
+    /** Remove completed dry-run entries from activeJobs to bound memory usage. */
+    private fun cleanupCompletedDryRuns() {
+        activeJobs.entries.removeIf { (_, state) ->
+            state.dryRun && state.job.isCompleted
         }
     }
 
@@ -281,31 +308,56 @@ class SwarmController(
 
     /**
      * Get detailed info about a specific run including all task results.
+     * Dry runs (not persisted) are served from in-memory state while active.
      */
     @GetMapping("/runs/{id}")
     fun getRun(@PathVariable id: String): Mono<RunDetailResponse> {
         return mono {
             val userId = getCurrentUserId()
             val run = store?.getRun(id, userId)
-                ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Swarm run not found: $id")
-            val effectiveRun = resolveEffectiveStatus(run)
-            val isStale = isStaleRunning(run)
-            val tasks = store.getTasks(id)
-            val effectiveTasks = resolveStaleTaskStatuses(isStale, tasks)
-            RunDetailResponse(
-                id = effectiveRun.id,
-                presetName = effectiveRun.presetName,
-                title = effectiveRun.title,
-                status = effectiveRun.status.name,
-                totalInputTokens = effectiveRun.totalInputTokens,
-                totalOutputTokens = effectiveRun.totalOutputTokens,
-                totalCacheReadTokens = effectiveRun.totalCacheReadTokens,
-                totalCacheWriteTokens = effectiveRun.totalCacheWriteTokens,
-                totalDurationMs = effectiveRun.totalDurationMs,
-                error = effectiveRun.error,
-                tasks = effectiveTasks.map { it.toSummary() },
-                language = effectiveRun.language
-            )
+            if (run != null) {
+                val effectiveRun = resolveEffectiveStatus(run)
+                val isStale = isStaleRunning(run)
+                val tasks = store.getTasks(id)
+                val effectiveTasks = resolveStaleTaskStatuses(isStale, tasks)
+                RunDetailResponse(
+                    id = effectiveRun.id,
+                    presetName = effectiveRun.presetName,
+                    title = effectiveRun.title,
+                    status = effectiveRun.status.name,
+                    totalInputTokens = effectiveRun.totalInputTokens,
+                    totalOutputTokens = effectiveRun.totalOutputTokens,
+                    totalCacheReadTokens = effectiveRun.totalCacheReadTokens,
+                    totalCacheWriteTokens = effectiveRun.totalCacheWriteTokens,
+                    totalDurationMs = effectiveRun.totalDurationMs,
+                    error = effectiveRun.error,
+                    tasks = effectiveTasks.map { it.toSummary() },
+                    language = effectiveRun.language
+                )
+            } else {
+                // Dry runs are ephemeral — serve from in-memory state
+                val state = activeJobs[id]
+                if (state != null && state.dryRun && state.userId == userId) {
+                    val memRun = state.run
+                    RunDetailResponse(
+                        id = memRun.id,
+                        presetName = memRun.presetName,
+                        title = memRun.title,
+                        status = memRun.status.name,
+                        totalInputTokens = memRun.tasks.sumOf { it.inputTokens },
+                        totalOutputTokens = memRun.tasks.sumOf { it.outputTokens },
+                        totalCacheReadTokens = memRun.tasks.sumOf { it.cacheReadTokens },
+                        totalCacheWriteTokens = memRun.tasks.sumOf { it.cacheWriteTokens },
+                        totalDurationMs = memRun.tasks.sumOf { it.durationMs },
+                        error = memRun.error,
+                        tasks = memRun.tasks.map { it.toSummary() },
+                        language = memRun.language,
+                        dryRun = true
+                    )
+                } else {
+                    throw ResponseStatusException(HttpStatus.NOT_FOUND, "Swarm run not found: $id")
+                }
+            }
         }
     }
 
@@ -321,8 +373,20 @@ class SwarmController(
         return mono {
             val userId = getCurrentUserId()
             val run = store?.getRun(id, userId)
+
             if (run == null) {
-                mapOf("error" to "Run not found")
+                // Dry runs are not in the store — cancel from in-memory state
+                val state = activeJobs[id]
+                if (state != null && state.dryRun && state.userId == userId) {
+                    state.abortSignal.set(true)
+                    state.job.cancel()
+                    activeJobs.remove(id)
+                    eventBridge.onRunCancelled(id)
+                    logger.info("Cancelled dry run '{}'", id)
+                    mapOf("status" to "CANCELLED")
+                } else {
+                    mapOf("error" to "Run not found")
+                }
             } else if (run.status != SwarmRunStatus.RUNNING &&
                 run.status != SwarmRunStatus.PENDING &&
                 run.status != SwarmRunStatus.RESUMING &&
@@ -859,15 +923,16 @@ class SwarmController(
     ): Flux<ServerSentEvent<String>> {
         return mono {
             val userId = getCurrentUserId()
-            // Verify run exists and belongs to the current user
+            // Verify run exists and belongs to the current user (store or in-memory dry run)
             store?.getRun(id, userId)
+                ?: activeJobs[id]?.takeIf { it.dryRun && it.userId == userId }?.run
                 ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Swarm run not found: $id")
-        }.flatMapMany { run ->
+        }.flatMapMany { swarmRun ->
             val objectMapper = SharedObjectMapper.instance
 
             // Emit a synthetic snapshot event first so late subscribers
             // (who missed run_started due to replay=0) get immediate context.
-            val effectiveRun = resolveEffectiveStatus(run)
+            val effectiveRun = resolveEffectiveStatus(swarmRun)
             val snapshotEvent = SwarmEvent(
                 type = "swarm_run_snapshot",
                 runId = effectiveRun.id,
@@ -966,7 +1031,8 @@ class SwarmController(
         val totalDurationMs: Long,
         val error: String?,
         val tasks: List<TaskSummary>,
-        val language: String = ""
+        val language: String = "",
+        val dryRun: Boolean = false
     )
 
     data class TaskSummary(

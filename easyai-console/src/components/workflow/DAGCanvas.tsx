@@ -75,6 +75,7 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({ preset, onBack }) => {
 
   const isRunning = activeRunDetail?.status === 'RUNNING' || activeRunDetail?.status === 'PENDING';
   const isPaused = activeRunDetail?.status === 'PAUSED';
+  const isDryRun = activeRunDetail?.dryRun === true;
 
   // Load model configs and group names when variable dialog opens
   useEffect(() => {
@@ -122,6 +123,24 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({ preset, onBack }) => {
     }
     setShowVarDialog(false);
     launchRun(preset.name, variableValues, selectedModelConfigId || undefined);
+  }, [preset.name, variableValues, selectedModelConfigId, launchRun, runtimeVariables]);
+
+  const handleStartDryRun = useCallback(() => {
+    // Validate required fields (same as normal run)
+    const errors: Record<string, boolean> = {};
+    let hasError = false;
+    runtimeVariables.forEach((v) => {
+      if (v.required && !variableValues[v.name]?.trim()) {
+        errors[v.name] = true;
+        hasError = true;
+      }
+    });
+    if (hasError) {
+      setValidationErrors(errors);
+      return;
+    }
+    setShowVarDialog(false);
+    launchRun(preset.name, variableValues, selectedModelConfigId || undefined, true);
   }, [preset.name, variableValues, selectedModelConfigId, launchRun, runtimeVariables]);
 
   const handleCancel = useCallback(() => {
@@ -239,6 +258,11 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({ preset, onBack }) => {
         </button>
 
         <span className="font-medium text-sm truncate flex-1">{preset.title}</span>
+        {isDryRun && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-amber-500/10 text-amber-600 shrink-0">
+            {i18n('Dry Run')}
+          </span>
+        )}
         {(activeRunDetail?.language || preset.language) && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-blue-500/10 text-blue-600 shrink-0">
             <Globe className="w-3 h-3" />
@@ -255,13 +279,15 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({ preset, onBack }) => {
               <Play className="w-4 h-4" />
               {i18n('Launch Run')}
             </button>
-            <button
-              onClick={handlePause}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-yellow-500/10 text-yellow-600 hover:bg-yellow-500/20 transition-colors"
-            >
-              <PauseCircle className="w-4 h-4" />
-              {i18n('Pause')}
-            </button>
+            {!isDryRun && (
+              <button
+                onClick={handlePause}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-yellow-500/10 text-yellow-600 hover:bg-yellow-500/20 transition-colors"
+              >
+                <PauseCircle className="w-4 h-4" />
+                {i18n('Pause')}
+              </button>
+            )}
             <button
               onClick={handleCancel}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-red-500/10 text-red-600 hover:bg-red-500/20 transition-colors"
@@ -523,6 +549,13 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({ preset, onBack }) => {
                 className="px-3 py-1.5 text-sm rounded-md border border-border hover:bg-muted"
               >
                 {i18n('Cancel')}
+              </button>
+              <button
+                onClick={handleStartDryRun}
+                title={i18n('Execute without saving to DB or Run History')}
+                className="px-3 py-1.5 text-sm rounded-md border border-border hover:bg-muted"
+              >
+                {i18n('Dry Run')}
               </button>
               <button
                 onClick={handleStartRun}

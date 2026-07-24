@@ -16,7 +16,6 @@ const AGENT_CONTEXT_OPTIONS: { value: AgentEnv | 'ALL_CONTEXTS'; label: string }
   { value: 'ALL_CONTEXTS', label: 'All Contexts' },
   { value: 'CHAT', label: 'Chat' },
   { value: 'SWARM', label: 'Swarm' },
-  { value: 'BOTH', label: 'Both' },
 ];
 
 export const AgentsPage: React.FC = () => {
@@ -157,7 +156,6 @@ export const AgentsPage: React.FC = () => {
                       <span className="text-xs text-muted-foreground">·</span>
                       <span className={`text-xs px-1.5 py-0.5 rounded ${
                         agent.agentContext === 'SWARM' ? 'text-orange-400 bg-orange-400/10' :
-                        agent.agentContext === 'BOTH' ? 'text-purple-400 bg-purple-400/10' :
                         'text-green-400 bg-green-400/10'
                       }`}>
                         {agent.agentContext}

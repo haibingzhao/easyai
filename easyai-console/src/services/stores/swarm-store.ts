@@ -24,7 +24,7 @@ interface SwarmState {
   loadPresets: () => Promise<void>;
   deletePreset: (name: string) => Promise<void>;
   loadRuns: () => Promise<void>;
-  launchRun: (presetName: string, variables?: Record<string, string>, modelConfigId?: string) => Promise<string | null>;
+  launchRun: (presetName: string, variables?: Record<string, string>, modelConfigId?: string, dryRun?: boolean) => Promise<string | null>;
   cancelRun: (id: string) => Promise<void>;
   deleteRun: (id: string) => Promise<void>;
   pauseRun: (runId: string) => Promise<void>;
@@ -75,10 +75,13 @@ export const useSwarmStore = create<SwarmState>((set, get) => ({
     set({ runs });
   },
 
-  launchRun: async (presetName, variables, modelConfigId) => {
-    const result = await swarmService.launchRun(presetName, variables, modelConfigId);
+  launchRun: async (presetName, variables, modelConfigId, dryRun) => {
+    const result = await swarmService.launchRun(presetName, variables, modelConfigId, dryRun);
     if (!result) return null;
-    await get().loadRuns();
+    // Dry runs never appear in run history — skip refreshing the list
+    if (!dryRun) {
+      await get().loadRuns();
+    }
     get().pollActiveRun(result.runId);
     return result.runId;
   },
