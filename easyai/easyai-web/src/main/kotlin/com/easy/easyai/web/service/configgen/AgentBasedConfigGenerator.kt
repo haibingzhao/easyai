@@ -415,6 +415,7 @@ If you need the full specification, call `list_resources type="spec"`.
 - agentDefinitionId: MUST reference an existing agent for global mode (from list_resources type="agents")
 - dependsOn: forms a valid DAG (no cycles)
 - inputFrom: variable routing from upstream tasks
+- Variables: ALWAYS define a required variable named `user_input` (description: "The user query or task description"). This is the standard entry point variable used by the runtime. Use `{{ user_input }}` in task prompt templates to reference the user's input. Do NOT invent alternative names like "userProblem", "query", "task_description" — always use `user_input`.
 """.trimIndent()
             else -> buildGenericSystemPrompt(configType)
         }

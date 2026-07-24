@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useResizable } from '@/hooks/useResizable';
 import { ArrowLeft, Play, History, StopCircle, PauseCircle, X, Globe } from 'lucide-react';
-import type { PresetInfo, TaskSummary } from '@/services/swarm-service';
+import type { PresetInfo, TaskSummary, TeamHistoryResponse, MemberStatusDto } from '@/services/swarm-service';
+import { swarmService } from '@/services/swarm-service';
 import { useSwarmStore } from '@/services/stores/swarm-store';
 import { modelConfigService } from '@/services/model-config-service';
 import { storageService } from '@/services/storage-service';
@@ -40,6 +41,7 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({ preset, onBack }) => {
   const [sidebarWidth, setSidebarWidth] = useState(380);
   const [panelResizing, setPanelResizing] = useState(false);
   const [subCanvasTaskId, setSubCanvasTaskId] = useState<string | null>(null);
+  const [teamHistory, setTeamHistory] = useState<TeamHistoryResponse | null>(null);
 
   const sidebarResizer = useResizable({
     minWidth: 280,
@@ -93,6 +95,41 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({ preset, onBack }) => {
       }).catch(() => {/* ignore */});
     }
   }, [showVarDialog]);
+
+  // Fetch team history for the open sub-canvas; poll while the TEAM task is running
+  const subCanvasTaskStatus = subCanvasTaskId ? taskStatuses.get(subCanvasTaskId)?.status : undefined;
+  useEffect(() => {
+    if (!subCanvasTaskId || !activeRunDetail) {
+      setTeamHistory(null);
+      return;
+    }
+    const runId = activeRunDetail.id;
+    const isTaskRunning = subCanvasTaskStatus === 'IN_PROGRESS' || subCanvasTaskStatus === 'PENDING';
+
+    let cancelled = false;
+    const fetchHistory = () => {
+      swarmService.fetchTeamHistory(runId, subCanvasTaskId).then((data) => {
+        if (!cancelled) setTeamHistory(data);
+      }).catch(() => {/* ignore */});
+    };
+    fetchHistory();
+
+    const timer = isTaskRunning ? setInterval(fetchHistory, 3000) : null;
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [subCanvasTaskId, activeRunDetail, subCanvasTaskStatus]);
+
+  // Latest runtime status per member (last execution wins) for sub-canvas coloring
+  const memberStatuses = useMemo(() => {
+    if (!teamHistory) return undefined;
+    const map: Record<string, MemberStatusDto> = {};
+    for (const exec of teamHistory.memberExecutions) {
+      map[exec.memberId] = exec.status;
+    }
+    return map;
+  }, [teamHistory]);
 
   // Variables shown in the run dialog: exclude updatable ones (those are set by agents at runtime)
   const runtimeVariables = useMemo(
@@ -421,6 +458,7 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({ preset, onBack }) => {
                   agents={preset.agents}
                   onBack={() => setSubCanvasTaskId(null)}
                   readOnly
+                  memberStatuses={memberStatuses}
                 />
               </div>
             );

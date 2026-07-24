@@ -12,6 +12,7 @@ import {
   type EdgeData,
 } from '@/utils/dag-layout';
 import { EditableWorkflowNode } from './EditableWorkflowNode';
+import { TeamSubCanvas } from './TeamSubCanvas';
 import { i18n } from '@/utils/i18n';
 
 interface WorkflowEditorCanvasProps {
@@ -61,6 +62,7 @@ export const WorkflowEditorCanvas: React.FC<WorkflowEditorCanvasProps> = ({
   const dragLineRef = useRef<SVGLineElement>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [hoveredEdge, setHoveredEdge] = useState<number | null>(null);
+  const [subCanvasTaskId, setSubCanvasTaskId] = useState<string | null>(null);
   const dragMouseRef = useRef({ x: 0, y: 0 });
 
   // Build agent role lookup
@@ -366,6 +368,7 @@ export const WorkflowEditorCanvas: React.FC<WorkflowEditorCanvasProps> = ({
                 task={task}
                 isSelected={selectedTaskId === task.id}
                 onClick={() => onSelectTask(task.id)}
+                onDoubleClick={task.type === 'TEAM' && task.team ? () => setSubCanvasTaskId(task.id) : undefined}
                 onAddChild={handleAddChild}
                 onAddSibling={handleAddSibling}
                 onDelete={handleDeleteTask}
@@ -394,6 +397,21 @@ export const WorkflowEditorCanvas: React.FC<WorkflowEditorCanvasProps> = ({
               </button>
             </div>
           )}
+
+          {/* Team Sub-Canvas overlay (double-click a TEAM node) */}
+          {subCanvasTaskId && (() => {
+            const subTask = tasks.find((t) => t.id === subCanvasTaskId);
+            if (!subTask?.team) return null;
+            return (
+              <div className="absolute inset-0 z-30 bg-background/95 p-4">
+                <TeamSubCanvas
+                  teamSpec={subTask.team}
+                  agents={agents}
+                  onBack={() => setSubCanvasTaskId(null)}
+                />
+              </div>
+            );
+          })()}
         </div>
       </div>
 

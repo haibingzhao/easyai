@@ -5,6 +5,14 @@ export interface NodePosition {
 }
 
 /**
+ * Compute the circle radius for a given number of members.
+ * Exposed so callers can size the canvas world to fit the whole ring.
+ */
+export function computeRadialRadius(memberCount: number): number {
+  return Math.max(200, memberCount * 60);
+}
+
+/**
  * Compute radial positions for a team sub-canvas.
  * Leader is placed at the center; members are evenly distributed on a circle.
  *
@@ -29,7 +37,7 @@ export function computeRadialPositions(
   const count = memberIds.length;
   if (count === 0) return positions;
 
-  const radius = Math.max(200, count * 60);
+  const radius = computeRadialRadius(count);
   const angleStep = (2 * Math.PI) / count;
   // Start from top (-PI/2) for aesthetic layout
   const startAngle = -Math.PI / 2;

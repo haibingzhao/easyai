@@ -771,11 +771,11 @@ export const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
         {/* TEAM section */}
         {localTask.type === 'TEAM' && (
           <TeamConfigPanel
-            team={localTask.team ?? DEFAULT_TEAM}
+            team={{ ...DEFAULT_TEAM, ...localTask.team }}
             agents={agents}
             variables={variables}
             inputFrom={localTask.inputFrom ?? {}}
-            onUpdate={(teamUpdate) => update({ team: { ...(localTask.team ?? DEFAULT_TEAM), ...teamUpdate } })}
+            onUpdate={(teamUpdate) => update({ team: { ...DEFAULT_TEAM, ...localTask.team, ...teamUpdate } })}
           />
         )}
       </div>

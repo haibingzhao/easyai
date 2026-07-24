@@ -207,6 +207,8 @@ An `EscalationCompletionCheck` provides a soft guarantee: if a member’s output
 
 Variables defined here are requested from the user when launching a swarm run. Their values are available in ALL task prompt templates.
 
+**Convention**: Always define a required variable named `user_input` as the primary entry point. The runtime uses `user_input` as the fallback UserMessage when a task has no promptTemplate, and TEAM leaders reference it directly. Do not use alternative names (e.g. "userProblem", "query").
+
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `name` | string | **yes** | — | Variable name used in Jinja2 templates as `{{ name }}`. |

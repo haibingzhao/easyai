@@ -49,7 +49,7 @@ const V_PADDING = 16; // px — top/bottom padding of the editing area
  * A single scrollable wrapper keeps them in sync without manual scroll handlers.
  */
 export const JinjaTemplateEditor = forwardRef<JinjaTemplateEditorHandle, JinjaTemplateEditorProps>(({
-  value,
+  value = '',
   onChange,
   placeholder,
   maxLength,

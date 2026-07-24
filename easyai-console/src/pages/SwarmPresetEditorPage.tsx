@@ -20,6 +20,52 @@ import { useResizable } from '@/hooks/useResizable';
 
 type SectionId = 'basic' | 'agents' | 'tasks' | 'variables';
 
+/**
+ * Normalize an AI-generated task: fill in missing fields with safe defaults.
+ * LLM output may omit optional-looking fields (e.g. team.contextTemplate),
+ * which would crash downstream editors that assume them present.
+ */
+function normalizeAiTask(raw: Record<string, unknown>): SwarmTaskDto {
+  const t = raw as unknown as SwarmTaskDto;
+  const type = (['SINGLE', 'DELIBERATION', 'TEAM'].includes(t.type) ? t.type : 'SINGLE') as SwarmTaskDto['type'];
+  const task: SwarmTaskDto = {
+    ...t,
+    id: t.id ?? '',
+    type,
+    promptTemplate: t.promptTemplate ?? '',
+    dependsOn: t.dependsOn ?? [],
+    inputFrom: t.inputFrom ?? {},
+  };
+  if (type === 'TEAM') {
+    const team = (t.team ?? {}) as Record<string, unknown>;
+    task.team = {
+      leader: typeof team.leader === 'string' ? team.leader : '',
+      members: Array.isArray(team.members) ? (team.members as string[]) : [],
+      maxIterations: typeof team.maxIterations === 'number' ? team.maxIterations : 5,
+      maxDynamicTasks: typeof team.maxDynamicTasks === 'number' ? team.maxDynamicTasks : 10,
+      roundTimeoutSeconds: typeof team.roundTimeoutSeconds === 'number' ? team.roundTimeoutSeconds : 600,
+      memberTimeoutSeconds: typeof team.memberTimeoutSeconds === 'number' ? team.memberTimeoutSeconds : 0,
+      consultationTimeoutSeconds: typeof team.consultationTimeoutSeconds === 'number' ? team.consultationTimeoutSeconds : undefined,
+      contextTemplate: typeof team.contextTemplate === 'string' ? team.contextTemplate : '',
+    };
+    task.deliberation = undefined;
+  } else if (type === 'DELIBERATION') {
+    const d = (t.deliberation ?? {}) as Record<string, unknown>;
+    task.deliberation = {
+      participants: Array.isArray(d.participants) ? (d.participants as string[]) : [],
+      judge: typeof d.judge === 'string' ? d.judge : '',
+      maxRounds: typeof d.maxRounds === 'number' ? d.maxRounds : 3,
+      order: d.order === 'ROUND_ROBIN' ? 'ROUND_ROBIN' : 'SEQUENTIAL',
+      contextTemplate: typeof d.contextTemplate === 'string' ? d.contextTemplate : '',
+    };
+    task.team = undefined;
+  } else {
+    task.team = undefined;
+    task.deliberation = undefined;
+  }
+  return task;
+}
+
 interface NavSection {
   id: SectionId;
   label: string;
@@ -40,7 +86,9 @@ export const SwarmPresetEditorPage: React.FC = () => {
   const [description, setDescription] = useState('');
   const [agents, setAgents] = useState<SwarmAgentSpecDto[]>([]);
   const [tasks, setTasks] = useState<SwarmTaskDto[]>([]);
-  const [variables, setVariables] = useState<SwarmVariableDto[]>([]);
+  const [variables, setVariables] = useState<SwarmVariableDto[]>([
+    { name: 'user_input', description: 'The user query or task description', required: true, defaultValue: null, updatable: false },
+  ]);
   const [language, setLanguage] = useState('');
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -121,7 +169,7 @@ export const SwarmPresetEditorPage: React.FC = () => {
     if (typeof config.title === 'string') setTitle(config.title);
     if (typeof config.description === 'string') setDescription(config.description);
     if (Array.isArray(config.agents)) setAgents(config.agents as SwarmAgentSpecDto[]);
-    if (Array.isArray(config.tasks)) setTasks(config.tasks as SwarmTaskDto[]);
+    if (Array.isArray(config.tasks)) setTasks((config.tasks as Record<string, unknown>[]).map(normalizeAiTask));
     if (Array.isArray(config.variables)) setVariables(config.variables as SwarmVariableDto[]);
   }, [agents.length, tasks.length]);
 
