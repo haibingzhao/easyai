@@ -289,6 +289,8 @@ data class TeamSpec(
     val maxDynamicTasks: Int = 10,
     val roundTimeoutSeconds: Int = 600,
     val memberTimeoutSeconds: Int = 0,
+    /** Timeout in seconds for user consultation responses. 0 = use default (300s). */
+    val consultationTimeoutSeconds: Int = 0,
     /** Jinja2 template for the team task context. Leader uses this to auto-generate prompts. */
     val contextTemplate: String = "",
 )
@@ -325,6 +327,7 @@ enum class MemberStatus {
     RUNNING,
     COMPLETED,
     ESCALATED,
+    SUSPENDED,
     REASSIGNED
 }
 
@@ -426,6 +429,8 @@ data class WorkerResult(
     val cacheWriteTokens: Long = 0,
     val durationMs: Long = 0,
     val error: String? = null,
+    /** Session ID created for this worker execution — used for resume support. */
+    val sessionId: String? = null,
     /** Deliberation history — populated only for DELIBERATION tasks. */
     val deliberationHistory: List<DeliberationEntry> = emptyList(),
     /** Verdict prompt sent to the Judge — populated only for DELIBERATION tasks. */

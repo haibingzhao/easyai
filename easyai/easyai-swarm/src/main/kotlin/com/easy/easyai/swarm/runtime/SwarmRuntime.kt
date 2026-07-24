@@ -54,6 +54,9 @@ class SwarmRuntime(
         eventBridge = eventBridge,
     )
 
+    /** Registry for pending team consultations — used by REST API to complete/reject user consultations. */
+    val consultationRegistry: TeamConsultationRegistry get() = teamExecutor.consultationRegistry
+
     private val deliberationExecutor = DeliberationTaskExecutor(
         workerExecutor = workerExecutor,
         eventBridge = eventBridge,

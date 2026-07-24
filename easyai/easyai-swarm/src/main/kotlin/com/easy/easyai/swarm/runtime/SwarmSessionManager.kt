@@ -2,6 +2,7 @@ package com.easy.easyai.swarm.runtime
 
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.event.MessageListener
+import com.easy.easyai.core.model.EasyAiMessage
 
 /**
  * Abstraction for swarm worker session lifecycle management.
@@ -39,4 +40,14 @@ interface SwarmSessionManager {
      * @return A MessageListener instance, or null if listener creation is not supported
      */
     fun createMessageListener(sessionId: String, context: AgentContext): MessageListener?
+
+    /**
+     * Load persisted messages for a session (excluding compacted messages).
+     * Used by [SwarmWorkerExecutor.resumeWorker] to restore conversation history
+     * before resuming a suspended member.
+     *
+     * @param sessionId The session to load messages from
+     * @return List of messages ordered by creation time, or empty list if not supported
+     */
+    suspend fun loadMessages(sessionId: String): List<EasyAiMessage> = emptyList()
 }

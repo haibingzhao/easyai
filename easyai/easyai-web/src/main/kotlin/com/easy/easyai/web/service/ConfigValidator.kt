@@ -13,14 +13,10 @@ import com.easy.easyai.swarm.model.TaskType
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.web.model.ConfigValidationError
 import com.easy.easyai.web.model.ConfigValidationResult
-import com.easy.easyai.web.service.validation.AgentConfigValidator
-import com.easy.easyai.web.service.validation.FieldConstraintValidator
-import com.easy.easyai.web.service.validation.ResourceExistenceValidator
-import com.easy.easyai.web.service.validation.TemplateConsistencyValidator
-import com.easy.easyai.web.service.validation.TemplateSyntaxValidator
+import com.easy.easyai.web.service.validation.*
+import org.slf4j.LoggerFactory
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
-import org.slf4j.LoggerFactory
 
 /**
  * Validates generated (or user-supplied) Agent and Swarm configs.
@@ -87,11 +83,11 @@ class ConfigValidator(
         val errors = mutableListOf<ConfigValidationError>()
 
         // 1. Parse basic fields
-        val name = configNode.get("name")?.asText()
+        val name = configNode.get("name")?.asString()
         if (name.isNullOrBlank()) {
             errors.add(ConfigValidationError("name", "Swarm preset name is required"))
         }
-        val title = configNode.get("title")?.asText()
+        val title = configNode.get("title")?.asString()
         if (title.isNullOrBlank()) {
             errors.add(ConfigValidationError("title", "Swarm preset title is required"))
         }

@@ -907,6 +907,69 @@ class SwarmController(
         )
     }
 
+    // --- Team Consultation Endpoints ---
+
+    data class ConsultationAnswerRequest(
+        val memberId: String,
+        val answer: String,
+    )
+
+    data class ConsultationRejectRequest(
+        val memberId: String,
+    )
+
+    /**
+     * Answer a pending team consultation.
+     * Completes the CompletableDeferred in TeamTaskExecutor, triggering member resume.
+     */
+    @PostMapping("/runs/{runId}/tasks/{taskId}/consultation/answer")
+    suspend fun answerConsultation(
+        @PathVariable runId: String,
+        @PathVariable taskId: String,
+        @RequestBody request: ConsultationAnswerRequest,
+    ): ResponseEntity<Map<String, Any>> {
+        val userId = getCurrentUserId()
+        // Verify run ownership
+        store?.getRun(runId, userId)
+            ?: activeJobs[runId]?.takeIf { it.userId == userId }?.run
+            ?: return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(mapOf("error" to "Swarm run not found: $runId"))
+
+        val answered = runtime.consultationRegistry.answer(runId, taskId, request.memberId, request.answer)
+        return if (answered) {
+            ResponseEntity.ok(mapOf("status" to "answered", "memberId" to request.memberId))
+        } else {
+            ResponseEntity.status(HttpStatus.GONE)
+                .body(mapOf("error" to "Consultation not found or already completed", "memberId" to request.memberId))
+        }
+    }
+
+    /**
+     * Reject/skip a pending team consultation.
+     * The member will be marked as ESCALATED and Leader will re-decide next round.
+     */
+    @PostMapping("/runs/{runId}/tasks/{taskId}/consultation/reject")
+    suspend fun rejectConsultation(
+        @PathVariable runId: String,
+        @PathVariable taskId: String,
+        @RequestBody request: ConsultationRejectRequest,
+    ): ResponseEntity<Map<String, Any>> {
+        val userId = getCurrentUserId()
+        // Verify run ownership
+        store?.getRun(runId, userId)
+            ?: activeJobs[runId]?.takeIf { it.userId == userId }?.run
+            ?: return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(mapOf("error" to "Swarm run not found: $runId"))
+
+        val rejected = runtime.consultationRegistry.reject(runId, taskId, request.memberId)
+        return if (rejected) {
+            ResponseEntity.ok(mapOf("status" to "rejected", "memberId" to request.memberId))
+        } else {
+            ResponseEntity.status(HttpStatus.GONE)
+                .body(mapOf("error" to "Consultation not found or already completed", "memberId" to request.memberId))
+        }
+    }
+
     /**
      * SSE event stream for a specific swarm run.
      *

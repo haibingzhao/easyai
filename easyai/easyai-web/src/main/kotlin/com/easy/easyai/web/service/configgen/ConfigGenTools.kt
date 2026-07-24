@@ -12,9 +12,26 @@ import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.tool.ToolUpdate
 import com.easy.easyai.skills.SkillRegistry
 import com.easy.easyai.tools.mcp.McpClientManager
+import com.easy.easyai.web.model.ConfigValidationError
 import com.easy.easyai.web.service.ConfigValidator
 import kotlinx.coroutines.CoroutineScope
 import tools.jackson.databind.JsonNode
+
+/**
+ * Formats validation errors into a human-readable string with errors and warnings sections.
+ */
+internal fun formatValidationErrors(errors: List<ConfigValidationError>): String = buildString {
+    appendLine("Errors:")
+    errors.filter { it.severity == "error" }.forEach {
+        appendLine("  - [${it.field}] ${it.message}")
+    }
+    if (errors.any { it.severity == "warning" }) {
+        appendLine("Warnings:")
+        errors.filter { it.severity == "warning" }.forEach {
+            appendLine("  - [${it.field}] ${it.message}")
+        }
+    }
+}
 
 // ============================================================================
 // Tool 1: validate_config
@@ -56,9 +73,7 @@ class ValidateConfigTool(
     ): ToolResult {
         return try {
             val configObj = args["config"]
-            if (configObj == null) {
-                return errorResult("Missing 'config' parameter. Provide the JSON configuration to validate.")
-            }
+                ?: return errorResult("Missing 'config' parameter. Provide the JSON configuration to validate.")
 
             val configNode: JsonNode = objectMapper.valueToTree(configObj)
 
@@ -77,16 +92,7 @@ class ValidateConfigTool(
                     }
                 } else {
                     appendLine("✗ Validation FAILED")
-                    appendLine("Errors:")
-                    result.errors.filter { it.severity == "error" }.forEach {
-                        appendLine("  - [${it.field}] ${it.message}")
-                    }
-                    if (result.errors.any { it.severity == "warning" }) {
-                        appendLine("Warnings:")
-                        result.errors.filter { it.severity == "warning" }.forEach {
-                            appendLine("  - [${it.field}] ${it.message}")
-                        }
-                    }
+                    append(formatValidationErrors(result.errors))
                     appendLine()
                     appendLine("Fix the errors above and call validate_config again.")
                 }

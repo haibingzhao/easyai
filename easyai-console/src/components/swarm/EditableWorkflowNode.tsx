@@ -8,6 +8,7 @@ interface EditableWorkflowNodeProps {
   task: SwarmTaskDto;
   isSelected: boolean;
   onClick: () => void;
+  onDoubleClick?: () => void;
   onAddChild: (parentId: string) => void;
   onAddSibling: (siblingId: string) => void;
   onDelete: (taskId: string) => void;
@@ -21,6 +22,7 @@ export const EditableWorkflowNode: React.FC<EditableWorkflowNodeProps> = ({
   task,
   isSelected,
   onClick,
+  onDoubleClick,
   onAddChild,
   onAddSibling,
   onDelete,
@@ -40,6 +42,10 @@ export const EditableWorkflowNode: React.FC<EditableWorkflowNodeProps> = ({
       onClick={(e) => {
         e.stopPropagation();
         onClick();
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onDoubleClick?.();
       }}
     >
       {/* Input port (top center) */}

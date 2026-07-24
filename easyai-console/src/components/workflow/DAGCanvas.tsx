@@ -9,6 +9,8 @@ import type { ModelProviderConfig } from '@/types/settings';
 import { WorkflowNode } from './WorkflowNode';
 import { NodeDetailPanel } from './NodeDetailPanel';
 import { RunHistoryPanel } from './RunHistoryPanel';
+import { TeamSubCanvas } from '@/components/swarm/TeamSubCanvas';
+import { TeamConsultationPanel } from '@/components/swarm/TeamConsultationPanel';
 import { i18n } from '@/utils/i18n';
 import type { RunSummary } from '@/services/swarm-service';
 import {
@@ -37,6 +39,7 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({ preset, onBack }) => {
   const [activeSidebarTab, setActiveSidebarTab] = useState<'detail' | 'history'>('detail');
   const [sidebarWidth, setSidebarWidth] = useState(380);
   const [panelResizing, setPanelResizing] = useState(false);
+  const [subCanvasTaskId, setSubCanvasTaskId] = useState<string | null>(null);
 
   const sidebarResizer = useResizable({
     minWidth: 280,
@@ -58,6 +61,8 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({ preset, onBack }) => {
     loadRunDetail,
     pollActiveRun,
     loadRuns,
+    pendingConsultation,
+    clearPendingConsultation,
   } = useSwarmStore();
 
   const positions = useMemo(() => computeNodePositions(preset.tasks), [preset.tasks]);
@@ -395,6 +400,8 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({ preset, onBack }) => {
                   }
                   isSelected={selectedTaskId === task.id}
                   onClick={() => setSelectedTaskId(selectedTaskId === task.id ? null : task.id)}
+                  onDoubleClick={task.type === 'TEAM' && task.team ? () => setSubCanvasTaskId(task.id) : undefined}
+                  waitingUserAnswer={pendingConsultation?.taskId === task.id}
                   agentRole={agentMap.get(task.agentId)}
                   x={pos.x}
                   y={pos.y}
@@ -402,6 +409,35 @@ export const DAGCanvas: React.FC<DAGCanvasProps> = ({ preset, onBack }) => {
               );
             })}
           </div>
+
+          {/* Team Sub-Canvas overlay */}
+          {subCanvasTaskId && (() => {
+            const subTask = preset.tasks.find((t) => t.id === subCanvasTaskId);
+            if (!subTask?.team) return null;
+            return (
+              <div className="absolute inset-0 z-30 bg-background/95 p-4">
+                <TeamSubCanvas
+                  teamSpec={subTask.team}
+                  agents={preset.agents}
+                  onBack={() => setSubCanvasTaskId(null)}
+                  readOnly
+                />
+              </div>
+            );
+          })()}
+
+          {/* Team Consultation Panel — floating bottom-right */}
+          {pendingConsultation && (
+            <div className="absolute bottom-4 right-4 z-40 w-80">
+              <TeamConsultationPanel
+                runId={pendingConsultation.runId}
+                taskId={pendingConsultation.taskId}
+                consultation={pendingConsultation.consultation}
+                onResolved={clearPendingConsultation}
+                onClose={clearPendingConsultation}
+              />
+            </div>
+          )}
         </div>
 
         {/* Drag handle */}

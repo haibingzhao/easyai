@@ -142,6 +142,73 @@ class SwarmRuntimeTeamTest {
             assertTrue(result.newTasks.isEmpty())
             assertTrue(result.reassignments.isEmpty())
         }
+
+        @Test
+        fun `parse JSON with suspendAndAssist field`() {
+            val json = """
+                {
+                  "analysis": "Member m1 is blocked, sending helper.",
+                  "newTasks": [],
+                  "reassignments": [],
+                  "suspendAndAssist": [
+                    {"blockedMemberId": "m1", "helperMemberId": "m2", "assistTask": "Fix the API key issue"}
+                  ],
+                  "suspendAndConsultUser": [],
+                  "isComplete": false
+                }
+            """.trimIndent()
+
+            val result = LeaderDecisionParser.parse(json)
+
+            assertEquals(1, result.suspendAndAssist.size)
+            assertEquals("m1", result.suspendAndAssist[0].blockedMemberId)
+            assertEquals("m2", result.suspendAndAssist[0].helperMemberId)
+            assertEquals("Fix the API key issue", result.suspendAndAssist[0].assistTask)
+            assertTrue(result.suspendAndConsultUser.isEmpty())
+            assertFalse(result.isComplete)
+        }
+
+        @Test
+        fun `parse JSON with suspendAndConsultUser field`() {
+            val json = """
+                {
+                  "analysis": "Need user input for m3.",
+                  "newTasks": [],
+                  "reassignments": [],
+                  "suspendAndAssist": [],
+                  "suspendAndConsultUser": [
+                    {"blockedMemberId": "m3", "question": "Which database to use?", "options": ["PostgreSQL", "MySQL"]}
+                  ],
+                  "isComplete": false
+                }
+            """.trimIndent()
+
+            val result = LeaderDecisionParser.parse(json)
+
+            assertEquals(1, result.suspendAndConsultUser.size)
+            assertEquals("m3", result.suspendAndConsultUser[0].blockedMemberId)
+            assertEquals("Which database to use?", result.suspendAndConsultUser[0].question)
+            assertEquals(listOf("PostgreSQL", "MySQL"), result.suspendAndConsultUser[0].options)
+            assertTrue(result.suspendAndAssist.isEmpty())
+        }
+
+        @Test
+        fun `parse JSON without new fields defaults to empty lists (backward compat)`() {
+            val json = """
+                {
+                  "analysis": "Old format without suspend fields.",
+                  "newTasks": [{"memberId": "m1", "assignment": "Do work"}],
+                  "reassignments": [],
+                  "isComplete": false
+                }
+            """.trimIndent()
+
+            val result = LeaderDecisionParser.parse(json)
+
+            assertTrue(result.suspendAndAssist.isEmpty())
+            assertTrue(result.suspendAndConsultUser.isEmpty())
+            assertEquals(1, result.newTasks.size)
+        }
     }
 
     // ── B. Team data model serialization ────────────────────────────────────
@@ -230,12 +297,13 @@ class SwarmRuntimeTeamTest {
         }
 
         @Test
-        fun `MemberStatus enum has four values`() {
+        fun `MemberStatus enum has five values`() {
             val values = MemberStatus.entries
-            assertEquals(4, values.size)
+            assertEquals(5, values.size)
             assertTrue(values.contains(MemberStatus.RUNNING))
             assertTrue(values.contains(MemberStatus.COMPLETED))
             assertTrue(values.contains(MemberStatus.ESCALATED))
+            assertTrue(values.contains(MemberStatus.SUSPENDED))
             assertTrue(values.contains(MemberStatus.REASSIGNED))
         }
 
@@ -355,6 +423,10 @@ class SwarmRuntimeTeamTest {
             assertTrue(state.delegationHistory.isEmpty())
             assertTrue(state.runningJobs.isEmpty())
             assertTrue(state.runningMemberIds.isEmpty())
+            assertTrue(state.suspendedMembers.isEmpty())
+            assertTrue(state.pendingConsultations.isEmpty())
+            assertTrue(state.memberSessionIds.isEmpty())
+            assertTrue(state.memberAssignments.isEmpty())
         }
     }
 

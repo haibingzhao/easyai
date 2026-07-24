@@ -6,6 +6,7 @@ import {
   type RunDetailResponse,
   type SwarmEvent,
 } from '@/services/swarm-service';
+import type { ConsultationData } from '@/components/swarm/TeamConsultationPanel';
 
 const TERMINAL_EVENTS = new Set([
   'swarm_run_completed',
@@ -14,12 +15,19 @@ const TERMINAL_EVENTS = new Set([
   'swarm_run_paused',
 ]);
 
+export interface PendingConsultation {
+  runId: string;
+  taskId: string;
+  consultation: ConsultationData;
+}
+
 interface SwarmState {
   presets: PresetInfo[];
   runs: RunSummary[];
   activeRunDetail: RunDetailResponse | null;
   loading: boolean;
   swarmEnabled: boolean;
+  pendingConsultation: PendingConsultation | null;
 
   loadPresets: () => Promise<void>;
   deletePreset: (name: string) => Promise<void>;
@@ -32,6 +40,7 @@ interface SwarmState {
   loadRunDetail: (id: string) => Promise<void>;
   pollActiveRun: (runId: string) => Promise<void>;
   setActiveRunDetail: (detail: RunDetailResponse | null) => void;
+  clearPendingConsultation: () => void;
 }
 
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -50,6 +59,7 @@ export const useSwarmStore = create<SwarmState>((set, get) => ({
   activeRunDetail: null,
   loading: false,
   swarmEnabled: true,
+  pendingConsultation: null,
 
   loadPresets: async () => {
     set({ loading: true });
@@ -156,8 +166,26 @@ export const useSwarmStore = create<SwarmState>((set, get) => ({
     };
 
     const handleEvent = (_event: SwarmEvent) => {
+      if (_event.type === 'swarm_team_user_consultation_needed' && _event.taskId) {
+        const d = _event.data as { memberId?: string; question?: string; options?: string[]; allowOther?: boolean };
+        if (d.memberId && d.question) {
+          set({
+            pendingConsultation: {
+              runId: _event.runId,
+              taskId: _event.taskId,
+              consultation: {
+                memberId: d.memberId,
+                question: d.question,
+                options: d.options,
+                allowOther: d.allowOther,
+              },
+            },
+          });
+        }
+      }
       if (TERMINAL_EVENTS.has(_event.type)) {
         closeEventSource();
+        set({ pendingConsultation: null });
         get().loadRunDetail(runId);
         get().loadRuns();
       } else {
@@ -179,4 +207,5 @@ export const useSwarmStore = create<SwarmState>((set, get) => ({
   },
 
   setActiveRunDetail: (detail) => set({ activeRunDetail: detail }),
+  clearPendingConsultation: () => set({ pendingConsultation: null }),
 }));

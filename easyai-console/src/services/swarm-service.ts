@@ -76,6 +76,7 @@ export interface TeamSpecDto {
   maxDynamicTasks: number;
   roundTimeoutSeconds: number;
   memberTimeoutSeconds: number;
+  consultationTimeoutSeconds?: number;
   contextTemplate: string;
 }
 
@@ -87,7 +88,7 @@ export interface EscalationEntryDto {
   reassignedTo?: string;
 }
 
-export type MemberStatusDto = 'RUNNING' | 'COMPLETED' | 'ESCALATED' | 'REASSIGNED';
+export type MemberStatusDto = 'RUNNING' | 'COMPLETED' | 'ESCALATED' | 'SUSPENDED' | 'REASSIGNED';
 
 export interface TeamMemberExecutionDto {
   memberId: string;
@@ -414,6 +415,44 @@ class SwarmService {
     if (!resp.ok) {
       const msg = await resp.text();
       throw new Error(msg || `Import failed: ${resp.status}`);
+    }
+    return resp.json();
+  }
+
+  // --- Team Consultation ---
+
+  async answerTeamConsultation(
+    runId: string, taskId: string, memberId: string, answer: string
+  ): Promise<{ status: string; memberId: string }> {
+    const resp = await authFetch(
+      `${API_BASE}/runs/${runId}/tasks/${taskId}/consultation/answer`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ memberId, answer }),
+      }
+    );
+    if (!resp.ok) {
+      const msg = await resp.text();
+      throw new Error(msg || `Answer consultation failed: ${resp.status}`);
+    }
+    return resp.json();
+  }
+
+  async rejectTeamConsultation(
+    runId: string, taskId: string, memberId: string
+  ): Promise<{ status: string; memberId: string }> {
+    const resp = await authFetch(
+      `${API_BASE}/runs/${runId}/tasks/${taskId}/consultation/reject`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ memberId }),
+      }
+    );
+    if (!resp.ok) {
+      const msg = await resp.text();
+      throw new Error(msg || `Reject consultation failed: ${resp.status}`);
     }
     return resp.json();
   }

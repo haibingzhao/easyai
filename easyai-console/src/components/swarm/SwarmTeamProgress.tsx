@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { Loader2, CheckCircle2, AlertTriangle, ArrowRightLeft, ChevronDown, ChevronRight } from 'lucide-react';
+import { Loader2, CheckCircle2, AlertTriangle, ArrowRightLeft, ChevronDown, ChevronRight, PauseCircle } from 'lucide-react';
 import type { TeamHistoryResponse, TeamRoundRecordDto, TeamMemberExecutionDto, EscalationEntryDto, MemberStatusDto } from '@/services/swarm-service';
 import { swarmService } from '@/services/swarm-service';
 import { i18n } from '@/utils/i18n';
@@ -28,6 +28,11 @@ const STATUS_CONFIG: Record<MemberStatusDto, { icon: React.ReactNode; color: str
     icon: <AlertTriangle className="w-3 h-3" />,
     color: 'text-orange-500',
     label: 'Escalated',
+  },
+  SUSPENDED: {
+    icon: <PauseCircle className="w-3 h-3" />,
+    color: 'text-amber-500',
+    label: 'Suspended',
   },
   REASSIGNED: {
     icon: <ArrowRightLeft className="w-3 h-3" />,

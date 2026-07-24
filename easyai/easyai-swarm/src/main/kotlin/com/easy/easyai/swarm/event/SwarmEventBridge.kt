@@ -389,6 +389,47 @@ class SwarmEventBridge {
         ))
     }
 
+    suspend fun onTeamMemberSuspended(run: SwarmRun, task: SwarmTask, memberId: String, reason: String) {
+        emit(SwarmEvent(
+            type = "swarm_team_member_suspended",
+            runId = run.id,
+            taskId = task.id,
+            data = mapOf(
+                "memberId" to memberId,
+                "reason" to reason.take(500)
+            )
+        ))
+    }
+
+    suspend fun onTeamMemberResumed(run: SwarmRun, task: SwarmTask, memberId: String, resumeSource: String) {
+        emit(SwarmEvent(
+            type = "swarm_team_member_resumed",
+            runId = run.id,
+            taskId = task.id,
+            data = mapOf(
+                "memberId" to memberId,
+                "resumeSource" to resumeSource
+            )
+        ))
+    }
+
+    suspend fun onTeamUserConsultationNeeded(
+        run: SwarmRun, task: SwarmTask, memberId: String,
+        question: String, options: List<String> = emptyList()
+    ) {
+        emit(SwarmEvent(
+            type = "swarm_team_user_consultation_needed",
+            runId = run.id,
+            taskId = task.id,
+            data = mapOf(
+                "memberId" to memberId,
+                "question" to question,
+                "options" to options,
+                "allowOther" to true
+            )
+        ))
+    }
+
     // --- Worker events ---
 
     /**

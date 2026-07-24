@@ -5,6 +5,7 @@ import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.agent.PersistedSession
 import com.easy.easyai.core.event.MessageListener
+import com.easy.easyai.core.model.EasyAiMessage
 import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.repository.session.R2dbcAsyncSessionStore
 import com.easy.easyai.swarm.event.SwarmEventBridge
@@ -115,6 +116,10 @@ class SwarmSessionAutoConfiguration {
             return if (sessionStore is R2dbcAsyncSessionStore) {
                 sessionStore.createMessageListener(sessionId, context)
             } else null
+        }
+
+        override suspend fun loadMessages(sessionId: String): List<EasyAiMessage> {
+            return sessionStore.loadActiveMessages(sessionId)
         }
     }
 }

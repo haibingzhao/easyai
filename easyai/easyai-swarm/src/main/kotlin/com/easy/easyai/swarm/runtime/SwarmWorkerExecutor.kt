@@ -245,6 +245,7 @@ class SwarmWorkerExecutor(
                 cacheReadTokens = output.usage.cacheReadTokens.toLong(),
                 cacheWriteTokens = output.usage.cacheWriteTokens.toLong(),
                 durationMs = output.usage.durationMs,
+                sessionId = sessionId,
                 taskReport = reportRef.get(),
             )
             ExecutionStatus.TIMEOUT -> WorkerResult(
@@ -254,6 +255,7 @@ class SwarmWorkerExecutor(
                 cacheReadTokens = output.usage.cacheReadTokens.toLong(),
                 cacheWriteTokens = output.usage.cacheWriteTokens.toLong(),
                 durationMs = output.usage.durationMs,
+                sessionId = sessionId,
                 error = "Worker '${agentSpec.id}' timed out after ${agentSpec.timeoutSeconds}s"
             )
             ExecutionStatus.FAILED -> WorkerResult(
@@ -263,7 +265,132 @@ class SwarmWorkerExecutor(
                 cacheReadTokens = output.usage.cacheReadTokens.toLong(),
                 cacheWriteTokens = output.usage.cacheWriteTokens.toLong(),
                 durationMs = output.usage.durationMs,
+                sessionId = sessionId,
                 error = output.error ?: "Worker '${agentSpec.id}' failed"
+            )
+        }
+    }
+
+    /**
+     * Resume a previously suspended worker from its persisted session.
+     *
+     * Loads historical messages from the session, appends [resumeMessage] as a new UserMessage,
+     * and continues execution with the same agent configuration.
+     *
+     * @param agentSpec The agent spec for the suspended member
+     * @param sessionId The session ID from the original execution
+     * @param resumeMessage Message to inject (e.g., resolution info or user answer)
+     */
+    internal suspend fun resumeWorker(
+        agentSpec: SwarmAgentSpec,
+        sessionId: String,
+        resumeMessage: String,
+        run: SwarmRun,
+        task: SwarmTask,
+        runContext: RunContext,
+        abortSignal: () -> Boolean = { false },
+        additionalTools: List<ToolDefinition> = emptyList(),
+        additionalCompletionChecks: List<AgentCompletionCheck> = emptyList(),
+    ): WorkerResult {
+        // Resolve agent context (same as executeWorker)
+        val (baseContext, resolvedTools) = try {
+            agentResolver.resolve(
+                spec = agentSpec,
+                run = run,
+                task = task,
+                modelConfigId = runContext.modelConfigId,
+                agentDefCache = runContext.agentDefCache,
+                modelConfigCache = runContext.modelConfigCache,
+            )
+        } catch (e: Exception) {
+            logger.error("Failed to resolve agent '{}' for resume: {}", agentSpec.id, e.message, e)
+            return WorkerResult(
+                SwarmTaskStatus.FAILED, "",
+                error = "Failed to resolve agent '${agentSpec.id}' for resume: ${e.message}"
+            )
+        }
+
+        // Load historical messages from the persisted session
+        val historyMessages = try {
+            sessionManager?.loadMessages(sessionId) ?: emptyList()
+        } catch (e: Exception) {
+            logger.warn("Failed to load session messages for '{}': {}", sessionId, e.message)
+            emptyList()
+        }
+
+        if (historyMessages.isEmpty()) {
+            logger.warn("No history found for session '{}', falling back to fresh execution", sessionId)
+        }
+
+        val toolsWithAdditional = resolvedTools + additionalTools
+        val context = baseContext.copy(
+            tools = toolsWithAdditional,
+            sessionId = sessionId,
+            abortSignal = abortSignal,
+        )
+
+        val workerService = wrapServiceWithListener(
+            agentService,
+            sessionManager?.createMessageListener(sessionId, context)
+        )
+        val finalService = wrapServiceWithCompletionChecks(workerService, additionalCompletionChecks)
+
+        val output = executeAgentWithProtection(
+            agent = Agent(context, finalService),
+            prompt = resumeMessage,
+            timeoutMs = agentSpec.timeoutSeconds * 1000L,
+            abortSignal = abortSignal,
+            onEvent = { event ->
+                if (eventVerbosity != "task") {
+                    val shouldForward = eventVerbosity == "all" ||
+                        (eventVerbosity == "tool" && event.type.startsWith("tool_"))
+                    if (shouldForward) {
+                        eventBridge.onWorkerEvent(
+                            SwarmEvent(
+                                type = "worker_${event.type}",
+                                runId = run.id,
+                                taskId = task.id,
+                                data = mapOf("agentEventType" to event.type)
+                            )
+                        )
+                    }
+                }
+            },
+            maxSummaryLength = MAX_SUMMARY_LENGTH,
+            label = "Resumed Worker '${agentSpec.id}'",
+            initialMessages = historyMessages,
+        )
+
+        return when (output.status) {
+            ExecutionStatus.COMPLETED -> WorkerResult(
+                status = SwarmTaskStatus.COMPLETED,
+                summary = output.summary,
+                inputTokens = output.usage.inputTokens.toLong(),
+                outputTokens = output.usage.outputTokens.toLong(),
+                cacheReadTokens = output.usage.cacheReadTokens.toLong(),
+                cacheWriteTokens = output.usage.cacheWriteTokens.toLong(),
+                durationMs = output.usage.durationMs,
+                sessionId = sessionId,
+            )
+            ExecutionStatus.TIMEOUT -> WorkerResult(
+                SwarmTaskStatus.FAILED, "",
+                inputTokens = output.usage.inputTokens.toLong(),
+                outputTokens = output.usage.outputTokens.toLong(),
+                cacheReadTokens = output.usage.cacheReadTokens.toLong(),
+                cacheWriteTokens = output.usage.cacheWriteTokens.toLong(),
+                durationMs = output.usage.durationMs,
+                sessionId = sessionId,
+                error = "Resumed worker '${agentSpec.id}' timed out after ${agentSpec.timeoutSeconds}s"
+            )
+            ExecutionStatus.FAILED -> WorkerResult(
+                SwarmTaskStatus.FAILED, "",
+                inputTokens = output.usage.inputTokens.toLong(),
+                outputTokens = output.usage.outputTokens.toLong(),
+                cacheReadTokens = output.usage.cacheReadTokens.toLong(),
+                cacheWriteTokens = output.usage.cacheWriteTokens.toLong(),
+                durationMs = output.usage.durationMs,
+                sessionId = sessionId,
+                error = output.error ?: "Resumed worker '${agentSpec.id}' failed"
             )
         }
     }

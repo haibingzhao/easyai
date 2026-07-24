@@ -4,11 +4,7 @@ import com.easy.easyai.agent.registry.ToolRegistry
 import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.common.util.SharedObjectMapper
-import com.easy.easyai.core.agent.Agent
-import com.easy.easyai.core.agent.AgentContext
-import com.easy.easyai.core.agent.AgentRunner
-import com.easy.easyai.core.agent.AgentService
-import com.easy.easyai.core.agent.AsyncAgentStore
+import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.event.*
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.model.UserMessage
@@ -19,12 +15,11 @@ import com.easy.easyai.web.model.AiConfigGenerateRequest
 import com.easy.easyai.web.model.ConfigValidationResult
 import com.easy.easyai.web.service.ConfigValidator
 import com.easy.easyai.web.service.validation.TemplateConsistencyValidator
-import tools.jackson.databind.node.ObjectNode
 import kotlinx.coroutines.flow.FlowCollector
-import kotlinx.coroutines.flow.collect
 import org.slf4j.LoggerFactory
 import org.springframework.http.codec.ServerSentEvent
 import tools.jackson.databind.JsonNode
+import tools.jackson.databind.node.ObjectNode
 
 /**
  * A single configuration block submitted via submit_config_block tool.
@@ -90,9 +85,7 @@ class AgentBasedConfigGenerator(
                 return@action "FINALIZE_FAILED: No configuration blocks received yet. Submit blocks via submit_config_block first."
             }
             val assembled = assembleConfigFromBlocks(configBlocks, request.existingConfig)
-            if (assembled == null) {
-                return@action "FINALIZE_FAILED: Could not assemble configuration from ${configBlocks.size} submitted blocks."
-            }
+                ?: return@action "FINALIZE_FAILED: Could not assemble configuration from ${configBlocks.size} submitted blocks."
             val validation = try {
                 configValidator.validateSwarmConfig(assembled, userId)
             } catch (e: Exception) {
@@ -102,16 +95,7 @@ class AgentBasedConfigGenerator(
             if (validation != null && !validation.valid) {
                 buildString {
                     appendLine("✗ VALIDATION FAILED")
-                    appendLine("Errors:")
-                    validation.errors.filter { it.severity == "error" }.forEach {
-                        appendLine("  - [${it.field}] ${it.message}")
-                    }
-                    if (validation.errors.any { it.severity == "warning" }) {
-                        appendLine("Warnings:")
-                        validation.errors.filter { it.severity == "warning" }.forEach {
-                            appendLine("  - [${it.field}] ${it.message}")
-                        }
-                    }
+                    append(formatValidationErrors(validation.errors))
                     appendLine("Fix the issues by re-submitting corrected blocks via submit_config_block, then call finalize_config again.")
                 }
             } else {
@@ -158,7 +142,7 @@ class AgentBasedConfigGenerator(
 
         // 6. Build initial messages
         val systemPrompt = buildAgentSystemPrompt(request.configType)
-        val userMessageText = buildAgentUserMessage(request, userId)
+        val userMessageText = buildAgentUserMessage(request)
 
         val initialMessages = listOf(
             com.easy.easyai.core.model.SystemMessage(text = systemPrompt),
@@ -359,7 +343,7 @@ class AgentBasedConfigGenerator(
         if (modelConfigId == null) return null
         return try {
             modelConfigStore.getConfig(modelConfigId, userId)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             logger.warn("Failed to resolve model config '{}', using default", modelConfigId)
             null
         }
@@ -457,7 +441,7 @@ When calling submit_config, provide the complete JSON configuration and a brief 
 """.trimIndent()
     }
 
-    private suspend fun buildAgentUserMessage(request: AiConfigGenerateRequest, userId: String): String {
+    private fun buildAgentUserMessage(request: AiConfigGenerateRequest): String {
         val sb = StringBuilder()
 
         sb.appendLine("## Requirements")

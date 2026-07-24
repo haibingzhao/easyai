@@ -4,6 +4,7 @@ import com.easy.easyai.core.event.AgentEvent
 import com.easy.easyai.core.event.EventStream
 import com.easy.easyai.core.event.MessageEndEvent
 import com.easy.easyai.core.event.MessageListener
+import com.easy.easyai.core.model.EasyAiMessage
 import com.easy.easyai.core.model.Usage
 import com.easy.easyai.core.model.UserMessage
 import kotlinx.coroutines.*
@@ -84,11 +85,12 @@ suspend fun executeAgentWithProtection(
     maxSummaryLength: Int = 10_000,
     truncateLabel: String = "Summary",
     label: String = "Agent",
+    initialMessages: List<EasyAiMessage> = emptyList(),
 ): AgentExecutionOutput {
     val jobDeferred = CompletableDeferred<Job>()
     val runner = AgentRunner(
         agent = agent,
-        messages = mutableListOf(),
+        messages = initialMessages.toMutableList(),
         abortSignal = abortSignal,
         registerJob = { job -> job?.let { jobDeferred.complete(it) } }
     )

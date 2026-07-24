@@ -21,6 +21,26 @@ internal data class Reassignment(
 )
 
 /**
+ * Suspend a blocked member, dispatch a helper to resolve the issue,
+ * then feed the result back to the suspended member to resume.
+ */
+internal data class SuspendAndAssistSpec(
+    val blockedMemberId: String,
+    val helperMemberId: String,
+    val assistTask: String,
+)
+
+/**
+ * Suspend a blocked member and consult the user for a decision,
+ * then feed the user's answer back to the suspended member to resume.
+ */
+internal data class SuspendAndConsultUserSpec(
+    val blockedMemberId: String,
+    val question: String,
+    val options: List<String> = emptyList(),
+)
+
+/**
  * Parsed Leader decision for one coordination round.
  */
 internal data class LeaderDecision(
@@ -28,6 +48,8 @@ internal data class LeaderDecision(
     val newTasks: List<DynamicTaskSpec>,
     val reassignments: List<Reassignment>,
     val isComplete: Boolean,
+    val suspendAndAssist: List<SuspendAndAssistSpec> = emptyList(),
+    val suspendAndConsultUser: List<SuspendAndConsultUserSpec> = emptyList(),
 )
 
 /**
