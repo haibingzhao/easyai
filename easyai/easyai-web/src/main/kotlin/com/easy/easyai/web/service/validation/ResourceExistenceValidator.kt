@@ -2,6 +2,7 @@ package com.easy.easyai.web.service.validation
 
 import com.easy.easyai.agent.api.model.AgentCreateRequest
 import com.easy.easyai.agent.registry.ToolRegistry
+import com.easy.easyai.core.agent.AgentType
 import com.easy.easyai.core.agent.AsyncAgentStore
 import com.easy.easyai.skills.SkillRegistry
 import com.easy.easyai.tools.mcp.McpClientManager
@@ -51,6 +52,24 @@ class ResourceExistenceValidator(
                 if (!exists) {
                     errors.add(ConfigValidationError("subAgentIds", "Sub-agent '$id' does not exist"))
                 }
+            }
+        }
+
+        // Validate team members (TEAM agents)
+        if (request.agentType == AgentType.TEAM) {
+            if (request.memberIds.isEmpty()) {
+                errors.add(ConfigValidationError("memberIds", "TEAM agent requires at least one member (memberIds)"))
+            }
+            for (id in request.memberIds) {
+                val member = agentStore.findById(id, userId)
+                if (member == null) {
+                    errors.add(ConfigValidationError("memberIds", "Member agent '$id' does not exist"))
+                } else if (member.agentType == AgentType.TEAM) {
+                    errors.add(ConfigValidationError("memberIds", "Member '$id' is a TEAM agent — nested teams are not allowed"))
+                }
+            }
+            if (request.toolNames.isNotEmpty()) {
+                errors.add(ConfigValidationError("toolNames", "TEAM agent leader should have empty toolNames (leader coordinates, members execute)", "warning"))
             }
         }
 

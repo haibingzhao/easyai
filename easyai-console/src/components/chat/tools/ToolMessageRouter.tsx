@@ -19,6 +19,7 @@ import { MemoryToolMessage } from './MemoryToolMessage';
 import { CalcToolMessage } from './CalcToolMessage';
 import { WebFetchToolMessage } from './WebFetchToolMessage';
 import { LoadSkillToolMessage } from './LoadSkillToolMessage';
+import { TeamToolMessage } from './TeamToolMessage';
 import { GenericToolMessage } from './GenericToolMessage';
 import { McpToolCard } from './McpToolCard';
 
@@ -42,6 +43,9 @@ const TOOL_RENDERERS: Record<string, React.ComponentType<ToolMessageProps>> = {
   calc: CalcToolMessage,
   webfetch: WebFetchToolMessage,
   load_skill: LoadSkillToolMessage,
+  delegate_to_member: TeamToolMessage,
+  wait_for_member_events: TeamToolMessage,
+  resume_member: TeamToolMessage,
 };
 
 export function ToolMessageRouter(props: ToolMessageProps) {

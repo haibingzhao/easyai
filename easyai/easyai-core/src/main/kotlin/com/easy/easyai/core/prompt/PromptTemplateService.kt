@@ -67,6 +67,44 @@ class PromptTemplateService(
                     appendLine("The subagent result will be returned to you as the tool output.")
                 }
             } else null,
+            teamMembersList = context.teamMembers.takeIf { it.isNotEmpty() }?.let { list ->
+                buildString {
+                    appendLine("## Team Coordination Protocol")
+                    appendLine("You are a team leader coordinating member agents to complete tasks.")
+                    appendLine()
+                    appendLine("### Your Members")
+                    list.forEach { m ->
+                        append("- `${m["id"]}`")
+                        val name = m["name"] as? String
+                        if (!name.isNullOrBlank() && name != m["id"]) append(" ($name)")
+                        val desc = m["description"] as? String
+                        if (!desc.isNullOrBlank()) append(": $desc")
+                        appendLine()
+                    }
+                    appendLine()
+                    appendLine("### Workflow")
+                    appendLine("1. Analyze the task and plan which members to delegate to")
+                    appendLine("2. Use `delegate_to_member` to assign work — it returns IMMEDIATELY while the member runs in the background")
+                    appendLine("3. Use `wait_for_member_events` to block until members complete or report issues")
+                    appendLine("4. React to events:")
+                    appendLine("   - COMPLETED: check if all members are done")
+                    appendLine("   - BLOCKED: use `resume_member` with the answer/guidance, or delegate the work to another member")
+                    appendLine("   - ERROR: retry with a clearer task, reassign to another member, or report to the user")
+                    appendLine("5. Repeat steps 3-4 until all members complete")
+                    appendLine("6. Synthesize all member results into a comprehensive final response")
+                    appendLine()
+                    appendLine("### Important Rules")
+                    appendLine("- You coordinate; members do the actual work. Do NOT execute tasks yourself.")
+                    appendLine("- Delegate independent work to multiple members in parallel for efficiency.")
+                    appendLine("- Always call `wait_for_member_events` after delegating — never end your turn while members are running.")
+                    context.teamStatusSummary?.let { status ->
+                        appendLine()
+                        appendLine(status.trimEnd())
+                        appendLine()
+                        appendLine("Use this recovered status to decide: resume BLOCKED members via `resume_member`, re-delegate interrupted RUNNING members.")
+                    }
+                }
+            },
             instructionsSegment = InstructionsLoader.formatForPrompt(context.instructions),
             memorySegment = context.memory,
             outputSchemaSegment = context.outputSchema?.let { schema ->

@@ -21,6 +21,7 @@ import com.easy.easyai.core.message.MessageConverter
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.skills.SkillRegistry
+import com.easy.easyai.skills.team.TeamCoordinationStateRegistry
 import com.easy.easyai.snapshot.GitSnapshotService
 import com.easy.easyai.snapshot.RevertService
 import com.easy.easyai.snapshot.SnapshotEventListener
@@ -167,9 +168,11 @@ open class WebAutoConfiguration {
         @Autowired(required = false)
         snapshotService: SnapshotService? = null,
         @Autowired(required = false)
-        fileStorageService: FileStorageService? = null
+        fileStorageService: FileStorageService? = null,
+        @Autowired(required = false)
+        teamStateRegistry: TeamCoordinationStateRegistry? = null
     ): SessionService {
-        return SessionService(sessionManager, sessionStore, snapshotService, fileStorageService)
+        return SessionService(sessionManager, sessionStore, snapshotService, fileStorageService, teamStateRegistry)
     }
 
     @Bean

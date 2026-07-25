@@ -105,11 +105,12 @@ class SubAgentTool(
             byName
         }
 
-        // 2. Validate agent type (PRIMARY-only agents cannot be used as subagent)
-        if (resolvedDefinition.agentType == AgentType.PRIMARY) {
+        // 2. Validate agent type (PRIMARY-only and TEAM agents cannot be used as subagent)
+        if (resolvedDefinition.agentType == AgentType.PRIMARY ||
+            resolvedDefinition.agentType == AgentType.TEAM) {
             return ToolResult(
                 content = listOf(TextContent(
-                    "Error: Agent '${params.agentType}' is primary-only and cannot be used as a sub-agent."
+                    "Error: Agent '${params.agentType}' (${resolvedDefinition.agentType}) cannot be used as a sub-agent."
                 )),
                 isError = true
             )

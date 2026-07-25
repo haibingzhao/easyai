@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState, useLayoutEffect, useCallback } from 'react';
-import { ArrowLeft, Crown, User, Loader2, CheckCircle2, AlertTriangle, PauseCircle, ArrowRightLeft } from 'lucide-react';
+import { ArrowLeft, Crown, User, Loader2, CheckCircle2, AlertTriangle, PauseCircle, ArrowRightLeft, XCircle, PlayCircle } from 'lucide-react';
 import { computeRadialPositions, computeRadialRadius } from '@/utils/radial-layout';
 import { i18n } from '@/utils/i18n';
 import type { MemberStatusDto } from '@/services/swarm-service';
@@ -49,11 +49,23 @@ const MEMBER_STATUS_STYLE: Record<MemberStatusDto, { border: string; icon: React
     label: 'Escalated',
     labelColor: 'text-orange-500',
   },
+  ERROR: {
+    border: 'border-red-400',
+    icon: <XCircle className="w-3.5 h-3.5 text-red-500" />,
+    label: 'Error',
+    labelColor: 'text-red-500',
+  },
   SUSPENDED: {
     border: 'border-amber-400',
     icon: <PauseCircle className="w-3.5 h-3.5 text-amber-500" />,
     label: 'Suspended',
     labelColor: 'text-amber-500',
+  },
+  RESUMED: {
+    border: 'border-teal-400',
+    icon: <PlayCircle className="w-3.5 h-3.5 text-teal-500" />,
+    label: 'Resumed',
+    labelColor: 'text-teal-500',
   },
   REASSIGNED: {
     border: 'border-gray-400',

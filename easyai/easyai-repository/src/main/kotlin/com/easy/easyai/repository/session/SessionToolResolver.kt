@@ -69,12 +69,16 @@ class SessionToolResolver(
      * Resolve tools for an agent, respecting agentDef.toolNames.
      * Static tools are filtered by agentDef.toolNames; MCP tools have their own
      * filtering via getAgentMcpConfigs and are not subject to toolNames.
+     * Tools with [ToolDefinition.alwaysInclude] (e.g., team coordination tools)
+     * bypass toolNames filtering — their builders already guard applicability.
      */
     suspend fun resolveToolsForAgent(agentDef: AgentDefinition, agentContext: AgentContext): List<ToolDefinition> {
         val service = agentService ?: return emptyList()
         val staticTools = toolFactory.createTools(agentContext, service)
-        val filteredStatic = if (agentDef.toolNames.isEmpty()) emptyList()
-            else staticTools.filter { it.name in agentDef.toolNames }
+        val filteredStatic = if (agentDef.toolNames.isEmpty())
+            staticTools.filter { it.alwaysInclude }
+        else
+            staticTools.filter { it.name in agentDef.toolNames || it.alwaysInclude }
         // MCP tools have their own filtering via getAgentMcpConfigs, not subject to toolNames
         val mcpTools = resolveMcpTools(agentContext)
         return filteredStatic + mcpTools

@@ -9,13 +9,14 @@ Use this as the authoritative reference when generating agent JSON configuration
 |-------|------|----------|---------|-------------|-------------|
 | `id` | string | **yes** | — | 1–50 chars | Unique agent identifier. Use `kebab-case` (e.g. `code-reviewer`). Immutable after creation. |
 | `name` | string | **yes** | — | 1–20 chars | Human-readable display name shown in the UI. |
-| `agentType` | string | no | `PRIMARY` | enum: `PRIMARY`, `SUBAGENT`, `ALL` | Controls visibility. See **Agent Type Semantics** below. |
+| `agentType` | string | no | `PRIMARY` | enum: `PRIMARY`, `SUBAGENT`, `TEAM`, `ALL` | Controls visibility. See **Agent Type Semantics** below. |
 | `agentContext` | string | no | `CHAT` | enum: `CHAT`, `SWARM`, `BOTH` | Controls execution environment compatibility. See **Agent Context Semantics** below. |
 | `description` | string | no | null | ≤ 200 chars | Short description of the agent's purpose. |
 | `promptTemplate` | string | **yes** | — | Valid Jinja2 | System prompt template. When provided, it **fully replaces** the built-in system prompt. See **Prompt Template** below. |
 | `customInstructions` | string | no | null | — | Free-text instructions injected into the template variable `custom_instructions`. |
 | `toolNames` | string[] | no | `[]` | Each name must exist in the available tools list | Tool whitelist. **Empty array = ALL tools available.** Non-empty = only listed tools. |
 | `subAgentIds` | string[] | no | `[]` | Each ID must reference an existing agent | Sub-agents this agent can delegate tasks to. |
+| `memberIds` | string[] | no | `[]` | Each ID must reference an existing non-TEAM agent | Team members. **Required when `agentType=TEAM`** (≥2 recommended). Members execute the work; the TEAM leader only coordinates. |
 | `skillNames` | string[] | no | `[]` | Each name must exist in the available skills list | Skill whitelist. Skills are discovered from markdown files. |
 | `mcpConfigs` | object[] | no | `[]` | `serverName` must be a connected MCP server | MCP server bindings. See **MCP Configs** below. |
 | `commandNames` | string[] | no | `[]` | — | Command whitelist. |
@@ -33,6 +34,7 @@ Use this as the authoritative reference when generating agent JSON configuration
 |-------|----------|
 | `PRIMARY` | Visible in the user-facing agent selector. Cannot be used as a sub-agent delegation target. |
 | `SUBAGENT` | Hidden from the user-facing selector. Can ONLY be invoked via delegation from another agent. |
+| `TEAM` | Team leader visible in the agent selector. Coordinates member agents (from `memberIds`) via `delegate_to_member` / `wait_for_member_events` / `resume_member` tools. Members must be existing non-TEAM agents; nested teams are not allowed. `toolNames` should be empty or minimal — the leader coordinates, members execute. |
 | `ALL` | Visible in the selector AND available as a delegation target. Use for versatile agents. |
 
 ## Agent Context Semantics
@@ -61,6 +63,7 @@ When writing a `promptTemplate`, these variables are available via the Jinja2 re
 | `tools` | list of objects | Tool registry + whitelist | Available tools. Each object has `name` (string) and `description` (string). |
 | `skills` | list of objects | Skill registry + whitelist | Available skills. Each object has `name` (string) and `description` (string). |
 | `sub_agents` | list of objects | Agent store + whitelist | Delegatable sub-agents. Each object has `name`, `description`, and optionally `inputSchema`. |
+| `team_members` | list of objects | Agent store + `memberIds` | Team member agents (TEAM agents only). Each object has `name` and `description`. |
 | `instructions` | list of objects | AGENTS.md files (when `instructionsEnabled`) | Project-level instructions. Each object has `name` (string), `content` (string), and `source` (enum: `PROJECT` or `SUBDIR`). |
 | `project` | object | Project configuration | Project metadata map. May contain project-specific context. |
 | `os` | string | `System.getProperty("os.name")` | Operating system name, e.g. `Mac OS X`, `Linux`, `Windows 11`. |
@@ -310,8 +313,9 @@ When `outputSchema` is set:
    - **Rule of thumb**: If you can't describe a concrete scenario where the agent would use a tool/MCP/skill during its task, remove it. Fewer tools → faster reasoning → fewer wrong tool calls → lower token cost.
 3. **Set appropriate `maxIterations`**: Simple Q&A agents can use 10–20; complex coding agents may need 50–100.
 4. **Use `agentType: SUBAGENT`** for specialized workers (e.g., a linter agent) that should only be invoked via delegation.
-5. **Always include `{{ custom_instructions }}`** in your `promptTemplate` so users can add runtime tweaks.
-6. **Prefer `customInstructions` over hardcoding** behavioral tweaks into the prompt — it's easier to iterate on.
-7. **Set `instructionsEnabled: false`** for agents that should ignore project-level AGENTS.md (e.g., generic utility agents).
-8. **Use `outputSchema`** when you need guaranteed JSON structure (e.g., for downstream parsing or UI rendering).
-9. **Use `inputSchema` for structured agents**: When an agent is a delegation target or processes structured data, define `inputSchema` to enforce a clear contract and use `{{ input.field }}` in the template.
+5. **Use `agentType: TEAM`** to coordinate multiple existing agents: set `memberIds` referencing existing non-TEAM agents (discover via `list_resources`), keep `toolNames` empty (the leader coordinates via delegate/wait/resume tools; members do the actual work), and focus the `promptTemplate` on coordination strategy with `{% if team_members %}` member listing.
+6. **Always include `{{ custom_instructions }}`** in your `promptTemplate` so users can add runtime tweaks.
+7. **Prefer `customInstructions` over hardcoding** behavioral tweaks into the prompt — it's easier to iterate on.
+8. **Set `instructionsEnabled: false`** for agents that should ignore project-level AGENTS.md (e.g., generic utility agents).
+9. **Use `outputSchema`** when you need guaranteed JSON structure (e.g., for downstream parsing or UI rendering).
+10. **Use `inputSchema` for structured agents**: When an agent is a delegation target or processes structured data, define `inputSchema` to enforce a clear contract and use `{{ input.field }}` in the template.

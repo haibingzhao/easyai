@@ -1,12 +1,18 @@
 package com.easy.easyai.swarm.runtime
 
+import com.easy.easyai.core.team.BlockedMemberState
+import com.easy.easyai.core.team.MemberSignalTool
+import com.easy.easyai.core.team.TeamEventDrain
+import com.easy.easyai.core.team.TeamMemberExecution
+import com.easy.easyai.core.team.TeamMemberStatus
+import com.easy.easyai.core.team.TeamTokenUsage
+import com.easy.easyai.core.team.TeamTokenUsage.Companion
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.swarm.event.SwarmEventBridge
 import com.easy.easyai.swarm.model.*
 import com.easy.easyai.swarm.store.SwarmRunStore
 import com.easy.easyai.swarm.tool.EscalationCompletionCheck
 import com.easy.easyai.swarm.tool.EscalationResult
-import com.easy.easyai.swarm.tool.EscalationTool
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import org.slf4j.LoggerFactory
@@ -128,7 +134,7 @@ internal class TeamTaskExecutor(
         if (isResume) {
             rebuildStateFromHistory(state, task)
             // Restore taskSummaries from completed member executions for downstream tasks
-            for (exec in task.memberExecutions.filter { it.status == MemberStatus.COMPLETED && it.summary != null }) {
+            for (exec in task.memberExecutions.filter { it.status == TeamMemberStatus.COMPLETED && it.summary != null }) {
                 taskSummaries["${task.id}.${exec.memberId}"] = exec.summary!!
             }
             logger.info("TEAM task '{}' resuming from round {} ({} member executions restored)",
@@ -196,12 +202,7 @@ internal class TeamTaskExecutor(
                     }
 
                     // Drain: wait brief window to aggregate more results
-                    delay(2000.milliseconds)
-                    val batch = mutableListOf(first)
-                    while (true) {
-                        val next = resultChannel.tryReceive().getOrNull() ?: break
-                        batch.add(next)
-                    }
+                    val batch = TeamEventDrain.drain(resultChannel, first)
 
                     // Process batch: update state, emit events, update taskSummaries
                     processResultBatch(batch, state, run, task, taskSummaries,
@@ -444,7 +445,7 @@ internal class TeamTaskExecutor(
                 memberId = spec.blockedMemberId,
                 round = iteration,
                 assignment = originalAssignment,
-                status = MemberStatus.SUSPENDED,
+                status = TeamMemberStatus.SUSPENDED,
                 escalationReason = spec.assistTask,
             ))
 
@@ -484,7 +485,7 @@ internal class TeamTaskExecutor(
                 memberId = spec.blockedMemberId,
                 round = iteration,
                 assignment = originalAssignment,
-                status = MemberStatus.SUSPENDED,
+                status = TeamMemberStatus.SUSPENDED,
                 escalationReason = spec.question,
             ))
 
@@ -522,7 +523,7 @@ internal class TeamTaskExecutor(
                             memberId = spec.blockedMemberId,
                             round = iteration,
                             assignment = originalAssignment,
-                            status = MemberStatus.ESCALATED,
+                            status = TeamMemberStatus.ESCALATED,
                             escalationReason = reason,
                         ),
                     ))
@@ -552,11 +553,9 @@ internal class TeamTaskExecutor(
             state.total += result.tokens.snapshot()
             state.memberExecutions.add(memberExec)
 
-            if (memberExec.status == MemberStatus.COMPLETED) {
+            if (memberExec.status == TeamMemberStatus.COMPLETED) {
                 eventBridge.onTeamMemberCompleted(run, task, memberId, memberExec.summary ?: "")
-                if (memberExec.summary != null) {
-                    taskSummaries["${task.id}.$memberId"] = memberExec.summary
-                }
+                memberExec.summary?.let { taskSummaries["${task.id}.$memberId"] = it }
 
                 // If this was a helper for a suspended member, trigger resume
                 val assistFor = result.assistForMemberId
@@ -574,7 +573,7 @@ internal class TeamTaskExecutor(
                         state.runningJobs["resume:$assistFor"] = resumeJob
                     }
                 }
-            } else if (memberExec.status == MemberStatus.ESCALATED) {
+            } else if (memberExec.status == TeamMemberStatus.ESCALATED || memberExec.status == TeamMemberStatus.ERROR) {
                 state.escalationHistory.add(EscalationEntry(
                     memberId = memberId,
                     round = memberExec.round,
@@ -610,7 +609,7 @@ internal class TeamTaskExecutor(
                 memberId = memberId,
                 execution = TeamMemberExecution(
                     memberId = memberId, round = round, assignment = assignment,
-                    status = MemberStatus.ESCALATED,
+                    status = TeamMemberStatus.ERROR,
                     escalationReason = "Member '$memberId' not found in run agents"
                 ),
             )
@@ -623,16 +622,16 @@ internal class TeamTaskExecutor(
             memberAgentDef
         )
 
-        // Inject EscalationTool + EscalationCompletionCheck for explicit escalation signaling
+        // Inject escalation signal tool (MemberSignalTool named "escalate") + completion check
         val escalationRef = AtomicReference<EscalationResult?>(null)
-        val escalationTool = EscalationTool(
+        val escalationTool = MemberSignalTool(
             metadata = ToolMetadata(
                 name = "escalate",
-                description = EscalationTool.DESCRIPTION,
+                description = MemberSignalTool.signalDescription("team leader"),
                 permissionCategory = "swarm",
                 isDefaultTool = false
             ),
-            escalationRef = escalationRef
+            onSignal = { reason, progress -> escalationRef.set(EscalationResult(reason, progress)) }
         )
         val completionCheck = EscalationCompletionCheck(escalationRef)
 
@@ -649,10 +648,10 @@ internal class TeamTaskExecutor(
         // Check if member explicitly escalated via tool call
         val escalationReason = escalationRef.get()?.reason
 
-        val status = if (escalationReason != null || memberResult.status == SwarmTaskStatus.FAILED) {
-            MemberStatus.ESCALATED
-        } else {
-            MemberStatus.COMPLETED
+        val status = when {
+            escalationReason != null -> TeamMemberStatus.ESCALATED
+            memberResult.status == SwarmTaskStatus.FAILED -> TeamMemberStatus.ERROR
+            else -> TeamMemberStatus.COMPLETED
         }
 
         return MemberExecutionResult(
@@ -662,10 +661,11 @@ internal class TeamTaskExecutor(
                 round = round,
                 assignment = assignment,
                 status = status,
-                summary = if (status == MemberStatus.COMPLETED) memberResult.summary else null,
+                summary = if (status == TeamMemberStatus.COMPLETED) memberResult.summary else null,
                 escalationReason = escalationReason ?: memberResult.error,
                 inputTokens = memberResult.inputTokens,
                 outputTokens = memberResult.outputTokens,
+                memberSessionId = memberResult.sessionId,
             ),
             tokens = TokenCounters.from(memberResult),
         )
@@ -685,7 +685,7 @@ internal class TeamTaskExecutor(
                 memberId = memberId,
                 round = iteration,
                 assignment = "",
-                status = MemberStatus.ESCALATED,
+                status = TeamMemberStatus.ERROR,
                 escalationReason = "Timed out after ${memberTimeoutMs / 1000}s",
             ),
         )
@@ -724,7 +724,7 @@ internal class TeamTaskExecutor(
      * Called after a helper completes (SUSPEND_AND_ASSIST) or user answers (SUSPEND_AND_CONSULT_USER).
      */
     private suspend fun resumeSuspendedMember(
-        suspended: SuspendedMemberInfo,
+        suspended: BlockedMemberState,
         resolutionInfo: String,
         run: SwarmRun,
         task: SwarmTask,
@@ -740,9 +740,9 @@ internal class TeamTaskExecutor(
                 memberId = suspended.memberId,
                 execution = TeamMemberExecution(
                     memberId = suspended.memberId,
-                    round = suspended.suspendedAtRound,
+                    round = suspended.blockedAtRound,
                     assignment = suspended.originalAssignment,
-                    status = MemberStatus.ESCALATED,
+                    status = TeamMemberStatus.ESCALATED,
                     escalationReason = "Cannot resume: member '${suspended.memberId}' not found",
                 ),
             )
@@ -755,16 +755,16 @@ internal class TeamTaskExecutor(
             appendLine("Please continue your original task: ${suspended.originalAssignment}")
         }
 
-        // Inject EscalationTool for the resumed execution
+        // Inject escalation signal tool (MemberSignalTool named "escalate") for the resumed execution
         val escalationRef = AtomicReference<EscalationResult?>(null)
-        val escalationTool = EscalationTool(
+        val escalationTool = MemberSignalTool(
             metadata = ToolMetadata(
                 name = "escalate",
-                description = EscalationTool.DESCRIPTION,
+                description = MemberSignalTool.signalDescription("team leader"),
                 permissionCategory = "swarm",
                 isDefaultTool = false
             ),
-            escalationRef = escalationRef
+            onSignal = { reason, progress -> escalationRef.set(EscalationResult(reason, progress)) }
         )
         val completionCheck = EscalationCompletionCheck(escalationRef)
 
@@ -784,10 +784,10 @@ internal class TeamTaskExecutor(
         state?.suspendedMembers?.remove(suspended.memberId)
 
         val escalationReason = escalationRef.get()?.reason
-        val status = if (escalationReason != null || resumeResult.status == SwarmTaskStatus.FAILED) {
-            MemberStatus.ESCALATED
-        } else {
-            MemberStatus.COMPLETED
+        val status = when {
+            escalationReason != null -> TeamMemberStatus.ESCALATED
+            resumeResult.status == SwarmTaskStatus.FAILED -> TeamMemberStatus.ERROR
+            else -> TeamMemberStatus.COMPLETED
         }
 
         eventBridge.onTeamMemberResumed(run, task, suspended.memberId,
@@ -797,13 +797,14 @@ internal class TeamTaskExecutor(
             memberId = suspended.memberId,
             execution = TeamMemberExecution(
                 memberId = suspended.memberId,
-                round = suspended.suspendedAtRound,
+                round = suspended.blockedAtRound,
                 assignment = suspended.originalAssignment,
                 status = status,
-                summary = if (status == MemberStatus.COMPLETED) resumeResult.summary else null,
+                summary = if (status == TeamMemberStatus.COMPLETED) resumeResult.summary else null,
                 escalationReason = escalationReason ?: resumeResult.error,
                 inputTokens = resumeResult.inputTokens,
                 outputTokens = resumeResult.outputTokens,
+                memberSessionId = suspended.sessionId,
             ),
             tokens = TokenCounters.from(resumeResult),
         )
@@ -823,10 +824,10 @@ internal class TeamTaskExecutor(
         val delegatedMembers = decision.newTasks.map { it.memberId } +
             decision.reassignments.map { it.toMemberId }
         val completedMembers = batch
-            .filter { it.execution.status == MemberStatus.COMPLETED }
+            .filter { it.execution.status == TeamMemberStatus.COMPLETED }
             .map { it.memberId }
         val escalations = batch
-            .filter { it.execution.status == MemberStatus.ESCALATED }
+            .filter { it.execution.status == TeamMemberStatus.ESCALATED || it.execution.status == TeamMemberStatus.ERROR }
             .map { it.memberId }
 
         return TeamRoundRecord(
@@ -922,8 +923,8 @@ internal class TeamTaskExecutor(
             appendLine("<trigger_events>")
             for (result in triggerBatch) {
                 val exec = result.execution
-                val statusLabel = if (exec.status == MemberStatus.COMPLETED) "COMPLETED" else "ESCALATED"
-                val detail = if (exec.status == MemberStatus.COMPLETED) {
+                val statusLabel = exec.status.name
+                val detail = if (exec.status == TeamMemberStatus.COMPLETED) {
                     exec.summary?.take(800) ?: "(no summary)"
                 } else {
                     exec.escalationReason ?: "Unknown"
@@ -954,7 +955,7 @@ internal class TeamTaskExecutor(
         // Completed Tasks (capped at 10)
         appendLine("### Completed Tasks (recent 10)")
         val completed = state.memberExecutions
-            .filter { it.status == MemberStatus.COMPLETED }
+            .filter { it.status == TeamMemberStatus.COMPLETED }
             .takeLast(10)
         if (completed.isNotEmpty()) {
             appendLine("<completed_tasks>")
@@ -1014,7 +1015,7 @@ internal class TeamTaskExecutor(
             for ((memberId, info) in suspendedEntries) {
                 val consultPending = state.pendingConsultations.containsKey(memberId)
                 val statusLabel = if (consultPending) "WAITING_USER_ANSWER" else "WAITING_ASSIST"
-                appendLine("- **$memberId** [$statusLabel] (round ${info.suspendedAtRound}): ${info.blockReason.take(200)}")
+                appendLine("- **$memberId** [$statusLabel] (round ${info.blockedAtRound}): ${info.blockReason.take(200)}")
             }
         } else {
             appendLine("(No suspended members)")
@@ -1093,8 +1094,8 @@ internal class TeamTaskExecutor(
         memberExecutions: List<TeamMemberExecution>,
         roundRecords: List<TeamRoundRecord>
     ): String {
-        val completedExecs = memberExecutions.filter { it.status == MemberStatus.COMPLETED }
-        val escalatedExecs = memberExecutions.filter { it.status == MemberStatus.ESCALATED }
+        val completedExecs = memberExecutions.filter { it.status == TeamMemberStatus.COMPLETED }
+        val escalatedExecs = memberExecutions.filter { it.status == TeamMemberStatus.ESCALATED || it.status == TeamMemberStatus.ERROR }
 
         val sb = StringBuilder()
         sb.append("Team coordination completed in ${roundRecords.size} round(s).\n\n")
@@ -1136,12 +1137,12 @@ internal class TeamTaskExecutor(
         state.runningJobs.remove(memberId)
         state.runningMemberIds.remove(memberId)
         val originalAssignment = state.memberAssignments[memberId] ?: ""
-        state.suspendedMembers[memberId] = SuspendedMemberInfo(
+        state.suspendedMembers[memberId] = BlockedMemberState(
             memberId = memberId,
             sessionId = sessionId,
             originalAssignment = originalAssignment,
             blockReason = blockReason,
-            suspendedAtRound = iteration,
+            blockedAtRound = iteration,
         )
         eventBridge.onTeamMemberSuspended(run, task, memberId, blockReason)
         return originalAssignment
@@ -1201,6 +1202,8 @@ internal class TeamTaskExecutor(
             state.total.output += exec.outputTokens
             // Restore last known assignment per member
             state.memberAssignments[exec.memberId] = exec.assignment
+            // Restore last known session ID per member (enables suspend/resume after rebuild)
+            exec.memberSessionId?.let { state.memberSessionIds[exec.memberId] = it }
         }
 
         // Restore escalation history
@@ -1237,7 +1240,7 @@ internal class TeamExecutionState {
     val runningJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
     val runningMemberIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     /** Members suspended awaiting assist result or user consultation. Key = memberId. */
-    val suspendedMembers = java.util.concurrent.ConcurrentHashMap<String, SuspendedMemberInfo>()
+    val suspendedMembers = java.util.concurrent.ConcurrentHashMap<String, BlockedMemberState>()
     /** Pending user consultation deferreds. Key = "memberId". */
     val pendingConsultations = java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<String>>()
     /** Last known sessionId for each member (from their most recent execution). Key = memberId. */
@@ -1246,64 +1249,18 @@ internal class TeamExecutionState {
     val memberAssignments = java.util.concurrent.ConcurrentHashMap<String, String>()
 }
 
-/**
- * Tracks a suspended team member awaiting resolution (assist result or user answer).
- */
-internal data class SuspendedMemberInfo(
-    val memberId: String,
-    val sessionId: String,
-    val originalAssignment: String,
-    val blockReason: String,
-    val suspendedAtRound: Int,
-)
+// TokenCounters is now a typealias for the shared core.team.TeamTokenUsage.
+// WorkerResult-specific accumulation lives as package-level extensions below.
+internal typealias TokenCounters = TeamTokenUsage
 
-/**
- * Mutable token counter accumulator. Eliminates repetitive field-by-field
- * token summation across leader, member, and round result aggregation.
- */
-internal class TokenCounters {
-    var input: Long = 0L
-    var output: Long = 0L
-    var cacheRead: Long = 0L
-    var cacheWrite: Long = 0L
-    var duration: Long = 0L
-
-    operator fun plusAssign(result: WorkerResult) {
-        input += result.inputTokens
-        output += result.outputTokens
-        cacheRead += result.cacheReadTokens
-        cacheWrite += result.cacheWriteTokens
-        duration += result.durationMs
-    }
-
-    operator fun plusAssign(s: Snapshot) {
-        input += s.input
-        output += s.output
-        cacheRead += s.cacheRead
-        cacheWrite += s.cacheWrite
-        duration += s.duration
-    }
-
-    fun snapshot() = Snapshot(input, output, cacheRead, cacheWrite, duration)
-
-    data class Snapshot(
-        val input: Long,
-        val output: Long,
-        val cacheRead: Long,
-        val cacheWrite: Long,
-        val duration: Long,
-    )
-
-    companion object {
-        fun from(result: WorkerResult) = TokenCounters().apply {
-            input = result.inputTokens
-            output = result.outputTokens
-            cacheRead = result.cacheReadTokens
-            cacheWrite = result.cacheWriteTokens
-            duration = result.durationMs
-        }
-    }
+/** Accumulate token counts from a [WorkerResult] into this usage instance. */
+internal operator fun TeamTokenUsage.plusAssign(result: WorkerResult) {
+    add(result.inputTokens, result.outputTokens, result.cacheReadTokens, result.cacheWriteTokens, result.durationMs)
 }
+
+/** Create a [TeamTokenUsage] pre-loaded from a [WorkerResult]. */
+internal fun Companion.from(result: WorkerResult): TeamTokenUsage =
+    of(result.inputTokens, result.outputTokens, result.cacheReadTokens, result.cacheWriteTokens, result.durationMs)
 
 /**
  * Internal result of executing one team member's assignment.

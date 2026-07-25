@@ -9,7 +9,7 @@
 | `id` | string | **yes** | Unique identifier, `kebab-case` (1–50 chars) |
 | `name` | string | **yes** | Display name (1–20 chars) |
 | `promptTemplate` | string | **yes** | Jinja2 system prompt template (replaces built-in prompt) |
-| `agentType` | string | no | `PRIMARY` (default) / `SUBAGENT` / `ALL` |
+| `agentType` | string | no | `PRIMARY` (default) / `SUBAGENT` / `TEAM` / `ALL` |
 | `agentContext` | string | no | `CHAT` (default) / `SWARM` / `BOTH` |
 | `description` | string | no | Purpose description (≤200 chars) |
 | `customInstructions` | string | no | Injected into `{{ custom_instructions }}` variable |
@@ -17,6 +17,7 @@
 | `skillNames` | string[] | no | Skill whitelist (NEVER put in toolNames) |
 | `mcpConfigs` | object[] | no | MCP server bindings (NEVER put MCP tools in toolNames) |
 | `subAgentIds` | string[] | no | Delegatable sub-agents (must reference existing agents) |
+| `memberIds` | string[] | no | Team members (**required when agentType=TEAM**, must reference existing non-TEAM agents) |
 | `maxIterations` | integer | no | ReAct loop cap (default 50) |
 | `maxSubAgentDepth` | integer | no | Delegation depth (default 1, 0=disabled) |
 | `inputSchema` | object/null | no | JSON Schema for structured input (`{{ input.xxx }}`) |
@@ -30,6 +31,7 @@
 |-----------|----------|
 | `PRIMARY` | Visible in agent selector |
 | `SUBAGENT` | Hidden, only via delegation |
+| `TEAM` | Team leader: coordinates member agents via delegate/wait/resume tools. Requires `memberIds`. toolNames should be empty or minimal (leader coordinates, members execute) |
 | `ALL` | Visible + delegatable |
 
 | agentContext | Behavior |
@@ -60,6 +62,7 @@
 4. **promptTemplate MUST include `{{ custom_instructions }}`**
 5. **`{{ input.xxx }}` requires inputSchema** to be set
 6. **SWARM context**: when `agentContext` is `SWARM`, tools `load_skill`, `task`, `run_swarm` are unavailable — never include in toolNames; `skillNames` and `subAgentIds` must be empty
+7. **TEAM agent requires memberIds** (≥2 recommended); members must be existing non-TEAM agents; TEAM agent's promptTemplate should focus on coordination strategy, not task execution
 
 ## Best Practices
 
@@ -100,5 +103,20 @@
       "target_lang": { "type": "string" }
     }
   }
+}
+```
+
+## Example: Team Agent
+
+```json
+{
+  "id": "fullstack-team",
+  "name": "Fullstack Team",
+  "agentType": "TEAM",
+  "description": "Coordinates backend and frontend agents for full-stack tasks",
+  "promptTemplate": "You are a team leader coordinating full-stack development. {{ custom_instructions }}\n\n{% if team_members %}\n## Your Members\n{% for m in team_members %}\n- {{ m.name }}: {{ m.description }}\n{% endfor %}\n{% endif %}",
+  "memberIds": ["backend-dev", "frontend-dev"],
+  "toolNames": [],
+  "maxIterations": 30
 }
 ```

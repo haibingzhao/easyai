@@ -9,6 +9,10 @@ export const TOOL_NAMES = {
   TODO_WRITE: 'todo_write',
   /** Tool that manages goal state (update_status, update_objective, add_evidence) */
   GOAL: 'goal',
+  /** Team coordination tools (TEAM agent only) */
+  DELEGATE_TO_MEMBER: 'delegate_to_member',
+  WAIT_FOR_MEMBER_EVENTS: 'wait_for_member_events',
+  RESUME_MEMBER: 'resume_member',
 } as const;
 
 /**

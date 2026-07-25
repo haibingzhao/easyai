@@ -454,6 +454,7 @@ object Tables {
         val escalationReason = text("escalation_reason").nullable()
         val inputTokens = long("input_tokens").default(0L)
         val outputTokens = long("output_tokens").default(0L)
+        val memberSessionId = varchar("member_session_id", 64).nullable()
         val createdAt = long("created_at")
 
         override val primaryKey = PrimaryKey(id)
@@ -485,6 +486,56 @@ object Tables {
 
         init {
             index(false, runId, taskId)
+        }
+    }
+
+    /**
+     * Team Agent member execution table.
+     * Records each member's assignment, status, and token usage per round in a Team Agent session.
+     * Keyed by team_session_id (the leader's chat session) — independent from Swarm tables.
+     */
+    object TeamMemberExecutionTable : Table("team_member_execution") {
+        val id = varchar("id", 64)
+        val teamSessionId = varchar("team_session_id", 64)
+        val memberId = varchar("member_id", 128)
+        val round = integer("round").default(1)
+        val assignment = text("assignment")
+        val status = varchar("status", 20)
+        val summary = text("summary").nullable()
+        val escalationReason = text("escalation_reason").nullable()
+        val memberSessionId = varchar("member_session_id", 64).nullable()
+        val toolCallId = varchar("tool_call_id", 128).nullable()
+        val inputTokens = long("input_tokens").default(0L)
+        val outputTokens = long("output_tokens").default(0L)
+        val startedAt = long("started_at").nullable()
+        val completedAt = long("completed_at").nullable()
+
+        override val primaryKey = PrimaryKey(id)
+
+        init {
+            index(false, teamSessionId)
+        }
+    }
+
+    /**
+     * Team Agent round record table.
+     * Records which members were delegated/completed/blocked/resumed per coordination round.
+     * Member lists are stored as JSON-serialized List<String>.
+     */
+    object TeamRoundRecordTable : Table("team_round_record") {
+        val id = varchar("id", 64)
+        val teamSessionId = varchar("team_session_id", 64)
+        val round = integer("round")
+        val delegatedMembers = text("delegated_members").nullable()   // JSON: List<String>
+        val completedMembers = text("completed_members").nullable()   // JSON: List<String>
+        val blockedMembers = text("blocked_members").nullable()       // JSON: List<String>
+        val resumedMembers = text("resumed_members").nullable()       // JSON: List<String>
+        val createdAt = long("created_at")
+
+        override val primaryKey = PrimaryKey(id)
+
+        init {
+            index(false, teamSessionId)
         }
     }
 

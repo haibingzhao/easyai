@@ -10,6 +10,10 @@ data class PromptContext(
     val protocol: String? = null,
     val modelId: String? = null,
     val subAgents: List<Map<String, Any?>> = emptyList(),
+    /** Team member data for TEAM agents (list of {id, name, description} maps). */
+    val teamMembers: List<Map<String, Any?>> = emptyList(),
+    /** Recovered team execution status (when restoring a TEAM session after restart). */
+    val teamStatusSummary: String? = null,
     val skills: List<Map<String, Any?>> = emptyList(),
     val instructions: List<InstructionInfo> = emptyList(),
     val project: Map<String, Any?>? = null,
@@ -38,6 +42,8 @@ data class PromptContext(
         "protocol" to (protocol ?: ""),
         "model_id" to (modelId ?: ""),
         "sub_agents" to subAgents,
+        "team_members" to teamMembers,
+        "team_status_summary" to (teamStatusSummary ?: ""),
         "skills" to skills,
         "instructions" to instructions,
         "project" to (project ?: emptyMap<String, Any>()),

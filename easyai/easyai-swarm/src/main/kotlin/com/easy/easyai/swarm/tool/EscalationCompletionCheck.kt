@@ -9,7 +9,17 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Completion check that ensures a team member calls the [EscalationTool] when blocked.
+ * Result captured when a team member calls the escalation signal tool
+ * ([com.easy.easyai.core.team.MemberSignalTool] with name="escalate").
+ *
+ * @param reason Why the member cannot proceed.
+ * @param progress Optional progress description provided by the member.
+ */
+data class EscalationResult(val reason: String, val progress: String = "")
+
+/**
+ * Completion check that ensures a team member calls the escalate tool
+ * ([com.easy.easyai.core.team.MemberSignalTool]) when blocked.
  *
  * Soft-guarantee logic:
  * - If the member already called the escalate tool → [CompletionCheckResult.Done]

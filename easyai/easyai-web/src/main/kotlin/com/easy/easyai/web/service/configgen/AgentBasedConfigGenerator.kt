@@ -381,6 +381,7 @@ You are an expert EasyAI configuration generator specializing in agent configura
 - subAgentIds: MUST reference existing agents (from list_resources type="agents")
 - inputSchema: required when using {{ input.xxx }} in promptTemplate
 - Minimalism: only include tools/skills/MCP the agent will actually use
+- For TEAM agents: set agentType="TEAM" and provide memberIds referencing existing non-TEAM agents (discover via list_resources type="agents"). The leader coordinates via delegate_to_member/wait_for_member_events/resume_member tools; members do the actual work. Keep toolNames empty for leaders and focus the promptTemplate on coordination strategy.
 - **SWARM context restriction**: when agentContext is SWARM, `load_skill`, `task`, and `run_swarm` are NOT available — NEVER include them in toolNames; skillNames and subAgentIds must be empty (Skills and Sub-Agents are unsupported in swarm runtime)
 
 ## Configuration Specification

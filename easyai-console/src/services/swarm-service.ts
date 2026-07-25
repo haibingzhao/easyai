@@ -88,7 +88,7 @@ export interface EscalationEntryDto {
   reassignedTo?: string;
 }
 
-export type MemberStatusDto = 'RUNNING' | 'COMPLETED' | 'ESCALATED' | 'SUSPENDED' | 'REASSIGNED';
+export type MemberStatusDto = 'RUNNING' | 'COMPLETED' | 'ESCALATED' | 'ERROR' | 'SUSPENDED' | 'RESUMED' | 'REASSIGNED';
 
 export interface TeamMemberExecutionDto {
   memberId: string;

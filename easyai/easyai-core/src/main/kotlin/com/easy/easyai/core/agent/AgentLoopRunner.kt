@@ -387,6 +387,8 @@ internal class AgentLoopRunner(
             modelId = context.modelId,
             skills = context.skills,
             subAgents = context.subAgents,
+            teamMembers = context.teamMembers,
+            teamStatusSummary = context.teamStatusSummary,
             instructions = context.instructions,
             cwd = context.projectPath?.toString(),
             memory = memoryContent,

@@ -2,9 +2,11 @@
  * Agent type: controls visibility and invocation rules.
  * - PRIMARY: Only usable as a main agent selected by the user.
  * - SUBAGENT: Only invocable via the subagent tool, not selectable by the user.
+ * - TEAM: Team leader that coordinates member agents via delegate/wait/resume tools.
+ *   Selectable by the user in Chat (like PRIMARY), requires memberIds.
  * - ALL: Can be used as both primary agent and sub-agent.
  */
-export type AgentType = 'PRIMARY' | 'SUBAGENT' | 'ALL';
+export type AgentType = 'PRIMARY' | 'SUBAGENT' | 'TEAM' | 'ALL';
 
 /**
  * Agent execution environment compatibility.
@@ -17,7 +19,7 @@ export type AgentEnv = 'CHAT' | 'SWARM' | 'BOTH';
 /**
  * Target type for agent tool configuration.
  */
-export type TargetType = 'TOOL' | 'SUBAGENT' | 'SKILL' | 'MCP' | 'COMMAND';
+export type TargetType = 'TOOL' | 'SUBAGENT' | 'SKILL' | 'MCP' | 'COMMAND' | 'MEMBER';
 
 /**
  * Tool information from the API.
@@ -46,6 +48,7 @@ export interface AgentDto {
   skillNames: string[];
   mcpConfigs: McpBindingDto[];
   commandNames: string[];
+  memberIds: string[];
   maxIterations: number;
   maxSubAgentDepth: number;
   color: string | null;
@@ -74,6 +77,8 @@ export interface AgentCreateRequest {
   skillNames: string[];
   mcpConfigs: McpBindingDto[];
   commandNames: string[];
+  /** Team member agent IDs. Required when agentType = TEAM; members must be existing non-TEAM agents. */
+  memberIds?: string[];
   maxIterations: number;
   maxSubAgentDepth: number;
   color?: string;

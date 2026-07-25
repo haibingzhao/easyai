@@ -1,5 +1,7 @@
 package com.easy.easyai.repository.swarm
 
+import com.easy.easyai.core.team.TeamMemberExecution
+import com.easy.easyai.core.team.TeamMemberStatus
 import com.easy.easyai.repository.database.Tables
 import com.easy.easyai.repository.database.UserScope
 import com.easy.easyai.swarm.model.*
@@ -394,6 +396,7 @@ class R2dbcSwarmRunStore(
                     this[Tables.SwarmTeamMemberExecutionTable.escalationReason] = exec.escalationReason
                     this[Tables.SwarmTeamMemberExecutionTable.inputTokens] = exec.inputTokens
                     this[Tables.SwarmTeamMemberExecutionTable.outputTokens] = exec.outputTokens
+                    this[Tables.SwarmTeamMemberExecutionTable.memberSessionId] = exec.memberSessionId
                     this[Tables.SwarmTeamMemberExecutionTable.createdAt] = System.currentTimeMillis()
                 }
             }
@@ -434,16 +437,17 @@ class R2dbcSwarmRunStore(
                         round = row[Tables.SwarmTeamMemberExecutionTable.round],
                         assignment = row[Tables.SwarmTeamMemberExecutionTable.assignment],
                         status = try {
-                            MemberStatus.valueOf(row[Tables.SwarmTeamMemberExecutionTable.status])
+                            TeamMemberStatus.valueOf(row[Tables.SwarmTeamMemberExecutionTable.status])
                         } catch (e: IllegalArgumentException) {
-                            logger.warn("Unknown MemberStatus '{}' in DB, defaulting to COMPLETED",
+                            logger.warn("Unknown TeamMemberStatus '{}' in DB, defaulting to COMPLETED",
                                 row[Tables.SwarmTeamMemberExecutionTable.status])
-                            MemberStatus.COMPLETED
+                            TeamMemberStatus.COMPLETED
                         },
                         summary = row[Tables.SwarmTeamMemberExecutionTable.summary],
                         escalationReason = row[Tables.SwarmTeamMemberExecutionTable.escalationReason],
                         inputTokens = row[Tables.SwarmTeamMemberExecutionTable.inputTokens],
-                        outputTokens = row[Tables.SwarmTeamMemberExecutionTable.outputTokens]
+                        outputTokens = row[Tables.SwarmTeamMemberExecutionTable.outputTokens],
+                        memberSessionId = row[Tables.SwarmTeamMemberExecutionTable.memberSessionId]
                     )
                 }
 

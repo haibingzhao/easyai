@@ -16,7 +16,10 @@ import {
   Brain,
   Calculator,
   Globe,
-  Sparkles
+  Sparkles,
+  Users,
+  Clock,
+  RefreshCw
 } from 'lucide-react';
 
 export const TOOL_ICONS: Record<string, LucideIcon> = {
@@ -35,6 +38,9 @@ export const TOOL_ICONS: Record<string, LucideIcon> = {
   calc: Calculator,
   webfetch: Globe,
   load_skill: Sparkles,
+  delegate_to_member: Users,
+  wait_for_member_events: Clock,
+  resume_member: RefreshCw,
 };
 
 /**
@@ -68,6 +74,9 @@ export function getToolDisplayName(toolName: string): string {
     calc: 'Calculator',
     webfetch: 'Web Fetch',
     load_skill: 'Load Skill',
+    delegate_to_member: 'Delegate to Member',
+    wait_for_member_events: 'Wait for Member Events',
+    resume_member: 'Resume Member',
   };
   return displayNames[toolName] || toolName;
 }

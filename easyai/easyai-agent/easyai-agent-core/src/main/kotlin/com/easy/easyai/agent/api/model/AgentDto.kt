@@ -21,6 +21,8 @@ data class AgentDto(
     val skillNames: List<String> = emptyList(),
     val mcpConfigs: List<McpBindingDto> = emptyList(),
     val commandNames: List<String> = emptyList(),
+    /** Team member agent IDs. Only meaningful when agentType = TEAM. */
+    val memberIds: List<String> = emptyList(),
     val maxIterations: Int = 50,
     val maxSubAgentDepth: Int = 1,
     val color: String? = null,
@@ -50,6 +52,8 @@ data class AgentCreateRequest(
     val skillNames: List<String> = emptyList(),
     val mcpConfigs: List<McpBindingDto> = emptyList(),
     val commandNames: List<String> = emptyList(),
+    /** Team member agent IDs. Required when agentType = TEAM; members must be existing non-TEAM agents. */
+    val memberIds: List<String> = emptyList(),
     val maxIterations: Int = 50,
     val maxSubAgentDepth: Int = 1,
     val color: String? = null,
@@ -96,4 +100,12 @@ data class McpBindingDto(
 data class AgentConfigsRequest(
     val targetType: String,
     val targetNames: List<String>
+)
+
+/**
+ * Request body for updating team agent members.
+ */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+data class AgentMembersRequest(
+    val memberIds: List<String>
 )

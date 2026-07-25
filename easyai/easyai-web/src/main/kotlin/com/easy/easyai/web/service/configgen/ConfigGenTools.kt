@@ -194,6 +194,8 @@ class ListResourcesTool(
                     appendLine("  Description: ${agent.description}")
                 }
             }
+            appendLine()
+            appendLine("NOTE: Any non-TEAM agent (type=PRIMARY, SUBAGENT, or ALL) can be used as a team member via the memberIds field when creating a TEAM agent.")
         }
     }
 

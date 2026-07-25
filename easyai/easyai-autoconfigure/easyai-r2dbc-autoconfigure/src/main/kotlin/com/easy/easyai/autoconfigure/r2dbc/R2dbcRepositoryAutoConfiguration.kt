@@ -17,6 +17,8 @@ import com.easy.easyai.core.goal.GoalStore
 import com.easy.easyai.core.permission.PermissionRuleStore
 import com.easy.easyai.core.permission.PermissionService
 import com.easy.easyai.core.prompt.InstructionsLoader
+import com.easy.easyai.core.team.TeamExecutionStore
+import com.easy.easyai.core.team.TeamMemberHistoryLoader
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolFactory
 import com.easy.easyai.repository.agent.R2dbcAgentStore
@@ -194,6 +196,7 @@ class R2dbcRepositoryAutoConfiguration(
         sessionToolResolver: SessionToolResolver,
         @Autowired(required = false) skillRegistry: com.easy.easyai.skills.SkillRegistry? = null,
         @Autowired(required = false) todoStore: AsyncTodoStore? = null,
+        @Autowired(required = false) teamExecutionStore: TeamExecutionStore? = null,
     ): SessionManager {
         // Agent lookup function
         val agentLookup: suspend (String, String) -> AgentDefinition? = { id, userId -> agentStore.findById(id, userId) }
@@ -223,7 +226,8 @@ class R2dbcRepositoryAutoConfiguration(
             agentLookup = agentLookup,
             todoStore = todoStore,
             skills = skillsData,
-            agentStore = agentStore
+            agentStore = agentStore,
+            teamExecutionStore = teamExecutionStore
         )
     }
 
@@ -298,6 +302,20 @@ class R2dbcRepositoryAutoConfiguration(
         return SubAgentMessageListenerFactory { sessionId, context, parentMessageId, parentToolCallId ->
             (sessionStore as? R2dbcAsyncSessionStore)?.createMessageListener(sessionId, context, parentMessageId, parentToolCallId)
         }
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(TeamMemberHistoryLoader::class)
+    fun teamMemberHistoryLoader(
+        sessionStore: AsyncSessionStore
+    ): TeamMemberHistoryLoader {
+        return TeamMemberHistoryLoader { sessionId -> sessionStore.loadActiveMessages(sessionId) }
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(TeamExecutionStore::class)
+    fun teamExecutionStore(initializer: R2dbcDatabaseInitializer): TeamExecutionStore {
+        return com.easy.easyai.repository.team.R2dbcTeamExecutionStore(initializer.getDatabase())
     }
 
     @Bean

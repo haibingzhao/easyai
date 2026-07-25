@@ -5,21 +5,21 @@ import com.easy.easyai.core.agent.CompletionCheckInput
 import com.easy.easyai.core.agent.CompletionCheckResult
 import com.easy.easyai.core.model.AssistantMessage
 import com.easy.easyai.core.model.TextContent
+import com.easy.easyai.core.team.MemberSignalTool
+import com.easy.easyai.core.team.TeamMemberExecution
+import com.easy.easyai.core.team.TeamMemberStatus
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.swarm.model.DeliberationOrder
 import com.easy.easyai.swarm.model.DeliberationSpec
 import com.easy.easyai.swarm.model.EscalationEntry
-import com.easy.easyai.swarm.model.MemberStatus
 import com.easy.easyai.swarm.model.SwarmTask
 import com.easy.easyai.swarm.model.SwarmTaskStatus
 import com.easy.easyai.swarm.model.TaskType
-import com.easy.easyai.swarm.model.TeamMemberExecution
 import com.easy.easyai.swarm.model.TeamRoundRecord
 import com.easy.easyai.swarm.model.TeamSpec
 import com.easy.easyai.swarm.model.WorkerResult
 import com.easy.easyai.swarm.tool.EscalationCompletionCheck
 import com.easy.easyai.swarm.tool.EscalationResult
-import com.easy.easyai.swarm.tool.EscalationTool
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import kotlinx.coroutines.runBlocking
@@ -297,14 +297,16 @@ class SwarmRuntimeTeamTest {
         }
 
         @Test
-        fun `MemberStatus enum has five values`() {
-            val values = MemberStatus.entries
-            assertEquals(5, values.size)
-            assertTrue(values.contains(MemberStatus.RUNNING))
-            assertTrue(values.contains(MemberStatus.COMPLETED))
-            assertTrue(values.contains(MemberStatus.ESCALATED))
-            assertTrue(values.contains(MemberStatus.SUSPENDED))
-            assertTrue(values.contains(MemberStatus.REASSIGNED))
+        fun `TeamMemberStatus enum has seven values`() {
+            val values = TeamMemberStatus.entries
+            assertEquals(7, values.size)
+            assertTrue(values.contains(TeamMemberStatus.RUNNING))
+            assertTrue(values.contains(TeamMemberStatus.COMPLETED))
+            assertTrue(values.contains(TeamMemberStatus.ESCALATED))
+            assertTrue(values.contains(TeamMemberStatus.ERROR))
+            assertTrue(values.contains(TeamMemberStatus.SUSPENDED))
+            assertTrue(values.contains(TeamMemberStatus.RESUMED))
+            assertTrue(values.contains(TeamMemberStatus.REASSIGNED))
         }
 
         @Test
@@ -350,7 +352,7 @@ class SwarmRuntimeTeamTest {
                 memberId = "worker-a",
                 round = 1,
                 assignment = "Research market data",
-                status = MemberStatus.COMPLETED,
+                status = TeamMemberStatus.COMPLETED,
                 summary = "Done.",
                 inputTokens = 100,
                 outputTokens = 200,
@@ -395,7 +397,7 @@ class SwarmRuntimeTeamTest {
                     EscalationEntry("m1", 1, "stuck", resolution = "helped by leader")
                 ),
                 memberExecutions = listOf(
-                    TeamMemberExecution("m1", 1, "task A", MemberStatus.COMPLETED)
+                    TeamMemberExecution("m1", 1, "task A", TeamMemberStatus.COMPLETED)
                 ),
                 roundRecords = listOf(
                     TeamRoundRecord(1, "analyze", listOf("m1"), emptyList(), emptyList())
@@ -492,21 +494,21 @@ class SwarmRuntimeTeamTest {
         }
     }
 
-    // ── C. EscalationTool & EscalationCompletionCheck ────────────────────
+    // ── C. MemberSignalTool & EscalationCompletionCheck ────────────────────
 
     @Nested
-    inner class `EscalationTool behavior` {
+    inner class `MemberSignalTool behavior` {
 
-        private fun createTool(): Pair<EscalationTool, AtomicReference<EscalationResult?>> {
+        private fun createTool(): Pair<MemberSignalTool, AtomicReference<EscalationResult?>> {
             val ref = AtomicReference<EscalationResult?>(null)
-            val tool = EscalationTool(
+            val tool = MemberSignalTool(
                 metadata = ToolMetadata(
                     name = "escalate",
                     description = "test",
                     permissionCategory = "swarm",
                     isDefaultTool = false
                 ),
-                escalationRef = ref
+                onSignal = { reason, progress -> ref.set(EscalationResult(reason, progress)) }
             )
             return tool to ref
         }
@@ -527,7 +529,7 @@ class SwarmRuntimeTeamTest {
 
             assertNotNull(ref.get())
             assertEquals("Cannot proceed without API key", ref.get()!!.reason)
-            assertTrue(result.content.filterIsInstance<TextContent>().first().text.contains("Escalation recorded"))
+            assertTrue(result.content.filterIsInstance<TextContent>().first().text.contains("[BLOCKED]"))
         }
 
         @Test

@@ -6,6 +6,7 @@ import { SessionsTab } from './SessionsTab';
 import { ReferencePanel } from '../chat/ReferencePanel';
 import { TodoPanel } from '../chat/TodoPanel';
 import { GoalCard } from '../chat/GoalCard';
+import { TeamMemberPanel } from '../chat/team/TeamMemberPanel';
 import { useProjectStore } from '@/services/stores/project-store';
 import { useNavStore, type RightPanelTab } from '@/services/stores/nav-store';
 import { i18n } from '@/utils/i18n';
@@ -21,20 +22,24 @@ interface RightPanelProps {
   mainTodos?: TodoInfo[];
   subAgentTodos?: Record<string, SubAgentTodoGroup>;
   goal?: GoalStatusEvent | null;
+  /** Whether the current chat agent is a TEAM agent (shows the Team tab) */
+  isTeamAgent?: boolean;
 }
 
-const TABS: { id: RightPanelTab; labelKey: string }[] = [
+const BASE_TABS: { id: RightPanelTab; labelKey: string }[] = [
   { id: 'summary', labelKey: 'Summary' },
   { id: 'review', labelKey: 'Review' },
   { id: 'files', labelKey: 'Files' },
   { id: 'sessions', labelKey: 'History' },
 ];
 
+const TEAM_TAB: { id: RightPanelTab; labelKey: string } = { id: 'team', labelKey: 'Team' };
+
 /**
  * Right-side panel with Summary, Review, Files, and Sessions tabs.
  * Tab switching is driven by nav-store actions (openFile, openReviewTab, openSessionsTab).
  */
-export const RightPanel: React.FC<RightPanelProps> = ({ onClose, references, mainTodos, subAgentTodos, goal }) => {
+export const RightPanel: React.FC<RightPanelProps> = ({ onClose, references, mainTodos, subAgentTodos, goal, isTeamAgent = false }) => {
   const activeTab = useNavStore((s) => s.rightPanelTab);
   const setActiveTab = useNavStore((s) => s.setRightPanelTab);
   const selectedFile = useNavStore((s) => s.selectedFile);
@@ -44,17 +49,21 @@ export const RightPanel: React.FC<RightPanelProps> = ({ onClose, references, mai
   const rootPath = currentProject?.path || '';
   const projectId = currentProject?.id || '';
 
+  // Team tab only visible for TEAM agents; fall back to summary if stale
+  const tabs = isTeamAgent ? [TEAM_TAB, ...BASE_TABS] : BASE_TABS;
+  const effectiveTab = activeTab === 'team' && !isTeamAgent ? 'summary' : activeTab;
+
   return (
     <div className="h-full flex flex-col bg-background border-l border-border">
       {/* Tab bar */}
       <div className="flex items-center justify-between border-b border-border shrink-0">
         <div className="flex">
-          {TABS.map((tab) => (
+          {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={`px-3 py-2 text-xs transition-colors border-b-2 ${
-                activeTab === tab.id
+                effectiveTab === tab.id
                   ? 'border-primary font-medium text-foreground'
                   : 'border-transparent text-muted-foreground hover:text-foreground'
               }`}
@@ -74,13 +83,16 @@ export const RightPanel: React.FC<RightPanelProps> = ({ onClose, references, mai
 
       {/* Tab content */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === 'summary' && (
+        {effectiveTab === 'team' && isTeamAgent && (
+          <TeamMemberPanel />
+        )}
+        {effectiveTab === 'summary' && (
           <SummaryTab references={references} mainTodos={mainTodos} subAgentTodos={subAgentTodos} goal={goal} />
         )}
-        {activeTab === 'review' && (
+        {effectiveTab === 'review' && (
           <ReviewTab />
         )}
-        {activeTab === 'files' && (
+        {effectiveTab === 'files' && (
           <FilesTab
             rootPath={rootPath}
             projectId={projectId}
@@ -88,7 +100,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({ onClose, references, mai
             onFileSelect={setSelectedFile}
           />
         )}
-        {activeTab === 'sessions' && (
+        {effectiveTab === 'sessions' && (
           <SessionsTab />
         )}
       </div>

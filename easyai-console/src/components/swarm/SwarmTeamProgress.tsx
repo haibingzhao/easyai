@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Loader2, CheckCircle2, AlertTriangle, ArrowRightLeft, ChevronDown, ChevronRight, PauseCircle } from 'lucide-react';
+import { Loader2, CheckCircle2, AlertTriangle, ArrowRightLeft, ChevronDown, ChevronRight, PauseCircle, XCircle, PlayCircle } from 'lucide-react';
 import type { TeamHistoryResponse, TeamRoundRecordDto, TeamMemberExecutionDto, EscalationEntryDto, MemberStatusDto } from '@/services/swarm-service';
 import { swarmService } from '@/services/swarm-service';
 import { i18n } from '@/utils/i18n';
@@ -28,10 +28,20 @@ const STATUS_CONFIG: Record<MemberStatusDto, { icon: React.ReactNode; color: str
     color: 'text-orange-500',
     label: 'Escalated',
   },
+  ERROR: {
+    icon: <XCircle className="w-3 h-3" />,
+    color: 'text-red-500',
+    label: 'Error',
+  },
   SUSPENDED: {
     icon: <PauseCircle className="w-3 h-3" />,
     color: 'text-amber-500',
     label: 'Suspended',
+  },
+  RESUMED: {
+    icon: <PlayCircle className="w-3 h-3" />,
+    color: 'text-teal-500',
+    label: 'Resumed',
   },
   REASSIGNED: {
     icon: <ArrowRightLeft className="w-3 h-3" />,
@@ -207,7 +217,11 @@ export const SwarmTeamProgress: React.FC<SwarmTeamProgressProps> = ({
           ) : (
             <div className="space-y-1.5">
               {memberExecutions.map((exec: TeamMemberExecutionDto, idx: number) => {
-                const cfg = STATUS_CONFIG[exec.status];
+                const cfg = STATUS_CONFIG[exec.status] ?? {
+                  icon: <AlertTriangle className="w-3 h-3" />,
+                  color: 'text-gray-500',
+                  label: exec.status,
+                };
                 const assignKey = `assign-${exec.memberId}-${exec.round}-${idx}`;
                 const isAssignCollapsed = collapsedEntries.has(assignKey);
                 return (

@@ -7,6 +7,8 @@ import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.model.EasyAiMessage
 import com.easy.easyai.core.model.TodoInfo
 import com.easy.easyai.core.prompt.InstructionsLoader
+import com.easy.easyai.core.team.TeamExecutionStore
+import com.easy.easyai.core.team.TeamMemberStatus
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.repository.todo.AsyncTodoStore
 import kotlinx.coroutines.sync.Mutex
@@ -37,7 +39,9 @@ class DatabaseSessionManager(
     /** Skills data for prompt rendering */
     private val skills: List<Map<String, Any?>> = emptyList(),
     /** Optional: agent store for dynamic sub-agents resolution */
-    private val agentStore: AsyncAgentStore? = null
+    private val agentStore: AsyncAgentStore? = null,
+    /** Optional: team execution store for TEAM session status recovery */
+    private val teamExecutionStore: TeamExecutionStore? = null
 ) : SessionManager {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val saveMutex = Mutex()
@@ -83,6 +87,61 @@ class DatabaseSessionManager(
         "description" to description,
         "inputSchema" to inputSchema
     )
+
+    /**
+     * Resolve team member data for TEAM agents (prompt rendering + team tool registration).
+     * Loads each configured member's AgentDefinition and maps to a prompt-friendly map.
+     */
+    private suspend fun resolveTeamMembersData(agentId: String, userId: String): List<Map<String, Any?>> {
+        val store = agentStore ?: return emptyList()
+        val memberIds = store.getAgentMemberIds(agentId)
+        if (memberIds.isEmpty()) return emptyList()
+        return memberIds.mapNotNull { memberId ->
+            store.findById(memberId, userId)?.let { member ->
+                mapOf(
+                    "id" to member.id,
+                    "name" to member.name,
+                    "description" to member.description,
+                )
+            }
+        }
+    }
+
+    /**
+     * Build a recovered team status summary from persisted execution records.
+     * Injected into the leader's system prompt when a TEAM session is restored,
+     * enabling precise decisions: resume BLOCKED members, re-delegate interrupted RUNNING ones.
+     */
+    private suspend fun buildTeamStatusSummary(sessionId: String): String? {
+        val store = teamExecutionStore ?: return null
+        return try {
+            val executions = store.getExecutions(sessionId)
+            if (executions.isEmpty()) return null
+            // Latest execution record per member
+            val latestByMember = executions
+                .groupBy { it.memberId }
+                .mapValues { (_, list) -> list.maxBy { it.startedAt ?: 0L } }
+            buildString {
+                appendLine("## Team Status (recovered from persistence)")
+                latestByMember.forEach { (memberId, exec) ->
+                    when (exec.status) {
+                        TeamMemberStatus.COMPLETED ->
+                            appendLine("- $memberId: COMPLETED — '${exec.summary?.take(200) ?: ""}'")
+                        TeamMemberStatus.ESCALATED ->
+                            appendLine("- $memberId: BLOCKED — needs: '${exec.escalationReason?.take(200) ?: ""}' (use resume_member to unblock)")
+                        TeamMemberStatus.RUNNING ->
+                            appendLine("- $memberId: RUNNING (possibly interrupted — re-delegate if no result was reported)")
+                        TeamMemberStatus.ERROR ->
+                            appendLine("- $memberId: ERROR — ${exec.escalationReason?.take(200) ?: "unknown"}")
+                        else -> appendLine("- $memberId: ${exec.status}")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to build team status summary for session {}: {}", sessionId, e.message)
+            null
+        }
+    }
 
     /**
      * Resolve skills for a specific agent, applying whitelist filtering.
@@ -141,11 +200,24 @@ class DatabaseSessionManager(
         // Agent-based path: look up agent definition and resolve tools
         val agentDef = agentLookup?.invoke(agentId, agentContext.userId ?: "system")
         if (agentDef != null) {
-            val (contextWithSkills, resolvedTools) = resolveAgentContextAndTools(agentDef, resolvedContext, projectPath)
+            val userId = agentContext.userId ?: "system"
+            val isTeamAgent = agentDef.agentType == AgentType.TEAM
+            // TEAM agents: inject member definitions for prompt rendering and team tools
+            val contextWithMembers = if (isTeamAgent) {
+                resolvedContext.copy(
+                    teamMembers = resolveTeamMembersData(agentDef.id, userId)
+                )
+            } else resolvedContext
+            val (contextWithSkills, resolvedTools) = resolveAgentContextAndTools(agentDef, contextWithMembers, projectPath)
 
             // Check database for existing session (to restore endReason)
-            val persistedSession = sessionStore.findById(id, agentContext.userId ?: "system")
-            val agent = agentFactory.createAgentWithAgentDef(agentDef, id, config, options, resolvedTools, contextWithSkills)
+            val persistedSession = sessionStore.findById(id, userId)
+            // TEAM + existing session: inject recovered execution status so the leader
+            // can decide precisely (resume BLOCKED members, re-delegate interrupted ones)
+            val finalContext = if (isTeamAgent && persistedSession != null) {
+                contextWithSkills.copy(teamStatusSummary = buildTeamStatusSummary(id))
+            } else contextWithSkills
+            val agent = agentFactory.createAgentWithAgentDef(agentDef, id, config, options, resolvedTools, finalContext)
             val chatSession = ChatSession(id, agent)
             if (persistedSession != null) {
                 logger.info("Restoring session from database with agent {}: {}", agentId, id)

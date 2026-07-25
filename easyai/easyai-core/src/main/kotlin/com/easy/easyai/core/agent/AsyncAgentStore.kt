@@ -71,5 +71,15 @@ interface AsyncAgentStore {
         return getAgentToolConfigs(agentId, TargetType.COMMAND).map { it.targetName }
     }
 
+    /** Save member list for a team agent (replaces existing MEMBER entries). */
+    suspend fun saveAgentMembers(agentId: String, memberIds: List<String>) {
+        saveAgentToolConfigs(agentId, TargetType.MEMBER, memberIds)
+    }
+
+    /** Get member agent IDs for a team agent (targetType=MEMBER). */
+    suspend fun getAgentMemberIds(agentId: String): List<String> {
+        return getAgentToolConfigs(agentId, TargetType.MEMBER).map { it.targetName }
+    }
+
     suspend fun count(): Long
 }

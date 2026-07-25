@@ -63,6 +63,12 @@ interface ToolBuilder {
     val tracksFileChanges: Boolean get() = metadata.tracksFileChanges
 
     /**
+     * Whether this tool bypasses agent-level toolNames filtering.
+     * Default: false (subject to toolNames filtering).
+     */
+    val alwaysInclude: Boolean get() = metadata.alwaysInclude
+
+    /**
      * Permission evaluator for this tool.
      * Determines how permission checks are performed for this tool's calls.
      * Default: simple evaluation using "tool.execute.$permissionCategory".

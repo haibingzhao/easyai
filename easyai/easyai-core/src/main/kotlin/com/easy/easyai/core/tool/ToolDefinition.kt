@@ -112,6 +112,14 @@ interface ToolDefinition {
      */
     val tracksFileChanges: Boolean get() = false
 
+    /**
+     * Whether this tool bypasses agent-level toolNames filtering.
+     * Session-scoped coordination tools (e.g., team tools) set this to true so they
+     * remain available even when the agent's toolNames list is empty or does not include them.
+     * Default: false (subject to toolNames filtering).
+     */
+    val alwaysInclude: Boolean get() = false
+
     suspend fun execute(
         agentContext: AgentContext,
         toolCallId: String,
@@ -142,6 +150,7 @@ abstract class BaseToolDefinition(
     override val defaultPatternWildcard: Boolean get() = metadata.defaultPatternWildcard
     override val skipOnResume: Boolean get() = metadata.skipOnResume
     override val tracksFileChanges: Boolean get() = metadata.tracksFileChanges
+    override val alwaysInclude: Boolean get() = metadata.alwaysInclude
 
     protected abstract fun parameterType(): Class<*>
 

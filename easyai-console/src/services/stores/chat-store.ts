@@ -19,6 +19,7 @@ import {
 import { handleChatEvent, setLastRespondedPermissionToolCallId } from './chat/event-handler';
 import { commitStreamingMessageImpl, loadSessionMessagesImpl } from './chat/session-loader';
 import { getGoal } from '@/services/goal-service';
+import { useTeamStore } from './team-store';
 
 // Re-export for backward compatibility (consumed by MessageEditor, InlineEditMessage, NodeMessageList, etc.)
 export { convertSnapshot } from './chat/message-converter';
@@ -484,5 +485,14 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   handleEvent: (event) => {
     handleChatEvent(event, get, set);
+    // Team coordination tools: refresh member executions immediately on SSE events
+    const teamToolNames: string[] = [TOOL_NAMES.DELEGATE_TO_MEMBER, TOOL_NAMES.WAIT_FOR_MEMBER_EVENTS, TOOL_NAMES.RESUME_MEMBER];
+    if (
+      (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') &&
+      teamToolNames.includes((event as { toolName?: string }).toolName ?? '')
+    ) {
+      const sid = get().sessionId;
+      if (sid) void useTeamStore.getState().refreshExecutions(sid);
+    }
   },
 }));

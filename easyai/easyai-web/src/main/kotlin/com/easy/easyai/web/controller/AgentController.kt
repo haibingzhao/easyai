@@ -7,6 +7,7 @@ import com.easy.easyai.common.textio.template.InvalidTemplateException
 import com.easy.easyai.common.textio.template.TemplateRenderer
 import com.easy.easyai.core.agent.AgentDefinition
 import com.easy.easyai.core.agent.AgentToolConfig
+import com.easy.easyai.core.agent.AgentType
 import com.easy.easyai.core.agent.AsyncAgentStore
 import com.easy.easyai.core.agent.TargetType
 import com.easy.easyai.web.model.ValidateTemplateRequest
@@ -39,6 +40,8 @@ import com.easy.easyai.common.util.SharedObjectMapper
  * - PUT    /api/agents/{id}/tools   - Update agent tools
  * - GET    /api/agents/{id}/configs - Get agent tool/subagent configs
  * - PUT    /api/agents/{id}/configs - Save agent tool/subagent configs
+ * - GET    /api/agents/{id}/members - Get team agent member IDs
+ * - PUT    /api/agents/{id}/members - Save team agent member IDs
  * - POST   /api/agents/validate-template - Validate Jinja2 template syntax
  */
 @RestController
@@ -114,6 +117,7 @@ class AgentController(
         if (existing != null) {
             throw ResponseStatusException(HttpStatus.CONFLICT, "Agent already exists: ${request.id}")
         }
+        validateTeamMembers(request.agentType, request.memberIds, userId)
         val agent = AgentDefinition.create(
             id = request.id,
             name = request.name,
@@ -138,12 +142,14 @@ class AgentController(
         agentStore.saveAgentToolConfigs(request.id, TargetType.SKILL, request.skillNames)
         agentStore.saveAgentMcpConfigs(request.id, request.mcpConfigs.toAgentToolConfigs(request.id))
         agentStore.saveAgentCommands(request.id, request.commandNames)
+        agentStore.saveAgentMembers(request.id, request.memberIds)
         agent.toDto(
             toolNames = request.toolNames,
             subAgentIds = request.subAgentIds,
             skillNames = request.skillNames,
             mcpConfigs = request.mcpConfigs,
-            commandNames = request.commandNames
+            commandNames = request.commandNames,
+            memberIds = request.memberIds
         )
     }
 
@@ -159,6 +165,7 @@ class AgentController(
         if (existing.userId == AuthConstants.SYSTEM_USER_ID) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot modify built-in agent: $id")
         }
+        validateTeamMembers(request.agentType, request.memberIds, userId)
 
         val updated = existing.copy(
             name = request.name,
@@ -183,6 +190,7 @@ class AgentController(
         agentStore.saveAgentToolConfigs(id, TargetType.SKILL, request.skillNames)
         agentStore.saveAgentMcpConfigs(id, request.mcpConfigs.toAgentToolConfigs(id))
         agentStore.saveAgentCommands(id, request.commandNames)
+        agentStore.saveAgentMembers(id, request.memberIds)
         loadAgentDto(updated, id)
     }
 
@@ -253,6 +261,37 @@ class AgentController(
     }
 
     /**
+     * Get team agent member IDs.
+     */
+    @GetMapping("/{id}/members")
+    fun getMembers(@PathVariable id: String): Mono<List<String>> = mono {
+        val userId = getCurrentUserId()
+        agentStore.findById(id, userId)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found: $id")
+        agentStore.getAgentMemberIds(id)
+    }
+
+    /**
+     * Save team agent member IDs (replaces existing member list).
+     * Members must be existing non-TEAM agents.
+     */
+    @PutMapping("/{id}/members")
+    fun saveMembers(
+        @PathVariable id: String,
+        @RequestBody request: AgentMembersRequest
+    ): Mono<List<String>> = mono {
+        val userId = getCurrentUserId()
+        val agent = agentStore.findById(id, userId)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found: $id")
+        if (agent.userId == AuthConstants.SYSTEM_USER_ID) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot modify built-in agent: $id")
+        }
+        validateTeamMembers(agent.agentType, request.memberIds, userId)
+        agentStore.saveAgentMembers(id, request.memberIds)
+        request.memberIds
+    }
+
+    /**
      * Validate Jinja2 template syntax.
      * Returns validation result with detailed errors if the template is invalid.
      */
@@ -319,7 +358,8 @@ class AgentController(
         subAgentIds: List<String>? = null,
         skillNames: List<String>? = null,
         mcpConfigs: List<McpBindingDto>? = null,
-        commandNames: List<String>? = null
+        commandNames: List<String>? = null,
+        memberIds: List<String>? = null
     ): AgentDto = AgentDto(
         id = this.id,
         name = this.name,
@@ -333,6 +373,7 @@ class AgentController(
         skillNames = skillNames ?: emptyList(),
         mcpConfigs = mcpConfigs ?: emptyList(),
         commandNames = commandNames ?: emptyList(),
+        memberIds = memberIds ?: emptyList(),
         maxIterations = this.maxIterations,
         maxSubAgentDepth = this.maxSubAgentDepth,
         color = this.color,
@@ -358,18 +399,43 @@ class AgentController(
         throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid targetType: $value. Must be TOOL, SUBAGENT, SKILL, MCP, or COMMAND")
     }
 
+    /**
+     * Validate team member references:
+     * - TEAM agents require at least one member; non-TEAM agents ignore memberIds.
+     * - All memberIds must reference existing agents (user-owned or built-in).
+     * - Members cannot be TEAM type (prevents infinite nesting); only PRIMARY/SUBAGENT/ALL.
+     */
+    private suspend fun validateTeamMembers(agentType: AgentType, memberIds: List<String>, userId: String) {
+        if (agentType != AgentType.TEAM) return
+        if (memberIds.isEmpty()) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "TEAM agent requires at least one member (memberIds)")
+        }
+        for (memberId in memberIds) {
+            val member = agentStore.findById(memberId, userId)
+                ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Member agent not found: $memberId")
+            if (member.agentType == AgentType.TEAM) {
+                throw ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Member '$memberId' is a TEAM agent — nested teams are not allowed"
+                )
+            }
+        }
+    }
+
     private suspend fun loadAgentDto(agent: AgentDefinition, id: String): AgentDto = coroutineScope {
         val toolsDeferred = async { agentStore.getAgentToolNames(id) }
         val subAgentIdsDeferred = async { agentStore.getAgentSubAgentNames(id) }
         val skillNamesDeferred = async { agentStore.getAgentSkillNames(id) }
         val mcpConfigsDeferred = async { agentStore.getAgentMcpConfigs(id).toMcpBindingDtos() }
         val commandNamesDeferred = async { agentStore.getAgentCommandNames(id) }
+        val memberIdsDeferred = async { agentStore.getAgentMemberIds(id) }
         agent.toDto(
             toolNames = toolsDeferred.await(),
             subAgentIds = subAgentIdsDeferred.await(),
             skillNames = skillNamesDeferred.await(),
             mcpConfigs = mcpConfigsDeferred.await(),
-            commandNames = commandNamesDeferred.await()
+            commandNames = commandNamesDeferred.await(),
+            memberIds = memberIdsDeferred.await()
         )
     }
 

@@ -1,5 +1,6 @@
 package com.easy.easyai.swarm.model
 
+import com.easy.easyai.core.team.TeamMemberExecution
 import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
@@ -274,7 +275,7 @@ data class DeliberationHistoryResponse(
  *
  * The Leader auto-generates planning and coordination prompts at runtime
  * from [contextTemplate], eliminating the need for manual prompt configuration.
- * Members use an injected EscalationTool for explicit escalation instead of keyword detection.
+ * Members use an injected MemberSignalTool ("escalate") for explicit escalation instead of keyword detection.
  *
  * @param leader Agent ID that coordinates task delegation and progress tracking.
  * @param members Agent IDs available for task execution (configuration-time candidate pool).
@@ -308,31 +309,6 @@ data class EscalationEntry(
     val resolution: String? = null,
     val reassignedTo: String? = null,
 )
-
-/**
- * Execution record for a single team member within a team task.
- */
-data class TeamMemberExecution(
-    val memberId: String,
-    val round: Int,
-    val assignment: String,
-    val status: MemberStatus,
-    val summary: String? = null,
-    val escalationReason: String? = null,
-    val inputTokens: Long = 0,
-    val outputTokens: Long = 0,
-)
-
-/**
- * Status of a team member's task execution.
- */
-enum class MemberStatus {
-    RUNNING,
-    COMPLETED,
-    ESCALATED,
-    SUSPENDED,
-    REASSIGNED
-}
 
 /**
  * Record of a single team coordination round (leader's decision history).

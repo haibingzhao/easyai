@@ -3,11 +3,12 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { ToolSelector } from '@/components/agent/ToolSelector';
 import { SubAgentSelector } from '@/components/agent/SubAgentSelector';
+import { TeamMemberSelector } from '@/components/agent/TeamMemberSelector';
 import { SkillSelector } from '@/components/agent/SkillSelector';
 import { McpSelector } from '@/components/agent/McpSelector';
 import { CommandSelector } from '@/components/agent/CommandSelector';
 import { SchemaEditor } from '@/components/agent/SchemaEditor';
-import { ArrowLeft, Save, Loader2, Bot, Shield, Settings, Terminal, BookOpen, Users, Server, Zap, Braces, Sparkles } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, Bot, Shield, Settings, Terminal, BookOpen, Users, Server, Zap, Braces, Sparkles, Network } from 'lucide-react';
 import { JinjaTemplateEditor, type JinjaTemplateEditorHandle } from '@/components/agent/JinjaTemplateEditor';
 import { type VariableGroup } from '@/components/agent/VariableDropdown';
 import { AiConfigPanel } from '@/components/ai/AiConfigPanel';
@@ -38,7 +39,7 @@ const PROMPT_CONTEXT_VARIABLES: { name: string; description: string }[] = [
   { name: 'current_date_time', description: 'Current date/time (yyyy-MM-dd HH:mm:ss z).' },
 ];
 
-type SectionId = 'basic' | 'tools' | 'skills' | 'subagents' | 'mcp' | 'commands' | 'schema';
+type SectionId = 'basic' | 'tools' | 'skills' | 'subagents' | 'members' | 'mcp' | 'commands' | 'schema';
 
 interface NavSection {
   id: SectionId;
@@ -68,6 +69,7 @@ export const AgentCreatePage: React.FC = () => {
   const [promptTemplate, setPromptTemplate] = useState('');
   const [selectedTools, setSelectedTools] = useState<string[]>([]);
   const [selectedSubAgents, setSelectedSubAgents] = useState<string[]>([]);
+  const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [selectedMcpConfigs, setSelectedMcpConfigs] = useState<McpBindingDto[]>([]);
   const [selectedCommands, setSelectedCommands] = useState<string[]>([]);
@@ -154,6 +156,7 @@ export const AgentCreatePage: React.FC = () => {
         setPromptTemplate(agent.promptTemplate || '');
         setSelectedTools(agent.toolNames);
         setSelectedSubAgents(agent.subAgentIds || []);
+        setSelectedMembers(agent.memberIds || []);
         setSelectedSkills(agent.skillNames || []);
         setSelectedMcpConfigs(agent.mcpConfigs || []);
         setSelectedCommands(agent.commandNames || []);
@@ -177,6 +180,7 @@ export const AgentCreatePage: React.FC = () => {
         setPromptTemplate('');
         setSelectedTools(['glob', 'grep', 'ls', 'read']);
         setSelectedSubAgents([]);
+        setSelectedMembers([]);
         setSelectedSkills([]);
         setSelectedMcpConfigs([]);
         setSelectedCommands([]);
@@ -197,7 +201,8 @@ export const AgentCreatePage: React.FC = () => {
     { id: 'basic', label: i18n('Basic'), icon: <Settings className="w-4 h-4" /> },
     { id: 'tools', label: i18n('Tools'), icon: <Terminal className="w-4 h-4" /> },
     { id: 'skills', label: i18n('Skills'), icon: <BookOpen className="w-4 h-4" />, hidden: isSwarmContext },
-    { id: 'subagents', label: i18n('Sub Agents'), icon: <Users className="w-4 h-4" />, hidden: agentType === 'SUBAGENT' || isSwarmContext },
+    { id: 'subagents', label: i18n('Sub Agents'), icon: <Users className="w-4 h-4" />, hidden: agentType === 'SUBAGENT' || agentType === 'TEAM' || isSwarmContext },
+    { id: 'members', label: i18n('Members'), icon: <Network className="w-4 h-4" />, hidden: agentType !== 'TEAM' || isSwarmContext },
     { id: 'mcp', label: i18n('MCP'), icon: <Server className="w-4 h-4" /> },
     { id: 'commands', label: i18n('Commands'), icon: <Zap className="w-4 h-4" />, hidden: isSwarmContext },
     { id: 'schema', label: i18n('Schema'), icon: <Braces className="w-4 h-4" />, hidden: isChatContext },
@@ -222,7 +227,7 @@ export const AgentCreatePage: React.FC = () => {
     if (typeof config.name === 'string') setName(config.name);
     if (typeof config.description === 'string') setDescription(config.description);
     if (typeof config.id === 'string') setCallsign(config.id);
-    if (config.agentType === 'PRIMARY' || config.agentType === 'SUBAGENT') setAgentType(config.agentType);
+    if (config.agentType === 'PRIMARY' || config.agentType === 'SUBAGENT' || config.agentType === 'TEAM') setAgentType(config.agentType);
     if (config.agentContext === 'CHAT' || config.agentContext === 'SWARM') setAgentContext(config.agentContext);
     if (typeof config.promptTemplate === 'string') setPromptTemplate(config.promptTemplate);
     if (Array.isArray(config.toolNames)) {
@@ -234,6 +239,7 @@ export const AgentCreatePage: React.FC = () => {
         : rawTools);
     }
     if (Array.isArray(config.subAgentIds)) setSelectedSubAgents(config.subAgentIds as string[]);
+    if (Array.isArray(config.memberIds)) setSelectedMembers(config.memberIds as string[]);
     if (Array.isArray(config.skillNames)) setSelectedSkills(config.skillNames as string[]);
     if (Array.isArray(config.mcpConfigs)) setSelectedMcpConfigs(config.mcpConfigs as McpBindingDto[]);
     if (Array.isArray(config.commandNames)) setSelectedCommands(config.commandNames as string[]);
@@ -247,10 +253,10 @@ export const AgentCreatePage: React.FC = () => {
     id: callsign, name, description, agentType, agentContext,
     toolNames: selectedTools, subAgentIds: selectedSubAgents,
     skillNames: selectedSkills, mcpConfigs: selectedMcpConfigs,
-    commandNames: selectedCommands, maxIterations,
+    commandNames: selectedCommands, memberIds: selectedMembers, maxIterations,
     promptTemplate,
   }), [callsign, name, description, agentType, agentContext, selectedTools, selectedSubAgents,
-    selectedSkills, selectedMcpConfigs, selectedCommands, maxIterations,
+    selectedSkills, selectedMcpConfigs, selectedCommands, selectedMembers, maxIterations,
     promptTemplate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -282,6 +288,11 @@ export const AgentCreatePage: React.FC = () => {
       return;
     }
 
+    if (agentType === 'TEAM' && selectedMembers.length === 0) {
+      setError('TEAM agent requires at least one member');
+      return;
+    }
+
     const request: AgentCreateRequest = {
       id: isEdit ? callsign : callsign.toLowerCase().replace(/\s+/g, '-'),
       name: name.trim(),
@@ -294,6 +305,7 @@ export const AgentCreatePage: React.FC = () => {
       skillNames: selectedSkills,
       mcpConfigs: selectedMcpConfigs,
       commandNames: selectedCommands,
+      memberIds: agentType === 'TEAM' ? selectedMembers : [],
       maxIterations,
       maxSubAgentDepth: 1,
       enabled: true,
@@ -500,6 +512,18 @@ export const AgentCreatePage: React.FC = () => {
                     </button>
                     <button
                       type="button"
+                      onClick={() => setAgentType('TEAM')}
+                      disabled={readOnly}
+                      className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                        agentType === 'TEAM'
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-muted hover:bg-muted/80'
+                      } ${readOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                    >
+                      Team
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setAgentType('ALL')}
                       disabled={readOnly}
                       className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
@@ -645,11 +669,21 @@ export const AgentCreatePage: React.FC = () => {
             )}
 
             {/* === Sub Agents Section === */}
-            {activeSection === 'subagents' && agentType !== 'SUBAGENT' && (
+            {activeSection === 'subagents' && agentType !== 'SUBAGENT' && agentType !== 'TEAM' && (
               <SubAgentSelector
                 selectedSubAgents={selectedSubAgents}
                 onChange={setSelectedSubAgents}
                 availableSubAgents={subAgents}
+                disabled={readOnly}
+              />
+            )}
+
+            {/* === Team Members Section === */}
+            {activeSection === 'members' && agentType === 'TEAM' && (
+              <TeamMemberSelector
+                selectedMembers={selectedMembers}
+                onChange={setSelectedMembers}
+                availableAgents={agents}
                 disabled={readOnly}
               />
             )}

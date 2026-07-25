@@ -20,7 +20,9 @@ import { revertToMessage, unrevert } from '@/services/checkpoint-service';
 import { Plus, PanelRight, PanelRightClose } from 'lucide-react';
 import { i18n } from '../../utils/i18n';
 import { RightPanel } from '../files/RightPanel';
+import { TeamMemberDetail } from './team/TeamMemberDetail';
 import { useNavStore } from '@/services/stores/nav-store';
+import { useTeamStore } from '@/services/stores/team-store';
 import { useResizable } from '@/hooks/useResizable';
 import { useSessionFileChanges } from '@/hooks/useSessionFileChanges';
 
@@ -31,12 +33,26 @@ const SCROLL_BOTTOM_THRESHOLD = 50;
 
 export const ChatPanel: React.FC = () => {
   const { messages, isStreaming, isFileWriting, hasArtifacts, artifactCount, clearChat, streamingBlocks, todos, subAgentTodos, isAwaitingPermission, revertState, setRevertState, sessionId, runningSessionId, setRunningSessionId, setStreaming, loadSessionMessages, loadSessionMessagesIncremental, setTodos, setAllSubAgentTodos, setFileReviewOverrides, refreshGoal, currentGoal, pendingMessageData } = useChatStore();
-  const { loadAgents, loadTools } = useAgentStore();
+  const { loadAgents, loadTools, agents, selectedAgentId } = useAgentStore();
   const [showArtifactPanel, setShowArtifactPanel] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const { rightPanelOpen, toggleRightPanel, setRightPanelOpen, rightPanelWidth, setRightPanelWidth } = useNavStore();
   const [panelResizing, setPanelResizing] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+
+  // Team agent detection + member detail selection
+  const isTeamAgent = useMemo(
+    () => agents.find((a) => a.id === selectedAgentId)?.agentType === 'TEAM',
+    [agents, selectedAgentId]
+  );
+  const selectedMemberId = useTeamStore((s) => s.selectedMemberId);
+  const resetTeam = useTeamStore((s) => s.resetTeam);
+  const clearSelectedMember = useTeamStore((s) => s.clearSelectedMember);
+
+  // Clear member detail view on session switch
+  useEffect(() => {
+    clearSelectedMember();
+  }, [sessionId, clearSelectedMember]);
 
   // Use shared hook for session file changes + accept/reject handlers
   const { sessionFileChanges, handleAcceptFile, handleRejectFile, handleAcceptAll, handleRejectAll } = useSessionFileChanges();
@@ -434,6 +450,7 @@ export const ChatPanel: React.FC = () => {
 
   const handleNewSession = () => {
     clearChat();
+    resetTeam();
     useNavStore.getState().setSelectedFile(null);
   };
 
@@ -477,7 +494,10 @@ export const ChatPanel: React.FC = () => {
             </div>
           </div>
 
-          {/* Message list */}
+          {/* Message list — replaced by TeamMemberDetail when a team member is selected */}
+          {selectedMemberId ? (
+            <TeamMemberDetail />
+          ) : (
           <div
             ref={messagesContainerRef}
             className="flex-1 overflow-y-auto"
@@ -501,6 +521,7 @@ export const ChatPanel: React.FC = () => {
               </div>
             )}
           </div>
+          )}
 
           {/* Permission bar - shown when tool execution requires user approval */}
           {awaitingPermission && <PermissionBar />}
@@ -558,7 +579,7 @@ export const ChatPanel: React.FC = () => {
         {/* Right panel (Files/Summary/Review/Sessions) */}
         {showRightPanel && (
           <div className="h-full right-panel shrink-0" style={{ width: rightPanelWidth }}>
-            <RightPanel onClose={() => setRightPanelOpen(false)} references={aggregatedReferences} mainTodos={todos} subAgentTodos={subAgentTodos} goal={currentGoal} />
+            <RightPanel onClose={() => setRightPanelOpen(false)} references={aggregatedReferences} mainTodos={todos} subAgentTodos={subAgentTodos} goal={currentGoal} isTeamAgent={isTeamAgent} />
           </div>
         )}
 

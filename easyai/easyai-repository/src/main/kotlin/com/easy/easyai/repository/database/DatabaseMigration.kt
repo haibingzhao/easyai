@@ -56,6 +56,8 @@ class DatabaseMigration(
                 Tables.SwarmEscalationHistoryTable,
                 Tables.SwarmTeamMemberExecutionTable,
                 Tables.SwarmTeamRoundRecordTable,
+                Tables.TeamMemberExecutionTable,
+                Tables.TeamRoundRecordTable,
                 Tables.SwarmPresetTable
             )
         )

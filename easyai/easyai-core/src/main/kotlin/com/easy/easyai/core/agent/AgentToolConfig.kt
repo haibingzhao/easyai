@@ -8,7 +8,9 @@ enum class TargetType {
     SUBAGENT,
     SKILL,
     MCP,
-    COMMAND
+    COMMAND,
+    /** Team Agent member: targetName is the member agent's ID. Only for TEAM-type agents. */
+    MEMBER
 }
 
 /**

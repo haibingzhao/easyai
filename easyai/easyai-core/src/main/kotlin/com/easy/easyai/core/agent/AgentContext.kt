@@ -56,6 +56,10 @@ data class AgentContext(
     /** Skill whitelist for this agent. Empty = no skills allowed. Non-empty = only listed skills. */
     val allowedSkillNames: List<String> = emptyList(),
     val subAgents: List<Map<String, Any?>> = emptyList(),
+    /** Team member data for prompt rendering (list of {id, name, description} maps). Only for TEAM agents. */
+    val teamMembers: List<Map<String, Any?>> = emptyList(),
+    /** Recovered team execution status summary (injected when restoring a TEAM session). */
+    val teamStatusSummary: String? = null,
     /** Project-level instructions loaded from AGENTS.md. Injected into system prompt. */
     val instructions: List<InstructionInfo> = emptyList(),
     /**

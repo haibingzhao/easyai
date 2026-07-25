@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-export type RightPanelTab = 'summary' | 'review' | 'files' | 'sessions';
+export type RightPanelTab = 'summary' | 'review' | 'files' | 'sessions' | 'team';
 
 interface NavState {
   sidebarCollapsed: boolean;
@@ -31,6 +31,8 @@ interface NavState {
   openReviewTab: (path?: string) => void;
   /** Open the Sessions tab */
   openSessionsTab: () => void;
+  /** Open the Team tab (Team Member Panel) */
+  openTeamTab: () => void;
 }
 
 const DEFAULT_SIDEBAR_WIDTH = 220;
@@ -63,6 +65,10 @@ export const useNavStore = create<NavState>()(persist(
       openSessionsTab: () => set({
         rightPanelOpen: true,
         rightPanelTab: 'sessions' as RightPanelTab,
+      }),
+      openTeamTab: () => set({
+        rightPanelOpen: true,
+        rightPanelTab: 'team' as RightPanelTab,
       }),
     }),
     {

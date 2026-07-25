@@ -4,6 +4,7 @@ import com.easy.easyai.core.agent.SessionManager
 import com.easy.easyai.core.model.*
 import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.repository.session.MessageWithTimestamp
+import com.easy.easyai.skills.team.TeamCoordinationStateRegistry
 import com.easy.easyai.snapshot.SnapshotService
 import com.easy.easyai.web.model.*
 import org.slf4j.LoggerFactory
@@ -14,7 +15,9 @@ class SessionService(
     private val sessionManager: SessionManager,
     private val sessionStore: AsyncSessionStore,
     private val snapshotService: SnapshotService? = null,
-    private val fileStorageService: FileStorageService? = null
+    private val fileStorageService: FileStorageService? = null,
+    /** Optional: cleans up Team Agent in-memory coordination state on session deletion. */
+    private val teamStateRegistry: TeamCoordinationStateRegistry? = null
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper = SharedObjectMapper.instance
@@ -317,6 +320,12 @@ class SessionService(
         sessionStore.delete(id, userId)
         // Close in-memory session
         sessionManager.closeSession(id)
+        // Clean up Team Agent in-memory coordination state (coroutine scope + channel)
+        try {
+            teamStateRegistry?.remove(id)
+        } catch (e: Exception) {
+            logger.warn("Failed to clean up team coordination state for session {}: {}", id, e.message)
+        }
         logger.info("Deleted session: {}", id)
     }
 

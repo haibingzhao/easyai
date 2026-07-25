@@ -12,6 +12,7 @@ data class AgentPromptConfig(
     val scriptLlmSegment: String? = null,
     val skillsList: String? = null,
     val subAgentsList: String? = null,
+    val teamMembersList: String? = null,
     val toolsList: String? = null,
     val instructionsSegment: String? = null,
     val memorySegment: String? = null,
