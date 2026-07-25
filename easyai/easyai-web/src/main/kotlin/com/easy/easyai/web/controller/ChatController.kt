@@ -9,10 +9,10 @@ import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.snapshot.RevertService
 import com.easy.easyai.snapshot.SnapshotService
 import com.easy.easyai.web.model.*
-import com.easy.easyai.web.util.AttachmentValidationException
 import com.easy.easyai.web.security.getCurrentUserId
 import com.easy.easyai.web.service.ChatStreamService
 import com.easy.easyai.web.service.SessionService
+import com.easy.easyai.web.util.AttachmentValidationException
 import kotlinx.coroutines.reactor.asFlux
 import kotlinx.coroutines.reactor.mono
 import org.slf4j.LoggerFactory
@@ -374,8 +374,8 @@ class ChatController(
         @PathVariable sessionId: String
     ): Mono<List<QueuedMessageResponse>> {
         return mono {
-            val userId = verifyOwnership(sessionId)
-            chatStreamService.getQueuedMessages(sessionId, userId)
+            verifyOwnership(sessionId)
+            chatStreamService.getQueuedMessages(sessionId)
         }
     }
 
@@ -389,8 +389,8 @@ class ChatController(
         @PathVariable queueId: String
     ): Mono<Void> {
         return mono {
-            val userId = verifyOwnership(sessionId)
-            val removed = chatStreamService.removeQueuedMessage(sessionId, userId, queueId)
+            verifyOwnership(sessionId)
+            val removed = chatStreamService.removeQueuedMessage(sessionId, queueId)
             if (!removed) {
                 throw ResponseStatusException(HttpStatus.NOT_FOUND, "Queued message not found: $queueId")
             }
@@ -407,8 +407,8 @@ class ChatController(
         @RequestBody request: QueueUpdateRequest
     ): Mono<Map<String, String>> {
         return mono {
-            val userId = verifyOwnership(sessionId)
-            val updated = chatStreamService.updateQueuedMessage(sessionId, userId, queueId, request.content)
+            verifyOwnership(sessionId)
+            val updated = chatStreamService.updateQueuedMessage(sessionId, queueId, request.content)
             if (!updated) {
                 throw ResponseStatusException(HttpStatus.NOT_FOUND, "Queued message not found: $queueId")
             }
@@ -425,8 +425,8 @@ class ChatController(
         @RequestBody request: QueueReorderRequest
     ): Mono<Map<String, String>> {
         return mono {
-            val userId = verifyOwnership(sessionId)
-            chatStreamService.reorderQueuedMessages(sessionId, userId, request.ids)
+            verifyOwnership(sessionId)
+            chatStreamService.reorderQueuedMessages(sessionId, request.ids)
             mapOf("status" to "reordered")
         }
     }

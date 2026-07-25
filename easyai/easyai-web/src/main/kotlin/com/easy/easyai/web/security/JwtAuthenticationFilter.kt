@@ -35,11 +35,14 @@ class JwtAuthenticationFilter(
             return chain.filter(exchange)
         }
 
-        // Prefer Authorization header; fall back to `token` query param (for SSE/EventSource)
-        val token = extractToken(exchange)
-        if (token == null) {
+        // Skip internal endpoints — they handle their own script-token authentication
+        val path = exchange.request.path.value()
+        if (path.startsWith("/api/internal/")) {
             return chain.filter(exchange)
         }
+
+        // Prefer Authorization header; fall back to `token` query param (for SSE/EventSource)
+        val token = extractToken(exchange) ?: return chain.filter(exchange)
 
         return try {
             val claims = jwtTokenProvider.validateAccessToken(token)

@@ -1,0 +1,11 @@
+{
+  "properties": [
+    {
+      "name": "easyai.script-llm.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the script LLM feature is enabled. When true, scripts executed via BashTool receive environment variables (EASYAI_SCRIPT_TOKEN, EASYAI_BACKEND_URL, EASYAI_MODEL_CONFIG_ID) for calling back to the internal LLM endpoint.",
+      "sourceType": "com.easy.easyai.web.service.ScriptLlmProperties",
+      "defaultValue": false
+    }
+  ]
+}

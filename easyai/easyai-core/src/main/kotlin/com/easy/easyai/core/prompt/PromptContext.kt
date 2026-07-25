@@ -22,6 +22,8 @@ data class PromptContext(
     val outputSchema: String? = null,
     /** Structured input variables for template rendering. */
     val inputVariables: Map<String, Any?> = emptyMap(),
+    /** Whether script LLM access is available (env vars injected into bash processes). */
+    val scriptLlmAvailable: Boolean = false,
     /** Current date and time for injection into prompts. */
     val currentDateTime: String = java.time.ZonedDateTime.now()
         .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z"))

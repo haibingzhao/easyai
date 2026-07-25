@@ -9,6 +9,7 @@ data class AgentPromptConfig(
     val protocol: String? = null,
     val customInstructions: String? = null,
     val environmentInfo: String? = null,
+    val scriptLlmSegment: String? = null,
     val skillsList: String? = null,
     val subAgentsList: String? = null,
     val toolsList: String? = null,

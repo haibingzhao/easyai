@@ -6,13 +6,17 @@ import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.compaction.CompactionTransformContextService
 import com.easy.easyai.compaction.ContextCompactionOrchestrator
-import com.easy.easyai.core.agent.*
+import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.agent.ChatSession
+import com.easy.easyai.core.agent.SessionManager
+import com.easy.easyai.core.agent.TransformContextService
 import com.easy.easyai.core.event.*
 import com.easy.easyai.core.goal.GoalStatusListener
 import com.easy.easyai.core.goal.GoalStatusNotifier
 import com.easy.easyai.core.goal.GoalStore
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.permission.PermissionService
+import com.easy.easyai.core.tool.ScriptEnvProvider
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.skills.command.CommandService
@@ -52,7 +56,8 @@ class ChatStreamService(
     private val commandService: CommandService? = null,
     private val goalStatusNotifier: GoalStatusNotifier? = null,
     private val goalStore: GoalStore? = null,
-    private val fileStorageService: FileStorageService? = null
+    private val fileStorageService: FileStorageService? = null,
+    private val scriptEnvProvider: ScriptEnvProvider? = null
 ) : DisposableBean {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper: ObjectMapper = SharedObjectMapper.instance
@@ -317,7 +322,6 @@ class ChatStreamService(
      */
     suspend fun removeQueuedMessage(
         sessionId: String,
-        userId: String,
         queueId: String
     ): Boolean {
         val session = activeSessions[sessionId]
@@ -337,7 +341,6 @@ class ChatStreamService(
      */
     suspend fun updateQueuedMessage(
         sessionId: String,
-        userId: String,
         queueId: String,
         newContent: String
     ): Boolean {
@@ -357,7 +360,6 @@ class ChatStreamService(
      */
     suspend fun reorderQueuedMessages(
         sessionId: String,
-        userId: String,
         ids: List<String>
     ) {
         val session = activeSessions[sessionId]
@@ -370,8 +372,7 @@ class ChatStreamService(
      * Return a snapshot of all queued messages (steering + followUp) for a session.
      */
     suspend fun getQueuedMessages(
-        sessionId: String,
-        userId: String
+        sessionId: String
     ): List<QueuedMessageResponse> {
         val session = activeSessions[sessionId]
         // Return empty list if session is not actively streaming (queue is ephemeral)
@@ -582,6 +583,15 @@ class ChatStreamService(
             projectStore.findById(projectId, userId)
         } else null
 
+        // Build a partial context for script env generation
+        val partialContext = AgentContext(
+            agentId = agentId,
+            modelConfig = config,
+            sessionId = sessionId,
+            userId = userId
+        )
+        val scriptEnv = scriptEnvProvider?.getScriptEnv(partialContext) ?: emptyMap()
+
         return AgentContext(
             agentId = agentId,
             modelConfig = config,
@@ -589,7 +599,8 @@ class ChatStreamService(
             userId = userId,
             projectId = projectId,
             projectPath = project?.let { java.nio.file.Path.of(it.path) },
-            memoryAutoGeneration = project?.memoryAutoGeneration ?: true
+            memoryAutoGeneration = project?.memoryAutoGeneration ?: true,
+            scriptEnv = scriptEnv
         )
     }
 

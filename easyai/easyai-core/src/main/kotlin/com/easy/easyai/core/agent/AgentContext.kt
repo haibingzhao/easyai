@@ -93,7 +93,9 @@ data class AgentContext(
      * Dry-run mode: skip all persistence (messages, todos, snapshots).
      * Used by Config Generator Agent and other ephemeral agents that don't need DB writes.
      */
-    val dryRun: Boolean = false
+    val dryRun: Boolean = false,
+    /** Environment variables for script LLM access. Non-empty when script-llm feature is enabled. */
+    val scriptEnv: Map<String, String> = emptyMap()
 ) {
     /** Model ID derived from modelConfig, or empty string if not configured. */
     val modelId: String get() = modelConfig?.modelId ?: ""

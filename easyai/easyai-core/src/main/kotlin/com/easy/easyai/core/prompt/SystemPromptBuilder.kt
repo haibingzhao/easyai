@@ -35,6 +35,9 @@ class SystemPromptBuilder(
             }
         }
 
+        // 3.5 Script LLM access info (when available)
+        addIfNotBlank(context.scriptLlmSegment)
+
         // 4-6. Tools, skills, sub-agents lists (runtime generated)
         addIfNotBlank(context.toolsList)
         addIfNotBlank(context.skillsList)

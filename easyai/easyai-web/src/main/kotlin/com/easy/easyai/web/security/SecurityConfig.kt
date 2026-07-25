@@ -1,6 +1,5 @@
 package com.easy.easyai.web.security
 
-import com.easy.easyai.auth.AuthConstants
 import com.easy.easyai.auth.jwt.JwtTokenProvider
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -52,6 +51,8 @@ class SecurityConfig {
                         .pathMatchers("/api/auth/**").permitAll()
                         // Setup endpoints are public (for database configuration wizard)
                         .pathMatchers("/api/setup/**").permitAll()
+                        // Internal LLM endpoint (authenticated via script token in controller)
+                        .pathMatchers("/api/internal/llm/**").permitAll()
                         // Health check is public
                         .pathMatchers("/api/chat/health").permitAll()
                         // Static console assets served same-origin (desktop client)

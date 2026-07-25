@@ -15,6 +15,7 @@ import com.easy.easyai.core.agent.WaitForUserListener
 import com.easy.easyai.core.goal.GoalStatusNotifier
 import com.easy.easyai.core.goal.GoalStore
 import com.easy.easyai.core.permission.PermissionService
+import com.easy.easyai.core.tool.ScriptEnvProvider
 import com.easy.easyai.core.message.DefaultMessageConverter
 import com.easy.easyai.core.message.MessageConverter
 import com.easy.easyai.repository.project.AsyncProjectStore
@@ -31,6 +32,7 @@ import com.easy.easyai.web.handler.CheckpointCustomEventConverter
 import com.easy.easyai.web.handler.CustomEventConverter
 import com.easy.easyai.web.handler.GoalStatusCustomEventConverter
 import com.easy.easyai.web.security.AuthProperties
+import com.easy.easyai.web.service.ScriptLlmProperties
 import com.easy.easyai.web.security.AuthService
 import com.easy.easyai.web.security.McpPreConnectFilter
 import com.easy.easyai.web.service.ConfigValidator
@@ -74,7 +76,7 @@ import java.nio.file.Path
 @ConditionalOnClass(ChatModel::class)
 @ConditionalOnProperty(prefix = "easyai.web", name = ["enabled"], havingValue = "true", matchIfMissing = true)
 @ConditionalOnProperty(prefix = "easyai.database", name = ["configured"], havingValue = "true", matchIfMissing = true)
-@EnableConfigurationProperties(WebProperties::class, AuthProperties::class)
+@EnableConfigurationProperties(WebProperties::class, AuthProperties::class, ScriptLlmProperties::class)
 @ComponentScan(basePackages = ["com.easy.easyai.web"])
 open class WebAutoConfiguration {
 
@@ -103,11 +105,14 @@ open class WebAutoConfiguration {
         @Autowired(required = false)
         goalStore: GoalStore? = null,
         @Autowired(required = false)
-        fileStorageService: FileStorageService? = null
+        fileStorageService: FileStorageService? = null,
+        @Autowired(required = false)
+        scriptEnvProvider: ScriptEnvProvider? = null
     ): ChatStreamService {
         return ChatStreamService(sessionManager, configStore, modelFactories,
             transformContextService, permissionService, sessionStore, projectStore, snapshotService,
-            customEventConverters ?: emptyList(), commandService, goalStatusNotifier, goalStore, fileStorageService)
+            customEventConverters ?: emptyList(), commandService, goalStatusNotifier, goalStore, fileStorageService,
+            scriptEnvProvider)
     }
 
     @Bean

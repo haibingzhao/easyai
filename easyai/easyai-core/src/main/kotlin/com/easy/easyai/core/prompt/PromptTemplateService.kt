@@ -33,6 +33,7 @@ class PromptTemplateService(
             customInstructions = context.customInstructions,
             cwd = if (includeTools) context.cwd else null,
             os = if (includeTools) context.os else null,
+            scriptLlmSegment = if (context.scriptLlmAvailable && includeTools) SCRIPT_LLM_SEGMENT else null,
             toolsList = if (includeTools) context.tools.takeIf { it.isNotEmpty() }?.let { list ->
                 buildString {
                     appendLine("## Available Tools")
@@ -102,5 +103,35 @@ class PromptTemplateService(
             logger.error("Failed to render prompt template, falling back to default: {}", e.message, e)
             defaultBuilder.build(buildDefaultConfig(context, includeTools = false)).joinToString("\n\n")
         }
+    }
+
+    companion object {
+        private val SCRIPT_LLM_SEGMENT = $$"""
+## Script LLM Access
+
+When executing scripts via the bash tool, the following environment variables are automatically available for LLM access:
+- `EASYAI_SCRIPT_TOKEN`: Bearer token for the internal LLM API (auto-injected, 30min expiry)
+- `EASYAI_BACKEND_URL`: Backend base URL (auto-injected)
+- `EASYAI_MODEL_CONFIG_ID`: Default model configuration ID (auto-injected)
+
+Scripts can call the LLM synchronously via HTTP:
+
+```bash
+curl -s -X POST "$EASYAI_BACKEND_URL/api/internal/llm/process" \
+  -H "Authorization: Bearer $EASYAI_SCRIPT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"system","content":"instruction"},{"role":"user","content":"content to process"}]}'
+```
+
+For batch processing multiple items:
+```bash
+curl -s -X POST "$EASYAI_BACKEND_URL/api/internal/llm/batch-process" \
+  -H "Authorization: Bearer $EASYAI_SCRIPT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"instruction":"system prompt","items":[{"id":"1","content":"text1"},{"id":"2","content":"text2"}]}'
+```
+
+Use this when you need to process many files with LLM (transcription, summarization, translation, etc.) via generated scripts. The script does NOT need any API key — authentication is handled by the injected token.
+        """.trimIndent()
     }
 }
