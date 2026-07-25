@@ -64,6 +64,13 @@ export interface DesktopConfig {
   jvmArgs: string[];
   /** Auto-update settings. */
   update: UpdateConfig;
+  /**
+   * Backend port used by the previous launch. Reused on the next launch to
+   * keep the origin (and therefore the httpOnly auth cookie) stable. The
+   * shell falls back to a random free port when this one is taken.
+   * null = no port recorded yet.
+   */
+  port: number | null;
 }
 
 export function configPath(): string {
@@ -84,6 +91,7 @@ export function loadConfig(): DesktopConfig {
     workDir: null,
     jvmArgs: [],
     update: { enabled: false, feedUrl: null, downloadPageUrl: null },
+    port: null,
   };
   try {
     const raw = fs.readFileSync(configPath(), 'utf-8');
@@ -103,6 +111,13 @@ export function loadConfig(): DesktopConfig {
             ? update.downloadPageUrl
             : null,
       },
+      port:
+        typeof parsed.port === 'number' &&
+        Number.isInteger(parsed.port) &&
+        parsed.port > 0 &&
+        parsed.port <= 65535
+          ? parsed.port
+          : null,
     };
   } catch {
     return defaults;
@@ -161,6 +176,22 @@ export function resolveDatabase(config: DesktopConfig): ResolvedDb {
     username: 'sa',
     password: '',
   };
+}
+
+/**
+ * Persist the backend port actually used so the next launch can reuse the
+ * same origin, keeping the httpOnly refresh-token cookie valid. Merges into
+ * the raw JSON file so user-edited fields are preserved.
+ */
+export function savePort(port: number): void {
+  let raw: Record<string, unknown> = {};
+  try {
+    raw = JSON.parse(fs.readFileSync(configPath(), 'utf-8')) as Record<string, unknown>;
+  } catch {
+    // Missing or corrupt config: start from an empty object.
+  }
+  raw.port = port;
+  fs.writeFileSync(configPath(), JSON.stringify(raw, null, 2), 'utf-8');
 }
 
 export function resolveWorkDir(config: DesktopConfig): string {

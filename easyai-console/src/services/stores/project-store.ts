@@ -21,6 +21,8 @@ interface ProjectState {
   createProject: (name: string, path: string, description?: string) => Promise<Project>;
   updateProject: (id: string, data: UpdateProjectRequest) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;
+  /** Clear project state on user switch (logout/login) to avoid cross-user project leakage */
+  resetForUserSwitch: () => void;
 }
 
 export const useProjectStore = create<ProjectState>()(
@@ -131,6 +133,8 @@ export const useProjectStore = create<ProjectState>()(
           };
         });
       },
+
+      resetForUserSwitch: () => set({ currentProject: null, projects: [], userSelected: false }),
     }),
     {
       name: 'easyai-project',

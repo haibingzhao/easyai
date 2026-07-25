@@ -13,6 +13,7 @@ import { type VariableGroup } from '@/components/agent/VariableDropdown';
 import { AiConfigPanel } from '@/components/ai/AiConfigPanel';
 import type { AgentCreateRequest, AgentType, AgentEnv, McpBindingDto, TemplateValidationError } from '@/types/agent';
 import { agentService } from '@/services/agent-service';
+import { SWARM_EXCLUDED_TOOLS } from '@/constants/tools';
 import { i18n } from '@/utils/i18n';
 import { useResizable } from '@/hooks/useResizable';
 
@@ -224,7 +225,14 @@ export const AgentCreatePage: React.FC = () => {
     if (config.agentType === 'PRIMARY' || config.agentType === 'SUBAGENT') setAgentType(config.agentType);
     if (config.agentContext === 'CHAT' || config.agentContext === 'SWARM') setAgentContext(config.agentContext);
     if (typeof config.promptTemplate === 'string') setPromptTemplate(config.promptTemplate);
-    if (Array.isArray(config.toolNames)) setSelectedTools(config.toolNames as string[]);
+    if (Array.isArray(config.toolNames)) {
+      const effectiveContext = config.agentContext === 'SWARM' || config.agentContext === 'CHAT'
+        ? config.agentContext : agentContext;
+      const rawTools = config.toolNames as string[];
+      setSelectedTools(effectiveContext === 'SWARM'
+        ? rawTools.filter(t => !SWARM_EXCLUDED_TOOLS.includes(t))
+        : rawTools);
+    }
     if (Array.isArray(config.subAgentIds)) setSelectedSubAgents(config.subAgentIds as string[]);
     if (Array.isArray(config.skillNames)) setSelectedSkills(config.skillNames as string[]);
     if (Array.isArray(config.mcpConfigs)) setSelectedMcpConfigs(config.mcpConfigs as McpBindingDto[]);
@@ -233,7 +241,7 @@ export const AgentCreatePage: React.FC = () => {
     if (typeof config.instructionsEnabled === 'boolean') setInstructionsEnabled(config.instructionsEnabled);
     if (typeof config.inputSchema === 'string') { setInputSchemaEnabled(true); setInputSchema(config.inputSchema); }
     if (typeof config.outputSchema === 'string') { setOutputSchemaEnabled(true); setOutputSchema(config.outputSchema); }
-  }, []);
+  }, [agentContext]);
 
   const buildCurrentConfig = useCallback(() => ({
     id: callsign, name, description, agentType, agentContext,
@@ -623,6 +631,7 @@ export const AgentCreatePage: React.FC = () => {
                 selectedTools={selectedTools}
                 onChange={setSelectedTools}
                 disabled={readOnly}
+                excludeTools={isSwarmContext ? SWARM_EXCLUDED_TOOLS : undefined}
               />
             )}
 

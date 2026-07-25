@@ -33,6 +33,14 @@ internal fun formatValidationErrors(errors: List<ConfigValidationError>): String
     }
 }
 
+/**
+ * Tools that the swarm runtime does not support for worker agents:
+ * - load_skill: skills are cleared in swarm context
+ * - task: SubAgentTool is not created (parentAgentId recursion guard)
+ * - run_swarm: mainAgentOnly tool, blocked for non-main agents
+ */
+internal val SWARM_UNSUPPORTED_TOOLS = setOf("load_skill", "task", "run_swarm")
+
 // ============================================================================
 // Tool 1: validate_config
 // ============================================================================
@@ -117,6 +125,10 @@ data class ValidateConfigParameter(
 /**
  * Lists available resources by type (agents, tools, skills, MCP servers, models, spec).
  * Enables on-demand resource discovery instead of injecting everything into the prompt.
+ *
+ * @param swarmContext When true, tools unsupported by the swarm runtime
+ *   (load_skill, task, run_swarm) are excluded from the tools listing,
+ *   and skills are reported as unavailable.
  */
 class ListResourcesTool(
     private val toolRegistry: ToolRegistry,
@@ -125,7 +137,8 @@ class ListResourcesTool(
     private val mcpClientManager: McpClientManager?,
     private val modelConfigStore: ModelProviderConfigStore,
     private val userId: String,
-    private val configType: String
+    private val configType: String,
+    private val swarmContext: Boolean = false
 ) : BaseToolDefinition(
     ToolMetadata(
         name = "list_resources",
@@ -186,16 +199,22 @@ class ListResourcesTool(
 
     private fun listTools(): String {
         val tools = toolRegistry.getAllTools()
+            .let { all -> if (swarmContext) all.filter { it.name !in SWARM_UNSUPPORTED_TOOLS } else all }
         if (tools.isEmpty()) return "No built-in tools available."
         return buildString {
             appendLine("Built-in Tools (valid values for toolNames field):")
             tools.forEach { tool ->
                 appendLine("- **${tool.name}**: ${tool.description}")
             }
+            if (swarmContext) {
+                appendLine()
+                appendLine("NOTE: load_skill, task, and run_swarm are NOT available in swarm runtime and must NOT be used in toolNames.")
+            }
         }
     }
 
     private fun listSkills(): String {
+        if (swarmContext) return "Skills are NOT available in swarm runtime. Do not use skillNames or load_skill."
         val skills = skillRegistry?.all() ?: emptyList()
         if (skills.isEmpty()) return "No skills available."
         return buildString {

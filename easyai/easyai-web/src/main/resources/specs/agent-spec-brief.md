@@ -35,7 +35,7 @@
 | agentContext | Behavior |
 |--------------|----------|
 | `CHAT` | Uses Chat variables (tools, skills, memory, os, cwd) |
-| `SWARM` | Uses Swarm variables (user_input, deliberation_history) |
+| `SWARM` | Uses Swarm variables (user_input, deliberation_history). **Restrictions**: `load_skill`, `task`, `run_swarm` unavailable in toolNames; skillNames and subAgentIds must be empty |
 | `BOTH` | Compatible with both environments |
 
 ## Prompt Template Variables
@@ -59,6 +59,7 @@
 3. **Skills via skillNames** — NEVER in toolNames
 4. **promptTemplate MUST include `{{ custom_instructions }}`**
 5. **`{{ input.xxx }}` requires inputSchema** to be set
+6. **SWARM context**: when `agentContext` is `SWARM`, tools `load_skill`, `task`, `run_swarm` are unavailable — never include in toolNames; `skillNames` and `subAgentIds` must be empty
 
 ## Best Practices
 

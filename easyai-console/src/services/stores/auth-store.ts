@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { setAccessToken, getAccessToken } from '@/services/api-client';
 import { authService } from '@/services/auth-service';
 import type { UserProfile } from '@/services/auth-service';
+import { useProjectStore } from './project-store';
+import { useChatStore } from './chat-store';
 
 interface AuthState {
   user: UserProfile | null;
@@ -61,12 +63,14 @@ export const useAuthStore = create<AuthState>((set) => ({
   login: async (username, password) => {
     const response = await authService.login(username, password);
     setAccessToken(response.accessToken);
+    resetUserScopedState();
     set({ user: response.user, isAuthenticated: true });
   },
 
   register: async (username, password, email, displayName) => {
     const response = await authService.register(username, password, email, displayName);
     setAccessToken(response.accessToken);
+    resetUserScopedState();
     set({ user: response.user, isAuthenticated: true });
   },
 
@@ -77,6 +81,13 @@ export const useAuthStore = create<AuthState>((set) => ({
       // Best effort
     }
     setAccessToken(null);
+    resetUserScopedState();
     set({ user: null, isAuthenticated: false });
   },
 }));
+
+/** Reset user-scoped stores (project selection, chat) to prevent cross-user state leakage */
+function resetUserScopedState() {
+  useProjectStore.getState().resetForUserSwitch();
+  useChatStore.getState().clearChat();
+}

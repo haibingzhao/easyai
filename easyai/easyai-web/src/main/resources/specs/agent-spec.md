@@ -42,7 +42,7 @@ Controls where the agent's `promptTemplate` can be correctly rendered. Orthogona
 | Value | Behavior |
 |-------|----------|
 | `CHAT` | Prompt uses only PromptContext variables (`tools`, `skills`, `memory`, `os`, `cwd`, `model_id`, etc.). Usable in Chat sessions. In Swarm workflows, the task promptTemplate is skipped and the agent's own system prompt drives behavior. |
-| `SWARM` | Prompt may use Swarm-specific variables (`user_input`, `deliberation_history`, `rounds`, upstream task summaries). Designed for Swarm workflow tasks. Not shown in Chat agent selector. |
+| `SWARM` | Prompt may use Swarm-specific variables (`user_input`, `deliberation_history`, `rounds`, upstream task summaries). Designed for Swarm workflow tasks. Not shown in Chat agent selector. **Restrictions**: `load_skill`, `task`, `run_swarm` are unavailable in swarm runtime — never include in `toolNames`; `skillNames` and `subAgentIds` must be empty (Skills and Sub-Agents unsupported). |
 | `BOTH` | Compatible with both Chat and Swarm environments. Shown in Chat selector and supports custom task promptTemplate in Swarm. |
 
 ## Prompt Template

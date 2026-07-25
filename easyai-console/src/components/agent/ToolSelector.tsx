@@ -6,6 +6,8 @@ interface ToolSelectorProps {
   selectedTools: string[];
   onChange: (tools: string[]) => void;
   disabled?: boolean;
+  /** Tool names to hide from the list (e.g., tools unavailable in swarm context). */
+  excludeTools?: string[];
 }
 
 /** Icon mapping by permissionCategory */
@@ -31,8 +33,12 @@ function getToolIcon(name: string, category?: string): React.ReactNode {
   return NAME_ICONS[name] || <Bot className="w-4 h-4" />;
 }
 
-export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onChange, disabled }) => {
+export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onChange, disabled, excludeTools }) => {
   const { tools } = useAgentStore();
+
+  const visibleTools = excludeTools && excludeTools.length > 0
+    ? tools.filter((tool) => !excludeTools.includes(tool.name))
+    : tools;
 
   const toggleTool = (toolName: string) => {
     if (selectedTools.includes(toolName)) {
@@ -50,7 +56,7 @@ export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onCha
       </div>
 
       <div className="space-y-2">
-        {tools.map((tool) => {
+        {visibleTools.map((tool) => {
           const isSelected = selectedTools.includes(tool.name);
           return (
             <label

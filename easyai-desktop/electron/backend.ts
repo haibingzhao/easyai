@@ -41,6 +41,17 @@ export function findFreePort(): Promise<number> {
   });
 }
 
+/** Check whether a specific TCP port is free on the loopback interface. */
+export function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.listen(port, '127.0.0.1', () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
 export function backendUrl(port: number): string {
   return `http://127.0.0.1:${port}`;
 }

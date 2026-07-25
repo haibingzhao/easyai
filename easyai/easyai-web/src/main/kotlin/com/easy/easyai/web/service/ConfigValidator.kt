@@ -13,6 +13,7 @@ import com.easy.easyai.swarm.model.TaskType
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.web.model.ConfigValidationError
 import com.easy.easyai.web.model.ConfigValidationResult
+import com.easy.easyai.web.service.configgen.SWARM_UNSUPPORTED_TOOLS
 import com.easy.easyai.web.service.validation.*
 import org.slf4j.LoggerFactory
 import tools.jackson.databind.JsonNode
@@ -118,6 +119,13 @@ class ConfigValidator(
                     if (agent.name.isBlank()) {
                         errors.add(ConfigValidationError(
                             "agents", "Inline agent '${agent.id}' must have a non-blank 'name' field"
+                        ))
+                    }
+                    // Validate that toolNames don't include swarm-unsupported tools
+                    val unsupported = agent.toolNames.filter { it in SWARM_UNSUPPORTED_TOOLS }
+                    if (unsupported.isNotEmpty()) {
+                        errors.add(ConfigValidationError(
+                            "agents", "Inline agent '${agent.id}' uses tools not available in swarm runtime: ${unsupported.joinToString(", ")}"
                         ))
                     }
                     continue

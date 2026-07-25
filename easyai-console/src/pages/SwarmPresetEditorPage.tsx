@@ -14,6 +14,7 @@ import { modelConfigService } from '@/services/model-config-service';
 import type { ModelProviderConfig } from '@/types/settings';
 import type { ToolInfo } from '@/types/agent';
 import { validateDag } from '@/utils/dag-validator';
+import { SWARM_EXCLUDED_TOOLS } from '@/constants/tools';
 import { aiConfigService } from '@/services/ai-config-service';
 import { i18n } from '@/utils/i18n';
 import { useResizable } from '@/hooks/useResizable';
@@ -168,7 +169,14 @@ export const SwarmPresetEditorPage: React.FC = () => {
     if (typeof config.name === 'string') setName(config.name);
     if (typeof config.title === 'string') setTitle(config.title);
     if (typeof config.description === 'string') setDescription(config.description);
-    if (Array.isArray(config.agents)) setAgents(config.agents as SwarmAgentSpecDto[]);
+    if (Array.isArray(config.agents)) {
+      // Strip tools unsupported by the swarm runtime from inline agents
+      setAgents((config.agents as SwarmAgentSpecDto[]).map(a =>
+        a.toolNames && a.toolNames.length > 0
+          ? { ...a, toolNames: a.toolNames.filter(t => !SWARM_EXCLUDED_TOOLS.includes(t)) }
+          : a
+      ));
+    }
     if (Array.isArray(config.tasks)) setTasks((config.tasks as Record<string, unknown>[]).map(normalizeAiTask));
     if (Array.isArray(config.variables)) setVariables(config.variables as SwarmVariableDto[]);
   }, [agents.length, tasks.length]);

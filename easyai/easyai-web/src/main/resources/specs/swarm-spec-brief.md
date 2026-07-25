@@ -68,10 +68,11 @@ Example: `"mcpConfigs": [{ "serverName": "github", "toolNames": ["search_code"],
 1. **Global agents**: `agentDefinitionId` MUST reference an existing Agent — use `list_resources type="agents"` to find valid IDs
 2. **Inline agents**: `agentDefinitionId` blank + provide `name` (required), optionally `systemPrompt`, `toolNames`, `mcpConfigs`
 3. **MCP tools go in `mcpConfigs`, NEVER in `toolNames`** — `toolNames` is only for built-in tools
-4. **dependsOn forms a DAG** — no cycles allowed
-5. **inputFrom routes upstream results** — `{varName: taskId}` makes `{{ varName }}` available in promptTemplate
-6. **Task IDs in dependsOn/inputFrom must exist** in the tasks array
-7. **Agent IDs in agentId/participants/judge must exist** in the agents array
+4. **Swarm-unsupported tools**: `load_skill`, `task`, and `run_swarm` are NOT available in swarm runtime — NEVER include them in `toolNames` (Skills and Sub-Agents are not supported for swarm agents)
+5. **dependsOn forms a DAG** — no cycles allowed
+6. **inputFrom routes upstream results** — `{varName: taskId}` makes `{{ varName }}` available in promptTemplate
+7. **Task IDs in dependsOn/inputFrom must exist** in the tasks array
+8. **Agent IDs in agentId/participants/judge must exist** in the agents array
 
 ## Example
 

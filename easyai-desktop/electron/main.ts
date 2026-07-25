@@ -8,17 +8,18 @@
  * Dev escape hatch: EASYAI_BACKEND_URL skips spawning and loads an
  * externally running backend (e.g. `mvn spring-boot:run` from the IDE).
  */
-import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, session, shell } from 'electron';
 import path from 'path';
 import {
   BackendHandle,
   backendUrl,
   findFreePort,
+  isPortFree,
   startBackend,
   stopBackend,
   waitForHealth,
 } from './backend';
-import { loadConfig, resolveDatabase, resolveWorkDir } from './config';
+import { loadConfig, resolveDatabase, resolveWorkDir, savePort } from './config';
 import { logDir } from './paths';
 import type { BackendStatus } from './preload';
 import {
@@ -31,6 +32,9 @@ import {
 } from './updater';
 
 const HEALTH_TIMEOUT_MS = 120_000;
+
+/** Must match AuthConstants.REFRESH_TOKEN_COOKIE on the backend. */
+const REFRESH_TOKEN_COOKIE = 'easyai_refresh_token';
 
 let mainWindow: BrowserWindow | null = null;
 let backendHandle: BackendHandle | null = null;
@@ -46,6 +50,35 @@ function pagePath(name: string): string {
 function sendStatus(status: BackendStatus): void {
   lastStatus = status;
   mainWindow?.webContents.send('backend-status', status);
+}
+
+/**
+ * Copy the httpOnly refresh-token cookie from the previous backend origin to
+ * the current one. Cookies are scoped by origin (including port), so when the
+ * backend port changes between launches the login state would be lost unless
+ * the cookie is migrated. Best effort: any failure simply leaves the user at
+ * the login screen.
+ */
+async function migrateAuthCookies(fromPort: number, toPort: number): Promise<void> {
+  try {
+    const cookies = await session.defaultSession.cookies.get({
+      url: `http://127.0.0.1:${fromPort}/api/auth`,
+      name: REFRESH_TOKEN_COOKIE,
+    });
+    for (const cookie of cookies) {
+      await session.defaultSession.cookies.set({
+        url: `http://127.0.0.1:${toPort}/api/auth`,
+        name: cookie.name,
+        value: cookie.value,
+        httpOnly: true,
+        path: '/api/auth',
+        sameSite: 'lax',
+        expirationDate: cookie.expirationDate,
+      });
+    }
+  } catch {
+    // Best effort — migration failure only means the user logs in again.
+  }
 }
 
 function createWindow(): void {
@@ -143,9 +176,12 @@ async function launchBackend(): Promise<void> {
     }
 
     sendStatus({ phase: 'starting', message: 'Choosing a free port…' });
-    const port = await findFreePort();
-
     const config = loadConfig();
+    // Reuse the previous port when possible so the origin (and therefore the
+    // httpOnly auth cookie) stays stable across launches.
+    const port =
+      config.port !== null && (await isPortFree(config.port)) ? config.port : await findFreePort();
+
     const db = resolveDatabase(config);
     const workDir = resolveWorkDir(config);
 
@@ -179,6 +215,13 @@ async function launchBackend(): Promise<void> {
         });
       }
     });
+
+    // Port changed since the last launch: carry the refresh-token cookie over
+    // to the new origin so the user stays logged in.
+    if (config.port !== null && config.port !== port) {
+      await migrateAuthCookies(config.port, port);
+    }
+    savePort(port);
 
     consoleUrl = backendUrl(port);
     sendStatus({ phase: 'ready', message: 'Loading console…' });

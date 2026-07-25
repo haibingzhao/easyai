@@ -34,7 +34,7 @@ Each entry defines an agent **role** within the swarm. Supports two modes:
 | `name` | string | conditional | `""` | Display name for the inline agent. **Required when `agentDefinitionId` is blank.** |
 | `description` | string | no | `""` | Description of the inline agent's purpose. |
 | `systemPrompt` | string | no | `""` | System prompt template (Jinja2). Becomes the agent's promptTemplate. Only used for inline agents. |
-| `toolNames` | string[] | no | `[]` | Built-in tool names available to this inline agent. Only used for inline agents. |
+| `toolNames` | string[] | no | `[]` | Built-in tool names available to this inline agent. Only used for inline agents. **Must NOT include `load_skill`, `task`, or `run_swarm`** (unavailable in swarm runtime). |
 | `mcpConfigs` | SwarmMcpBinding[] | no | `[]` | MCP server bindings available to this inline agent. Only used for inline agents. See **SwarmMcpBinding** below. |
 
 ### SwarmMcpBinding — MCP Server Binding
@@ -70,6 +70,7 @@ In this example:
 - **`modelName` overrides the model**: Useful when you want a specific agent to use a more capable or cheaper model than the default.
 - Multiple swarm agents can reference the same `agentDefinitionId` with different roles/parameters.
 - **MCP tools go in `mcpConfigs`, NEVER in `toolNames`**: The `toolNames` field is only for built-in tools.
+- **Swarm-unsupported tools**: `load_skill`, `task`, and `run_swarm` are NOT available in swarm runtime — never include them in `toolNames`. Skills and Sub-Agents are not supported for swarm agents.
 
 ## SwarmTask — DAG Task Definitions
 

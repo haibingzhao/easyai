@@ -331,7 +331,10 @@ class AgentBasedConfigGenerator(
     }
 
     private fun buildTools(configType: String, userId: String, finalizeAction: suspend (String?) -> String): List<ToolDefinition> {
-        val listResources = ListResourcesTool(toolRegistry, agentStore, skillRegistry, mcpClientManager, modelConfigStore, userId, configType)
+        val listResources = ListResourcesTool(
+            toolRegistry, agentStore, skillRegistry, mcpClientManager, modelConfigStore, userId, configType,
+            swarmContext = configType == "swarm"
+        )
         return if (configType == "swarm") {
             // Chunked mode: blocks + finalize. No validate_config/submit_config to prevent
             // the LLM from outputting the full config JSON as a tool parameter (causes stream stalls).
@@ -378,6 +381,7 @@ You are an expert EasyAI configuration generator specializing in agent configura
 - subAgentIds: MUST reference existing agents (from list_resources type="agents")
 - inputSchema: required when using {{ input.xxx }} in promptTemplate
 - Minimalism: only include tools/skills/MCP the agent will actually use
+- **SWARM context restriction**: when agentContext is SWARM, `load_skill`, `task`, and `run_swarm` are NOT available — NEVER include them in toolNames; skillNames and subAgentIds must be empty (Skills and Sub-Agents are unsupported in swarm runtime)
 
 ## Configuration Specification
 $specBrief
@@ -410,6 +414,7 @@ If you need the full specification, call `list_resources type="spec"`.
 ## Critical Rules
 - Agents support two modes: Global (agentDefinitionId references existing agent) or Inline (agentDefinitionId blank, provide name/systemPrompt/toolNames/mcpConfigs)
 - toolNames: ONLY built-in tools (from list_resources type="tools")
+- **Swarm runtime restrictions**: `load_skill`, `task`, and `run_swarm` are NOT available in swarm runtime — NEVER include them in toolNames. Skills and Sub-Agents are not supported for swarm agents.
 - MCP tools: via mcpConfigs field, NEVER in toolNames. Format: [{"serverName":"xxx","toolNames":["t1"],"promptNames":[]}]
 - mcpConfigs.toolNames empty = all tools from that server allowed
 - agentDefinitionId: MUST reference an existing agent for global mode (from list_resources type="agents")

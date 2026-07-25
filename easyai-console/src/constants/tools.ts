@@ -10,3 +10,12 @@ export const TOOL_NAMES = {
   /** Tool that manages goal state (update_status, update_objective, add_evidence) */
   GOAL: 'goal',
 } as const;
+
+/**
+ * Tools unavailable in Swarm runtime context.
+ * The backend does not support Skills and Sub Agents for swarm agents:
+ * - load_skill: skills are cleared in swarm context
+ * - task: SubAgentTool is not created (parentAgentId recursion guard)
+ * - run_swarm: mainAgentOnly tool, blocked for non-main agents
+ */
+export const SWARM_EXCLUDED_TOOLS: string[] = ['load_skill', 'task', 'run_swarm'];
