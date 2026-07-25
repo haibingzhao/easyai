@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { markdownCodeComponents } from './markdownCodeComponents';
 import { i18n } from '../../utils/i18n';
+import { formatDurationSeconds } from '../../utils/format';
 
 /**
  * Normalize literal `\n` (two-char escape) to actual newlines.
@@ -71,15 +72,8 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({ content, isStreami
 
   const isCurrentlyStreaming = isStreaming && !isFinished;
 
-  const formatDuration = (seconds: number): string => {
-    if (seconds < 60) return `${seconds}s`;
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}m ${s}s`;
-  };
-
   const showDuration = elapsed > 0 || (durationMs !== undefined && durationMs > 0);
-  const durationText = showDuration ? formatDuration(durationMs !== undefined ? Math.floor(durationMs / 1000) : elapsed) : '';
+  const durationText = showDuration ? formatDurationSeconds(durationMs !== undefined ? Math.floor(durationMs / 1000) : elapsed) : '';
 
   return (
     <div className="border-l-2 border-border bg-muted/50 rounded-l-md">

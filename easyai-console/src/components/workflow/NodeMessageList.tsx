@@ -9,8 +9,7 @@ import { mergeToolResults } from '@/services/stores/chat/session-loader';
 import { MessageList } from '@/components/chat/MessageList';
 import { markdownCodeComponents } from '@/components/chat/markdownCodeComponents';
 import { i18n } from '@/utils/i18n';
-
-const POLL_INTERVAL_MS = 3000;
+import { usePolling } from '@/hooks/usePolling';
 
 interface NodeMessageListProps {
   runId: string;
@@ -24,7 +23,6 @@ export const NodeMessageList: React.FC<NodeMessageListProps> = ({ runId, taskId,
   const [messages, setMessages] = useState<MessageSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   /** Tracks the latest message timestamp for incremental fetching */
   const lastTimestampRef = useRef<number>(0);
@@ -98,23 +96,7 @@ export const NodeMessageList: React.FC<NodeMessageListProps> = ({ runId, taskId,
   }, [messages]);
 
   // Poll while task is running — uses incremental fetch
-  useEffect(() => {
-    if (!isRunning) {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-      return;
-    }
-
-    pollRef.current = setInterval(() => fetchIncremental(), POLL_INTERVAL_MS);
-    return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-  }, [isRunning, fetchIncremental]);
+  usePolling(fetchIncremental, isRunning);
 
   // Find the closest scrollable ancestor
   const findScrollContainer = useCallback((node: HTMLElement | null) => {

@@ -34,10 +34,7 @@ class LsTool(metadata: ToolMetadata, private val workDir: Path) : BaseToolDefini
         val dirPath = (args["path"] as? String)?.let { workDir.resolveSafe(it) } ?: workDir.normalize()
 
         if (!dirPath.isDirectory()) {
-            return@withContext ToolResult(
-                content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "Error: not a directory: ${args["path"]}", isError = true)),
-                isError = true
-            )
+            return@withContext errorResult(toolCallId, name, "Error: not a directory: ${args["path"]}")
         }
 
         val entries = dirPath.listDirectoryEntries().map { entry ->

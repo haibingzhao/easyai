@@ -52,10 +52,7 @@ class BashTool(
         coroutineScope: CoroutineScope,
         onUpdate: suspend (ToolUpdate) -> Unit
     ): ToolResult = withContext(Dispatchers.IO) {
-        val command = args["command"] as? String ?: return@withContext ToolResult(
-            content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "Error: missing 'command' parameter", isError = true)),
-            isError = true
-        )
+        val command = args["command"] as? String ?: return@withContext errorResult(toolCallId, name, "Error: missing 'command' parameter")
         val timeoutSec = ((args["timeout"] as? Number)?.toLong() ?: DEFAULT_TIMEOUT_SEC)
             .coerceIn(MIN_TIMEOUT_SEC, MAX_TIMEOUT_SEC)
         val shell = resolveBashShell()

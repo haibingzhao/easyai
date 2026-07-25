@@ -80,34 +80,16 @@ class EditTool(metadata: ToolMetadata, private val workDir: Path) : BaseToolDefi
         coroutineScope: CoroutineScope,
         onUpdate: suspend (ToolUpdate) -> Unit
     ): ToolResult = withContext(Dispatchers.IO) {
-        val pathStr = args["path"] as? String ?: return@withContext ToolResult(
-            content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "Error: missing 'path' parameter", isError = true)),
-            isError = true
-        )
-        val oldString = args["oldString"] as? String ?: return@withContext ToolResult(
-            content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "Error: missing 'oldString' parameter", isError = true)),
-            isError = true
-        )
-        val newString = args["newString"] as? String ?: return@withContext ToolResult(
-            content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "Error: missing 'newString' parameter", isError = true)),
-            isError = true
-        )
+        val pathStr = args["path"] as? String ?: return@withContext errorResult(toolCallId, name, "Error: missing 'path' parameter")
+        val oldString = args["oldString"] as? String ?: return@withContext errorResult(toolCallId, name, "Error: missing 'oldString' parameter")
+        val newString = args["newString"] as? String ?: return@withContext errorResult(toolCallId, name, "Error: missing 'newString' parameter")
         val replaceAll = args["replaceAll"] as? Boolean
 
-        if (oldString == newString) return@withContext ToolResult(
-            content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "No changes to apply: oldString and newString are identical.", isError = true)),
-            isError = true
-        )
-        if (oldString.isEmpty()) return@withContext ToolResult(
-            content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "oldString must not be empty. Use write to create or overwrite a file.", isError = true)),
-            isError = true
-        )
+        if (oldString == newString) return@withContext errorResult(toolCallId, name, "No changes to apply: oldString and newString are identical.")
+        if (oldString.isEmpty()) return@withContext errorResult(toolCallId, name, "oldString must not be empty. Use write to create or overwrite a file.")
 
         val file = workDir.resolveSafe(pathStr)
-        if (!file.exists()) return@withContext ToolResult(
-            content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "Error: file not found: $pathStr", isError = true)),
-            isError = true
-        )
+        if (!file.exists()) return@withContext errorResult(toolCallId, name, "Error: file not found: $pathStr")
 
         // Read file content and store original bytes for stale content detection
         val rawContent = file.readText()
@@ -118,14 +100,8 @@ class EditTool(metadata: ToolMetadata, private val workDir: Path) : BaseToolDefi
         val normalizedNew = convertToLineEnding(newString, ending)
         val replacements = countOccurrences(bomInfo.text, normalizedOld)
 
-        if (replacements == 0) return@withContext ToolResult(
-            content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "Could not find oldString in the file. It must match exactly, including whitespace and indentation.", isError = true)),
-            isError = true
-        )
-        if (replacements > 1 && replaceAll != true) return@withContext ToolResult(
-            content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "Found multiple exact matches for oldString. Provide more surrounding context or set replaceAll to true.", isError = true)),
-            isError = true
-        )
+        if (replacements == 0) return@withContext errorResult(toolCallId, name, "Could not find oldString in the file. It must match exactly, including whitespace and indentation.")
+        if (replacements > 1 && replaceAll != true) return@withContext errorResult(toolCallId, name, "Found multiple exact matches for oldString. Provide more surrounding context or set replaceAll to true.")
 
         val replaced = if (replaceAll == true) {
             bomInfo.text.replace(normalizedOld, normalizedNew)
@@ -137,10 +113,7 @@ class EditTool(metadata: ToolMetadata, private val workDir: Path) : BaseToolDefi
         // Write-if-unchanged: verify file hasn't been modified since we read it
         val currentBytes = file.readBytes()
         if (!currentBytes.contentEquals(expectedBytes)) {
-            return@withContext ToolResult(
-                content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "File changed after reading. Read it again before editing.", isError = true)),
-                isError = true
-            )
+            return@withContext errorResult(toolCallId, name, "File changed after reading. Read it again before editing.")
         }
         file.writeText(finalContent)
 

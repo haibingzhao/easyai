@@ -1,5 +1,5 @@
 import type { SlashCommand, UserCommand, UserCommandCreateRequest } from '@/types/command';
-import { authFetch } from '@/services/api-client';
+import { authFetch, fetchJson, fetchVoid, JSON_HEADERS } from '@/services/api-client';
 
 export class CommandService {
   private static cache: SlashCommand[] | null = null;
@@ -30,21 +30,17 @@ export class CommandService {
   private static readonly USER_COMMANDS_API = '/api/user-commands';
 
   static async listUserCommands(): Promise<UserCommand[]> {
-    const resp = await authFetch(this.USER_COMMANDS_API);
-    if (!resp.ok) throw new Error(`Failed to list commands: ${resp.status}`);
-    return resp.json();
+    return fetchJson<UserCommand[]>(this.USER_COMMANDS_API);
   }
 
   static async getUserCommand(id: string): Promise<UserCommand> {
-    const resp = await authFetch(`${this.USER_COMMANDS_API}/${encodeURIComponent(id)}`);
-    if (!resp.ok) throw new Error(`Failed to get command: ${resp.status}`);
-    return resp.json();
+    return fetchJson<UserCommand>(`${this.USER_COMMANDS_API}/${encodeURIComponent(id)}`);
   }
 
   static async createUserCommand(request: UserCommandCreateRequest): Promise<UserCommand> {
     const resp = await authFetch(this.USER_COMMANDS_API, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify(request),
     });
     if (!resp.ok) {
@@ -57,7 +53,7 @@ export class CommandService {
   static async updateUserCommand(id: string, request: UserCommandCreateRequest): Promise<UserCommand> {
     const resp = await authFetch(`${this.USER_COMMANDS_API}/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify(request),
     });
     if (!resp.ok) {
@@ -68,9 +64,6 @@ export class CommandService {
   }
 
   static async deleteUserCommand(id: string): Promise<void> {
-    const resp = await authFetch(`${this.USER_COMMANDS_API}/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-    });
-    if (!resp.ok) throw new Error(`Failed to delete command: ${resp.status}`);
+    return fetchVoid(`${this.USER_COMMANDS_API}/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 }

@@ -17,17 +17,8 @@ import type { GoalStatusEvent } from '@/types/socket-event';
 import { useChatStore } from '@/services/stores/chat-store';
 import { pauseGoal, resumeGoal, deleteGoal } from '@/services/goal-service';
 import { i18n } from '@/utils/i18n';
+import { formatDurationSeconds } from '@/utils/format';
 import { GoalEditDialog } from './GoalEditDialog';
-
-/** Format elapsed seconds into human-readable string: seconds, m+ s, or h+ m+ s */
-function formatElapsed(totalSeconds: number): string {
-  if (totalSeconds < 60) return `${totalSeconds}s`;
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
-  if (h > 0) return `${h}h ${m}m ${s}s`;
-  return `${m}m ${s}s`;
-}
 
 interface GoalCardProps {
   goal: GoalStatusEvent;
@@ -205,7 +196,7 @@ export const GoalCard: React.FC<GoalCardProps> = ({ goal }) => {
               </span>
               <span>·</span>
               <span>
-                {formatElapsed(goal.elapsedSeconds)} {i18n('elapsed')}
+                {formatDurationSeconds(goal.elapsedSeconds)} {i18n('elapsed')}
               </span>
             </div>
 

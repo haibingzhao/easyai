@@ -1,4 +1,4 @@
-import { authFetch } from '@/services/api-client';
+import { authFetch, fetchJson, JSON_HEADERS } from '@/services/api-client';
 import { parseSSEStream, SSEConnectionError } from '@/services/sse-parser';
 import type {
   AiConfigGenerateRequest,
@@ -53,7 +53,7 @@ class AiConfigService {
       try {
         const response = await authFetch(`${API_BASE}/generate/stream`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: JSON_HEADERS,
           body: JSON.stringify(request),
           signal: abortController.signal,
         });
@@ -172,16 +172,11 @@ class AiConfigService {
     configType: 'agent' | 'swarm',
     config: Record<string, unknown>
   ): Promise<ConfigValidationResult> {
-    const response = await authFetch(`${API_BASE}/validate`, {
+    return fetchJson<ConfigValidationResult>(`${API_BASE}/validate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ configType, config }),
     });
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(error || 'Failed to validate config');
-    }
-    return response.json();
   }
 }
 

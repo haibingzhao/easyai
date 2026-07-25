@@ -53,10 +53,7 @@ class GrepTool(metadata: ToolMetadata, private val workDir: Path) : BaseToolDefi
         val result = executeProcess(cmd, 30.seconds, workDir = searchPath, maxOutputBytes = Int.MAX_VALUE, onUpdate = onUpdate)
 
         if (result.timedOut) {
-            return@withContext ToolResult(
-                content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "grep stalled: no output for 30s", isError = true)),
-                isError = true
-            )
+            return@withContext errorResult(toolCallId, name, "grep stalled: no output for 30s")
         }
 
         when (result.exitCode) {
@@ -95,7 +92,7 @@ class GrepTool(metadata: ToolMetadata, private val workDir: Path) : BaseToolDefi
                 ToolResult(content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "No matches found")))
             }
             else -> {
-                ToolResult(content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "grep error: ${result.output}", isError = true)), isError = true)
+                errorResult(toolCallId, name, "grep error: ${result.output}")
             }
         }
     }

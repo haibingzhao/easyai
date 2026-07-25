@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { PresetRequest, SwarmAgentSpecDto } from '@/services/swarm-service';
+import type { ResourceItem } from '@/types/agent';
 import { swarmService } from '@/services/swarm-service';
 import { agentService } from '@/services/agent-service';
 import { mcpService } from '@/services/mcp-service';
@@ -11,12 +12,6 @@ interface SwarmImportDialogProps {
   preset: PresetRequest;
   onClose: () => void;
   onImported: () => void;
-}
-
-interface ResourceItem {
-  name: string;
-  available: boolean;
-  checked: boolean;
 }
 
 interface AgentResourceState {

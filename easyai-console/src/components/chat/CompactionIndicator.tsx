@@ -2,7 +2,7 @@ import React from 'react';
 import { Archive } from 'lucide-react';
 import type { CustomMessage } from '../../types/message';
 import { i18n } from '../../utils/i18n';
-import { formatTokenCount } from '../../utils/format';
+import { formatTokenCount, formatDurationMs } from '../../utils/format';
 
 interface CompactionIndicatorProps {
   message: CustomMessage;
@@ -15,12 +15,7 @@ interface CompactionIndicatorProps {
 export const CompactionIndicator: React.FC<CompactionIndicatorProps> = ({ message }) => {
   const { tokensSaved, durationMs } = message.metadata as { tokensSaved?: number; durationMs?: number };
 
-  const formatDuration = (ms: number): string => {
-    if (ms >= 1_000) return `${(ms / 1_000).toFixed(0)}s`;
-    return `${ms}ms`;
-  };
-
-  const durationText = durationMs != null && durationMs > 0 ? formatDuration(durationMs) : '';
+  const durationText = durationMs != null && durationMs > 0 ? formatDurationMs(durationMs, { precision: 0 }) : '';
 
   return (
     <div className="flex justify-start mx-4 my-1">

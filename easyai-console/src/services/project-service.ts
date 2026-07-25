@@ -1,4 +1,4 @@
-import { authFetch } from '@/services/api-client';
+import { authFetch, fetchJson, fetchVoid, JSON_HEADERS } from '@/services/api-client';
 
 export interface Project {
   id: string;
@@ -34,70 +34,43 @@ export class ProjectService {
     if (options?.search) params.set('search', options.search);
     const query = params.toString();
     const url = query ? `${API_BASE}?${query}` : API_BASE;
-
-    const response = await authFetch(url);
-    if (!response.ok) {
-      const error = await response.text().catch(() => '');
-      throw new Error(`Failed to list projects: ${error || `HTTP ${response.status}`}`);
-    }
-    return response.json();
+    return fetchJson<Project[]>(url);
   }
 
   /**
    * Create a new project.
    */
   async createProject(request: CreateProjectRequest): Promise<Project> {
-    const response = await authFetch(API_BASE, {
+    return fetchJson<Project>(API_BASE, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify(request),
     });
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Failed to create project: ${error}`);
-    }
-    return response.json();
   }
 
   /**
    * Get a single project by ID.
    */
   async getProject(id: string): Promise<Project> {
-    const response = await authFetch(`${API_BASE}/${id}`);
-    if (!response.ok) {
-      const error = await response.text().catch(() => '');
-      throw new Error(`Failed to get project: ${error || `HTTP ${response.status}`}`);
-    }
-    return response.json();
+    return fetchJson<Project>(`${API_BASE}/${id}`);
   }
 
   /**
    * Delete a project by ID.
    */
   async deleteProject(id: string): Promise<void> {
-    const response = await authFetch(`${API_BASE}/${id}`, {
-      method: 'DELETE',
-    });
-    if (!response.ok) {
-      const error = await response.text().catch(() => '');
-      throw new Error(`Failed to delete project: ${error || `HTTP ${response.status}`}`);
-    }
+    return fetchVoid(`${API_BASE}/${id}`, { method: 'DELETE' });
   }
 
   /**
    * Update a project.
    */
   async updateProject(id: string, request: UpdateProjectRequest): Promise<Project> {
-    const response = await authFetch(`${API_BASE}/${id}`, {
+    return fetchJson<Project>(`${API_BASE}/${id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify(request),
     });
-    if (!response.ok) {
-      const error = await response.text().catch(() => '');
-      throw new Error(`Failed to update project: ${error || `HTTP ${response.status}`}`);
-    }
-    return response.json();
   }
 
   /**

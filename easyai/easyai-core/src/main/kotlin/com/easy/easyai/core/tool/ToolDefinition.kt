@@ -4,6 +4,7 @@ import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.event.AgentEvent
 import com.easy.easyai.core.model.ContentBlock
 import com.easy.easyai.core.model.TextContent
+import com.easy.easyai.core.model.ToolResultContent
 import com.easy.easyai.core.model.Usage
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.easy.easyai.common.util.SharedObjectMapper
@@ -169,6 +170,12 @@ abstract class BaseToolDefinition(
     /** Convenience helper to build an error ToolResult. */
     protected fun errorResult(message: String): ToolResult = ToolResult(
         content = listOf(TextContent(message)),
+        isError = true
+    )
+
+    /** Convenience helper to build an error ToolResult with tool call context. */
+    protected fun errorResult(toolCallId: String, toolName: String, message: String): ToolResult = ToolResult(
+        content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = toolName, output = message, isError = true)),
         isError = true
     )
 }

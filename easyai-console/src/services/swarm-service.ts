@@ -1,4 +1,4 @@
-import { authFetch, getAccessToken } from '@/services/api-client';
+import { authFetch, getAccessToken, fetchJson, downloadBlob, JSON_HEADERS } from '@/services/api-client';
 import type { SessionDetail, SessionMessagesAfterResponse } from '@/services/session-service';
 import type { McpBindingDto } from '@/types/agent';
 
@@ -241,16 +241,11 @@ class SwarmService {
   }
 
   async createPreset(request: PresetRequest): Promise<PresetInfo> {
-    const res = await authFetch(`${API_BASE}/presets`, {
+    const data = await fetchJson<PresetInfo>(`${API_BASE}/presets`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify(request),
     });
-    if (!res.ok) {
-      const error = await res.text();
-      throw new Error(error || 'Failed to create preset');
-    }
-    const data: PresetInfo = await res.json();
     return { ...data, tasks: normalizeTasks(data.tasks) };
   }
 
@@ -262,16 +257,11 @@ class SwarmService {
   }
 
   async updatePreset(name: string, request: PresetRequest): Promise<PresetInfo> {
-    const res = await authFetch(`${API_BASE}/presets/${encodeURIComponent(name)}`, {
+    const data = await fetchJson<PresetInfo>(`${API_BASE}/presets/${encodeURIComponent(name)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify(request),
     });
-    if (!res.ok) {
-      const error = await res.text();
-      throw new Error(error || 'Failed to update preset');
-    }
-    const data: PresetInfo = await res.json();
     return { ...data, tasks: normalizeTasks(data.tasks) };
   }
 
@@ -303,7 +293,7 @@ class SwarmService {
   ): Promise<{ runId: string } | null> {
     const res = await authFetch(`${API_BASE}/runs`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({
         presetName,
         variables: variables || {},
@@ -382,14 +372,7 @@ class SwarmService {
     const resp = await authFetch(`${API_BASE}/presets/${encodeURIComponent(name)}/export`);
     if (!resp.ok) throw new Error(`Export failed: ${resp.status}`);
     const blob = await resp.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${name}.swarm.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, `${name}.swarm.json`);
   }
 
   async importPreset(file: File): Promise<PresetInfo> {
@@ -407,16 +390,11 @@ class SwarmService {
   }
 
   async importPresetData(data: PresetRequest): Promise<PresetInfo> {
-    const resp = await authFetch(`${API_BASE}/presets/import`, {
+    return fetchJson<PresetInfo>(`${API_BASE}/presets/import`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify(data),
     });
-    if (!resp.ok) {
-      const msg = await resp.text();
-      throw new Error(msg || `Import failed: ${resp.status}`);
-    }
-    return resp.json();
   }
 
   // --- Team Consultation ---
@@ -424,37 +402,27 @@ class SwarmService {
   async answerTeamConsultation(
     runId: string, taskId: string, memberId: string, answer: string
   ): Promise<{ status: string; memberId: string }> {
-    const resp = await authFetch(
+    return fetchJson<{ status: string; memberId: string }>(
       `${API_BASE}/runs/${runId}/tasks/${taskId}/consultation/answer`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: JSON_HEADERS,
         body: JSON.stringify({ memberId, answer }),
       }
     );
-    if (!resp.ok) {
-      const msg = await resp.text();
-      throw new Error(msg || `Answer consultation failed: ${resp.status}`);
-    }
-    return resp.json();
   }
 
   async rejectTeamConsultation(
     runId: string, taskId: string, memberId: string
   ): Promise<{ status: string; memberId: string }> {
-    const resp = await authFetch(
+    return fetchJson<{ status: string; memberId: string }>(
       `${API_BASE}/runs/${runId}/tasks/${taskId}/consultation/reject`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: JSON_HEADERS,
         body: JSON.stringify({ memberId }),
       }
     );
-    if (!resp.ok) {
-      const msg = await resp.text();
-      throw new Error(msg || `Reject consultation failed: ${resp.status}`);
-    }
-    return resp.json();
   }
 }
 

@@ -1,28 +1,13 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Loader2, ChevronDown, ChevronRight, Scale } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { DeliberationEntryDto, DeliberationHistoryResponseDto } from '@/services/swarm-service';
 import { swarmService } from '@/services/swarm-service';
-import { formatTokenCount } from '@/utils/format';
+import { formatTokenCount, formatDurationMs } from '@/utils/format';
 import { i18n } from '@/utils/i18n';
 import { markdownCodeComponents } from '@/components/chat/markdownCodeComponents';
-
-/** Format milliseconds into human-readable duration like "1h 2m 3s". */
-function formatDuration(ms: number): string | null {
-  if (ms <= 0) return null;
-  const totalSec = Math.round(ms / 1000);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  const parts: string[] = [];
-  if (h > 0) parts.push(`${h}h`);
-  if (m > 0) parts.push(`${m}m`);
-  if (s > 0 || parts.length === 0) parts.push(`${s}s`);
-  return parts.join(' ');
-}
-
-const POLL_INTERVAL_MS = 3000;
+import { usePolling } from '@/hooks/usePolling';
 
 interface SwarmDeliberationProgressProps {
   runId: string;
@@ -42,7 +27,6 @@ export const SwarmDeliberationProgress: React.FC<SwarmDeliberationProgressProps>
   const [showOpeningPrompt, setShowOpeningPrompt] = useState(false);
   const [showVerdictPrompt, setShowVerdictPrompt] = useState(false);
   const [showVerdictResponse, setShowVerdictResponse] = useState(true);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const isRunning = taskStatus === 'PENDING' || taskStatus === 'IN_PROGRESS';
 
@@ -71,22 +55,8 @@ export const SwarmDeliberationProgress: React.FC<SwarmDeliberationProgressProps>
   }, [fetchData]);
 
   // Poll while task is running
-  useEffect(() => {
-    if (!isRunning) {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-      return;
-    }
-    pollRef.current = setInterval(() => fetchData(false), POLL_INTERVAL_MS);
-    return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-  }, [isRunning, fetchData]);
+  const pollFetch = useCallback(() => fetchData(false), [fetchData]);
+  usePolling(pollFetch, isRunning);
 
   if (loading) {
     return (
@@ -182,7 +152,7 @@ export const SwarmDeliberationProgress: React.FC<SwarmDeliberationProgressProps>
         {/* Selected round entries */}
         {activeEntries.map((entry, idx) => {
           const totalTokens = entry.inputTokens + entry.outputTokens;
-          const duration = formatDuration(entry.durationMs);
+          const duration = entry.durationMs > 0 ? formatDurationMs(entry.durationMs, { showHours: true }) : null;
           const entryKey = `${entry.agentId}-${idx}`;
           const isCollapsed = collapsedEntries.has(entryKey);
           // Per-participant round prompt (Round 2+)

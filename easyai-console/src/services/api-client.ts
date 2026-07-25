@@ -78,3 +78,43 @@ export async function authFetch(
 
   return res;
 }
+
+export const JSON_HEADERS = { 'Content-Type': 'application/json' } as const;
+
+/**
+ * Convenience wrapper: authFetch + ok-check + JSON parse.
+ * Throws an Error with the response body (or status) on non-ok responses.
+ */
+export async function fetchJson<T>(url: string, options?: AuthFetchOptions): Promise<T> {
+  const response = await authFetch(url, options);
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(body || `Request failed: ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+/**
+ * Convenience wrapper for endpoints that return no body (DELETE, etc.).
+ */
+export async function fetchVoid(url: string, options?: AuthFetchOptions): Promise<void> {
+  const response = await authFetch(url, options);
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(body || `Request failed: ${response.status}`);
+  }
+}
+
+/**
+ * Trigger a browser file-download from a Blob.
+ */
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}

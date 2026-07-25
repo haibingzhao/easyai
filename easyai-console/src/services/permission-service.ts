@@ -1,5 +1,5 @@
 import type { PermissionRuleDto, ToolPermissionInfo, PermissionSettingsDto, UpdateSettingRequest, FileNodeDto } from '../types/permission';
-import { authFetch } from '@/services/api-client';
+import { fetchJson, fetchVoid, JSON_HEADERS } from '@/services/api-client';
 
 const API_BASE = '/api/permission';
 
@@ -7,11 +7,7 @@ const API_BASE = '/api/permission';
  * Fetch all permission rules for a project.
  */
 export async function fetchPermissionRules(projectId: string): Promise<PermissionRuleDto[]> {
-  const response = await authFetch(`${API_BASE}/rules/${projectId}`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch permission rules: ${response.status}`);
-  }
-  return response.json();
+  return fetchJson<PermissionRuleDto[]>(`${API_BASE}/rules/${projectId}`);
 }
 
 /**
@@ -21,14 +17,11 @@ export async function savePermissionRules(
   projectId: string,
   rules: PermissionRuleDto[]
 ): Promise<void> {
-  const response = await authFetch(`${API_BASE}/rules/${projectId}`, {
+  return fetchVoid(`${API_BASE}/rules/${projectId}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ rules }),
   });
-  if (!response.ok) {
-    throw new Error(`Failed to save permission rules: ${response.status}`);
-  }
 }
 
 /**
@@ -38,14 +31,11 @@ export async function addPermissionRule(
   projectId: string,
   rule: PermissionRuleDto
 ): Promise<void> {
-  const response = await authFetch(`${API_BASE}/rules/${projectId}`, {
+  return fetchVoid(`${API_BASE}/rules/${projectId}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify(rule),
   });
-  if (!response.ok) {
-    throw new Error(`Failed to add permission rule: ${response.status}`);
-  }
 }
 
 /**
@@ -57,12 +47,7 @@ export async function deletePermissionRule(
   pattern: string
 ): Promise<void> {
   const params = new URLSearchParams({ permission, pattern });
-  const response = await authFetch(`${API_BASE}/rules/${projectId}?${params}`, {
-    method: 'DELETE',
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to delete permission rule: ${response.status}`);
-  }
+  return fetchVoid(`${API_BASE}/rules/${projectId}?${params}`, { method: 'DELETE' });
 }
 
 /**
@@ -71,11 +56,7 @@ export async function deletePermissionRule(
 export async function fetchToolPermissions(
   projectId: string
 ): Promise<ToolPermissionInfo[]> {
-  const response = await authFetch(`${API_BASE}/tools/${projectId}`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch tool permissions: ${response.status}`);
-  }
-  return response.json();
+  return fetchJson<ToolPermissionInfo[]>(`${API_BASE}/tools/${projectId}`);
 }
 
 /**
@@ -84,11 +65,7 @@ export async function fetchToolPermissions(
 export async function fetchPermissionSettings(
   projectId: string
 ): Promise<PermissionSettingsDto> {
-  const response = await authFetch(`${API_BASE}/settings/${projectId}`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch permission settings: ${response.status}`);
-  }
-  return response.json();
+  return fetchJson<PermissionSettingsDto>(`${API_BASE}/settings/${projectId}`);
 }
 
 /**
@@ -98,14 +75,11 @@ export async function updatePermissionSetting(
   projectId: string,
   request: UpdateSettingRequest
 ): Promise<void> {
-  const response = await authFetch(`${API_BASE}/settings/${projectId}`, {
+  return fetchVoid(`${API_BASE}/settings/${projectId}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify(request),
   });
-  if (!response.ok) {
-    throw new Error(`Failed to update permission setting: ${response.status}`);
-  }
 }
 
 /**
@@ -114,11 +88,7 @@ export async function updatePermissionSetting(
 export async function fetchProjectStructure(
   projectId: string
 ): Promise<FileNodeDto[]> {
-  const response = await authFetch(`${API_BASE}/project-structure/${projectId}`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch project structure: ${response.status}`);
-  }
-  return response.json();
+  return fetchJson<FileNodeDto[]>(`${API_BASE}/project-structure/${projectId}`);
 }
 
 /**
@@ -127,11 +97,7 @@ export async function fetchProjectStructure(
  */
 export async function searchFiles(projectId: string, query: string): Promise<FileNodeDto[]> {
   const params = new URLSearchParams({ projectId, query });
-  const response = await authFetch(`${API_BASE}/search-files?${params}`);
-  if (!response.ok) {
-    throw new Error(`Failed to search files: ${response.status}`);
-  }
-  return response.json();
+  return fetchJson<FileNodeDto[]>(`${API_BASE}/search-files?${params}`);
 }
 
 /**
@@ -144,9 +110,5 @@ export async function browseDirectory(absolutePath: string, projectId?: string):
   if (projectId) {
     params.set('projectId', projectId);
   }
-  const response = await authFetch(`${API_BASE}/browse-directory?${params}`);
-  if (!response.ok) {
-    throw new Error(`Failed to browse directory: ${response.status}`);
-  }
-  return response.json();
+  return fetchJson<FileNodeDto[]>(`${API_BASE}/browse-directory?${params}`);
 }

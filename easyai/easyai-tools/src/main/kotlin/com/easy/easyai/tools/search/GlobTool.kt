@@ -47,10 +47,7 @@ class GlobTool(metadata: ToolMetadata, private val workDir: Path) : BaseToolDefi
         val result = executeProcess(cmd, 30.seconds, workDir = searchPath, maxOutputBytes = Int.MAX_VALUE, onUpdate = onUpdate)
 
         if (result.timedOut) {
-            return@withContext ToolResult(
-                content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "glob timeout after 30s", isError = true)),
-                isError = true
-            )
+            return@withContext errorResult(toolCallId, name, "glob timeout after 30s")
         }
 
         when (result.exitCode) {
@@ -77,7 +74,7 @@ class GlobTool(metadata: ToolMetadata, private val workDir: Path) : BaseToolDefi
                 ToolResult(content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = result.trimEnd())))
             }
             else -> {
-                ToolResult(content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "glob error: ${result.output}", isError = true)), isError = true)
+                errorResult(toolCallId, name, "glob error: ${result.output}")
             }
         }
     }

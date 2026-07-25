@@ -1,7 +1,7 @@
 import type { DoneEvent, ErrorEvent, ChatStreamEvent } from '../types/socket-event';
 import type { ChatRequest, ChatAttachment } from '../types/socket-request';
 import type { ModelOptions } from '@/types/settings';
-import { authFetch } from '@/services/api-client';
+import { authFetch, JSON_HEADERS } from '@/services/api-client';
 import { parseSSEStream, SSEConnectionError } from '@/services/sse-parser';
 import type { RawSSEEvent } from '@/services/sse-parser';
 
@@ -79,7 +79,7 @@ export class ChatService {
     try {
       const response = await authFetch(`${API_BASE}/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: JSON_HEADERS,
         body: JSON.stringify(request),
         signal: this.abortController.signal,
       });
@@ -176,28 +176,25 @@ export async function sendMessageToBackend(params: SendMessageParams): Promise<C
 }
 
 /**
- * Resume a cancelled or errored chat session by calling the resume endpoint.
- * Stream SSE events and calls onEvent/onDone/onError callbacks.
- * Returns an abort function that can be used to cancel the resume.
+ * Factory function to create SSE stream handlers with common boilerplate.
+ * Eliminates duplication across resumeSession/answerQuestion/compactSession/replyPermission.
  */
-export function resumeSession(
-  sessionId: string,
-  message: string | undefined,
-  callbacks: {
-    onEvent: (event: ChatStreamEvent) => void;
-    onDone: (event: DoneEvent) => void;
-    onError: (event: ErrorEvent) => void;
-  }
-): { abort: () => void } {
+function createSseStream(config: {
+  url: string;
+  body?: unknown;
+  callbacks: SSECallbacks;
+  errorReason: string;
+  controllerSet?: Set<AbortController>;
+}): { abort: () => void } {
   const abortController = new AbortController();
-  activeResumeControllers.add(abortController);
+  config.controllerSet?.add(abortController);
 
   const execute = async () => {
     try {
-      const response = await authFetch(`${API_BASE}/resume`, {
+      const response = await authFetch(config.url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, message }),
+        headers: JSON_HEADERS,
+        ...(config.body !== undefined ? { body: JSON.stringify(config.body) } : {}),
         signal: abortController.signal,
       });
 
@@ -208,9 +205,9 @@ export function resumeSession(
       const reader = response.body?.getReader();
       if (!reader) throw new Error('No response body');
 
-      const result = await parseChatSSEStream(reader, callbacks);
+      const result = await parseChatSSEStream(reader, config.callbacks);
       if (!result.completed) {
-        callbacks.onError({
+        config.callbacks.onError({
           type: 'error',
           reason: 'connection_lost',
           errorMessage: 'Connection lost — the server may have restarted',
@@ -219,15 +216,15 @@ export function resumeSession(
     } catch (error) {
       if ((error as Error).name === 'AbortError') return;
       const isConnectionLost = error instanceof SSEConnectionError;
-      callbacks.onError({
+      config.callbacks.onError({
         type: 'error',
-        reason: isConnectionLost ? 'connection_lost' : 'resume_failed',
+        reason: isConnectionLost ? 'connection_lost' : config.errorReason,
         errorMessage: isConnectionLost
           ? 'Connection lost — the server may have restarted'
           : (error as Error).message,
       });
     } finally {
-      activeResumeControllers.delete(abortController);
+      config.controllerSet?.delete(abortController);
     }
   };
 
@@ -236,9 +233,28 @@ export function resumeSession(
   return {
     abort: () => {
       abortController.abort();
-      activeResumeControllers.delete(abortController);
+      config.controllerSet?.delete(abortController);
     },
   };
+}
+
+/**
+ * Resume a cancelled or errored chat session by calling the resume endpoint.
+ * Stream SSE events and calls onEvent/onDone/onError callbacks.
+ * Returns an abort function that can be used to cancel the resume.
+ */
+export function resumeSession(
+  sessionId: string,
+  message: string | undefined,
+  callbacks: SSECallbacks
+): { abort: () => void } {
+  return createSseStream({
+    url: `${API_BASE}/resume`,
+    body: { sessionId, message },
+    callbacks,
+    errorReason: 'resume_failed',
+    controllerSet: activeResumeControllers,
+  });
 }
 
 /**
@@ -250,62 +266,15 @@ export function answerQuestion(
   sessionId: string,
   toolCallId: string,
   answers: string[][],
-  callbacks: {
-    onEvent: (event: ChatStreamEvent) => void;
-    onDone: (event: DoneEvent) => void;
-    onError: (event: ErrorEvent) => void;
-  }
+  callbacks: SSECallbacks
 ): { abort: () => void } {
-  const abortController = new AbortController();
-  activeQuestionControllers.add(abortController);
-
-  const execute = async () => {
-    try {
-      const response = await authFetch(`${API_BASE}/question/${sessionId}/${toolCallId}/answer`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answers }),
-        signal: abortController.signal,
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No response body');
-
-      const result = await parseChatSSEStream(reader, callbacks);
-      if (!result.completed) {
-        callbacks.onError({
-          type: 'error',
-          reason: 'connection_lost',
-          errorMessage: 'Connection lost — the server may have restarted',
-        });
-      }
-    } catch (error) {
-      if ((error as Error).name === 'AbortError') return;
-      const isConnectionLost = error instanceof SSEConnectionError;
-      callbacks.onError({
-        type: 'error',
-        reason: isConnectionLost ? 'connection_lost' : 'answer_failed',
-        errorMessage: isConnectionLost
-          ? 'Connection lost — the server may have restarted'
-          : (error as Error).message,
-      });
-    } finally {
-      activeQuestionControllers.delete(abortController);
-    }
-  };
-
-  execute();
-
-  return {
-    abort: () => {
-      abortController.abort();
-      activeQuestionControllers.delete(abortController);
-    },
-  };
+  return createSseStream({
+    url: `${API_BASE}/question/${sessionId}/${toolCallId}/answer`,
+    body: { answers },
+    callbacks,
+    errorReason: 'answer_failed',
+    controllerSet: activeQuestionControllers,
+  });
 }
 
 /**
@@ -315,57 +284,13 @@ export function answerQuestion(
  */
 export function compactSession(
   sessionId: string,
-  callbacks: {
-    onEvent: (event: ChatStreamEvent) => void;
-    onDone: (event: DoneEvent) => void;
-    onError: (event: ErrorEvent) => void;
-  }
+  callbacks: SSECallbacks
 ): { abort: () => void } {
-  const abortController = new AbortController();
-
-  const execute = async () => {
-    try {
-      const response = await authFetch(`${API_BASE}/session/${sessionId}/compact`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: abortController.signal,
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No response body');
-
-      const result = await parseChatSSEStream(reader, callbacks);
-      if (!result.completed) {
-        callbacks.onError({
-          type: 'error',
-          reason: 'connection_lost',
-          errorMessage: 'Connection lost — the server may have restarted',
-        });
-      }
-    } catch (error) {
-      if ((error as Error).name === 'AbortError') return;
-      const isConnectionLost = error instanceof SSEConnectionError;
-      callbacks.onError({
-        type: 'error',
-        reason: isConnectionLost ? 'connection_lost' : 'compact_failed',
-        errorMessage: isConnectionLost
-          ? 'Connection lost — the server may have restarted'
-          : (error as Error).message,
-      });
-    }
-  };
-
-  execute();
-
-  return {
-    abort: () => {
-      abortController.abort();
-    },
-  };
+  return createSseStream({
+    url: `${API_BASE}/session/${sessionId}/compact`,
+    callbacks,
+    errorReason: 'compact_failed',
+  });
 }
 
 /**
@@ -390,7 +315,7 @@ export async function cancelChat(sessionId: string): Promise<void> {
   try {
     await authFetch(`${API_BASE}/cancel`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ sessionId }),
     });
   } catch (e) {
@@ -411,63 +336,16 @@ export function replyPermission(
   reason: string | undefined,
   permission: string | undefined,
   pattern: string | undefined,
-  callbacks: {
-    onEvent: (event: ChatStreamEvent) => void;
-    onDone: (event: DoneEvent) => void;
-    onError: (event: ErrorEvent) => void;
-  }
+  callbacks: SSECallbacks
 ): { abort: () => void } {
-  const abortController = new AbortController();
-  activePermissionControllers.add(abortController);
-
-  const execute = async () => {
-    try {
-      const endpoint = action === 'allow' ? 'allow' : 'deny';
-      const response = await authFetch(`${API_BASE}/permission/${sessionId}/${toolCallId}/${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ remember, reason, permission, pattern }),
-        signal: abortController.signal,
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No response body');
-
-      const result = await parseChatSSEStream(reader, callbacks);
-      if (!result.completed) {
-        callbacks.onError({
-          type: 'error',
-          reason: 'connection_lost',
-          errorMessage: 'Connection lost — the server may have restarted',
-        });
-      }
-    } catch (error) {
-      if ((error as Error).name === 'AbortError') return;
-      const isConnectionLost = error instanceof SSEConnectionError;
-      callbacks.onError({
-        type: 'error',
-        reason: isConnectionLost ? 'connection_lost' : 'permission_reply_failed',
-        errorMessage: isConnectionLost
-          ? 'Connection lost — the server may have restarted'
-          : (error as Error).message,
-      });
-    } finally {
-      activePermissionControllers.delete(abortController);
-    }
-  };
-
-  execute();
-
-  return {
-    abort: () => {
-      abortController.abort();
-      activePermissionControllers.delete(abortController);
-    },
-  };
+  const endpoint = action === 'allow' ? 'allow' : 'deny';
+  return createSseStream({
+    url: `${API_BASE}/permission/${sessionId}/${toolCallId}/${endpoint}`,
+    body: { remember, reason, permission, pattern },
+    callbacks,
+    errorReason: 'permission_reply_failed',
+    controllerSet: activePermissionControllers,
+  });
 }
 
 /**

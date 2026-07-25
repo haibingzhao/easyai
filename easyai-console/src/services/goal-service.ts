@@ -8,7 +8,7 @@
  * - get current goal state
  */
 
-import { authFetch } from './api-client';
+import { authFetch, fetchJson, JSON_HEADERS } from './api-client';
 import type { GoalStatusEvent } from '@/types/socket-event';
 
 const API_BASE = '/api/chat/session';
@@ -21,7 +21,8 @@ export async function getGoal(sessionId: string): Promise<GoalStatusEvent | null
   const response = await authFetch(`${API_BASE}/${sessionId}/goal`);
   if (response.status === 404) return null;
   if (!response.ok) {
-    throw new Error(`Failed to get goal: ${response.statusText}`);
+    const body = await response.text().catch(() => '');
+    throw new Error(body || `Request failed: ${response.status}`);
   }
   return response.json();
 }
@@ -31,14 +32,7 @@ export async function getGoal(sessionId: string): Promise<GoalStatusEvent | null
  * Sets the goal status to PAUSED.
  */
 export async function pauseGoal(sessionId: string): Promise<{ status: string; objective: string }> {
-  const response = await authFetch(`${API_BASE}/${sessionId}/goal/pause`, {
-    method: 'PUT',
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to pause goal: ${errorText || response.statusText}`);
-  }
-  return response.json();
+  return fetchJson<{ status: string; objective: string }>(`${API_BASE}/${sessionId}/goal/pause`, { method: 'PUT' });
 }
 
 /**
@@ -46,14 +40,7 @@ export async function pauseGoal(sessionId: string): Promise<{ status: string; ob
  * Sets the goal status back to ACTIVE.
  */
 export async function resumeGoal(sessionId: string): Promise<{ status: string; objective: string }> {
-  const response = await authFetch(`${API_BASE}/${sessionId}/goal/resume`, {
-    method: 'PUT',
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to resume goal: ${errorText || response.statusText}`);
-  }
-  return response.json();
+  return fetchJson<{ status: string; objective: string }>(`${API_BASE}/${sessionId}/goal/resume`, { method: 'PUT' });
 }
 
 /**
@@ -64,16 +51,11 @@ export async function updateGoal(
   sessionId: string,
   objective: string
 ): Promise<{ status: string; objective: string }> {
-  const response = await authFetch(`${API_BASE}/${sessionId}/goal`, {
+  return fetchJson<{ status: string; objective: string }>(`${API_BASE}/${sessionId}/goal`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify({ objective }),
   });
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to update goal: ${errorText || response.statusText}`);
-  }
-  return response.json();
 }
 
 /**
@@ -81,12 +63,5 @@ export async function updateGoal(
  * Removes the goal entirely.
  */
 export async function deleteGoal(sessionId: string): Promise<{ status: string }> {
-  const response = await authFetch(`${API_BASE}/${sessionId}/goal`, {
-    method: 'DELETE',
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to delete goal: ${errorText || response.statusText}`);
-  }
-  return response.json();
+  return fetchJson<{ status: string }>(`${API_BASE}/${sessionId}/goal`, { method: 'DELETE' });
 }

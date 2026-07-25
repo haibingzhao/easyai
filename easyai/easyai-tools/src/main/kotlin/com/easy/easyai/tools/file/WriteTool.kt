@@ -30,14 +30,8 @@ class WriteTool(metadata: ToolMetadata, private val workDir: Path) : BaseToolDef
         coroutineScope: CoroutineScope,
         onUpdate: suspend (ToolUpdate) -> Unit
     ): ToolResult = withContext(Dispatchers.IO) {
-        val pathStr = args["path"] as? String ?: return@withContext ToolResult(
-            content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "Error: missing 'path' parameter", isError = true)),
-            isError = true
-        )
-        val content = args["content"] as? String ?: return@withContext ToolResult(
-            content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "Error: missing 'content' parameter", isError = true)),
-            isError = true
-        )
+        val pathStr = args["path"] as? String ?: return@withContext errorResult(toolCallId, name, "Error: missing 'path' parameter")
+        val content = args["content"] as? String ?: return@withContext errorResult(toolCallId, name, "Error: missing 'content' parameter")
         val overwrite = when (val v = args["overwrite"]) {
             is Boolean -> v
             is String -> v.equals("true", ignoreCase = true)

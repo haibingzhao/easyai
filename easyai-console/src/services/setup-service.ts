@@ -12,7 +12,7 @@
  * - POST /api/system/database/apply
  */
 
-import { authFetch } from '@/services/api-client';
+import { fetchJson, JSON_HEADERS } from '@/services/api-client';
 
 export interface SetupStatus {
   mode: 'setup' | 'normal';
@@ -91,41 +91,29 @@ export class SetupService {
    * Get current database info (normal mode - auth required).
    */
   async getDatabaseInfo(): Promise<DatabaseInfo> {
-    const response = await authFetch('/api/system/database');
-    if (!response.ok) {
-      throw new Error('Failed to get database info');
-    }
-    return response.json();
+    return fetchJson<DatabaseInfo>('/api/system/database');
   }
 
   /**
    * Test a new database connection (normal mode - auth required).
    */
   async testConnectionAuth(request: DatabaseSetupRequest): Promise<TestConnectionResponse> {
-    const response = await authFetch('/api/system/database/test', {
+    return fetchJson<TestConnectionResponse>('/api/system/database/test', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify(request),
     });
-    if (!response.ok) {
-      throw new Error('Failed to test connection');
-    }
-    return response.json();
   }
 
   /**
    * Apply new database configuration (normal mode - auth required).
    */
   async applyConfig(request: DatabaseSetupRequest): Promise<ApplyConfigResponse> {
-    const response = await authFetch('/api/system/database/apply', {
+    return fetchJson<ApplyConfigResponse>('/api/system/database/apply', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify(request),
     });
-    if (!response.ok) {
-      throw new Error('Failed to apply configuration');
-    }
-    return response.json();
   }
 
   /**

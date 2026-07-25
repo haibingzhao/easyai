@@ -1,7 +1,7 @@
 import type { SessionResponse } from '../types/socket-request';
-import type { ToolCallStatus } from '../types/socket-event';
+import type { ToolCallStatus, UsageInfo } from '../types/socket-event';
 import type { TodoInfo } from '../types/todo';
-import { authFetch } from '@/services/api-client';
+import { authFetch, fetchJson, fetchVoid, JSON_HEADERS } from '@/services/api-client';
 
 /**
  * Snapshot of a tool execution result from the backend.
@@ -95,14 +95,7 @@ export interface ToolResultContentBlock {
 
 export type ContentBlock = TextContentBlock | ImageContentBlock | ThinkingContentBlock | ToolCallContentBlock | ToolResultContentBlock | CustomContentBlock | FileRefContentBlock;
 
-export interface UsageSnapshot {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  durationMs?: number;
-}
+export type UsageSnapshot = UsageInfo;
 
 /** Snapshot of context references (memories and rules) from the backend */
 export interface ReferencesSnapshot {
@@ -179,16 +172,10 @@ export interface PendingPermissionInfo {
 
 export class SessionService {
   async createSession(): Promise<string> {
-    const response = await authFetch(`${API_BASE}/session`, {
+    const data = await fetchJson<SessionResponse>(`${API_BASE}/session`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
     });
-
-    if (!response.ok) {
-      throw new Error('Failed to create session');
-    }
-
-    const data: SessionResponse = await response.json();
     return data.sessionId;
   }
 
@@ -197,19 +184,11 @@ export class SessionService {
     params.set('limit', String(limit));
     params.set('offset', String(offset));
     if (projectId) params.set('projectId', projectId);
-    const response = await authFetch(`${API_BASE}/sessions?${params.toString()}`);
-    if (!response.ok) {
-      throw new Error('Failed to list sessions');
-    }
-    return response.json();
+    return fetchJson<{ sessions: SessionListItem[], hasMore: boolean }>(`${API_BASE}/sessions?${params.toString()}`);
   }
 
   async getSessionDetail(id: string): Promise<SessionDetail> {
-    const response = await authFetch(`${API_BASE}/session/${id}`);
-    if (!response.ok) {
-      throw new Error('Failed to get session detail');
-    }
-    return response.json();
+    return fetchJson<SessionDetail>(`${API_BASE}/session/${id}`);
   }
 
   /**
@@ -217,21 +196,11 @@ export class SessionService {
    * Also returns compaction/dirty-marker metadata for fallback decisions.
    */
   async getSessionMessagesAfter(id: string, afterTimestamp: number): Promise<SessionMessagesAfterResponse> {
-    const response = await authFetch(`${API_BASE}/session/${id}/messages?after=${afterTimestamp}`);
-    if (!response.ok) {
-      throw new Error('Failed to get messages after timestamp');
-    }
-    return response.json();
+    return fetchJson<SessionMessagesAfterResponse>(`${API_BASE}/session/${id}/messages?after=${afterTimestamp}`);
   }
 
   async deleteSession(sessionId: string): Promise<void> {
-    const response = await authFetch(`${API_BASE}/session/${sessionId}`, {
-      method: 'DELETE',
-    });
-
-    if (!response.ok) {
-      throw new Error('Failed to delete session');
-    }
+    return fetchVoid(`${API_BASE}/session/${sessionId}`, { method: 'DELETE' });
   }
 
   async closeSession(sessionId: string): Promise<void> {
@@ -239,8 +208,7 @@ export class SessionService {
   }
 
   async getActiveSessionCount(): Promise<number> {
-    const response = await authFetch(`${API_BASE}/sessions/count`);
-    const data = await response.json();
+    const data = await fetchJson<{ count: number }>(`${API_BASE}/sessions/count`);
     return data.count;
   }
 

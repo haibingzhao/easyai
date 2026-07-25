@@ -37,15 +37,9 @@ class ReadTool(metadata: ToolMetadata, private val workDir: Path) : BaseToolDefi
         coroutineScope: CoroutineScope,
         onUpdate: suspend (ToolUpdate) -> Unit
     ): ToolResult = withContext(Dispatchers.IO) {
-        val pathStr = args["path"] as? String ?: return@withContext ToolResult(
-            content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "Error: missing 'path' parameter", isError = true)),
-            isError = true
-        )
+        val pathStr = args["path"] as? String ?: return@withContext errorResult(toolCallId, name, "Error: missing 'path' parameter")
         val file = workDir.resolveSafe(pathStr)
-        if (!file.exists()) return@withContext ToolResult(
-            content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = name, output = "Error: file not found: $pathStr", isError = true)),
-            isError = true
-        )
+        if (!file.exists()) return@withContext errorResult(toolCallId, name, "Error: file not found: $pathStr")
 
         val hasPagination = args.containsKey("offset") || args.containsKey("limit")
         val fileSize = file.fileSize()

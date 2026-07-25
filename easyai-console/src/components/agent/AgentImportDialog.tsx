@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import type { AgentDto, AgentCreateRequest } from '@/types/agent';
+import type { AgentDto, AgentCreateRequest, ResourceItem } from '@/types/agent';
 import { agentService } from '@/services/agent-service';
 import { mcpService } from '@/services/mcp-service';
 import { CommandService } from '@/services/command-service';
@@ -11,12 +11,6 @@ interface AgentImportDialogProps {
   agent: AgentDto;
   onClose: () => void;
   onImported: () => void;
-}
-
-interface ResourceItem {
-  name: string;
-  available: boolean;
-  checked: boolean;
 }
 
 export const AgentImportDialog: React.FC<AgentImportDialogProps> = ({ agent, onClose, onImported }) => {

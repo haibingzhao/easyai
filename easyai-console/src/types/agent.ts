@@ -136,3 +136,10 @@ export interface TemplateValidationError {
   fieldName?: string;
   severity?: string;
 }
+
+/** A resource item (tool or MCP server) shown in import dialogs. */
+export interface ResourceItem {
+  name: string;
+  available: boolean;
+  checked: boolean;
+}

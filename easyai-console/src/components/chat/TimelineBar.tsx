@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useMemo } from 'react';
 import type { Message, AssistantMessage, ToolResultMessage, CustomMessage } from '../../types/message';
+import { formatDurationMs } from '../../utils/format';
 
 interface TimelineBarProps {
   messages: Message[];
@@ -67,12 +68,6 @@ function formatTokens(count: number, unit?: string): string {
   return `${count} ${unit || "tokens"}`;
 }
 
-/** Format duration with appropriate unit, e.g. "1.5s" or "320ms" */
-function formatDuration(ms: number): string {
-  if (ms >= 1_000) return `${(ms / 1_000).toFixed(1)}s`;
-  return `${ms}ms`;
-}
-
 /** Raw bar before size normalization. */
 interface RawBar {
   type: BarType;
@@ -124,7 +119,7 @@ function expandStreamingBlocks(blocks: NonNullable<TimelineBarProps['streamingBl
           type: 'tool',
           size: tokens || 1,
           duration: blockDuration,
-          tip: `subagent: ${block.subAgent.agentName ?? 'unknown'} | ${formatTokens(tokens)}${blockDuration ? `, ${formatDuration(blockDuration)}` : ''}`,
+          tip: `subagent: ${block.subAgent.agentName ?? 'unknown'} | ${formatTokens(tokens)}${blockDuration ? `, ${formatDurationMs(blockDuration)}` : ''}`,
         });
       } else {
         result.push({
@@ -165,7 +160,7 @@ function expandMessages(messages: Message[]): RawBar[] {
           type: 'compact',
           size: tokensSaved,
           duration: (c.metadata.durationMs as number | undefined) ?? 0,
-          tip: `compact | -${formatTokens(tokensSaved)}, ${formatDuration((c.metadata.durationMs as number | undefined) ?? 0)}`,
+          tip: `compact | -${formatTokens(tokensSaved)}, ${formatDurationMs((c.metadata.durationMs as number | undefined) ?? 0)}`,
         });
       }
       continue;
@@ -188,13 +183,13 @@ function expandMessages(messages: Message[]): RawBar[] {
             type: 'reasoning',
             size: thinkingSize,
             duration: thinkingDuration,
-            tip: `${compactedPrefix}reasoning | ${formatTokens(thinkingSize, "chars")}, ${formatDuration(thinkingDuration)}`,
+            tip: `${compactedPrefix}reasoning | ${formatTokens(thinkingSize, "chars")}, ${formatDurationMs(thinkingDuration)}`,
           });
           result.push({
             type: 'text',
             size: textSize,
             duration: textDuration,
-            tip: `${compactedPrefix}text | ${formatTokens(textSize)}, ${formatDuration(textDuration)}`,
+            tip: `${compactedPrefix}text | ${formatTokens(textSize)}, ${formatDurationMs(textDuration)}`,
           });
         } else if (a.thinking) {
           const displayTokens = tokens
@@ -202,7 +197,7 @@ function expandMessages(messages: Message[]): RawBar[] {
             type: 'reasoning',
             size: displayTokens,
             duration: thinkingDuration,
-            tip: `${compactedPrefix}reasoning | ${formatTokens(displayTokens)}, ${formatDuration(thinkingDuration)}`,
+            tip: `${compactedPrefix}reasoning | ${formatTokens(displayTokens)}, ${formatDurationMs(thinkingDuration)}`,
           });
         } else if (a.content) {
           const displayTokens = tokens
@@ -210,7 +205,7 @@ function expandMessages(messages: Message[]): RawBar[] {
             type: 'text',
             size: displayTokens,
             duration: textDuration,
-            tip: `${compactedPrefix}text | ${formatTokens(displayTokens)}, ${formatDuration(textDuration)}`,
+            tip: `${compactedPrefix}text | ${formatTokens(displayTokens)}, ${formatDurationMs(textDuration)}`,
           });
         }
         // Tool results merged into assistant message (from loadSessionMessages)
@@ -228,7 +223,7 @@ function expandMessages(messages: Message[]): RawBar[] {
                 type: 'tool',
                 size: trTotalTokens,
                 duration: trDuration,
-                tip: `subagent: ${agentName} | ${formatTokens(trTotalTokens)}${trDuration ? `, ${formatDuration(trDuration)}` : ''}`,
+                tip: `subagent: ${agentName} | ${formatTokens(trTotalTokens)}${trDuration ? `, ${formatDurationMs(trDuration)}` : ''}`,
               });
             } else {
               // Fallback for old data: compute from subAgentMessages
@@ -242,7 +237,7 @@ function expandMessages(messages: Message[]): RawBar[] {
                   type: 'tool',
                   size: subTokens || 1,
                   duration: trDuration,
-                  tip: `subagent: ${subAgentGroup.agentName} | ${formatTokens(subTokens)}${trDuration ? `, ${formatDuration(trDuration)}` : ''}`,
+                  tip: `subagent: ${subAgentGroup.agentName} | ${formatTokens(subTokens)}${trDuration ? `, ${formatDurationMs(trDuration)}` : ''}`,
                 });
               } else {
                 result.push({
@@ -261,7 +256,7 @@ function expandMessages(messages: Message[]): RawBar[] {
             type: 'text',
             size: tokens || 1,
             duration: textDuration,
-            tip: `${compactedPrefix}nothing | ${formatTokens(tokens)}, ${formatDuration(textDuration)}`,
+            tip: `${compactedPrefix}nothing | ${formatTokens(tokens)}, ${formatDurationMs(textDuration)}`,
           });
         }
         break;

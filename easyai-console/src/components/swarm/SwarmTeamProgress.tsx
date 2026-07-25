@@ -1,8 +1,9 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Loader2, CheckCircle2, AlertTriangle, ArrowRightLeft, ChevronDown, ChevronRight, PauseCircle } from 'lucide-react';
 import type { TeamHistoryResponse, TeamRoundRecordDto, TeamMemberExecutionDto, EscalationEntryDto, MemberStatusDto } from '@/services/swarm-service';
 import { swarmService } from '@/services/swarm-service';
 import { i18n } from '@/utils/i18n';
+import { usePolling } from '@/hooks/usePolling';
 
 interface SwarmTeamProgressProps {
   runId: string;
@@ -10,8 +11,6 @@ interface SwarmTeamProgressProps {
   taskStatus?: string;
   teamHistory?: TeamHistoryResponse;
 }
-
-const POLL_INTERVAL_MS = 3000;
 
 const STATUS_CONFIG: Record<MemberStatusDto, { icon: React.ReactNode; color: string; label: string }> = {
   RUNNING: {
@@ -51,7 +50,6 @@ export const SwarmTeamProgress: React.FC<SwarmTeamProgressProps> = ({
   const [loading, setLoading] = useState(!externalHistory);
   const [expandedRound, setExpandedRound] = useState<number | null>(null);
   const [collapsedEntries, setCollapsedEntries] = useState<Set<string>>(new Set());
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const isRunning = taskStatus === 'PENDING' || taskStatus === 'IN_PROGRESS';
 
@@ -85,22 +83,8 @@ export const SwarmTeamProgress: React.FC<SwarmTeamProgressProps> = ({
   }, [fetchData, externalHistory]);
 
   // Poll while task is running
-  useEffect(() => {
-    if (!isRunning) {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-      return;
-    }
-    pollRef.current = setInterval(() => fetchData(false), POLL_INTERVAL_MS);
-    return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-  }, [isRunning, fetchData]);
+  const pollFetch = useCallback(() => fetchData(false), [fetchData]);
+  usePolling(pollFetch, isRunning);
 
   if (loading) {
     return (
