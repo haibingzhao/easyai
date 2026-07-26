@@ -52,6 +52,7 @@ export function useSessionFileChanges(fetchDiffs = false): UseSessionFileChanges
             reviewStatus: 'applied',
             changedBy: fc.changedBy,
             authors,
+            memberId: fc.memberId,
           });
         } else {
           existing.additions = (existing.additions || 0) + fc.additions;
@@ -63,6 +64,10 @@ export function useSessionFileChanges(fetchDiffs = false): UseSessionFileChanges
           // If any checkpoint has 'llm' author, mark the file as llm-changeable
           if (fc.changedBy === 'llm') {
             existing.changedBy = 'llm';
+          }
+          // Preserve member attribution
+          if (fc.memberId && !existing.memberId) {
+            existing.memberId = fc.memberId;
           }
         }
       }

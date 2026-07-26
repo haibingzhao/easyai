@@ -600,15 +600,15 @@ class ChatController(
     }
 
     /**
-     * Get session-level file diff summary.
+     * Get session-level file diff summary (includes team member changes).
      */
     @GetMapping("/session/{sessionId}/diff")
     fun getSessionDiff(
         @PathVariable sessionId: String
     ): Mono<List<DiffResponse>> {
         return mono {
-            val projectPath = resolveProjectPath(sessionId)
-            revertService.getSessionDiff(projectPath, sessionId).map { it.toDiffResponse() }
+            val userId = verifyOwnership(sessionId)
+            sessionService.getSessionDiffWithMembers(sessionId, userId).map { it.toDiffResponse() }
         }
     }
 

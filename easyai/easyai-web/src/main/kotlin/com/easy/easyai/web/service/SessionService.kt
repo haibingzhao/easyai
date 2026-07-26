@@ -7,6 +7,7 @@ import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.repository.session.MessageWithTimestamp
 import com.easy.easyai.skills.team.TeamCoordinationStateRegistry
 import com.easy.easyai.snapshot.SnapshotService
+import com.easy.easyai.snapshot.model.FileDiff
 import com.easy.easyai.web.model.*
 import org.slf4j.LoggerFactory
 import tools.jackson.core.type.TypeReference
@@ -234,7 +235,103 @@ class SessionService(
             logger.warn("Failed to check staged changes for session {}: {}", sessionId, e.message)
         }
 
+        // Aggregate team member session checkpoints (members use isolated session IDs,
+        // so their file changes are committed under separate session refs and never
+        // appear in the parent session's checkpoint chain).
+        if (teamExecutionStore != null) {
+            try {
+                val executions = teamExecutionStore.getExecutions(sessionId)
+                val memberSessions = executions.mapNotNull { exec ->
+                    exec.memberSessionId?.let { it to exec.memberId }
+                }.distinctBy { it.first }
+
+                for ((memberSessionId, memberId) in memberSessions) {
+                    val memberCheckpoints = snapshotService.listCheckpoints(projectPath, memberSessionId)
+                    if (memberCheckpoints.isEmpty()) continue
+                    val latestHash = memberCheckpoints.first().commitHash // newest-first ordering
+                    val memberBaseline = try {
+                        snapshotService.ensureBaseline(projectPath, memberSessionId)
+                    } catch (e: Exception) {
+                        logger.debug("No baseline for member session {}: {}", memberSessionId, e.message)
+                        continue
+                    }
+                    val memberDiffs = snapshotService.diff(projectPath, memberBaseline, latestHash)
+                    if (memberDiffs.isEmpty()) continue
+                    result.add(
+                        CheckpointSummary(
+                            messageId = "member:$memberSessionId",
+                            assistantMessageId = null,
+                            snapshotHash = latestHash,
+                            filesChanged = memberDiffs.map {
+                                FileChangeInfo(it.path, it.additions, it.deletions, it.status.name.lowercase(), "llm", memberId)
+                            },
+                            additions = memberDiffs.sumOf { it.additions },
+                            deletions = memberDiffs.sumOf { it.deletions },
+                            createdAt = memberCheckpoints.first().timestamp
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                logger.warn("Failed to aggregate member checkpoints for session {}: {}", sessionId, e.message)
+            }
+        }
+
         return result
+    }
+
+    /**
+     * Get session-level file diffs including team member changes.
+     * Extends the parent session's baseline→latest diff with member-only file patches.
+     */
+    suspend fun getSessionDiffWithMembers(sessionId: String, userId: String = "system"): List<FileDiff> {
+        if (snapshotService == null) return emptyList()
+        val context = sessionManager.getSessionContext(sessionId, userId) ?: return emptyList()
+        val projectPath = context.projectPath ?: return emptyList()
+        if (!snapshotService.isEnabled(projectPath)) return emptyList()
+
+        // Parent session diff: baseline → latest checkpoint
+        val parentDiffs = try {
+            val checkpoints = snapshotService.listCheckpoints(projectPath, sessionId)
+            if (checkpoints.isEmpty()) {
+                mutableListOf() // Parent has no checkpoints yet — still aggregate member diffs below
+            } else {
+                val baseline = snapshotService.ensureBaseline(projectPath, sessionId)
+                if (baseline != null) {
+                    snapshotService.diff(projectPath, baseline, checkpoints.first().commitHash).toMutableList()
+                } else {
+                    mutableListOf()
+                }
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to compute session diff for {}: {}", sessionId, e.message)
+            mutableListOf()
+        }
+
+        // Aggregate member-only file diffs
+        if (teamExecutionStore != null) {
+            try {
+                val memberSessions = teamExecutionStore.getExecutions(sessionId)
+                    .mapNotNull { it.memberSessionId }.distinct()
+                val existingPaths = parentDiffs.map { it.path }.toMutableSet()
+                for (memberSessionId in memberSessions) {
+                    val memberCheckpoints = snapshotService.listCheckpoints(projectPath, memberSessionId)
+                    if (memberCheckpoints.isEmpty()) continue
+                    val memberBaseline = try {
+                        snapshotService.ensureBaseline(projectPath, memberSessionId)
+                    } catch (e: Exception) { continue }
+                    val memberDiffs = snapshotService.diff(projectPath, memberBaseline, memberCheckpoints.first().commitHash)
+                    for (d in memberDiffs) {
+                        if (existingPaths.add(d.path)) {
+                            parentDiffs.add(d.copy(changedBy = "llm"))
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                logger.warn("Failed to aggregate member diffs for session {}: {}", sessionId, e.message)
+            }
+        }
+
+        return parentDiffs
     }
 
     /**

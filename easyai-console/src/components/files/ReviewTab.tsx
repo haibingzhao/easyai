@@ -105,7 +105,9 @@ export const ReviewTab: React.FC = () => {
 
   const authorIcons = (file: FileChangeItem) => {
     const icons: React.ReactNode[] = [];
-    if (file.changedBy === 'llm' || file.hasBothAuthors) {
+    if (file.memberId) {
+      icons.push(<span key="member" title={`Member: ${file.memberId}`} className="text-[10px] px-1 rounded bg-purple-500/20 text-purple-300 leading-tight">{file.memberId}</span>);
+    } else if (file.changedBy === 'llm' || file.hasBothAuthors) {
       icons.push(<span key="llm" title="LLM Agent"><Bot className="w-3 h-3 text-cyan-400 inline" /></span>);
     }
     if (file.changedBy === 'user' || file.hasBothAuthors) {
@@ -413,13 +415,16 @@ export const ReviewTab: React.FC = () => {
                   {renderReviewStatus(file)}
                   {!isUserOnly && file.reviewStatus === 'applied' && (
                     <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        className="p-0.5 rounded hover:bg-destructive/10 text-destructive transition-colors"
-                        title={i18n('Reject')}
-                        onClick={(e) => { e.stopPropagation(); handleRejectFile(file.path); }}
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
+                      {/* Reject is unavailable for member files — their changes live in isolated session refs */}
+                      {!file.memberId && (
+                        <button
+                          className="p-0.5 rounded hover:bg-destructive/10 text-destructive transition-colors"
+                          title={i18n('Reject')}
+                          onClick={(e) => { e.stopPropagation(); handleRejectFile(file.path); }}
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                       <button
                         className="p-0.5 rounded hover:bg-green-500/10 text-green-500 transition-colors"
                         title={i18n('Accept')}

@@ -6,6 +6,8 @@ export interface FileDiff {
   deletions: number;
   status: 'added' | 'modified' | 'deleted' | 'renamed';
   changedBy?: 'llm' | 'user';
+  /** Team member ID when change was made by a member agent */
+  memberId?: string;
 }
 
 /** Per-file change info within a checkpoint */
@@ -15,6 +17,8 @@ export interface FileChangeInfo {
   deletions: number;
   status: 'added' | 'modified' | 'deleted' | 'renamed';
   changedBy?: 'llm' | 'user';
+  /** Team member ID when change was made by a member agent */
+  memberId?: string;
 }
 
 /** Checkpoint info for a single turn */
@@ -65,6 +69,8 @@ export interface FileChangeItem {
   reviewStatus: 'pending' | 'accepted' | 'rejected' | 'applied';
   changedBy?: 'llm' | 'user';
   hasBothAuthors?: boolean;
+  /** Team member ID when change was made by a member agent */
+  memberId?: string;
 }
 
 /** Panel state for file changes */

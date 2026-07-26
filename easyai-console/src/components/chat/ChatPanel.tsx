@@ -389,10 +389,31 @@ export const ChatPanel: React.FC = () => {
       },
     });
 
+    // Periodic checkpoint refresh during SSE — surfaces team member file changes
+    // that don't flow through the parent's SSE stream (members use isolated session IDs).
+    const checkpointTimer = setInterval(async () => {
+      if (cancelled) return;
+      try {
+        const checkpoints = await getCheckpoints(runningSessionId);
+        if (cancelled) return;
+        const state = useChatStore.getState();
+        for (const cp of checkpoints) {
+          const key = cp.assistantMessageId || cp.messageId;
+          if (!key) continue;
+          // Upsert synthetic member checkpoints (their content grows as members write more files);
+          // only add genuinely new keys for real checkpoints (already pushed via SSE).
+          if (!state.checkpointsByMessageId[key] || key.startsWith('member:')) {
+            state.addCheckpoint(key, cp);
+          }
+        }
+      } catch { /* best-effort */ }
+    }, 8000);
+
     return () => {
       cancelled = true;
       watchHandle?.abort();
       if (timer) clearTimeout(timer);
+      clearInterval(checkpointTimer);
     };
   }, [runningSessionId, loadSessionMessages, loadSessionMessagesIncremental, setRunningSessionId, setStreaming]);
 
@@ -431,7 +452,7 @@ export const ChatPanel: React.FC = () => {
       } else {
         // Cmd+Z → revert to last checkpoint (only agent-end checkpoints with snapshotHash can be reverted)
         const checkpoints = Object.values(chatState.checkpointsByMessageId)
-          .filter((cp) => cp.snapshotHash && cp.messageId);
+          .filter((cp) => cp.snapshotHash && cp.messageId && !cp.messageId.startsWith('member:') && !cp.messageId.startsWith('staged:'));
         if (checkpoints.length > 0 && !chatState.revertState) {
           e.preventDefault();
           const lastCheckpoint = checkpoints[checkpoints.length - 1];

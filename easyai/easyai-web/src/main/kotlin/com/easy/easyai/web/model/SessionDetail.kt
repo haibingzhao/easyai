@@ -27,7 +27,9 @@ data class FileChangeInfo(
     val additions: Int,
     val deletions: Int,
     val status: String,
-    val changedBy: String? = null
+    val changedBy: String? = null,
+    /** Team member ID when the change was made by a member agent (null for leader/user changes). */
+    val memberId: String? = null
 )
 
 /**
