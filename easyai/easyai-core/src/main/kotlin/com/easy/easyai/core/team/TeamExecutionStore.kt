@@ -97,4 +97,10 @@ interface TeamExecutionStore {
 
     /** Get all round records for a team session, ordered by round. */
     suspend fun getRounds(teamSessionId: String): List<TeamRoundRecord>
+
+    /**
+     * Delete all execution and round records for a team session.
+     * Called when the owning chat session is deleted, to avoid orphaned rows.
+     */
+    suspend fun deleteByTeamSession(teamSessionId: String)
 }

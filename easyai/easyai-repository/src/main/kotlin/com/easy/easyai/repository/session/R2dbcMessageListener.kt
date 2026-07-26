@@ -24,7 +24,19 @@ class R2dbcMessageListener(
 ) : MessageListener {
     private val logger = LoggerFactory.getLogger(javaClass)
 
+    /**
+     * Guards one-time session-row creation. Team member sessions are created lazily
+     * (no session row exists until the first message is persisted), so we ensure the
+     * row exists on the first write. Idempotent + cheap for sessions that already exist.
+     */
+    @Volatile
+    private var sessionEnsured = false
+
     override suspend fun onMessageAdded(messages: List<EasyAiMessage>) {
+        if (!sessionEnsured) {
+            store.ensureSessionExists(sessionId, context)
+            sessionEnsured = true
+        }
         store.upsertMessages(context, sessionId, messages, parentMessageId, parentToolCallId)
         logger.debug("Persisted {} messages for session {}", messages.size, sessionId)
     }

@@ -1,9 +1,10 @@
-import { ArrowLeft, Loader2, AlertTriangle, CheckCircle2, XCircle, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { ArrowLeft, Loader2, AlertTriangle, CheckCircle2, XCircle, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { useTeamStore } from '@/services/stores/team-store';
 import { MessageList } from '../MessageList';
 import { formatTokenCount } from '@/utils/format';
 import { i18n } from '@/utils/i18n';
-import type { TeamMemberStatus } from '@/types/team';
+import { TERMINAL_STATUSES, type TeamMemberStatus } from '@/types/team';
 
 function statusBadge(status: TeamMemberStatus): { color: string; label: string } {
   switch (status) {
@@ -49,6 +50,11 @@ export const TeamMemberDetail: React.FC = () => {
   const memberMessagesLoading = useTeamStore((s) => s.memberMessagesLoading);
   const memberExecutions = useTeamStore((s) => s.memberExecutions);
   const clearSelectedMember = useTeamStore((s) => s.clearSelectedMember);
+  const refreshMemberMessages = useTeamStore((s) => s.refreshMemberMessages);
+
+  const [assignmentExpanded, setAssignmentExpanded] = useState(false);
+  const assignmentRef = useRef<HTMLParagraphElement>(null);
+  const [isClamped, setIsClamped] = useState(false);
 
   // Find the latest execution for the selected member (meta info)
   const execution = memberExecutions
@@ -56,6 +62,27 @@ export const TeamMemberDetail: React.FC = () => {
     .sort((a, b) => (b.round - a.round) || ((b.startedAt ?? 0) - (a.startedAt ?? 0)))[0];
 
   const badge = execution ? statusBadge(execution.status) : null;
+
+  // Detect whether the assignment text actually overflows 2 lines
+  useEffect(() => {
+    if (assignmentExpanded) {
+      // Keep toggle visible while expanded (user can only expand when clamped)
+      setIsClamped(true);
+      return;
+    }
+    const el = assignmentRef.current;
+    if (el) {
+      setIsClamped(el.scrollHeight > el.clientHeight);
+    }
+  }, [execution?.assignment, assignmentExpanded]);
+
+  // Poll member messages while the execution is non-terminal
+  const isRunning = execution ? !TERMINAL_STATUSES.includes(execution.status) : false;
+  useEffect(() => {
+    if (!isRunning || !selectedMemberId) return;
+    const timer = setInterval(() => refreshMemberMessages(), 3000);
+    return () => clearInterval(timer);
+  }, [isRunning, selectedMemberId, refreshMemberMessages]);
 
   return (
     <div className="h-full flex flex-col">
@@ -82,7 +109,27 @@ export const TeamMemberDetail: React.FC = () => {
           </div>
         )}
         {execution && (
-          <p className="text-xs text-muted-foreground line-clamp-2">{execution.assignment}</p>
+          <div
+            className={`select-none ${isClamped ? 'cursor-pointer' : ''}`}
+            onClick={() => isClamped && setAssignmentExpanded((prev) => !prev)}
+          >
+            <p
+              ref={assignmentRef}
+              className={`text-xs text-muted-foreground whitespace-pre-wrap break-words ${
+                assignmentExpanded ? '' : 'line-clamp-2'
+              }`}
+            >
+              {execution.assignment}
+            </p>
+            {isClamped && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] text-primary/70 hover:text-primary transition-colors">
+                {assignmentExpanded
+                  ? <><ChevronDown className="w-3 h-3 rotate-180" />{i18n('Collapse')}</>
+                  : <><ChevronRight className="w-3 h-3 rotate-90" />{i18n('Show more')}</>
+                }
+              </span>
+            )}
+          </div>
         )}
       </div>
 

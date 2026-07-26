@@ -2,6 +2,7 @@ package com.easy.easyai.web.service
 
 import com.easy.easyai.core.agent.SessionManager
 import com.easy.easyai.core.model.*
+import com.easy.easyai.core.team.TeamExecutionStore
 import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.repository.session.MessageWithTimestamp
 import com.easy.easyai.skills.team.TeamCoordinationStateRegistry
@@ -17,7 +18,9 @@ class SessionService(
     private val snapshotService: SnapshotService? = null,
     private val fileStorageService: FileStorageService? = null,
     /** Optional: cleans up Team Agent in-memory coordination state on session deletion. */
-    private val teamStateRegistry: TeamCoordinationStateRegistry? = null
+    private val teamStateRegistry: TeamCoordinationStateRegistry? = null,
+    /** Optional: cascade-deletes Team Agent execution/round records + member sub-sessions. */
+    private val teamExecutionStore: TeamExecutionStore? = null
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper = SharedObjectMapper.instance
@@ -325,6 +328,22 @@ class SessionService(
             teamStateRegistry?.remove(id)
         } catch (e: Exception) {
             logger.warn("Failed to clean up team coordination state for session {}: {}", id, e.message)
+        }
+        // Cascade-delete Team Agent persistence: member execution/round records + member sub-sessions.
+        // Without this, deleting a team session orphans rows in team_member_execution / team_round_record
+        // and leaves member sub-sessions visible in the history list.
+        try {
+            if (teamExecutionStore != null) {
+                val memberSessionIds = teamExecutionStore.getExecutions(id)
+                    .mapNotNull { it.memberSessionId }
+                    .distinct()
+                teamExecutionStore.deleteByTeamSession(id)
+                memberSessionIds.forEach { memberSessionId ->
+                    sessionStore.delete(memberSessionId, userId)
+                }
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to clean up team records for session {}: {}", id, e.message)
         }
         logger.info("Deleted session: {}", id)
     }

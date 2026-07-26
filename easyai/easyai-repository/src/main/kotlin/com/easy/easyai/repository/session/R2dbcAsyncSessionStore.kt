@@ -387,6 +387,30 @@ class R2dbcAsyncSessionStore(
     }
 
     /**
+     * Ensure a session row exists for [sessionId] (idempotent).
+     *
+     * Team member sessions are created lazily: the member session ID is generated at
+     * delegation time, but no session row is written until messages are persisted.
+     * Without this, session lookups ([findById]) fail with "Session not found" even
+     * though messages exist. Uses insertIgnore so pre-existing sessions (main chat,
+     * swarm, sub-agent) are left untouched.
+     */
+    suspend fun ensureSessionExists(sessionId: String, context: AgentContext) {
+        suspendTransaction(db) {
+            val userId = context.userId ?: UserScope.SYSTEM_USER_ID
+            val now = System.currentTimeMillis()
+            Tables.Session.insertIgnore {
+                it[Tables.Session.id] = sessionId
+                it[Tables.Session.projectId] = context.projectId
+                it[Tables.Session.status] = "active"
+                it[Tables.Session.userId] = userId
+                it[Tables.Session.createdAt] = now
+                it[Tables.Session.updatedAt] = now
+            }
+        }
+    }
+
+    /**
      * Returns a MessageListener that persists messages to the database in real-time.
      * Call this and pass it to AgentService.messageListener.
      */

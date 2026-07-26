@@ -12,6 +12,7 @@ import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
+import org.jetbrains.exposed.v1.r2dbc.deleteWhere
 import org.jetbrains.exposed.v1.r2dbc.insert
 import org.jetbrains.exposed.v1.r2dbc.selectAll
 import org.jetbrains.exposed.v1.r2dbc.update
@@ -147,6 +148,18 @@ class R2dbcTeamExecutionStore(
                     )
                 }
         }
+    }
+
+    override suspend fun deleteByTeamSession(teamSessionId: String) {
+        asyncTransaction(db) {
+            Tables.TeamMemberExecutionTable.deleteWhere {
+                Tables.TeamMemberExecutionTable.teamSessionId eq teamSessionId
+            }
+            Tables.TeamRoundRecordTable.deleteWhere {
+                Tables.TeamRoundRecordTable.teamSessionId eq teamSessionId
+            }
+        }
+        logger.debug("Deleted team execution + round records for session {}", teamSessionId)
     }
 
     private fun org.jetbrains.exposed.v1.core.ResultRow.toEntity(): TeamMemberExecutionEntity {

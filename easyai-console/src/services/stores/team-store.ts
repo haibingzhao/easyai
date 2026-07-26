@@ -28,6 +28,8 @@ interface TeamState {
   refreshExecutions: (sessionId: string) => Promise<void>;
   /** Select a member card → load its session messages for the detail view. */
   selectMember: (execution: TeamMemberExecution) => Promise<void>;
+  /** Re-fetch messages for the currently selected member (polling while running). */
+  refreshMemberMessages: () => Promise<void>;
   /** Back to team overview. */
   clearSelectedMember: () => void;
   /** Reset all team state (on session switch / clearChat). */
@@ -82,6 +84,20 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       if (get().selectedMemberSessionId === memberSessionId) {
         set({ memberMessagesLoading: false });
       }
+    }
+  },
+
+  refreshMemberMessages: async () => {
+    const memberSessionId = get().selectedMemberSessionId;
+    if (!memberSessionId) return;
+    try {
+      const detail = await sessionService.getSessionDetail(memberSessionId);
+      // Guard: selection may have changed during fetch
+      if (get().selectedMemberSessionId !== memberSessionId) return;
+      const messages = detail.messages.map(convertSnapshot);
+      set({ memberMessages: messages });
+    } catch {
+      // Silently ignore — will retry on next poll
     }
   },
 
