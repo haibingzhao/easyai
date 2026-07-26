@@ -45,7 +45,7 @@ export const ChatPanel: React.FC = () => {
     () => agents.find((a) => a.id === selectedAgentId)?.agentType === 'TEAM',
     [agents, selectedAgentId]
   );
-  const selectedMemberId = useTeamStore((s) => s.selectedMemberId);
+  const selectedExecutionId = useTeamStore((s) => s.selectedExecutionId);
   const resetTeam = useTeamStore((s) => s.resetTeam);
   const clearSelectedMember = useTeamStore((s) => s.clearSelectedMember);
 
@@ -543,7 +543,7 @@ export const ChatPanel: React.FC = () => {
           </div>
 
           {/* Message list — replaced by TeamMemberDetail when a team member is selected */}
-          {selectedMemberId ? (
+          {selectedExecutionId ? (
             <TeamMemberDetail />
           ) : (
           <div

@@ -116,6 +116,17 @@ class ResourceExistenceValidator(
             ))
         }
 
+        // Validate command/tool consistency: the /goal command creates a goal that
+        // requires the 'goal' tool for lifecycle management (complete/block/pause).
+        // Without it, a created goal can never be resolved and the agent loop stalls.
+        if ("goal" in request.commandNames && "goal" !in request.toolNames) {
+            errors.add(ConfigValidationError(
+                "commandNames",
+                "The /goal command is configured but 'goal' tool is missing from toolNames — created goals cannot be completed or blocked",
+                "warning"
+            ))
+        }
+
         // Validate MCP configs
         if (request.mcpConfigs.isNotEmpty()) {
             val connectedNames = mcpClientManager?.getConnectedServers(userId)?.map { it.serverName }?.toSet() ?: emptySet()

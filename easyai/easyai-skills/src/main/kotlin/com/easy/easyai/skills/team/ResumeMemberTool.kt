@@ -67,10 +67,14 @@ class ResumeMemberTool(
             return errorResult("Invalid parameters. Required: memberId (String), resolution (String)")
         }
 
+        // 0. Lenient member ID resolution (LLMs often pass "Researcher" instead of "inline:Researcher")
+        val memberId = DelegateToMemberTool.resolveMemberId(params.memberId, agentContext.teamMembers)
+            ?: params.memberId
+
         // 1. Retrieve blocked state (removes it — member is no longer blocked)
         //    Falls back to DB recovery after server restart (in-memory state lost)
-        val blocked = state.blockedMembers.remove(params.memberId)
-            ?: recoverBlockedStateFromDb(params.memberId)
+        val blocked = state.blockedMembers.remove(memberId)
+            ?: recoverBlockedStateFromDb(memberId)
             ?: run {
             val suggestions = buildString {
                 if (state.blockedMembers.isNotEmpty()) {
@@ -81,20 +85,20 @@ class ResumeMemberTool(
                 }
             }
             return errorResult(
-                "Error: Member '${params.memberId}' is not in blocked state.$suggestions"
+                "Error: Member '$memberId' is not in blocked state.$suggestions"
             )
         }
 
         // 2. Check member is not already running (race guard)
-        if (state.runningJobs.containsKey(params.memberId)) {
-            return errorResult("Error: Member '${params.memberId}' is already running.")
+        if (state.runningJobs.containsKey(memberId)) {
+            return errorResult("Error: Member '$memberId' is already running.")
         }
 
         // 3. Look up member AgentDefinition (DB lookup with inline fallback)
         val userId = agentContext.userId ?: "system"
-        val definition = agentStore.findById(params.memberId, userId)
-            ?: resolveInlineMember(params.memberId, agentContext)
-            ?: return errorResult("Error: Member agent '${params.memberId}' not found in agent store.")
+        val definition = agentStore.findById(memberId, userId)
+            ?: resolveInlineMember(memberId, agentContext)
+            ?: return errorResult("Error: Member agent '$memberId' not found in agent store.")
 
         // 4. Resolve member context and tools
         val inlineEntry = if (definition.id.startsWith("inline:")) {
@@ -122,7 +126,7 @@ class ResumeMemberTool(
             historyLoader?.loadActiveMessages(blocked.sessionId) ?: emptyList()
         } catch (e: Exception) {
             logger.warn("Failed to load history for member '{}' session {}: {}",
-                params.memberId, blocked.sessionId, e.message)
+                memberId, blocked.sessionId, e.message)
             emptyList()
         }
 
@@ -174,11 +178,11 @@ class ResumeMemberTool(
         // 9. Persist: mark original record RESUMED + insert new RUNNING record
         val newExecutionId = UUID.randomUUID().toString()
         markResumed(blocked.executionId)
-        state.recordResumed(params.memberId)
+        state.recordResumed(memberId)
         persistExecution(TeamMemberExecutionEntity(
             id = newExecutionId,
             teamSessionId = state.sessionId,
-            memberId = params.memberId,
+            memberId = memberId,
             round = round,
             assignment = blocked.originalAssignment,
             status = TeamMemberStatus.RUNNING,
@@ -188,7 +192,6 @@ class ResumeMemberTool(
         ))
 
         // 10. Launch background resume execution
-        val memberId = params.memberId
         val memberSessionId = blocked.sessionId
         val job = state.scope.launch {
             try {

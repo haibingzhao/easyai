@@ -45,7 +45,7 @@ function StatusIcon({ status }: { status: TeamMemberStatus }) {
  * is selected in the Team Member Panel. Shows the member's own session messages.
  */
 export const TeamMemberDetail: React.FC = () => {
-  const selectedMemberId = useTeamStore((s) => s.selectedMemberId);
+  const selectedExecutionId = useTeamStore((s) => s.selectedExecutionId);
   const memberMessages = useTeamStore((s) => s.memberMessages);
   const memberMessagesLoading = useTeamStore((s) => s.memberMessagesLoading);
   const memberExecutions = useTeamStore((s) => s.memberExecutions);
@@ -56,10 +56,8 @@ export const TeamMemberDetail: React.FC = () => {
   const assignmentRef = useRef<HTMLParagraphElement>(null);
   const [isClamped, setIsClamped] = useState(false);
 
-  // Find the latest execution for the selected member (meta info)
-  const execution = memberExecutions
-    .filter((e) => e.memberId === selectedMemberId)
-    .sort((a, b) => (b.round - a.round) || ((b.startedAt ?? 0) - (a.startedAt ?? 0)))[0];
+  // Find the selected execution (meta info)
+  const execution = memberExecutions.find((e) => e.id === selectedExecutionId);
 
   const badge = execution ? statusBadge(execution.status) : null;
 
@@ -79,10 +77,10 @@ export const TeamMemberDetail: React.FC = () => {
   // Poll member messages while the execution is non-terminal
   const isRunning = execution ? !TERMINAL_STATUSES.includes(execution.status) : false;
   useEffect(() => {
-    if (!isRunning || !selectedMemberId) return;
+    if (!isRunning || !selectedExecutionId) return;
     const timer = setInterval(() => refreshMemberMessages(), 3000);
     return () => clearInterval(timer);
-  }, [isRunning, selectedMemberId, refreshMemberMessages]);
+  }, [isRunning, selectedExecutionId, refreshMemberMessages]);
 
   return (
     <div className="h-full flex flex-col">

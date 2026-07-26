@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.toList
 import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
+import org.jetbrains.exposed.v1.core.greaterEq
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
 import org.jetbrains.exposed.v1.r2dbc.deleteWhere
 import org.jetbrains.exposed.v1.r2dbc.insert
@@ -160,6 +161,20 @@ class R2dbcTeamExecutionStore(
             }
         }
         logger.debug("Deleted team execution + round records for session {}", teamSessionId)
+    }
+
+    override suspend fun deleteByTeamSessionFrom(teamSessionId: String, fromTimestamp: Long) {
+        asyncTransaction(db) {
+            Tables.TeamMemberExecutionTable.deleteWhere {
+                (Tables.TeamMemberExecutionTable.teamSessionId eq teamSessionId) and
+                    (Tables.TeamMemberExecutionTable.startedAt greaterEq fromTimestamp)
+            }
+            Tables.TeamRoundRecordTable.deleteWhere {
+                (Tables.TeamRoundRecordTable.teamSessionId eq teamSessionId) and
+                    (Tables.TeamRoundRecordTable.createdAt greaterEq fromTimestamp)
+            }
+        }
+        logger.debug("Deleted team records for session {} from timestamp {}", teamSessionId, fromTimestamp)
     }
 
     private fun org.jetbrains.exposed.v1.core.ResultRow.toEntity(): TeamMemberExecutionEntity {

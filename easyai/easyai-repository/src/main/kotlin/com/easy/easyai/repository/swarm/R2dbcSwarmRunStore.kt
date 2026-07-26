@@ -523,6 +523,9 @@ class R2dbcSwarmRunStore(
             Tables.SwarmDeliberationHistoryTable.deleteWhere {
                 Tables.SwarmDeliberationHistoryTable.runId eq runId
             }
+            Tables.SwarmDeliberationVerdictTable.deleteWhere {
+                Tables.SwarmDeliberationVerdictTable.runId eq runId
+            }
             Tables.SwarmEscalationHistoryTable.deleteWhere {
                 Tables.SwarmEscalationHistoryTable.runId eq runId
             }

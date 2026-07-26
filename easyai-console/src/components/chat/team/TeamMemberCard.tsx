@@ -24,26 +24,18 @@ function statusVisual(status: TeamMemberStatus): { icon: React.ReactNode; color:
 
 interface TeamMemberCardProps {
   execution: TeamMemberExecution;
-  /** Total rounds executed by this member */
-  rounds: number;
-  /** Aggregated tokens across rounds */
-  totalInputTokens: number;
-  totalOutputTokens: number;
   selected: boolean;
   onClick: () => void;
 }
 
-/** A single member card in the Team Member Panel. */
+/** A single member execution card in the Team Member Panel. */
 export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
   execution,
-  rounds,
-  totalInputTokens,
-  totalOutputTokens,
   selected,
   onClick,
 }) => {
   const visual = statusVisual(execution.status);
-  const hasTokens = totalInputTokens > 0 || totalOutputTokens > 0;
+  const hasTokens = execution.inputTokens > 0 || execution.outputTokens > 0;
 
   return (
     <button
@@ -76,11 +68,10 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
         <span className="inline-flex items-center gap-1">
           <Bot className="w-3 h-3" />
           {i18n('Round')} {execution.round}
-          {rounds > 1 && `/${rounds}`}
         </span>
         {hasTokens && (
           <span className="tabular-nums">
-            ↑{formatTokenCount(totalInputTokens)} ↓{formatTokenCount(totalOutputTokens)}
+            ↑{formatTokenCount(execution.inputTokens)} ↓{formatTokenCount(execution.outputTokens)}
           </span>
         )}
       </div>

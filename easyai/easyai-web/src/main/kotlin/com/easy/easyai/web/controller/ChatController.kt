@@ -810,6 +810,9 @@ class ChatController(
             // 4. Delete messages
             val deletedCount = sessionService.deleteMessagesFrom(sessionId, request.messageId)
 
+            // 4b. Clean up Team Agent records from the truncation point (executions/rounds + member sub-sessions)
+            sessionService.deleteTeamRecordsFrom(sessionId, createdAt, userId)
+
             // 5. Rollback files
             val rollbackResult = if (projectPath != null) {
                 revertService.rollbackToBeforeMessage(projectPath, sessionId, createdAt)

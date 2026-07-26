@@ -267,6 +267,42 @@ class SessionService(
     }
 
     /**
+     * Clean up Team Agent records created at or after [fromTimestamp] for a session, plus their
+     * member sub-sessions. Called when editing a historical message truncates the conversation, so
+     * stale executions/rounds (and orphaned member sessions) from the removed portion don't linger.
+     */
+    suspend fun deleteTeamRecordsFrom(sessionId: String, fromTimestamp: Long, userId: String) {
+        // Reset in-memory coordination state (cancel running members + clear stale round/member state)
+        // so a re-run after editing starts fresh. Not gated on teamExecutionStore — the in-memory reset
+        // is valuable even when DB persistence is unavailable. Mirrors the cleanup in deleteSession.
+        try {
+            teamStateRegistry?.remove(sessionId)
+        } catch (e: Exception) {
+            logger.warn("Failed to reset team coordination state for session {}: {}", sessionId, e.message)
+        }
+
+        val store = teamExecutionStore ?: return
+        try {
+            // Collect member sub-session IDs of the executions about to be removed (startedAt >= fromTimestamp),
+            // mirroring the SQL boundary in deleteByTeamSessionFrom (null startedAt rows are left untouched).
+            val memberSessionIds = store.getExecutions(sessionId)
+                .filter { exec ->
+                    val startedAt = exec.startedAt
+                    startedAt != null && startedAt >= fromTimestamp
+                }
+                .mapNotNull { it.memberSessionId }
+                .distinct()
+            store.deleteByTeamSessionFrom(sessionId, fromTimestamp)
+            memberSessionIds.forEach { memberSessionId ->
+                sessionStore.delete(memberSessionId, userId)
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to clean up team records from timestamp {} for session {}: {}",
+                fromTimestamp, sessionId, e.message)
+        }
+    }
+
+    /**
      * Get the createdAt timestamp of a specific message.
      * @return The timestamp, or null if the message is not found.
      */

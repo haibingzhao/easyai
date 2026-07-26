@@ -235,6 +235,7 @@ const translations: Record<string, Record<string, string>> = {
     'Runtime unavailable': 'Runtime unavailable',
     'Blocked at runtime for Sub-Agent type': 'Blocked at runtime for Sub-Agent type',
     'Skills require load_skill tool': 'Skills configured but load_skill tool is not selected — the agent cannot load skill content',
+    'Goal command requires goal tool': 'The /goal command is configured but goal tool is not selected — created goals cannot be completed',
     // Right panel
     'Open Panel': 'Open Panel',
     'Close Panel': 'Close Panel',
@@ -580,6 +581,7 @@ const translations: Record<string, Record<string, string>> = {
     'Runtime unavailable': '运行时不可用',
     'Blocked at runtime for Sub-Agent type': '子智能体（Sub-Agent）类型在运行时会被禁用',
     'Skills require load_skill tool': '已配置 Skill 但未选择 load_skill 工具，Agent 将无法在运行时加载技能内容',
+    'Goal command requires goal tool': '已配置 /goal 命令但未选择 goal 工具，创建的 Goal 将无法完成或阻塞',
     // Right panel
     'Open Panel': '打开面板',
     'Close Panel': '关闭面板',

@@ -394,6 +394,7 @@ CRITICAL RULES — NEVER output the full configuration JSON as a tool parameter:
 - MCP tools: via mcpConfigs field, NEVER in toolNames
 - Skills: via skillNames field, NEVER in toolNames
 - **load_skill requirement**: if skillNames is non-empty, `load_skill` MUST be included in toolNames (otherwise the agent cannot load skill content at runtime)
+- **goal command requirement**: if commandNames includes "goal", `goal` MUST be included in toolNames (otherwise created goals cannot be completed/blocked, stalling the agent loop)
 - promptTemplate: MUST be valid Jinja2 and include {{ custom_instructions }}
 - subagent blocks: use {"agentId": "xxx"} for existing agents (from list_resources type="agents"),
   or provide full inline fields for custom sub-agents

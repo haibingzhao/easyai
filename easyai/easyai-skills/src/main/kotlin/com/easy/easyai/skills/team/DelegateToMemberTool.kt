@@ -64,28 +64,30 @@ class DelegateToMemberTool(
             return errorResult("Invalid parameters. Required: memberId (String), task (String)")
         }
 
-        // 1. Validate memberId is in configured team members
-        val memberIds = agentContext.teamMembers.mapNotNull { it["id"] as? String }
-        if (params.memberId !in memberIds) {
-            return errorResult(
-                "Error: Member '${params.memberId}' is not a configured team member. " +
-                "Available members: ${memberIds.joinToString()}"
-            )
-        }
+        // 1. Resolve memberId against configured team members (lenient matching:
+        //    LLMs often pass the display name "Researcher" instead of the full ID "inline:Researcher")
+        val memberId = resolveMemberId(params.memberId, agentContext.teamMembers)
+            ?: run {
+                val memberIds = agentContext.teamMembers.mapNotNull { it["id"] as? String }
+                return errorResult(
+                    "Error: Member '${params.memberId}' is not a configured team member. " +
+                    "Available members: ${memberIds.joinToString()}"
+                )
+            }
 
         // 2. Check member is not already running
-        if (state.runningJobs.containsKey(params.memberId)) {
+        if (state.runningJobs.containsKey(memberId)) {
             return errorResult(
-                "Error: Member '${params.memberId}' is already running. " +
+                "Error: Member '$memberId' is already running. " +
                 "Wait for its completion via wait_for_member_events before re-delegating."
             )
         }
 
         // 3. Look up member AgentDefinition (DB lookup with inline fallback)
         val userId = agentContext.userId ?: "system"
-        val definition = agentStore.findById(params.memberId, userId)
-            ?: resolveInlineMember(params.memberId, agentContext)
-            ?: return errorResult("Error: Member agent '${params.memberId}' not found in agent store.")
+        val definition = agentStore.findById(memberId, userId)
+            ?: resolveInlineMember(memberId, agentContext)
+            ?: return errorResult("Error: Member agent '$memberId' not found in agent store.")
 
         // 4. Resolve member context and tools independently
         val inlineEntry = if (definition.id.startsWith("inline:")) {
@@ -147,11 +149,11 @@ class DelegateToMemberTool(
 
         // 8. Persist RUNNING record
         val executionId = UUID.randomUUID().toString()
-        state.recordDelegated(params.memberId)
+        state.recordDelegated(memberId)
         persistExecution(TeamMemberExecutionEntity(
             id = executionId,
             teamSessionId = state.sessionId,
-            memberId = params.memberId,
+            memberId = memberId,
             round = round,
             assignment = params.task,
             status = TeamMemberStatus.RUNNING,
@@ -161,7 +163,6 @@ class DelegateToMemberTool(
         ))
 
         // 9. Launch background execution — returns immediately
-        val memberId = params.memberId
         val assignment = params.task
         val job = state.scope.launch {
             executeMember(
@@ -339,6 +340,34 @@ class DelegateToMemberTool(
         const val ASK_LEADER_TOOL_NAME = "ask_leader"
         const val MAX_MEMBER_RESULT_LENGTH = 10_000
 
+        /**
+         * Lenient member ID resolution. LLMs frequently pass the display name
+         * (e.g. "Researcher") instead of the configured full ID ("inline:Researcher").
+         *
+         * Resolution order:
+         * 1. Exact ID match
+         * 2. Match by [name] field (display name)
+         * 3. "inline:{input}" prefix match
+         * 4. Case-insensitive ID / name match
+         *
+         * @return The canonical member ID, or null if unresolvable.
+         */
+        fun resolveMemberId(input: String, teamMembers: List<Map<String, Any?>>): String? {
+            val ids = teamMembers.mapNotNull { it["id"] as? String }
+            // 1. Exact match
+            if (input in ids) return input
+            // 2. Match by display name
+            teamMembers.find { (it["name"] as? String) == input }?.let { return it["id"] as? String ?: input }
+            // 3. Inline prefix
+            val prefixed = "inline:$input"
+            if (prefixed in ids) return prefixed
+            // 4. Case-insensitive fallback
+            ids.find { it.equals(input, ignoreCase = true) }?.let { return it }
+            teamMembers.find { (it["name"] as? String)?.equals(input, ignoreCase = true) == true }
+                ?.let { return it["id"] as? String ?: input }
+            return null
+        }
+
         /** Tools never given to team members (prevent recursion and user interaction). */
         private val FORBIDDEN_MEMBER_TOOLS = listOf(
             "task", "ask_question",
@@ -366,6 +395,11 @@ class DelegateToMemberTool(
                     sb.appendLine("- Work autonomously with available tools.")
                 }
             }
+            sb.appendLine()
+            sb.appendLine("## Team Member Constraints")
+            sb.appendLine("- You are a team MEMBER, not the leader. You CANNOT delegate work to other agents.")
+            sb.appendLine("- Tools like delegate_to_member, wait_for_member_events, resume_member, and task are NOT available to you. Never attempt to call them.")
+            sb.appendLine("- Complete the assigned work YOURSELF using your own tools.")
             sb.appendLine()
             sb.appendLine("## Final Response Requirements")
             sb.appendLine("Your final message is the ONLY content reported to the team leader.")

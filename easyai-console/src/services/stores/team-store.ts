@@ -4,12 +4,13 @@ import type { Message } from '@/types/message';
 import { teamService } from '@/services/team-service';
 import { sessionService } from '@/services/session-service';
 import { convertSnapshot } from './chat/message-converter';
+import { mergeToolResults } from './chat/session-loader';
 
 interface TeamState {
   /** Member execution records for the current team session */
   memberExecutions: TeamMemberExecution[];
-  /** Currently selected member (for detail view); null = team overview */
-  selectedMemberId: string | null;
+  /** Currently selected execution (for detail view); null = team overview */
+  selectedExecutionId: string | null;
   /** Session ID of the selected member (used to load messages) */
   selectedMemberSessionId: string | null;
   /** Messages of the selected member's session */
@@ -38,7 +39,7 @@ interface TeamState {
 
 export const useTeamStore = create<TeamState>((set, get) => ({
   memberExecutions: [],
-  selectedMemberId: null,
+  selectedExecutionId: null,
   selectedMemberSessionId: null,
   memberMessages: [],
   memberMessagesLoading: false,
@@ -65,7 +66,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   selectMember: async (execution: TeamMemberExecution) => {
     const memberSessionId = execution.memberSessionId;
     set({
-      selectedMemberId: execution.memberId,
+      selectedExecutionId: execution.id,
       selectedMemberSessionId: memberSessionId ?? null,
       memberMessages: [],
       memberMessagesLoading: true,
@@ -78,7 +79,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       const detail = await sessionService.getSessionDetail(memberSessionId);
       // Guard: selection may have changed during fetch
       if (get().selectedMemberSessionId !== memberSessionId) return;
-      const messages = detail.messages.map(convertSnapshot);
+      const messages = mergeToolResults(detail.messages.map(convertSnapshot));
       set({ memberMessages: messages, memberMessagesLoading: false });
     } catch {
       if (get().selectedMemberSessionId === memberSessionId) {
@@ -94,7 +95,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       const detail = await sessionService.getSessionDetail(memberSessionId);
       // Guard: selection may have changed during fetch
       if (get().selectedMemberSessionId !== memberSessionId) return;
-      const messages = detail.messages.map(convertSnapshot);
+      const messages = mergeToolResults(detail.messages.map(convertSnapshot));
       set({ memberMessages: messages });
     } catch {
       // Silently ignore — will retry on next poll
@@ -103,7 +104,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
 
   clearSelectedMember: () =>
     set({
-      selectedMemberId: null,
+      selectedExecutionId: null,
       selectedMemberSessionId: null,
       memberMessages: [],
       memberMessagesLoading: false,
@@ -112,7 +113,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   resetTeam: () =>
     set({
       memberExecutions: [],
-      selectedMemberId: null,
+      selectedExecutionId: null,
       selectedMemberSessionId: null,
       memberMessages: [],
       memberMessagesLoading: false,

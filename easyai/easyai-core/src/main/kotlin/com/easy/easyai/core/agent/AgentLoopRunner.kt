@@ -329,8 +329,12 @@ internal class AgentLoopRunner(
             ?: lastResponseWithUsage?.results?.firstOrNull()?.metadata?.finishReason
         // Prefer usage from the dedicated usage chunk (message_delta), fall back to
         // lastResponseWithResults for providers that embed usage in a content-bearing chunk.
-        val usage = lastResponseWithUsage?.metadata?.usage
-            ?: finalResponse?.metadata?.usage
+        // NOTE: ChatResponseMetadata.getUsage() never returns null (defaults to EmptyUsage
+        // with all zeros), so we must check for meaningful values — not just non-null —
+        // otherwise an earlier empty chunk (e.g. Anthropic's thinking signature chunk)
+        // would shadow the real usage carried by the message_delta/tool-call chunk.
+        val usage = lastResponseWithUsage?.metadata?.usage?.takeIf { it.promptTokens > 0 || it.completionTokens > 0 }
+            ?: finalResponse?.metadata?.usage?.takeIf { it.promptTokens > 0 || it.completionTokens > 0 }
 
         return AssistantMessage(
             id = messageId,

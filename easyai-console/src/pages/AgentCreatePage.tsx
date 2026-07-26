@@ -764,11 +764,18 @@ export const AgentCreatePage: React.FC = () => {
 
             {/* === Commands Section === */}
             {activeSection === 'commands' && (
-              <CommandSelector
-                selectedCommands={selectedCommands}
-                onChange={setSelectedCommands}
-                disabled={readOnly}
-              />
+              <>
+                <CommandSelector
+                  selectedCommands={selectedCommands}
+                  onChange={setSelectedCommands}
+                  disabled={readOnly}
+                />
+                {selectedCommands.includes('goal') && !selectedTools.includes('goal') && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                    ⚠ {i18n('Goal command requires goal tool')}
+                  </p>
+                )}
+              </>
             )}
 
             {/* === Schema Section === */}

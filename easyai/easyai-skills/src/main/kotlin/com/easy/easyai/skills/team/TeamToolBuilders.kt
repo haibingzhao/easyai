@@ -85,8 +85,15 @@ class DelegateToMemberToolBuilder(
 
     override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         val state = resolveState(context) ?: return null
+        // Inject concrete member IDs into the tool description so the LLM sees
+        // exact valid values in the tool schema (reduces "Researcher" vs "inline:Researcher" errors)
+        val memberIds = context.teamMembers.mapNotNull { it["id"] as? String }
+        val dynamicMetadata = if (memberIds.isNotEmpty()) {
+            metadata.copy(description = metadata.description +
+                " Valid memberId values: ${memberIds.joinToString(", ")}.")
+        } else metadata
         return DelegateToMemberTool(
-            metadata = metadata,
+            metadata = dynamicMetadata,
             state = state,
             agentStore = agentStore!!,
             agentService = agentService,

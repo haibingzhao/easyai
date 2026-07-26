@@ -80,6 +80,18 @@ class R2dbcAsyncSessionStore(
         }
     }
 
+    /**
+     * Condition excluding Team Agent member sub-sessions from session listings.
+     * A session is a member sub-session when its ID is referenced as
+     * `member_session_id` in the team member execution table. Such sessions are
+     * internal to team coordination and are viewed via the Team panel instead.
+     */
+    private fun notTeamMemberSession(): Op<Boolean> = notExists(
+        Tables.TeamMemberExecutionTable
+            .select(Tables.TeamMemberExecutionTable.memberSessionId)
+            .where { Tables.TeamMemberExecutionTable.memberSessionId eq Tables.Session.id }
+    )
+
     override suspend fun findIdsByLimit(limit: Int, offset: Int, projectId: String?, userId: String, excludeSwarm: Boolean): SessionPageResult {
         return suspendTransaction(db) {
             val fetchSize = limit + 1
@@ -93,11 +105,12 @@ class R2dbcAsyncSessionStore(
                     } else {
                         userFilter and activeStatuses
                     }
-                    if (excludeSwarm) {
+                    val swarmFilter = if (excludeSwarm) {
                         baseFilter and Tables.Session.swarmRunId.isNull()
                     } else {
                         baseFilter
                     }
+                    swarmFilter and notTeamMemberSession()
                 }
                 .orderBy(Tables.Session.createdAt to SortOrder.DESC)
                 .limit(fetchSize)
@@ -129,11 +142,12 @@ class R2dbcAsyncSessionStore(
                     } else {
                         userFilter and activeStatuses
                     }
-                    if (excludeSwarm) {
+                    val swarmFilter = if (excludeSwarm) {
                         baseFilter and Tables.Session.swarmRunId.isNull()
                     } else {
                         baseFilter
                     }
+                    swarmFilter and notTeamMemberSession()
                 }
                 .orderBy(Tables.Session.createdAt to SortOrder.DESC)
                 .limit(fetchSize)

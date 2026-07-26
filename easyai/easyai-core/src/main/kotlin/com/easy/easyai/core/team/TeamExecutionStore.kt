@@ -103,4 +103,14 @@ interface TeamExecutionStore {
      * Called when the owning chat session is deleted, to avoid orphaned rows.
      */
     suspend fun deleteByTeamSession(teamSessionId: String)
+
+    /**
+     * Delete execution and round records for a team session created at or after [fromTimestamp]
+     * (executions by startedAt, rounds by createdAt).
+     *
+     * Called when editing a historical message truncates the conversation: team activity from the
+     * removed portion (delegations/rounds at or after the edited message's timestamp) is cleaned up
+     * so stale records don't linger in the Team panel.
+     */
+    suspend fun deleteByTeamSessionFrom(teamSessionId: String, fromTimestamp: Long)
 }

@@ -9,47 +9,19 @@ import { i18n } from '@/utils/i18n';
 
 const POLL_INTERVAL_MS = 3000;
 
-/** Aggregated view of one member across all its executions. */
-interface MemberAggregate {
-  memberId: string;
-  /** Latest execution (by round, then startedAt) */
-  latest: TeamMemberExecution;
-  rounds: number;
-  totalInputTokens: number;
-  totalOutputTokens: number;
-}
-
-function aggregateByMember(executions: TeamMemberExecution[]): MemberAggregate[] {
-  const groups = new Map<string, TeamMemberExecution[]>();
-  for (const exec of executions) {
-    const list = groups.get(exec.memberId) ?? [];
-    list.push(exec);
-    groups.set(exec.memberId, list);
-  }
-  const result: MemberAggregate[] = [];
-  for (const [memberId, list] of groups) {
-    const sorted = [...list].sort((a, b) => (a.round - b.round) || ((a.startedAt ?? 0) - (b.startedAt ?? 0)));
-    const latest = sorted[sorted.length - 1];
-    result.push({
-      memberId,
-      latest,
-      rounds: sorted.length,
-      totalInputTokens: sorted.reduce((s, e) => s + (e.inputTokens || 0), 0),
-      totalOutputTokens: sorted.reduce((s, e) => s + (e.outputTokens || 0), 0),
-    });
-  }
-  // Running/blocked members first, then by startedAt
+/** Sort executions: active (running/blocked) first, then by startedAt descending. */
+function sortExecutions(executions: TeamMemberExecution[]): TeamMemberExecution[] {
   const statusOrder: Record<string, number> = { RUNNING: 0, ESCALATED: 1, SUSPENDED: 1, ERROR: 2, COMPLETED: 3, RESUMED: 4, REASSIGNED: 5 };
-  result.sort((a, b) =>
-    (statusOrder[a.latest.status] ?? 9) - (statusOrder[b.latest.status] ?? 9) ||
-    ((a.latest.startedAt ?? 0) - (b.latest.startedAt ?? 0))
+  return [...executions].sort((a, b) =>
+    (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9) ||
+    ((b.startedAt ?? 0) - (a.startedAt ?? 0))
   );
-  return result;
 }
 
 /**
  * Team Member Panel — right-panel tab showing member execution cards
  * for the current TEAM agent session. Polls the executions API.
+ * Each execution is shown as a separate card (same member can appear multiple times).
  */
 export const TeamMemberPanel: React.FC = () => {
   const sessionId = useChatStore((s) => s.sessionId);
@@ -58,15 +30,15 @@ export const TeamMemberPanel: React.FC = () => {
   const setTeamFilter = useTeamStore((s) => s.setTeamFilter);
   const refreshExecutions = useTeamStore((s) => s.refreshExecutions);
   const selectMember = useTeamStore((s) => s.selectMember);
-  const selectedMemberId = useTeamStore((s) => s.selectedMemberId);
+  const selectedExecutionId = useTeamStore((s) => s.selectedExecutionId);
   const resetTeam = useTeamStore((s) => s.resetTeam);
 
-  const aggregates = useMemo(() => aggregateByMember(memberExecutions), [memberExecutions]);
+  const sorted = useMemo(() => sortExecutions(memberExecutions), [memberExecutions]);
 
-  // When every member has reached a terminal status there is nothing new to poll;
+  // When every execution has reached a terminal status there is nothing new to poll;
   // a subsequent leader action (re-delegate / resume) arrives via SSE and re-triggers a refresh.
-  const allTerminal = aggregates.length > 0 &&
-    aggregates.every((agg) => TERMINAL_STATUSES.includes(agg.latest.status));
+  const allTerminal = sorted.length > 0 &&
+    sorted.every((exec) => TERMINAL_STATUSES.includes(exec.status));
 
   // Initial fetch + reset on session change
   useEffect(() => {
@@ -77,7 +49,7 @@ export const TeamMemberPanel: React.FC = () => {
     refreshExecutions(sessionId);
   }, [sessionId, refreshExecutions, resetTeam]);
 
-  // Poll while a session is active and not all members are terminal
+  // Poll while a session is active and not all executions are terminal
   useEffect(() => {
     if (!sessionId || allTerminal) return;
     const timer = setInterval(() => refreshExecutions(sessionId), POLL_INTERVAL_MS);
@@ -85,17 +57,17 @@ export const TeamMemberPanel: React.FC = () => {
   }, [sessionId, allTerminal, refreshExecutions]);
 
   const counts = useMemo(() => {
-    const c: Record<TeamFilter, number> = { ALL: aggregates.length, RUNNING: 0, DONE: 0, BLOCKED: 0, ERROR: 0 };
-    for (const agg of aggregates) {
-      if (matchesTeamFilter(agg.latest.status, 'RUNNING')) c.RUNNING++;
-      if (matchesTeamFilter(agg.latest.status, 'DONE')) c.DONE++;
-      if (matchesTeamFilter(agg.latest.status, 'BLOCKED')) c.BLOCKED++;
-      if (matchesTeamFilter(agg.latest.status, 'ERROR')) c.ERROR++;
+    const c: Record<TeamFilter, number> = { ALL: sorted.length, RUNNING: 0, DONE: 0, BLOCKED: 0, ERROR: 0 };
+    for (const exec of sorted) {
+      if (matchesTeamFilter(exec.status, 'RUNNING')) c.RUNNING++;
+      if (matchesTeamFilter(exec.status, 'DONE')) c.DONE++;
+      if (matchesTeamFilter(exec.status, 'BLOCKED')) c.BLOCKED++;
+      if (matchesTeamFilter(exec.status, 'ERROR')) c.ERROR++;
     }
     return c;
-  }, [aggregates]);
+  }, [sorted]);
 
-  const visible = aggregates.filter((agg) => matchesTeamFilter(agg.latest.status, teamFilter));
+  const visible = sorted.filter((exec) => matchesTeamFilter(exec.status, teamFilter));
 
   return (
     <div className="h-full flex flex-col">
@@ -105,21 +77,18 @@ export const TeamMemberPanel: React.FC = () => {
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
             <Users className="w-8 h-8 opacity-40" />
             <p className="text-xs">
-              {aggregates.length === 0
+              {sorted.length === 0
                 ? i18n('No member executions yet. The team leader will delegate tasks to members during the conversation.')
                 : i18n('No members match this filter.')}
             </p>
           </div>
         ) : (
-          visible.map((agg) => (
+          visible.map((exec) => (
             <TeamMemberCard
-              key={agg.memberId}
-              execution={agg.latest}
-              rounds={agg.rounds}
-              totalInputTokens={agg.totalInputTokens}
-              totalOutputTokens={agg.totalOutputTokens}
-              selected={selectedMemberId === agg.memberId}
-              onClick={() => selectMember(agg.latest)}
+              key={exec.id}
+              execution={exec}
+              selected={selectedExecutionId === exec.id}
+              onClick={() => selectMember(exec)}
             />
           ))
         )}
