@@ -19,7 +19,8 @@ import {
   Sparkles,
   Users,
   Clock,
-  RefreshCw
+  RefreshCw,
+  Network
 } from 'lucide-react';
 
 export const TOOL_ICONS: Record<string, LucideIcon> = {
@@ -41,6 +42,7 @@ export const TOOL_ICONS: Record<string, LucideIcon> = {
   delegate_to_member: Users,
   wait_for_member_events: Clock,
   resume_member: RefreshCw,
+  run_swarm: Network,
 };
 
 /**
@@ -77,6 +79,7 @@ export function getToolDisplayName(toolName: string): string {
     delegate_to_member: 'Delegate to Member',
     wait_for_member_events: 'Wait for Member Events',
     resume_member: 'Resume Member',
+    run_swarm: 'Run Swarm',
   };
   return displayNames[toolName] || toolName;
 }

@@ -57,7 +57,7 @@ class AgentBasedConfigGenerator(
     private val objectMapper = SharedObjectMapper.instance
 
     companion object {
-        private const val MAX_ITERATIONS = 8
+        private const val MAX_ITERATIONS = 15
         private const val MAX_ITERATIONS_SWARM = 20
         private const val BATCH_SIZE = 20
     }
@@ -80,16 +80,20 @@ class AgentBasedConfigGenerator(
         var validationResult: ConfigValidationResult? = null
         val configBlocks = mutableListOf<ConfigBlock>()  // Chunked block accumulation
 
-        // Finalize action for swarm chunked mode: assemble blocks + existingConfig → validate → submit.
+        // Finalize action for chunked mode: assemble blocks + existingConfig → validate → submit.
         // This eliminates the need for the LLM to output the full config JSON as a tool parameter.
         val finalizeAction: suspend (String?) -> String = action@{ designExplanation ->
             if (configBlocks.isEmpty()) {
                 return@action "FINALIZE_FAILED: No configuration blocks received yet. Submit blocks via submit_config_block first."
             }
-            val assembled = assembleConfigFromBlocks(configBlocks, request.existingConfig)
+            val assembled = assembleConfigFromBlocks(configBlocks, request.existingConfig, request.configType)
                 ?: return@action "FINALIZE_FAILED: Could not assemble configuration from ${configBlocks.size} submitted blocks."
             val validation = try {
-                configValidator.validateSwarmConfig(assembled, userId)
+                if (request.configType == "swarm") {
+                    configValidator.validateSwarmConfig(assembled, userId)
+                } else {
+                    configValidator.validateAgentConfig(assembled, userId)
+                }
             } catch (e: Exception) {
                 logger.warn("Validation during finalize failed: {}", e.message)
                 null
@@ -287,7 +291,7 @@ class AgentBasedConfigGenerator(
 
             // Fallback priority: blocks (structured) > text extraction (heuristic)
             if (submittedConfig == null && configBlocks.isNotEmpty()) {
-                submittedConfig = assembleConfigFromBlocks(configBlocks, request.existingConfig)
+                submittedConfig = assembleConfigFromBlocks(configBlocks, request.existingConfig, request.configType)
                 logger.info("Assembled config from {} blocks", configBlocks.size)
             }
             if (submittedConfig == null) {
@@ -335,13 +339,8 @@ class AgentBasedConfigGenerator(
             toolRegistry, agentStore, skillRegistry, mcpClientManager, modelConfigStore, userId, configType,
             swarmContext = configType == "swarm"
         )
-        return if (configType == "swarm") {
-            // Chunked mode: blocks + finalize. No validate_config/submit_config to prevent
-            // the LLM from outputting the full config JSON as a tool parameter (causes stream stalls).
-            listOf(listResources, SubmitConfigBlockTool(), FinalizeConfigTool(finalizeAction))
-        } else {
-            listOf(ValidateConfigTool(configValidator, configType, userId), listResources, SubmitConfigTool())
-        }
+        // Both agent and swarm use chunked block mode to prevent stream stalls with large configs
+        return listOf(listResources, SubmitConfigBlockTool(), FinalizeConfigTool(finalizeAction))
     }
 
     private suspend fun resolveModelConfig(modelConfigId: String?, userId: String): ModelProviderConfig? {
@@ -365,30 +364,45 @@ You are an expert EasyAI configuration generator specializing in agent configura
 
 ## Your Workflow
 1. Analyze the user's requirements carefully
-2. Call `list_resources` to discover available tools, skills, and MCP servers
-3. Select the minimal set of tools/skills/MCP the agent needs
-4. Design the promptTemplate (must include {{ custom_instructions }})
-5. Generate the JSON configuration
-6. Call `validate_config` to verify correctness
-7. If validation fails, fix the errors and validate again
-8. Call `submit_config` with the final validated configuration
+2. Call `list_resources` to discover available tools, skills, MCP servers, and agents
+3. Call `submit_config_block` with blockType="basic" for agent identity and prompt
+4. Call `submit_config_block` with blockType="tools" for toolNames/skillNames/commandNames
+5. If MCP servers are needed: call `submit_config_block` with blockType="mcp"
+6. For EACH sub-agent: call `submit_config_block` with blockType="subagent" (one call per sub-agent)
+7. For EACH team member: call `submit_config_block` with blockType="member" (one call per member)
+8. Call `finalize_config` with a brief explanation — the system assembles, validates, and submits.
+   If validation fails, fix by re-submitting corrected blocks, then call finalize_config again.
+9. After finalize_config succeeds, output a brief summary to the user. Done.
+
+CRITICAL RULES — NEVER output the full configuration JSON as a tool parameter:
+- Each submit_config_block call contains ONLY ONE small section (~200-800 tokens)
+- finalize_config takes ONLY an explanation string — assembly is automatic
+- You do NOT have validate_config or submit_config tools — do not attempt to call them
+
+## Block Schemas
+- "basic": {"id": string, "name": string, "description": string, "agentType": "PRIMARY"|"SUBAGENT"|"TEAM"|"ALL",
+  "agentContext": "CHAT"|"SWARM"|"BOTH", "promptTemplate": string (MUST include {{ custom_instructions }}),
+  "customInstructions": string (optional), "maxIterations": int, "maxSubAgentDepth": int}
+- "tools": {"toolNames": string[], "skillNames": string[], "commandNames": string[]}
+- "mcp": {"mcpConfigs": [{"serverName": string, "toolNames": string[], "promptNames": string[]}]}
+- "subagent": {"agentId": string} for global reference, OR {"name": string, "description": string,
+  "systemPrompt": string, "toolNames": string[], "skillNames": string[], "mcpConfigs": [...]} for inline custom
+- "member": same schema as "subagent"
 
 ## Critical Rules
 - toolNames: ONLY built-in tools (from list_resources type="tools"); empty array = No tools
 - MCP tools: via mcpConfigs field, NEVER in toolNames
 - Skills: via skillNames field, NEVER in toolNames
 - promptTemplate: MUST be valid Jinja2 and include {{ custom_instructions }}
-- subAgentIds: MUST reference existing agents (from list_resources type="agents")
+- subagent blocks: use {"agentId": "xxx"} for existing agents (from list_resources type="agents"),
+  or provide full inline fields for custom sub-agents
 - inputSchema: required when using {{ input.xxx }} in promptTemplate
 - Minimalism: only include tools/skills/MCP the agent will actually use
-- For TEAM agents: set agentType="TEAM" and provide memberIds referencing existing non-TEAM agents (discover via list_resources type="agents"). The leader coordinates via delegate_to_member/wait_for_member_events/resume_member tools; members do the actual work. Keep toolNames empty for leaders and focus the promptTemplate on coordination strategy.
-- **SWARM context restriction**: when agentContext is SWARM, `load_skill`, `task`, and `run_swarm` are NOT available — NEVER include them in toolNames; skillNames and subAgentIds must be empty (Skills and Sub-Agents are unsupported in swarm runtime)
+- For TEAM agents: set agentType="TEAM" in basic block and provide member blocks
+- **SWARM context restriction**: when agentContext is SWARM, `load_skill`, `task`, and `run_swarm` are NOT available
 
 ## Configuration Specification
 $specBrief
-
-## Output Format
-When calling submit_config, provide the complete JSON configuration and a brief explanation of your design decisions.
 """.trimIndent()
             }
             "swarm" -> """
@@ -483,9 +497,9 @@ When calling submit_config, provide the complete JSON configuration and a brief 
             "agent" -> {
                 sb.appendLine("1. Call `list_resources type=\"tools\"` to see available built-in tools")
                 sb.appendLine("2. Call `list_resources type=\"skills\"` and `type=\"mcp_servers\"` if relevant")
-                sb.appendLine("3. Only include subAgentIds if the agent needs delegation (check type=\"agents\")")
-                sb.appendLine("4. Design the promptTemplate with {{ custom_instructions }} included")
-                sb.appendLine("5. Generate, validate, and submit the configuration")
+                sb.appendLine("3. Call `list_resources type=\"agents\"` if sub-agents or team members are needed")
+                sb.appendLine("4. Submit each section via `submit_config_block` (basic → tools → mcp → each subagent → each member)")
+                sb.appendLine("5. Call `finalize_config` with a brief explanation — assembly, validation, and submission are automatic")
             }
             "swarm" -> {
                 sb.appendLine("1. Call `list_resources type=\"agents\"` to see available agents")
@@ -588,70 +602,137 @@ When calling submit_config, provide the complete JSON configuration and a brief 
     }
 
     /**
-     * Assemble a complete swarm config JSON from individual blocks.
+     * Assemble a complete config JSON from individual blocks.
      * When [existingConfig] is provided, uses it as the base and merges blocks
      * by their blockIndex (partial edit mode).
+     * Supports both swarm blocks (meta/agent/task/variable) and agent blocks (basic/tools/mcp/subagent/member).
      */
-    private fun assembleConfigFromBlocks(blocks: List<ConfigBlock>, existingConfig: JsonNode?): JsonNode? {
+    private fun assembleConfigFromBlocks(blocks: List<ConfigBlock>, existingConfig: JsonNode?, configType: String = "swarm"): JsonNode? {
         return try {
             val root = if (existingConfig is ObjectNode) existingConfig.deepCopy() else objectMapper.createObjectNode()
 
-            // Meta block: overlay non-null fields (last submission wins)
-            blocks.lastOrNull { it.blockType == "meta" }?.let { meta ->
-                meta.data.path("name").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("name", it) }
-                meta.data.path("title").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("title", it) }
-                meta.data.path("description").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("description", it) }
-            }
-
-            // Agent blocks: merge by blockIndex into existing array
-            val agentBlocks = blocks.filter { it.blockType == "agent" }.sortedBy { it.blockIndex }
-            if (agentBlocks.isNotEmpty()) {
-                val agentsArr = (root.get("agents") as? ArrayNode)?.deepCopy()
-                    ?: objectMapper.createArrayNode()
-                agentBlocks.forEach { block ->
-                    if (block.blockIndex in 0 until agentsArr.size()) {
-                        agentsArr.set(block.blockIndex, block.data)
-                    } else {
-                        agentsArr.add(block.data)
-                    }
-                }
-                root.set("agents", agentsArr)
-            }
-
-            // Task blocks: merge by blockIndex into existing array
-            val taskBlocks = blocks.filter { it.blockType == "task" }.sortedBy { it.blockIndex }
-            if (taskBlocks.isNotEmpty()) {
-                val tasksArr = (root.get("tasks") as? ArrayNode)?.deepCopy()
-                    ?: objectMapper.createArrayNode()
-                taskBlocks.forEach { block ->
-                    if (block.blockIndex in 0 until tasksArr.size()) {
-                        tasksArr.set(block.blockIndex, block.data)
-                    } else {
-                        tasksArr.add(block.data)
-                    }
-                }
-                root.set("tasks", tasksArr)
-            }
-
-            // Variable blocks: merge by blockIndex into existing array
-            val varBlocks = blocks.filter { it.blockType == "variable" }.sortedBy { it.blockIndex }
-            if (varBlocks.isNotEmpty()) {
-                val varsArr = (root.get("variables") as? tools.jackson.databind.node.ArrayNode)?.deepCopy()
-                    ?: objectMapper.createArrayNode()
-                varBlocks.forEach { block ->
-                    if (block.blockIndex in 0 until varsArr.size()) {
-                        varsArr.set(block.blockIndex, block.data)
-                    } else {
-                        varsArr.add(block.data)
-                    }
-                }
-                root.set("variables", varsArr)
+            if (configType == "agent") {
+                assembleAgentConfigFromBlocks(blocks, root)
+            } else {
+                assembleSwarmConfigFromBlocks(blocks, root)
             }
 
             root
         } catch (e: Exception) {
             logger.warn("Failed to assemble config from blocks: {}", e.message)
             null
+        }
+    }
+
+    private fun assembleAgentConfigFromBlocks(blocks: List<ConfigBlock>, root: ObjectNode) {
+        // Basic block: merge fields into root
+        blocks.lastOrNull { it.blockType == "basic" }?.let { basic ->
+            listOf("id", "name", "description", "agentType", "agentContext",
+                "promptTemplate", "customInstructions", "inputSchema", "outputSchema").forEach { field ->
+                basic.data.path(field).takeIf { !it.isMissingNode && !it.isNull }?.let { root.set(field, it) }
+            }
+            basic.data.path("maxIterations").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("maxIterations", it) }
+            basic.data.path("maxSubAgentDepth").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("maxSubAgentDepth", it) }
+        }
+
+        // Tools block: merge toolNames/skillNames/commandNames
+        blocks.lastOrNull { it.blockType == "tools" }?.let { tools ->
+            tools.data.path("toolNames").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("toolNames", it) }
+            tools.data.path("skillNames").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("skillNames", it) }
+            tools.data.path("commandNames").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("commandNames", it) }
+        }
+
+        // MCP block: merge mcpConfigs
+        blocks.lastOrNull { it.blockType == "mcp" }?.let { mcp ->
+            mcp.data.path("mcpConfigs").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("mcpConfigs", it) }
+        }
+
+        // Subagent blocks: collect into subAgentIds (global) + customSubAgents (inline)
+        val subagentBlocks = blocks.filter { it.blockType == "subagent" }.sortedBy { it.blockIndex }
+        if (subagentBlocks.isNotEmpty()) {
+            val subAgentIds = objectMapper.createArrayNode()
+            val customSubAgents = objectMapper.createArrayNode()
+            subagentBlocks.forEach { block ->
+                val agentId = block.data.path("agentId")
+                if (!agentId.isMissingNode && !agentId.isNull && agentId.asText().isNotBlank()) {
+                    subAgentIds.add(agentId.asText())
+                } else {
+                    customSubAgents.add(block.data)
+                }
+            }
+            if (subAgentIds.size() > 0) root.set("subAgentIds", subAgentIds)
+            if (customSubAgents.size() > 0) root.set("customSubAgents", customSubAgents)
+        }
+
+        // Member blocks: collect into memberIds (global) + customMembers (inline)
+        val memberBlocks = blocks.filter { it.blockType == "member" }.sortedBy { it.blockIndex }
+        if (memberBlocks.isNotEmpty()) {
+            val memberIds = objectMapper.createArrayNode()
+            val customMembers = objectMapper.createArrayNode()
+            memberBlocks.forEach { block ->
+                val agentId = block.data.path("agentId")
+                if (!agentId.isMissingNode && !agentId.isNull && agentId.asText().isNotBlank()) {
+                    memberIds.add(agentId.asText())
+                } else {
+                    customMembers.add(block.data)
+                }
+            }
+            if (memberIds.size() > 0) root.set("memberIds", memberIds)
+            if (customMembers.size() > 0) root.set("customMembers", customMembers)
+        }
+    }
+
+    private fun assembleSwarmConfigFromBlocks(blocks: List<ConfigBlock>, root: ObjectNode) {
+        // Meta block: overlay non-null fields (last submission wins)
+        blocks.lastOrNull { it.blockType == "meta" }?.let { meta ->
+            meta.data.path("name").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("name", it) }
+            meta.data.path("title").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("title", it) }
+            meta.data.path("description").takeIf { !it.isMissingNode && !it.isNull }?.let { root.set("description", it) }
+        }
+
+        // Agent blocks: merge by blockIndex into existing array
+        val agentBlocks = blocks.filter { it.blockType == "agent" }.sortedBy { it.blockIndex }
+        if (agentBlocks.isNotEmpty()) {
+            val agentsArr = (root.get("agents") as? ArrayNode)?.deepCopy()
+                ?: objectMapper.createArrayNode()
+            agentBlocks.forEach { block ->
+                if (block.blockIndex in 0 until agentsArr.size()) {
+                    agentsArr.set(block.blockIndex, block.data)
+                } else {
+                    agentsArr.add(block.data)
+                }
+            }
+            root.set("agents", agentsArr)
+        }
+
+        // Task blocks: merge by blockIndex into existing array
+        val taskBlocks = blocks.filter { it.blockType == "task" }.sortedBy { it.blockIndex }
+        if (taskBlocks.isNotEmpty()) {
+            val tasksArr = (root.get("tasks") as? ArrayNode)?.deepCopy()
+                ?: objectMapper.createArrayNode()
+            taskBlocks.forEach { block ->
+                if (block.blockIndex in 0 until tasksArr.size()) {
+                    tasksArr.set(block.blockIndex, block.data)
+                } else {
+                    tasksArr.add(block.data)
+                }
+            }
+            root.set("tasks", tasksArr)
+        }
+
+        // Variable blocks: merge by blockIndex into existing array
+        val varBlocks = blocks.filter { it.blockType == "variable" }.sortedBy { it.blockIndex }
+        if (varBlocks.isNotEmpty()) {
+            val varsArr = (root.get("variables") as? ArrayNode)?.deepCopy()
+                ?: objectMapper.createArrayNode()
+            varBlocks.forEach { block ->
+                if (block.blockIndex in 0 until varsArr.size()) {
+                    varsArr.set(block.blockIndex, block.data)
+                } else {
+                    varsArr.add(block.data)
+                }
+            }
+            root.set("variables", varsArr)
         }
     }
 

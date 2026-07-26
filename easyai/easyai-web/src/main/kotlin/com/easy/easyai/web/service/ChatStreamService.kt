@@ -27,6 +27,7 @@ import com.easy.easyai.web.model.*
 import com.easy.easyai.web.util.AttachmentProcessor
 import com.easy.easyai.web.util.AttachmentValidationException
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import org.slf4j.LoggerFactory
@@ -94,6 +95,7 @@ class ChatStreamService(
         val localSessions = activeStreamSessions.entries.map { it.toPair() }
         activeStreamSessions.clear()
         activeSessions.clear()
+        sessionTaps.clear()
         statusUpdateScope.cancel()
         runBlocking {
             sessionStore?.let { store ->
@@ -129,6 +131,14 @@ class ChatStreamService(
     private val activeStreamSessions = ConcurrentHashMap<String, String>()
 
     /**
+     * Per-session broadcast tap for secondary SSE subscribers (e.g., historical session viewer).
+     * Primary SSE consumer (buildSseFlow) emits via non-blocking tryEmit;
+     * the watch endpoint collects from this flow.
+     * Config mirrors SwarmEventBridge: replay=0, buffer=256, DROP_OLDEST.
+     */
+    private val sessionTaps = ConcurrentHashMap<String, MutableSharedFlow<ServerSentEvent<ChatStreamEvent>>>()
+
+    /**
      * Check if a session has an active SSE stream.
      * Returns dual-dimension status: local (in-memory) + remote (DB).
      */
@@ -137,6 +147,26 @@ class ChatStreamService(
         val dbStatus = sessionStore?.findStatus(sessionId, userId)
         val remote = dbStatus == "streaming"
         return StreamingStatus(local = local, remote = remote)
+    }
+
+    /**
+     * Attach to an active session's SSE broadcast as a read-only observer.
+     * Terminates after done/error event (same transformWhile pattern as SwarmController.streamRunEvents).
+     * Returns immediate "not_streaming" done if session is not active on this server.
+     *
+     * The liveness check is performed at collection time (inside the flow) to eliminate
+     * the check-then-subscribe race where the session could end between check and subscription.
+     */
+    fun watchSession(sessionId: String): Flow<ServerSentEvent<ChatStreamEvent>> = flow {
+        val tap = sessionTaps[sessionId]
+        if (tap == null || !activeStreamSessions.containsKey(sessionId)) {
+            emit(ChatStreamEvent.Done(reason = "not_streaming").toSse("done"))
+            return@flow
+        }
+        tap.transformWhile { sse ->
+            emit(sse)
+            sse.event() != "done" && sse.event() != "error"
+        }.collect { emit(it) }
     }
 
     /**
@@ -891,6 +921,11 @@ class ChatStreamService(
         activeStreamSessions[session.id] = userId
         // Register the ChatSession instance so cancel/queue operations can find the RUNNING instance
         activeSessions[session.id] = session
+        // Create per-session broadcast tap for secondary subscribers (historical session viewer)
+        val tap = MutableSharedFlow<ServerSentEvent<ChatStreamEvent>>(
+            replay = 0, extraBufferCapacity = 256, onBufferOverflow = BufferOverflow.DROP_OLDEST
+        )
+        sessionTaps[session.id] = tap
         // Persist streaming status to DB (fire-and-forget)
         val streamingJob = markStreaming(session.id, userId)
 
@@ -958,25 +993,37 @@ class ChatStreamService(
                 }
 
                 val chatEvents = ChatEventConverter.convert(event, customEventConverters)
-                chatEvents.forEach { chatEvent -> emit(chatEvent.toSse()) }
+                chatEvents.forEach { chatEvent ->
+                    val sse = chatEvent.toSse()
+                    emit(sse)
+                    tap.tryEmit(sse)
+                }
             }
 
             // Emit done event after stream completes
             val resultMessages = stream.result()
             val doneEvent = ChatEventConverter.createDoneEvent(resultMessages, endReason = endReason)
-            emit(doneEvent.toSse("done"))
+            val doneSse = doneEvent.toSse("done")
+            emit(doneSse)
+            tap.tryEmit(doneSse)
         } catch (e: CancellationException) {
             logger.info("SSE connection cancelled during {} for session {}, aborting agent", context, session.id)
             session.abort()
+            // Notify secondary subscribers (watch endpoint) so they terminate immediately
+            // instead of hanging until the 30-minute controller timeout.
+            tap.tryEmit(errorSse("Primary SSE connection cancelled", isRetryable = false))
             // Don't clear pendingPermission here — the permission may still need user response.
             // cancelChat() handles explicit user cancellation separately.
             throw e
         } catch (e: Exception) {
             logger.error("Error in {} chat stream for session {}", context, session.id, e)
-            emit(errorSse(e.message, isRetryable))
+            val errSse = errorSse(e.message, isRetryable)
+            emit(errSse)
+            tap.tryEmit(errSse)
         } finally {
             activeStreamSessions.remove(session.id)
             activeSessions.remove(session.id)
+            sessionTaps.remove(session.id)
             goalListener?.let { goalStatusNotifier?.removeListener(it) }
             goalChannel.close()
             // Restore active status in DB (fire-and-forget)

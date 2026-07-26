@@ -57,15 +57,15 @@ class ResourceExistenceValidator(
 
         // Validate team members (TEAM agents)
         if (request.agentType == AgentType.TEAM) {
-            if (request.memberIds.isEmpty()) {
-                errors.add(ConfigValidationError("memberIds", "TEAM agent requires at least one member (memberIds)"))
+            if (request.memberIds.isEmpty() && request.customMembers.isEmpty()) {
+                errors.add(ConfigValidationError("memberIds", "TEAM agent requires at least one member (memberIds or customMembers)"))
             }
             for (id in request.memberIds) {
                 val member = agentStore.findById(id, userId)
                 if (member == null) {
                     errors.add(ConfigValidationError("memberIds", "Member agent '$id' does not exist"))
-                } else if (member.agentType == AgentType.TEAM) {
-                    errors.add(ConfigValidationError("memberIds", "Member '$id' is a TEAM agent — nested teams are not allowed"))
+                } else if (member.agentType != AgentType.ALL && member.agentType != AgentType.SUBAGENT) {
+                    errors.add(ConfigValidationError("memberIds", "Member '$id' is ${member.agentType} — only ALL or SUBAGENT agents can be team members"))
                 }
             }
             if (request.toolNames.isNotEmpty()) {

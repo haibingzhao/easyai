@@ -81,21 +81,31 @@ class DelegateToMemberTool(
             )
         }
 
-        // 3. Look up member AgentDefinition
+        // 3. Look up member AgentDefinition (DB lookup with inline fallback)
         val userId = agentContext.userId ?: "system"
-        val definition = agentStore.findById(params.memberId, userId) ?: run {
-            return errorResult("Error: Member agent '${params.memberId}' not found in agent store.")
-        }
+        val definition = agentStore.findById(params.memberId, userId)
+            ?: resolveInlineMember(params.memberId, agentContext)
+            ?: return errorResult("Error: Member agent '${params.memberId}' not found in agent store.")
 
         // 4. Resolve member context and tools independently
-        val (resolvedBaseContext, derivedTools) = if (contextResolver != null) {
-            contextResolver.resolve(definition, agentContext)
-        } else {
+        val inlineEntry = if (definition.id.startsWith("inline:")) {
+            agentContext.teamMembers.find { it["id"] == definition.id }
+        } else null
+        val effectiveContext = if (inlineEntry != null) {
             agentContext.copy(
+                mcpConfigs = com.easy.easyai.skills.subagent.SubAgentTool.parseInlineMcpConfigs(inlineEntry),
+                allowedSkillNames = com.easy.easyai.skills.subagent.SubAgentTool.parseInlineSkillNames(inlineEntry)
+            )
+        } else agentContext
+
+        val (resolvedBaseContext, derivedTools) = if (contextResolver != null) {
+            contextResolver.resolve(definition, effectiveContext)
+        } else {
+            effectiveContext.copy(
                 agentId = definition.id,
                 promptTemplate = definition.promptTemplate,
                 subAgents = emptyList()
-            ) to agentContext.tools.filter { it.name !in FORBIDDEN_MEMBER_TOOLS }
+            ) to effectiveContext.tools.filter { it.name !in FORBIDDEN_MEMBER_TOOLS }
         }
 
         // 5. Create blocked-state holder + ask_leader signal tool
@@ -312,6 +322,17 @@ class DelegateToMemberTool(
         } catch (e: Exception) {
             logger.warn("Failed to update team execution record: {}", e.message)
         }
+    }
+
+    /**
+     * Resolve an inline custom member from agentContext.teamMembers.
+     * Returns null if the memberId does not match any inline entry.
+     */
+    private fun resolveInlineMember(memberId: String, agentContext: AgentContext): AgentDefinition? {
+        val inlineEntry = agentContext.teamMembers.find {
+            (it["inline"] == true) && (it["id"] == memberId || it["name"] == memberId)
+        } ?: return null
+        return com.easy.easyai.skills.subagent.SubAgentTool.synthesizeInlineDefinition(inlineEntry)
     }
 
     companion object {

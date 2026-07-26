@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.*
 import org.springframework.web.server.ResponseStatusException
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
+import java.time.Duration
 
 /**
  * WebFlux REST controller exposing SSE endpoints for web client integration.
@@ -112,6 +113,23 @@ class ChatController(
             val status = chatStreamService.isSessionStreaming(sessionId, userId)
             mapOf("streaming" to status.remote, "local" to status.local)
         }
+    }
+
+    /**
+     * Attach to a running session's SSE event stream (read-only observer).
+     * Used by frontend when opening a running session from history to get real-time events.
+     * Graceful fallback: returns "not_streaming" done event if session is not active on this server.
+     */
+    @PostMapping(
+        value = ["/session/{sessionId}/events"],
+        produces = [MediaType.TEXT_EVENT_STREAM_VALUE]
+    )
+    fun watchSessionEvents(@PathVariable sessionId: String): Flux<ServerSentEvent<ChatStreamEvent>> {
+        return mono {
+            verifyOwnership(sessionId)
+            chatStreamService.watchSession(sessionId)
+        }.flatMapMany { it.asFlux() }
+         .timeout(Duration.ofMinutes(30))
     }
 
     /**

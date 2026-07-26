@@ -203,6 +203,11 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
             agent: `Agent ${block.blockIndex + 1}`,
             task: `Task ${block.blockIndex + 1}`,
             variable: `Variable ${block.blockIndex + 1}`,
+            basic: 'Basic',
+            tools: 'Tools',
+            mcp: 'MCP',
+            subagent: `Sub-Agent ${block.blockIndex + 1}`,
+            member: `Member ${block.blockIndex + 1}`,
           };
           const label = `${labelMap[block.blockType] ?? block.blockType} ✓`;
           setSegments(prev => [...prev, { type: 'config_block', blockType: block.blockType, blockIndex: block.blockIndex, label }]);

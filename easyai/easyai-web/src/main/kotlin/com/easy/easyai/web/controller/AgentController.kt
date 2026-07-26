@@ -17,6 +17,7 @@ import com.easy.easyai.web.security.getCurrentUserId
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.reactor.mono
+import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
@@ -52,6 +53,7 @@ class AgentController(
     @param:Autowired(required = false)
     private val templateRenderer: TemplateRenderer? = null,
 ) {
+    private val logger = LoggerFactory.getLogger(javaClass)
 
     @GetMapping
     fun listAll(): Mono<List<AgentDto>> = mono {
@@ -81,6 +83,8 @@ class AgentController(
 
     /**
      * Export an agent configuration as a self-contained JSON file.
+     * Global sub-agent/member references are expanded to inline custom format
+     * so the exported file is fully portable across environments.
      */
     @GetMapping("/{id}/export")
     fun exportAgent(@PathVariable id: String): Mono<ResponseEntity<String>> = mono {
@@ -88,13 +92,61 @@ class AgentController(
         val agent = agentStore.findById(id, userId)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found: $id")
         val dto = loadAgentDto(agent, id)
-        val exportDto = mapOf("formatVersion" to 1, "agent" to dto)
-        val json = objectMapper.writeValueAsString(exportDto)
+
+        // Expand global sub-agent references to inline custom format
+        // If an agent cannot be resolved (deleted/cross-user), keep original ID reference
+        val expandedSubAgents = mutableListOf<InlineAgentSpec>()
+        val unresolvedSubAgentIds = mutableListOf<String>()
+        for (subId in dto.subAgentIds) {
+            val spec = expandAgentToInlineSpec(subId, userId)
+            if (spec != null) expandedSubAgents.add(spec)
+            else { unresolvedSubAgentIds.add(subId); logger.warn("Export: sub-agent '{}' not found, keeping ID reference", subId) }
+        }
+        val expandedMembers = mutableListOf<InlineAgentSpec>()
+        val unresolvedMemberIds = mutableListOf<String>()
+        for (memberId in dto.memberIds) {
+            val spec = expandAgentToInlineSpec(memberId, userId)
+            if (spec != null) expandedMembers.add(spec)
+            else { unresolvedMemberIds.add(memberId); logger.warn("Export: member '{}' not found, keeping ID reference", memberId) }
+        }
+
+        val exportDto = dto.copy(
+            subAgentIds = unresolvedSubAgentIds,
+            memberIds = unresolvedMemberIds,
+            customSubAgents = expandedSubAgents + dto.customSubAgents,
+            customMembers = expandedMembers + dto.customMembers
+        )
+        val exportPayload = mapOf("formatVersion" to 1, "agent" to exportDto)
+        val json = objectMapper.writeValueAsString(exportPayload)
         val safeId = id.replace(Regex("[^a-zA-Z0-9._-]"), "_")
         ResponseEntity.ok()
             .header("Content-Disposition", "attachment; filename=\"${safeId}.agent.json\"")
             .contentType(MediaType.APPLICATION_JSON)
             .body(json)
+    }
+
+    /**
+     * Expand a global agent reference to an InlineAgentSpec for export.
+     * Loads the agent's definition, tools, skills, and MCP configs.
+     * Returns null if the agent is not found (logs a warning).
+     */
+    private suspend fun expandAgentToInlineSpec(agentId: String, userId: String): InlineAgentSpec? {
+        val definition = agentStore.findById(agentId, userId)
+        if (definition == null) {
+            logger.warn("Export: agent '{}' not found, skipping expansion", agentId)
+            return null
+        }
+        val toolNames = agentStore.getAgentToolNames(agentId)
+        val skillNames = agentStore.getAgentSkillNames(agentId)
+        val mcpConfigs = agentStore.getAgentMcpConfigs(agentId).toMcpBindingDtos()
+        return InlineAgentSpec(
+            name = definition.name,
+            description = definition.description ?: "",
+            systemPrompt = definition.promptTemplate ?: "",
+            toolNames = toolNames,
+            skillNames = skillNames,
+            mcpConfigs = mcpConfigs
+        )
     }
 
     @PostMapping
@@ -117,7 +169,7 @@ class AgentController(
         if (existing != null) {
             throw ResponseStatusException(HttpStatus.CONFLICT, "Agent already exists: ${request.id}")
         }
-        validateTeamMembers(request.agentType, request.memberIds, userId)
+        validateTeamMembers(request.agentType, request.memberIds, request.customMembers, userId)
         val agent = AgentDefinition.create(
             id = request.id,
             name = request.name,
@@ -143,13 +195,22 @@ class AgentController(
         agentStore.saveAgentMcpConfigs(request.id, request.mcpConfigs.toAgentToolConfigs(request.id))
         agentStore.saveAgentCommands(request.id, request.commandNames)
         agentStore.saveAgentMembers(request.id, request.memberIds)
+        // Save inline custom sub-agents and members
+        if (request.customSubAgents.isNotEmpty()) {
+            agentStore.saveAgentInlineSpecs(request.id, TargetType.SUBAGENT, request.customSubAgents.toInlineToolConfigs(request.id, TargetType.SUBAGENT))
+        }
+        if (request.customMembers.isNotEmpty()) {
+            agentStore.saveAgentInlineSpecs(request.id, TargetType.MEMBER, request.customMembers.toInlineToolConfigs(request.id, TargetType.MEMBER))
+        }
         agent.toDto(
             toolNames = request.toolNames,
             subAgentIds = request.subAgentIds,
             skillNames = request.skillNames,
             mcpConfigs = request.mcpConfigs,
             commandNames = request.commandNames,
-            memberIds = request.memberIds
+            memberIds = request.memberIds,
+            customSubAgents = request.customSubAgents,
+            customMembers = request.customMembers
         )
     }
 
@@ -165,7 +226,7 @@ class AgentController(
         if (existing.userId == AuthConstants.SYSTEM_USER_ID) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot modify built-in agent: $id")
         }
-        validateTeamMembers(request.agentType, request.memberIds, userId)
+        validateTeamMembers(request.agentType, request.memberIds, request.customMembers, userId)
 
         val updated = existing.copy(
             name = request.name,
@@ -191,6 +252,9 @@ class AgentController(
         agentStore.saveAgentMcpConfigs(id, request.mcpConfigs.toAgentToolConfigs(id))
         agentStore.saveAgentCommands(id, request.commandNames)
         agentStore.saveAgentMembers(id, request.memberIds)
+        // Save inline custom sub-agents and members
+        agentStore.saveAgentInlineSpecs(id, TargetType.SUBAGENT, request.customSubAgents.toInlineToolConfigs(id, TargetType.SUBAGENT))
+        agentStore.saveAgentInlineSpecs(id, TargetType.MEMBER, request.customMembers.toInlineToolConfigs(id, TargetType.MEMBER))
         loadAgentDto(updated, id)
     }
 
@@ -286,7 +350,7 @@ class AgentController(
         if (agent.userId == AuthConstants.SYSTEM_USER_ID) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot modify built-in agent: $id")
         }
-        validateTeamMembers(agent.agentType, request.memberIds, userId)
+        validateTeamMembers(agent.agentType, request.memberIds, emptyList(), userId)
         agentStore.saveAgentMembers(id, request.memberIds)
         request.memberIds
     }
@@ -359,7 +423,9 @@ class AgentController(
         skillNames: List<String>? = null,
         mcpConfigs: List<McpBindingDto>? = null,
         commandNames: List<String>? = null,
-        memberIds: List<String>? = null
+        memberIds: List<String>? = null,
+        customSubAgents: List<InlineAgentSpec>? = null,
+        customMembers: List<InlineAgentSpec>? = null
     ): AgentDto = AgentDto(
         id = this.id,
         name = this.name,
@@ -374,6 +440,8 @@ class AgentController(
         mcpConfigs = mcpConfigs ?: emptyList(),
         commandNames = commandNames ?: emptyList(),
         memberIds = memberIds ?: emptyList(),
+        customSubAgents = customSubAgents ?: emptyList(),
+        customMembers = customMembers ?: emptyList(),
         maxIterations = this.maxIterations,
         maxSubAgentDepth = this.maxSubAgentDepth,
         color = this.color,
@@ -403,20 +471,20 @@ class AgentController(
      * Validate team member references:
      * - TEAM agents require at least one member; non-TEAM agents ignore memberIds.
      * - All memberIds must reference existing agents (user-owned or built-in).
-     * - Members cannot be TEAM type (prevents infinite nesting); only PRIMARY/SUBAGENT/ALL.
+     * - Members must be ALL or SUBAGENT type (PRIMARY/TEAM not allowed as members).
      */
-    private suspend fun validateTeamMembers(agentType: AgentType, memberIds: List<String>, userId: String) {
+    private suspend fun validateTeamMembers(agentType: AgentType, memberIds: List<String>, customMembers: List<InlineAgentSpec>, userId: String) {
         if (agentType != AgentType.TEAM) return
-        if (memberIds.isEmpty()) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "TEAM agent requires at least one member (memberIds)")
+        if (memberIds.isEmpty() && customMembers.isEmpty()) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "TEAM agent requires at least one member (memberIds or customMembers)")
         }
         for (memberId in memberIds) {
             val member = agentStore.findById(memberId, userId)
                 ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Member agent not found: $memberId")
-            if (member.agentType == AgentType.TEAM) {
+            if (member.agentType != AgentType.ALL && member.agentType != AgentType.SUBAGENT) {
                 throw ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "Member '$memberId' is a TEAM agent — nested teams are not allowed"
+                    "Member '$memberId' is ${member.agentType} — only ALL or SUBAGENT agents can be team members"
                 )
             }
         }
@@ -424,18 +492,30 @@ class AgentController(
 
     private suspend fun loadAgentDto(agent: AgentDefinition, id: String): AgentDto = coroutineScope {
         val toolsDeferred = async { agentStore.getAgentToolNames(id) }
-        val subAgentIdsDeferred = async { agentStore.getAgentSubAgentNames(id) }
+        val subAgentConfigsDeferred = async { agentStore.getAgentToolConfigs(id, TargetType.SUBAGENT) }
         val skillNamesDeferred = async { agentStore.getAgentSkillNames(id) }
         val mcpConfigsDeferred = async { agentStore.getAgentMcpConfigs(id).toMcpBindingDtos() }
         val commandNamesDeferred = async { agentStore.getAgentCommandNames(id) }
-        val memberIdsDeferred = async { agentStore.getAgentMemberIds(id) }
+        val memberConfigsDeferred = async { agentStore.getAgentToolConfigs(id, TargetType.MEMBER) }
+
+        val subAgentConfigs = subAgentConfigsDeferred.await()
+        val memberConfigs = memberConfigsDeferred.await()
+
+        // Separate global ID references from inline custom specs
+        val subAgentIds = subAgentConfigs.filter { !it.targetName.startsWith("inline:") }.map { it.targetName }
+        val customSubAgents = subAgentConfigs.filter { it.targetName.startsWith("inline:") }.mapNotNull { it.toInlineAgentSpec() }
+        val memberIds = memberConfigs.filter { !it.targetName.startsWith("inline:") }.map { it.targetName }
+        val customMembers = memberConfigs.filter { it.targetName.startsWith("inline:") }.mapNotNull { it.toInlineAgentSpec() }
+
         agent.toDto(
             toolNames = toolsDeferred.await(),
-            subAgentIds = subAgentIdsDeferred.await(),
+            subAgentIds = subAgentIds,
             skillNames = skillNamesDeferred.await(),
             mcpConfigs = mcpConfigsDeferred.await(),
             commandNames = commandNamesDeferred.await(),
-            memberIds = memberIdsDeferred.await()
+            memberIds = memberIds,
+            customSubAgents = customSubAgents,
+            customMembers = customMembers
         )
     }
 
@@ -483,6 +563,27 @@ class AgentController(
                 targetName = binding.serverName,
                 metadata = metadata
             )
+        }
+
+        /** Convert InlineAgentSpec list to AgentToolConfig list for DB storage. */
+        fun List<InlineAgentSpec>.toInlineToolConfigs(agentId: String, targetType: TargetType): List<AgentToolConfig> = map { spec ->
+            AgentToolConfig(
+                id = "${agentId}_inline_${spec.name}",
+                agentId = agentId,
+                targetType = targetType,
+                targetName = "inline:${spec.name}",
+                metadata = objectMapper.writeValueAsString(spec)
+            )
+        }
+
+        /** Parse an AgentToolConfig with inline metadata back to InlineAgentSpec. */
+        fun AgentToolConfig.toInlineAgentSpec(): InlineAgentSpec? {
+            val json = metadata ?: return null
+            return try {
+                objectMapper.readValue(json, InlineAgentSpec::class.java)
+            } catch (e: Exception) {
+                null
+            }
         }
     }
 }

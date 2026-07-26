@@ -195,7 +195,7 @@ class ListResourcesTool(
                 }
             }
             appendLine()
-            appendLine("NOTE: Any non-TEAM agent (type=PRIMARY, SUBAGENT, or ALL) can be used as a team member via the memberIds field when creating a TEAM agent.")
+            appendLine("NOTE: Only ALL or SUBAGENT agents can be used as team members via the memberIds field when creating a TEAM agent.")
         }
     }
 
@@ -330,10 +330,12 @@ class SubmitConfigBlockTool : BaseToolDefinition(
     ToolMetadata(
         name = "submit_config_block",
         description = """
-            Submit a single block of the swarm configuration. Call multiple times, once per logical section.
+            Submit a single block of the configuration. Call multiple times, once per logical section.
             Blocks are assembled by the system into the final configuration.
 
             Block types and their schemas:
+
+            Swarm config blocks:
             - "meta": {"name": string, "title": string, "description": string}
             - "agent": {"id": string, "agentDefinitionId": string (blank for inline), "name": string,
               "description": string, "role": string, "systemPrompt": string, "toolNames": string[],
@@ -345,7 +347,18 @@ class SubmitConfigBlockTool : BaseToolDefinition(
               "team": {"leader": string, "members": string[], "maxIterations": int} (required if type=TEAM)}
             - "variable": {"name": string, "description": string, "defaultValue": string}
 
-            Input: {"blockType": "meta"|"agent"|"task"|"variable", "blockIndex": number, "data": object}
+            Agent config blocks:
+            - "basic": {"id": string, "name": string, "description": string, "agentType": string,
+              "agentContext": string, "promptTemplate": string, "customInstructions": string,
+              "maxIterations": int, "maxSubAgentDepth": int}
+            - "tools": {"toolNames": string[], "skillNames": string[], "commandNames": string[]}
+            - "mcp": {"mcpConfigs": [{"serverName": string, "toolNames": string[], "promptNames": string[]}]}
+            - "subagent": {"agentId": string} for global ref, OR {"name": string, "description": string,
+              "systemPrompt": string, "toolNames": string[], "skillNames": string[],
+              "mcpConfigs": [...]} for inline custom sub-agent
+            - "member": same schema as "subagent" (for team members)
+
+            Input: {"blockType": string, "blockIndex": number, "data": object}
             - blockIndex: 0-based index within the block type (e.g., second agent = blockIndex 1)
             - data: the JSON object for this block (must match the schema above)
         """.trimIndent(),
@@ -378,7 +391,7 @@ class SubmitConfigBlockTool : BaseToolDefinition(
             return errorResult("'data' must be a JSON object matching the block schema.")
         }
 
-        val validTypes = setOf("meta", "agent", "task", "variable")
+        val validTypes = setOf("meta", "agent", "task", "variable", "basic", "tools", "mcp", "subagent", "member")
         if (blockType !in validTypes) {
             return errorResult("Invalid blockType: '$blockType'. Must be one of: $validTypes")
         }

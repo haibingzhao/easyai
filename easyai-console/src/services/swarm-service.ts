@@ -368,6 +368,45 @@ class SwarmService {
     return eventSource;
   }
 
+  /**
+   * Subscribe to run events with automatic reconnection (exponential backoff).
+   * Returns a cleanup function that closes the connection and stops retries.
+   */
+  subscribeToRunEventsWithRetry(
+    runId: string,
+    onEvent: (event: SwarmEvent) => void,
+    opts?: { maxRetries?: number; baseDelayMs?: number }
+  ): () => void {
+    const maxRetries = opts?.maxRetries ?? 5;
+    const baseDelay = opts?.baseDelayMs ?? 1000;
+    let retries = 0;
+    let closed = false;
+    let es: EventSource | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const connect = () => {
+      if (closed) return;
+      es = this.subscribeToRunEvents(runId, (event) => {
+        retries = 0; // reset backoff on successful event
+        onEvent(event);
+      }, () => {
+        // onerror: schedule reconnect with backoff
+        if (closed || retries >= maxRetries) return;
+        const delay = Math.min(baseDelay * 2 ** retries, 16000);
+        retries++;
+        timer = setTimeout(connect, delay);
+      });
+    };
+
+    connect();
+
+    return () => {
+      closed = true;
+      if (timer) clearTimeout(timer);
+      es?.close();
+    };
+  }
+
   async exportPreset(name: string): Promise<void> {
     const resp = await authFetch(`${API_BASE}/presets/${encodeURIComponent(name)}/export`);
     if (!resp.ok) throw new Error(`Export failed: ${resp.status}`);

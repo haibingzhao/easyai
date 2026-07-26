@@ -5,7 +5,7 @@ import { ArtifactPanel } from '../artifacts/ArtifactPanel';
 import { WelcomeScreen } from './WelcomeScreen';
 import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
-import { getStreamingStatus } from '@/services/chat-service';
+import { getStreamingStatus, watchSession } from '@/services/chat-service';
 import { sessionService } from '@/services/session-service';
 import { getCheckpoints, getFileReviewState } from '@/services/checkpoint-service';
 import { Badge } from '../ui/Badge';
@@ -32,7 +32,7 @@ const BREAKPOINT = 800;
 const SCROLL_BOTTOM_THRESHOLD = 50;
 
 export const ChatPanel: React.FC = () => {
-  const { messages, isStreaming, isFileWriting, hasArtifacts, artifactCount, clearChat, streamingBlocks, todos, subAgentTodos, isAwaitingPermission, revertState, setRevertState, sessionId, runningSessionId, setRunningSessionId, setStreaming, loadSessionMessages, loadSessionMessagesIncremental, setTodos, setAllSubAgentTodos, setFileReviewOverrides, refreshGoal, currentGoal, pendingMessageData } = useChatStore();
+  const { messages, isStreaming, isFileWriting, hasArtifacts, artifactCount, clearChat, streamingBlocks, todos, subAgentTodos, swarmRuns, isAwaitingPermission, revertState, setRevertState, sessionId, runningSessionId, setRunningSessionId, setStreaming, loadSessionMessages, loadSessionMessagesIncremental, setTodos, setAllSubAgentTodos, setFileReviewOverrides, refreshGoal, currentGoal, pendingMessageData } = useChatStore();
   const { loadAgents, loadTools, agents, selectedAgentId } = useAgentStore();
   const [showArtifactPanel, setShowArtifactPanel] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
@@ -235,12 +235,13 @@ export const ChatPanel: React.FC = () => {
     }
   }, [sessionId, refreshGoal]);
 
-  // Poll streaming status when a running session is detected
+  // SSE-first with polling fallback when a running session is detected
   useEffect(() => {
     if (!runningSessionId) return;
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let watchHandle: { abort: () => void } | null = null;
 
     /**
      * Fetch incremental messages from the server.
@@ -340,10 +341,57 @@ export const ChatPanel: React.FC = () => {
       }
     };
 
-    poll();
+    /**
+     * Full reconciliation: load authoritative messages from DB.
+     * Called once when the SSE watch stream ends normally (done event).
+     */
+    const finalReconciliation = async () => {
+      try {
+        const [detail, checkpoints, groupedTodos] = await Promise.all([
+          sessionService.getSessionDetail(runningSessionId),
+          getCheckpoints(runningSessionId).catch(() => [] as CheckpointInfo[]),
+          sessionService.getGroupedTodos(runningSessionId).catch(() => ({ main: [], subAgents: [] })),
+        ]);
+        if (cancelled) return;
+        if (detail) {
+          loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason);
+        }
+        setTodos(groupedTodos.main);
+        setAllSubAgentTodos(
+          Object.fromEntries(groupedTodos.subAgents.map((g) => [g.agentName, { todos: g.todos, toolCallId: g.agentName }]))
+        );
+      } catch { /* best-effort */ }
+      if (!cancelled) {
+        setRunningSessionId(null);
+        setStreaming(false);
+      }
+    };
+
+    // SSE-first: attach to the running session's event broadcast
+    watchHandle = watchSession(runningSessionId, {
+      onEvent: (event) => {
+        useChatStore.getState().handleEvent(event);
+      },
+      onDone: (event) => {
+        if (cancelled) return;
+        if (event.reason === 'not_streaming') {
+          // Session not active on this server — fall back to polling
+          poll();
+        } else {
+          // Normal completion — full reconciliation
+          finalReconciliation();
+        }
+      },
+      onError: () => {
+        if (cancelled) return;
+        // SSE connection failed — fall back to polling
+        poll();
+      },
+    });
 
     return () => {
       cancelled = true;
+      watchHandle?.abort();
       if (timer) clearTimeout(timer);
     };
   }, [runningSessionId, loadSessionMessages, loadSessionMessagesIncremental, setRunningSessionId, setStreaming]);
@@ -579,7 +627,7 @@ export const ChatPanel: React.FC = () => {
         {/* Right panel (Files/Summary/Review/Sessions) */}
         {showRightPanel && (
           <div className="h-full right-panel shrink-0" style={{ width: rightPanelWidth }}>
-            <RightPanel onClose={() => setRightPanelOpen(false)} references={aggregatedReferences} mainTodos={todos} subAgentTodos={subAgentTodos} goal={currentGoal} isTeamAgent={isTeamAgent} />
+            <RightPanel onClose={() => setRightPanelOpen(false)} references={aggregatedReferences} mainTodos={todos} subAgentTodos={subAgentTodos} swarmRuns={swarmRuns} goal={currentGoal} isTeamAgent={isTeamAgent} />
           </div>
         )}
 

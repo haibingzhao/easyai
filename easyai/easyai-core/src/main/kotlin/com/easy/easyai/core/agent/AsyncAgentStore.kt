@@ -76,10 +76,19 @@ interface AsyncAgentStore {
         saveAgentToolConfigs(agentId, TargetType.MEMBER, memberIds)
     }
 
-    /** Get member agent IDs for a team agent (targetType=MEMBER). */
+    /** Get member agent IDs for a team agent (targetType=MEMBER, excludes inline entries). */
     suspend fun getAgentMemberIds(agentId: String): List<String> {
-        return getAgentToolConfigs(agentId, TargetType.MEMBER).map { it.targetName }
+        return getAgentToolConfigs(agentId, TargetType.MEMBER)
+            .filter { !it.targetName.startsWith("inline:") }
+            .map { it.targetName }
     }
+
+    /**
+     * Save inline custom agent specs for an agent (replaces existing inline entries of the given target type).
+     * Inline entries are distinguished by targetName prefix "inline:" and store spec JSON in metadata.
+     * Global ID references (without "inline:" prefix) are preserved separately via [saveAgentToolConfigs].
+     */
+    suspend fun saveAgentInlineSpecs(agentId: String, targetType: TargetType, specs: List<AgentToolConfig>)
 
     suspend fun count(): Long
 }

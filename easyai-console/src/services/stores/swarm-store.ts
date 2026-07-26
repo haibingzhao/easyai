@@ -41,6 +41,7 @@ interface SwarmState {
   pollActiveRun: (runId: string) => Promise<void>;
   setActiveRunDetail: (detail: RunDetailResponse | null) => void;
   clearPendingConsultation: () => void;
+  setPendingConsultation: (c: PendingConsultation | null) => void;
 }
 
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -208,4 +209,5 @@ export const useSwarmStore = create<SwarmState>((set, get) => ({
 
   setActiveRunDetail: (detail) => set({ activeRunDetail: detail }),
   clearPendingConsultation: () => set({ pendingConsultation: null }),
+  setPendingConsultation: (c) => set({ pendingConsultation: c }),
 }));

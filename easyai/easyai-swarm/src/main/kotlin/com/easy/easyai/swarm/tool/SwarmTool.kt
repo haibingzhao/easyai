@@ -76,7 +76,7 @@ class SwarmTool(
         }
 
         onUpdate(ToolUpdate.Progress(
-            "Starting swarm '${run.title}': ${run.tasks.size} tasks, ${run.agents.size} agents..."
+            "Starting swarm '${run.title}' (runId: ${run.id}): ${run.tasks.size} tasks, ${run.agents.size} agents..."
         ))
 
         logger.info("SwarmTool starting run '{}': preset={}, tasks={}, agents={}",

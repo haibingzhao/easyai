@@ -154,13 +154,18 @@ class R2dbcRepositoryAutoConfiguration(
                 parentContext: AgentContext
             ): Pair<AgentContext, List<ToolDefinition>> {
                 // Resolve skills with whitelist filtering (same logic as DatabaseSessionManager.resolveSkillsForAgent)
-                val allowedSkillConfigs = agentStore.getAgentToolConfigs(agentDef.id, TargetType.SKILL)
-                val (agentSkills, allowedSkillNames) = if (allowedSkillConfigs.isEmpty()) {
+                // For inline agents (id starts with "inline:"), skill whitelist is passed via parentContext.allowedSkillNames
+                val effectiveSkillNames: List<String> = if (agentDef.id.startsWith("inline:") && parentContext.allowedSkillNames.isNotEmpty()) {
+                    parentContext.allowedSkillNames
+                } else {
+                    val allowedSkillConfigs = agentStore.getAgentToolConfigs(agentDef.id, TargetType.SKILL)
+                    allowedSkillConfigs.map { it.targetName }
+                }
+                val (agentSkills, allowedSkillNames) = if (effectiveSkillNames.isEmpty()) {
                     listOf<Map<String, Any?>>() to listOf()  // No whitelist = no skills
                 } else {
-                    val allowedNames = allowedSkillConfigs.map { it.targetName }
-                    val allowedSet = allowedNames.toSet()
-                    skillsData.filter { (it["name"] as? String) in allowedSet } to allowedNames
+                    val allowedSet = effectiveSkillNames.toSet()
+                    skillsData.filter { (it["name"] as? String) in allowedSet } to effectiveSkillNames
                 }
                 // Resolve instructions based on sub-agent's own instructionsEnabled flag
                 val instructions = if (agentDef.instructionsEnabled) {

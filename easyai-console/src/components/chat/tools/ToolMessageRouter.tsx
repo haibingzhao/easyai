@@ -20,6 +20,7 @@ import { CalcToolMessage } from './CalcToolMessage';
 import { WebFetchToolMessage } from './WebFetchToolMessage';
 import { LoadSkillToolMessage } from './LoadSkillToolMessage';
 import { TeamToolMessage } from './TeamToolMessage';
+import { SwarmToolMessage } from './SwarmToolMessage';
 import { GenericToolMessage } from './GenericToolMessage';
 import { McpToolCard } from './McpToolCard';
 
@@ -46,6 +47,7 @@ const TOOL_RENDERERS: Record<string, React.ComponentType<ToolMessageProps>> = {
   delegate_to_member: TeamToolMessage,
   wait_for_member_events: TeamToolMessage,
   resume_member: TeamToolMessage,
+  run_swarm: SwarmToolMessage,
 };
 
 export function ToolMessageRouter(props: ToolMessageProps) {

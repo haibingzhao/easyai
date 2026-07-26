@@ -70,6 +70,7 @@ class DatabaseSessionManager(
     /**
      * Resolve sub-agents data for prompt rendering from agent store.
      * Applies whitelist filtering based on the parent agent's SUBAGENT tool configs.
+     * Also includes inline custom sub-agents (targetName starts with "inline:").
      */
     private suspend fun resolveSubAgentsData(agentId: String?, userId: String): List<Map<String, Any?>> {
         val store = agentStore ?: return emptyList()
@@ -77,8 +78,15 @@ class DatabaseSessionManager(
         if (agentId == null) return allSubAgents.map { it.toSubAgentMap() }
         val allowedConfigs = store.getAgentToolConfigs(agentId, TargetType.SUBAGENT)
         if (allowedConfigs.isEmpty()) return allSubAgents.map { it.toSubAgentMap() }  // No whitelist = all sub-agents
-        val allowedSet = allowedConfigs.map { it.targetName }.toSet()
-        return allSubAgents.filter { it.id in allowedSet }.map { it.toSubAgentMap() }
+
+        // Separate global references from inline custom specs
+        val globalConfigs = allowedConfigs.filter { !it.targetName.startsWith("inline:") }
+        val inlineConfigs = allowedConfigs.filter { it.targetName.startsWith("inline:") }
+
+        val allowedSet = globalConfigs.map { it.targetName }.toSet()
+        val globalEntries = allSubAgents.filter { it.id in allowedSet }.map { it.toSubAgentMap() }
+        val inlineEntries = inlineConfigs.mapNotNull { config -> config.toInlineSubAgentMap() }
+        return globalEntries + inlineEntries
     }
 
     private fun AgentDefinition.toSubAgentMap(): Map<String, Any?> = mapOf(
@@ -89,15 +97,50 @@ class DatabaseSessionManager(
     )
 
     /**
+     * Parse an inline AgentToolConfig (targetName="inline:{name}", metadata=JSON) into a sub-agent map.
+     * Includes extra fields (systemPrompt, toolNames, skillNames, mcpConfigs) for runtime synthesis.
+     */
+    private fun AgentToolConfig.toInlineSubAgentMap(): Map<String, Any?>? {
+        val json = metadata ?: return null
+        return try {
+            val node = com.easy.easyai.common.util.SharedObjectMapper.instance.readTree(json)
+            val toolNames = mutableListOf<String>()
+            val skillNames = mutableListOf<String>()
+            node.get("toolNames")?.let { arr -> if (arr.isArray) { for (el in arr) { toolNames.add(el.asText()) } } }
+            node.get("skillNames")?.let { arr -> if (arr.isArray) { for (el in arr) { skillNames.add(el.asText()) } } }
+            mapOf(
+                "id" to targetName,
+                "name" to (node.get("name")?.asText() ?: targetName.removePrefix("inline:")),
+                "description" to (node.get("description")?.asText() ?: ""),
+                "inputSchema" to null,
+                "inline" to true,
+                "systemPrompt" to (node.get("systemPrompt")?.asText() ?: ""),
+                "toolNames" to toolNames,
+                "skillNames" to skillNames,
+                "mcpConfigs" to metadata // raw JSON for downstream parsing
+            )
+        } catch (e: Exception) {
+            logger.warn("Failed to parse inline sub-agent metadata for '{}': {}", targetName, e.message)
+            null
+        }
+    }
+
+    /**
      * Resolve team member data for TEAM agents (prompt rendering + team tool registration).
      * Loads each configured member's AgentDefinition and maps to a prompt-friendly map.
+     * Also includes inline custom members (targetName starts with "inline:").
      */
     private suspend fun resolveTeamMembersData(agentId: String, userId: String): List<Map<String, Any?>> {
         val store = agentStore ?: return emptyList()
-        val memberIds = store.getAgentMemberIds(agentId)
-        if (memberIds.isEmpty()) return emptyList()
-        return memberIds.mapNotNull { memberId ->
-            store.findById(memberId, userId)?.let { member ->
+        val memberConfigs = store.getAgentToolConfigs(agentId, TargetType.MEMBER)
+        if (memberConfigs.isEmpty()) return emptyList()
+
+        // Separate global references from inline custom specs
+        val globalConfigs = memberConfigs.filter { !it.targetName.startsWith("inline:") }
+        val inlineConfigs = memberConfigs.filter { it.targetName.startsWith("inline:") }
+
+        val globalEntries = globalConfigs.mapNotNull { config ->
+            store.findById(config.targetName, userId)?.let { member ->
                 mapOf(
                     "id" to member.id,
                     "name" to member.name,
@@ -105,6 +148,8 @@ class DatabaseSessionManager(
                 )
             }
         }
+        val inlineEntries = inlineConfigs.mapNotNull { config -> config.toInlineSubAgentMap() }
+        return globalEntries + inlineEntries
     }
 
     /**

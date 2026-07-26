@@ -16,6 +16,9 @@ const activeQuestionControllers = new Set<AbortController>();
 // Store active permission reply abort controllers for cleanup
 const activePermissionControllers = new Set<AbortController>();
 
+// Store active watch (session observer) abort controllers for cleanup
+const activeWatchControllers = new Set<AbortController>();
+
 interface SSECallbacks {
   onEvent: (event: ChatStreamEvent) => void;
   onDone: (event: DoneEvent) => void;
@@ -294,7 +297,24 @@ export function compactSession(
 }
 
 /**
- * Abort all active SSE streams (resume, question, permission).
+ * Attach to a running session's SSE stream for real-time observation.
+ * Same pattern as resumeSession — reuses createSseStream (POST + auth + error handling).
+ * Used when opening a running session from history to get real-time events instead of polling.
+ */
+export function watchSession(
+  sessionId: string,
+  callbacks: SSECallbacks
+): { abort: () => void } {
+  return createSseStream({
+    url: `${API_BASE}/session/${sessionId}/events`,
+    callbacks,
+    errorReason: 'watch_failed',
+    controllerSet: activeWatchControllers,
+  });
+}
+
+/**
+ * Abort all active SSE streams (resume, question, permission, watch).
  * Called when user cancels the current chat session.
  */
 export function abortAllActiveStreams(): void {
@@ -304,6 +324,8 @@ export function abortAllActiveStreams(): void {
   activeQuestionControllers.clear();
   activePermissionControllers.forEach((controller) => controller.abort());
   activePermissionControllers.clear();
+  activeWatchControllers.forEach((controller) => controller.abort());
+  activeWatchControllers.clear();
 }
 
 /**

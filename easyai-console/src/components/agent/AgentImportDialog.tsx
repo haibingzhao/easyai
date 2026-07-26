@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import type { AgentDto, AgentCreateRequest, ResourceItem } from '@/types/agent';
+import type { AgentDto, AgentCreateRequest, ResourceItem, InlineAgentSpec } from '@/types/agent';
 import { agentService } from '@/services/agent-service';
 import { mcpService } from '@/services/mcp-service';
 import { CommandService } from '@/services/command-service';
@@ -25,6 +25,7 @@ export const AgentImportDialog: React.FC<AgentImportDialogProps> = ({ agent, onC
   const [skills, setSkills] = useState<ResourceItem[]>([]);
   const [subAgents, setSubAgents] = useState<ResourceItem[]>([]);
   const [commands, setCommands] = useState<ResourceItem[]>([]);
+  const [inlineWarnings, setInlineWarnings] = useState<string[]>([]);
 
   const idConflict = agents.some(a => a.id === agentId);
 
@@ -75,6 +76,28 @@ export const AgentImportDialog: React.FC<AgentImportDialogProps> = ({ agent, onC
           available: commandNames.has(name),
           checked: commandNames.has(name),
         })));
+
+        // Validate inline custom sub-agents/members resources (warn only, don't block)
+        const warnings: string[] = [];
+        const checkInlineSpecs = (specs: InlineAgentSpec[] | undefined, label: string) => {
+          (specs ?? []).forEach(spec => {
+            const missingTools = (spec.toolNames ?? []).filter(t => !toolNames.has(t));
+            const missingSkills = (spec.skillNames ?? []).filter(s => !skillNames.has(s));
+            const missingMcp = (spec.mcpConfigs ?? []).filter(m => !mcpNames.has(m.serverName));
+            if (missingTools.length > 0) {
+              warnings.push(`${label} "${spec.name}": missing tools: ${missingTools.join(', ')}`);
+            }
+            if (missingSkills.length > 0) {
+              warnings.push(`${label} "${spec.name}": missing skills: ${missingSkills.join(', ')}`);
+            }
+            if (missingMcp.length > 0) {
+              warnings.push(`${label} "${spec.name}": missing MCP: ${missingMcp.map(m => m.serverName).join(', ')}`);
+            }
+          });
+        };
+        checkInlineSpecs(agent.customSubAgents, 'Custom Sub-Agent');
+        checkInlineSpecs(agent.customMembers, 'Custom Member');
+        setInlineWarnings(warnings);
       } finally {
         setLoading(false);
       }
@@ -106,6 +129,8 @@ export const AgentImportDialog: React.FC<AgentImportDialogProps> = ({ agent, onC
           mcpServers.some(s => s.name === cfg.serverName && s.checked)
         ),
         commandNames: commands.filter(c => c.checked).map(c => c.name),
+        customSubAgents: agent.customSubAgents ?? [],
+        customMembers: agent.customMembers ?? [],
         maxIterations: agent.maxIterations,
         maxSubAgentDepth: agent.maxSubAgentDepth,
         color: agent.color ?? undefined,
@@ -225,6 +250,26 @@ export const AgentImportDialog: React.FC<AgentImportDialogProps> = ({ agent, onC
               {renderResourceSection(i18n('Skills'), skills, skills, setSkills)}
               {renderResourceSection(i18n('Sub-Agents'), subAgents, subAgents, setSubAgents)}
               {renderResourceSection(i18n('Commands'), commands, commands, setCommands)}
+
+              {/* Inline custom agent resource warnings */}
+              {inlineWarnings.length > 0 && (
+                <div className="border-t border-border pt-3 mt-3">
+                  <div className="text-xs font-medium text-muted-foreground mb-2">
+                    {i18n('Custom Agent Warnings')}
+                  </div>
+                  <div className="space-y-1">
+                    {inlineWarnings.map((w, i) => (
+                      <div key={i} className="flex items-start gap-1.5 text-xs text-yellow-600 dark:text-yellow-400">
+                        <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                        <span>{w}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    {i18n('These resources are not available but will not block import.')}
+                  </p>
+                </div>
+              )}
             </>
           )}
         </div>

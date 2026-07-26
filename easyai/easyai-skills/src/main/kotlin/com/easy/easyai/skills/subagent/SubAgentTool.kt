@@ -90,19 +90,28 @@ class SubAgentTool(
         val userId = agentContext.userId ?: "system"
         val definition = agentStore.findById(params.agentType, userId)
         val resolvedDefinition = definition ?: run {
-            // Fallback: search by name among sub-agents
+            // Fallback 1: search by name among sub-agents
             val availableSubAgents = agentStore.findSubAgents(userId)
             val byName = availableSubAgents.find { it.name == params.agentType }
-            if (byName == null) {
-                return ToolResult(
-                    content = listOf(TextContent(
-                        "Error: Unknown sub-agent type '${params.agentType}'. " +
-                        "Available: ${availableSubAgents.joinToString { it.name }}"
-                    )),
-                    isError = true
-                )
+            if (byName != null) {
+                byName
+            } else {
+                // Fallback 2: check for inline custom sub-agent in agentContext.subAgents
+                val inlineEntry = agentContext.subAgents.find {
+                    (it["inline"] == true) && (it["id"] == params.agentType || it["name"] == params.agentType)
+                }
+                if (inlineEntry != null) {
+                    synthesizeInlineDefinition(inlineEntry)
+                } else {
+                    return ToolResult(
+                        content = listOf(TextContent(
+                            "Error: Unknown sub-agent type '${params.agentType}'. " +
+                            "Available: ${availableSubAgents.joinToString { it.name }}"
+                        )),
+                        isError = true
+                    )
+                }
             }
-            byName
         }
 
         // 2. Validate agent type (PRIMARY-only and TEAM agents cannot be used as subagent)
@@ -141,14 +150,26 @@ class SubAgentTool(
         }
 
         // 3. Resolve sub-agent context and tools independently (same as primary agent)
+        // For inline agents, inject explicit MCP bindings and skill whitelist (they have no agent_tool DB rows)
+        val inlineEntry = if (resolvedDefinition.id.startsWith("inline:")) {
+            agentContext.subAgents.find { it["id"] == resolvedDefinition.id }
+        } else null
+        val effectiveContext = if (inlineEntry != null) {
+            val inlineSkillNames = parseInlineSkillNames(inlineEntry)
+            agentContext.copy(
+                mcpConfigs = parseInlineMcpConfigs(inlineEntry),
+                allowedSkillNames = inlineSkillNames
+            )
+        } else agentContext
+
         val (resolvedBaseContext, derivedTools) = if (contextResolver != null) {
-            contextResolver.resolve(resolvedDefinition, agentContext)
+            contextResolver.resolve(resolvedDefinition, effectiveContext)
         } else {
             // Fallback: inherit from parent tools (legacy behavior)
-            val parentTools = agentContext.tools
+            val parentTools = effectiveContext.tools
             val legacyTools = deriveToolPermissions(parentTools, resolvedDefinition, agentStore)
             // Ensure agentId and promptTemplate reflect the sub-agent's own definition, not the parent's
-            agentContext.copy(
+            effectiveContext.copy(
                 agentId = resolvedDefinition.id,
                 promptTemplate = resolvedDefinition.promptTemplate,
                 subAgents = emptyList()
@@ -254,6 +275,83 @@ class SubAgentTool(
 
         /** Tools always removed from sub-agent tool sets for safety. */
         private val FORBIDDEN_TOOLS = listOf("task", "ask_question")
+
+        /**
+         * Synthesize an AgentDefinition from an inline sub-agent map entry.
+         * Used when the sub-agent is defined inline (custom mode) rather than as a global DB record.
+         */
+        fun synthesizeInlineDefinition(entry: Map<String, Any?>): AgentDefinition {
+            val name = entry["name"] as? String ?: "inline-agent"
+            return AgentDefinition.create(
+                id = entry["id"] as? String ?: "inline-$name",
+                name = name,
+                description = entry["description"] as? String ?: "",
+                promptTemplate = entry["systemPrompt"] as? String ?: "",
+                toolNames = (entry["toolNames"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList(),
+                agentType = AgentType.SUBAGENT,
+                agentContext = AgentEnv.CHAT,
+            )
+        }
+
+        /**
+         * Parse skill names from an inline sub-agent entry.
+         * The "skillNames" field is stored as a JSON string in the inline metadata.
+         */
+        fun parseInlineSkillNames(entry: Map<String, Any?>): List<String> {
+            val rawJson = entry["mcpConfigs"] as? String ?: return emptyList()
+            return try {
+                val node = SharedObjectMapper.instance.readTree(rawJson)
+                val skillNode = node.get("skillNames") ?: return emptyList()
+                if (!skillNode.isArray) return emptyList()
+                val result = mutableListOf<String>()
+                for (el in skillNode) { result.add(el.asText()) }
+                result
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+
+        /**
+         * Parse MCP configs from an inline sub-agent entry's metadata.
+         * The "mcpConfigs" field contains the raw InlineAgentSpec JSON; extract mcpConfigs array.
+         */
+        fun parseInlineMcpConfigs(entry: Map<String, Any?>): List<AgentToolConfig> {
+            val rawJson = entry["mcpConfigs"] as? String ?: return emptyList()
+            return try {
+                val node = SharedObjectMapper.instance.readTree(rawJson)
+                val mcpNode = node.get("mcpConfigs") ?: return emptyList()
+                if (!mcpNode.isArray) return emptyList()
+                val result = mutableListOf<AgentToolConfig>()
+                for (mcpEl in mcpNode) {
+                    val serverName = mcpEl.get("serverName")?.asText() ?: ""
+                    val toolNamesNode = mcpEl.get("toolNames")
+                    val promptNamesNode = mcpEl.get("promptNames")
+                    val toolNames = mutableListOf<String>()
+                    val promptNames = mutableListOf<String>()
+                    if (toolNamesNode != null && toolNamesNode.isArray) {
+                        for (el in toolNamesNode) { toolNames.add(el.asText()) }
+                    }
+                    if (promptNamesNode != null && promptNamesNode.isArray) {
+                        for (el in promptNamesNode) { promptNames.add(el.asText()) }
+                    }
+                    val metadataObj = mutableMapOf<String, List<String>>()
+                    if (toolNames.isNotEmpty()) metadataObj["toolNames"] = toolNames
+                    if (promptNames.isNotEmpty()) metadataObj["promptNames"] = promptNames
+                    val metadata = metadataObj.takeIf { it.isNotEmpty() }
+                        ?.let { SharedObjectMapper.instance.writeValueAsString(it) }
+                    result.add(AgentToolConfig(
+                        id = "inline_mcp_$serverName",
+                        agentId = "inline",
+                        targetType = TargetType.MCP,
+                        targetName = serverName,
+                        metadata = metadata
+                    ))
+                }
+                result
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
 
         /**
          * Derive the tool set for a sub-agent from the parent's tools.

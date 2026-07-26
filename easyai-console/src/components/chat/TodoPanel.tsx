@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { ChevronDown, ChevronRight, CheckCircle2, Circle, Clock, XCircle, Bot } from 'lucide-react';
+import { ChevronDown, ChevronRight, CheckCircle2, Circle, Clock, XCircle, Bot, Network, Loader2, AlertTriangle, PauseCircle } from 'lucide-react';
 import type { TodoInfo, SubAgentTodoGroup } from '@/types/todo';
+import type { SwarmRunTracking } from '@/services/stores/chat-store';
 import { i18n } from '@/utils/i18n';
 
 interface TodoPanelProps {
   mainTodos: TodoInfo[];
   subAgentTodos: Record<string, SubAgentTodoGroup>;
+  swarmRuns?: Record<string, SwarmRunTracking>;
 }
 
 const statusIcons: Record<string, React.ReactNode> = {
@@ -86,7 +88,65 @@ function SubAgentGroup({ agentName, group }: { agentName: string; group: SubAgen
   );
 }
 
-export function TodoPanel({ mainTodos, subAgentTodos }: TodoPanelProps) {
+/** Collapsible swarm run group with cyan/teal accent */
+const SWARM_TASK_STATUS_ICON: Record<string, React.ReactNode> = {
+  PENDING: <Circle className="w-3.5 h-3.5 text-muted-foreground" />,
+  IN_PROGRESS: <Loader2 className="w-3.5 h-3.5 text-blue-500 animate-spin" />,
+  COMPLETED: <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />,
+  FAILED: <XCircle className="w-3.5 h-3.5 text-red-500" />,
+  BLOCKED: <AlertTriangle className="w-3.5 h-3.5 text-orange-500" />,
+  PAUSED: <PauseCircle className="w-3.5 h-3.5 text-purple-500" />,
+  CANCELLED: <XCircle className="w-3.5 h-3.5 text-gray-500" />,
+};
+
+function SwarmRunGroup({ tracking }: { tracking: SwarmRunTracking }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const completedTasks = tracking.tasks.filter((t) => t.status === 'COMPLETED').length;
+
+  return (
+    <div className="border-l-2 border-cyan-500/40 ml-2">
+      <div
+        className="flex items-center justify-between py-1.5 cursor-pointer hover:bg-muted/50 transition-colors px-2 rounded-r"
+        onClick={() => setIsExpanded(!isExpanded)}
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Network className="w-4 h-4 text-cyan-400 shrink-0" />
+          <span className="text-xs font-medium text-cyan-600 dark:text-cyan-400 shrink-0">
+            Swarm:
+          </span>
+          <span className="text-xs text-cyan-600 dark:text-cyan-400 truncate max-w-[140px]" title={tracking.presetName}>
+            {tracking.presetName}
+          </span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="text-xs text-muted-foreground">
+            {completedTasks}/{tracking.tasks.length}
+          </span>
+          {isExpanded ? (
+            <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" />
+          ) : (
+            <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />
+          )}
+        </div>
+      </div>
+      {isExpanded && (
+        <div className="space-y-0.5 pl-1">
+          {tracking.tasks.map((task) => (
+            <div key={task.id} className="flex items-center gap-2 py-1 text-xs px-2">
+              <span className="shrink-0">{SWARM_TASK_STATUS_ICON[task.status] ?? SWARM_TASK_STATUS_ICON.PENDING}</span>
+              <span className="flex-1 text-foreground truncate">{task.id}</span>
+              <span className="text-[10px] px-1 py-px rounded bg-muted text-muted-foreground shrink-0">
+                {task.type}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function TodoPanel({ mainTodos, subAgentTodos, swarmRuns }: TodoPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
 
   const mainCount = mainTodos.length;
@@ -96,14 +156,19 @@ export function TodoPanel({ mainTodos, subAgentTodos }: TodoPanelProps) {
   const subAgentEntries = Object.entries(subAgentTodos).filter(([, group]) => group.todos.length > 0);
   const hasSubAgents = subAgentEntries.length > 0;
 
-  // Total across main + all sub-agents
-  const totalAll = mainCount + subAgentEntries.reduce((sum, [, group]) => sum + group.todos.length, 0);
-  const completedAll = mainCompleted + subAgentEntries.reduce(
-    (sum, [, group]) => sum + countByStatus(group.todos, 'completed'),
-    0
-  );
+  // Aggregate swarm run counts
+  const swarmEntries = Object.entries(swarmRuns ?? {}).filter(([, r]) => r.tasks.length > 0);
+  const hasSwarms = swarmEntries.length > 0;
 
-  const hasAny = mainCount > 0 || hasSubAgents;
+  // Total across main + all sub-agents + swarm tasks
+  const totalAll = mainCount
+    + subAgentEntries.reduce((sum, [, group]) => sum + group.todos.length, 0)
+    + swarmEntries.reduce((sum, [, r]) => sum + r.tasks.length, 0);
+  const completedAll = mainCompleted
+    + subAgentEntries.reduce((sum, [, group]) => sum + countByStatus(group.todos, 'completed'), 0)
+    + swarmEntries.reduce((sum, [, r]) => sum + r.tasks.filter((t) => t.status === 'COMPLETED').length, 0);
+
+  const hasAny = mainCount > 0 || hasSubAgents || hasSwarms;
 
   return (
     <div className="text-sm">
@@ -152,6 +217,20 @@ export function TodoPanel({ mainTodos, subAgentTodos }: TodoPanelProps) {
                   <div className="space-y-1.5">
                     {subAgentEntries.map(([agentName, group]) => (
                       <SubAgentGroup key={agentName} agentName={agentName} group={group} />
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Swarm run groups */}
+              {hasSwarms && (
+                <>
+                  {(mainCount > 0 || hasSubAgents) && (
+                    <div className="border-t border-dashed border-border my-1.5" />
+                  )}
+                  <div className="space-y-1.5">
+                    {swarmEntries.map(([toolCallId, tracking]) => (
+                      <SwarmRunGroup key={toolCallId} tracking={tracking} />
                     ))}
                   </div>
                 </>

@@ -11,7 +11,7 @@ const AGENT_TYPE_OPTIONS: { value: AgentType | 'ALL_TYPES'; label: string }[] = 
   { value: 'ALL_TYPES', label: 'All Types' },
   { value: 'PRIMARY', label: 'Primary' },
   { value: 'SUBAGENT', label: 'Sub-Agent' },
-  { value: 'ALL', label: 'Both' },
+  { value: 'ALL', label: 'ALL' },
 ];
 
 const AGENT_CONTEXT_OPTIONS: { value: AgentEnv | 'ALL_CONTEXTS'; label: string }[] = [

@@ -10,6 +10,8 @@ import org.jetbrains.exposed.v1.core.ResultRow
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.inList
+import org.jetbrains.exposed.v1.core.like
+import org.jetbrains.exposed.v1.core.notLike
 import org.jetbrains.exposed.v1.core.or
 import org.jetbrains.exposed.v1.r2dbc.*
 import org.jetbrains.exposed.v1.r2dbc.transactions.suspendTransaction
@@ -206,9 +208,18 @@ class R2dbcAgentStore(private val db: R2dbcDatabase) : AsyncAgentStore {
     override suspend fun saveAgentToolConfigs(agentId: String, targetType: TargetType, targetNames: List<String>) {
         val toolTable = Tables.AgentToolTable
         suspendTransaction(db) {
-            toolTable.deleteWhere {
-                (toolTable.agentId eq agentId) and
-                (toolTable.targetType eq targetType.name)
+            // For SUBAGENT/MEMBER types, preserve inline entries (targetName starts with "inline:")
+            if (targetType == TargetType.SUBAGENT || targetType == TargetType.MEMBER) {
+                toolTable.deleteWhere {
+                    (toolTable.agentId eq agentId) and
+                    (toolTable.targetType eq targetType.name) and
+                    (toolTable.targetName notLike "inline:%")
+                }
+            } else {
+                toolTable.deleteWhere {
+                    (toolTable.agentId eq agentId) and
+                    (toolTable.targetType eq targetType.name)
+                }
             }
             targetNames.forEach { name ->
                 toolTable.insert {
@@ -244,7 +255,9 @@ class R2dbcAgentStore(private val db: R2dbcDatabase) : AsyncAgentStore {
     }
 
     override suspend fun getAgentSubAgentNames(agentId: String): List<String> {
-        return getAgentToolConfigs(agentId, TargetType.SUBAGENT).map { it.targetName }
+        return getAgentToolConfigs(agentId, TargetType.SUBAGENT)
+            .filter { !it.targetName.startsWith("inline:") }
+            .map { it.targetName }
     }
 
     override suspend fun saveAgentMcpConfigs(agentId: String, configs: List<AgentToolConfig>) {
@@ -266,6 +279,29 @@ class R2dbcAgentStore(private val db: R2dbcDatabase) : AsyncAgentStore {
                 }
             }
             logger.info("Saved {} MCP configs for agent {}", configs.size, agentId)
+        }
+    }
+
+    override suspend fun saveAgentInlineSpecs(agentId: String, targetType: TargetType, specs: List<AgentToolConfig>) {
+        val toolTable = Tables.AgentToolTable
+        suspendTransaction(db) {
+            // Delete existing inline entries (targetName starts with "inline:") for this agent + targetType
+            toolTable.deleteWhere {
+                (toolTable.agentId eq agentId) and
+                (toolTable.targetType eq targetType.name) and
+                (toolTable.targetName like "inline:%")
+            }
+            // Insert new inline specs with metadata JSON
+            specs.forEach { config ->
+                toolTable.insert {
+                    it[toolTable.id] = UUID.randomUUID().toString()
+                    it[toolTable.agentId] = agentId
+                    it[toolTable.targetType] = targetType.name
+                    it[toolTable.targetName] = config.targetName
+                    it[toolTable.metadata] = config.metadata
+                }
+            }
+            logger.info("Saved {} inline {} specs for agent {}", specs.size, targetType.name, agentId)
         }
     }
 

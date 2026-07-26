@@ -6,6 +6,7 @@ import { SessionsTab } from './SessionsTab';
 import { ReferencePanel } from '../chat/ReferencePanel';
 import { TodoPanel } from '../chat/TodoPanel';
 import { GoalCard } from '../chat/GoalCard';
+import { SwarmRunCard } from '../chat/SwarmRunCard';
 import { TeamMemberPanel } from '../chat/team/TeamMemberPanel';
 import { useProjectStore } from '@/services/stores/project-store';
 import { useNavStore, type RightPanelTab } from '@/services/stores/nav-store';
@@ -15,12 +16,14 @@ import { useResizable } from '@/hooks/useResizable';
 import type { ContextReferences } from '@/types/message';
 import type { TodoInfo, SubAgentTodoGroup } from '@/types/todo';
 import type { GoalStatusEvent } from '@/types/socket-event';
+import type { SwarmRunTracking } from '@/services/stores/chat-store';
 
 interface RightPanelProps {
   onClose: () => void;
   references?: ContextReferences;
   mainTodos?: TodoInfo[];
   subAgentTodos?: Record<string, SubAgentTodoGroup>;
+  swarmRuns?: Record<string, SwarmRunTracking>;
   goal?: GoalStatusEvent | null;
   /** Whether the current chat agent is a TEAM agent (shows the Team tab) */
   isTeamAgent?: boolean;
@@ -39,7 +42,7 @@ const TEAM_TAB: { id: RightPanelTab; labelKey: string } = { id: 'team', labelKey
  * Right-side panel with Summary, Review, Files, and Sessions tabs.
  * Tab switching is driven by nav-store actions (openFile, openReviewTab, openSessionsTab).
  */
-export const RightPanel: React.FC<RightPanelProps> = ({ onClose, references, mainTodos, subAgentTodos, goal, isTeamAgent = false }) => {
+export const RightPanel: React.FC<RightPanelProps> = ({ onClose, references, mainTodos, subAgentTodos, swarmRuns, goal, isTeamAgent = false }) => {
   const activeTab = useNavStore((s) => s.rightPanelTab);
   const setActiveTab = useNavStore((s) => s.setRightPanelTab);
   const selectedFile = useNavStore((s) => s.selectedFile);
@@ -87,7 +90,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({ onClose, references, mai
           <TeamMemberPanel />
         )}
         {effectiveTab === 'summary' && (
-          <SummaryTab references={references} mainTodos={mainTodos} subAgentTodos={subAgentTodos} goal={goal} />
+          <SummaryTab references={references} mainTodos={mainTodos} subAgentTodos={subAgentTodos} swarmRuns={swarmRuns} goal={goal} />
         )}
         {effectiveTab === 'review' && (
           <ReviewTab />
@@ -108,14 +111,16 @@ export const RightPanel: React.FC<RightPanelProps> = ({ onClose, references, mai
   );
 };
 
-/** Summary tab — shows Goal + Progress + References */
+/** Summary tab — shows Goal + Swarm + Progress + References */
 const SummaryTab: React.FC<{
   references?: ContextReferences;
   mainTodos?: TodoInfo[];
   subAgentTodos?: Record<string, SubAgentTodoGroup>;
+  swarmRuns?: Record<string, SwarmRunTracking>;
   goal?: GoalStatusEvent | null;
-}> = ({ references, mainTodos, subAgentTodos, goal }) => {
+}> = ({ references, mainTodos, subAgentTodos, swarmRuns, goal }) => {
   const emptyRefs: ContextReferences = { memories: [], rules: [] };
+  const hasSwarms = swarmRuns && Object.keys(swarmRuns).length > 0;
   return (
     <div className="p-2 space-y-0">
       {goal && (
@@ -124,7 +129,13 @@ const SummaryTab: React.FC<{
           <div className="border-t border-dashed border-border my-2" />
         </>
       )}
-      <TodoPanel mainTodos={mainTodos || []} subAgentTodos={subAgentTodos || {}} />
+      {hasSwarms && (
+        <>
+          <SwarmRunCard runs={swarmRuns} />
+          <div className="border-t border-dashed border-border my-2" />
+        </>
+      )}
+      <TodoPanel mainTodos={mainTodos || []} subAgentTodos={subAgentTodos || {}} swarmRuns={swarmRuns} />
       <div className="border-t border-dashed border-border my-2" />
       <ReferencePanel references={references || emptyRefs} />
     </div>

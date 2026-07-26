@@ -17,7 +17,9 @@
 | `skillNames` | string[] | no | Skill whitelist (NEVER put in toolNames) |
 | `mcpConfigs` | object[] | no | MCP server bindings (NEVER put MCP tools in toolNames) |
 | `subAgentIds` | string[] | no | Delegatable sub-agents (must reference existing agents) |
+| `customSubAgents` | object[] | no | Inline custom sub-agents (self-contained, no external reference needed) |
 | `memberIds` | string[] | no | Team members (**required when agentType=TEAM**, must reference existing non-TEAM agents) |
+| `customMembers` | object[] | no | Inline custom team members (self-contained, no external reference needed) |
 | `maxIterations` | integer | no | ReAct loop cap (default 50) |
 | `maxSubAgentDepth` | integer | no | Delegation depth (default 1, 0=disabled) |
 | `inputSchema` | object/null | no | JSON Schema for structured input (`{{ input.xxx }}`) |
@@ -53,6 +55,19 @@
 | `memory` | Agent memory content |
 | `os` / `cwd` | Operating system / working directory |
 | `current_date_time` | Current timestamp |
+
+## InlineAgentSpec Schema
+
+Each entry in `customSubAgents` / `customMembers`:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | **yes** | Unique name within the parent agent |
+| `description` | string | no | Purpose description |
+| `systemPrompt` | string | no | Jinja2 system prompt for this inline agent |
+| `toolNames` | string[] | no | Tool whitelist (empty = all tools) |
+| `skillNames` | string[] | no | Skill whitelist |
+| `mcpConfigs` | object[] | no | MCP server bindings |
 
 ## Critical Rules
 
@@ -117,6 +132,39 @@
   "promptTemplate": "You are a team leader coordinating full-stack development. {{ custom_instructions }}\n\n{% if team_members %}\n## Your Members\n{% for m in team_members %}\n- {{ m.name }}: {{ m.description }}\n{% endfor %}\n{% endif %}",
   "memberIds": ["backend-dev", "frontend-dev"],
   "toolNames": [],
+  "maxIterations": 30
+}
+```
+
+## Example: Agent with Inline Custom Sub-Agents
+
+```json
+{
+  "id": "research-assistant",
+  "name": "Research Assistant",
+  "agentType": "PRIMARY",
+  "description": "Delegates research tasks to specialized inline agents",
+  "promptTemplate": "You are a research coordinator. {{ custom_instructions }}\n\n{% if sub_agents %}\n## Sub-Agents\n{% for sa in sub_agents %}\n- {{ sa.name }}: {{ sa.description }}\n{% endfor %}\n{% endif %}",
+  "toolNames": ["web_search"],
+  "customSubAgents": [
+    {
+      "name": "summarizer",
+      "description": "Summarizes long documents into key points",
+      "systemPrompt": "You are a summarization expert. Condense the given text into bullet points.",
+      "toolNames": ["file_read"],
+      "skillNames": [],
+      "mcpConfigs": []
+    },
+    {
+      "name": "fact-checker",
+      "description": "Verifies claims against web sources",
+      "systemPrompt": "You verify factual claims. Use web search to confirm or refute.",
+      "toolNames": ["web_search", "file_read"],
+      "skillNames": [],
+      "mcpConfigs": []
+    }
+  ],
+  "maxSubAgentDepth": 1,
   "maxIterations": 30
 }
 ```

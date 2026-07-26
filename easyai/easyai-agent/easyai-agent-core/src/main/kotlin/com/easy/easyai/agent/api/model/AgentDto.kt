@@ -5,6 +5,21 @@ import com.easy.easyai.core.agent.AgentType
 import com.fasterxml.jackson.annotation.JsonInclude
 
 /**
+ * Inline custom agent specification.
+ * Used for defining sub-agents or team members directly within a parent agent
+ * without creating separate AgentDefinition records.
+ */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+data class InlineAgentSpec(
+    val name: String,
+    val description: String = "",
+    val systemPrompt: String = "",
+    val toolNames: List<String> = emptyList(),
+    val skillNames: List<String> = emptyList(),
+    val mcpConfigs: List<McpBindingDto> = emptyList()
+)
+
+/**
  * Agent DTO for API requests/responses.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -23,6 +38,10 @@ data class AgentDto(
     val commandNames: List<String> = emptyList(),
     /** Team member agent IDs. Only meaningful when agentType = TEAM. */
     val memberIds: List<String> = emptyList(),
+    /** Inline custom sub-agents defined directly within this agent. */
+    val customSubAgents: List<InlineAgentSpec> = emptyList(),
+    /** Inline custom team members defined directly within this agent. */
+    val customMembers: List<InlineAgentSpec> = emptyList(),
     val maxIterations: Int = 50,
     val maxSubAgentDepth: Int = 1,
     val color: String? = null,
@@ -52,8 +71,12 @@ data class AgentCreateRequest(
     val skillNames: List<String> = emptyList(),
     val mcpConfigs: List<McpBindingDto> = emptyList(),
     val commandNames: List<String> = emptyList(),
-    /** Team member agent IDs. Required when agentType = TEAM; members must be existing non-TEAM agents. */
+    /** Team member agent IDs. Required when agentType = TEAM; members must be existing ALL or SUBAGENT agents. */
     val memberIds: List<String> = emptyList(),
+    /** Inline custom sub-agents defined directly within this agent. */
+    val customSubAgents: List<InlineAgentSpec> = emptyList(),
+    /** Inline custom team members defined directly within this agent. */
+    val customMembers: List<InlineAgentSpec> = emptyList(),
     val maxIterations: Int = 50,
     val maxSubAgentDepth: Int = 1,
     val color: String? = null,

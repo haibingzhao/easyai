@@ -33,6 +33,19 @@ export interface ToolInfo {
 }
 
 /**
+ * Inline custom agent specification.
+ * Used for defining sub-agents or team members directly within a parent agent.
+ */
+export interface InlineAgentSpec {
+  name: string;
+  description: string;
+  systemPrompt: string;
+  toolNames: string[];
+  skillNames: string[];
+  mcpConfigs: McpBindingDto[];
+}
+
+/**
  * Agent DTO from the API.
  */
 export interface AgentDto {
@@ -49,6 +62,8 @@ export interface AgentDto {
   mcpConfigs: McpBindingDto[];
   commandNames: string[];
   memberIds: string[];
+  customSubAgents: InlineAgentSpec[];
+  customMembers: InlineAgentSpec[];
   maxIterations: number;
   maxSubAgentDepth: number;
   color: string | null;
@@ -79,6 +94,10 @@ export interface AgentCreateRequest {
   commandNames: string[];
   /** Team member agent IDs. Required when agentType = TEAM; members must be existing non-TEAM agents. */
   memberIds?: string[];
+  /** Inline custom sub-agents defined directly within this agent. */
+  customSubAgents?: InlineAgentSpec[];
+  /** Inline custom team members defined directly within this agent. */
+  customMembers?: InlineAgentSpec[];
   maxIterations: number;
   maxSubAgentDepth: number;
   color?: string;

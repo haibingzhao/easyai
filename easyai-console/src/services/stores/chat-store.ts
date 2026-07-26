@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { SocketEvent, PermissionRequestEvent, GoalStatusEvent } from '@/types/socket-event';
 import type { TodoInfo, SubAgentTodoGroup } from '@/types/todo';
+import type { TaskSummary } from '@/services/swarm-service';
 import type { Message, ToolResult, ToolResultContentBlock, ContextReferences, QueuedMessage } from '@/types/message';
 import type { CheckpointInfo, RevertStateInfo } from '@/types/checkpoint';
 import type {
@@ -24,6 +25,17 @@ import { useTeamStore } from './team-store';
 // Re-export for backward compatibility (consumed by MessageEditor, InlineEditMessage, NodeMessageList, etc.)
 export { convertSnapshot } from './chat/message-converter';
 
+/** Tracking data for a swarm run initiated from chat (keyed by toolCallId) */
+export interface SwarmRunTracking {
+  runId: string;
+  presetName: string;
+  title: string;
+  status: string;
+  tasks: TaskSummary[];
+  totalInputTokens: number;
+  totalOutputTokens: number;
+}
+
 interface ChatState {
   sessionId: string | null;
   agentId: string;
@@ -43,6 +55,7 @@ interface ChatState {
   cancelReason: string | null;
   todos: TodoInfo[];
   subAgentTodos: Record<string, SubAgentTodoGroup>;
+  swarmRuns: Record<string, SwarmRunTracking>;
   pendingPermission: PermissionRequestEvent | null;
   isCompacting: boolean;
   /** LLM timeout retry state (set on retry event, cleared when content resumes or stream ends) */
@@ -90,6 +103,7 @@ interface ChatState {
   setTodos: (todos: TodoInfo[]) => void;
   setSubAgentTodos: (agentName: string, todos: TodoInfo[], toolCallId?: string) => void;
   setAllSubAgentTodos: (map: Record<string, SubAgentTodoGroup>) => void;
+  updateSwarmRun: (toolCallId: string, data: SwarmRunTracking) => void;
   setPendingPermission: (permission: PermissionRequestEvent | null) => void;
   markPermissionResponded: (toolCallId: string | null) => void;
   setCompacting: (compacting: boolean) => void;
@@ -133,6 +147,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   agentId: 'default',
   todos: [],
   subAgentTodos: {},
+  swarmRuns: {},
   pendingPermission: null,
   isCompacting: false,
   retryInfo: null,
@@ -319,6 +334,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   setAllSubAgentTodos: (map) => set({ subAgentTodos: map }),
 
+  updateSwarmRun: (toolCallId, data) => set((state) => ({
+    swarmRuns: { ...state.swarmRuns, [toolCallId]: data },
+  })),
+
   setPendingPermission: (permission) => set({ pendingPermission: permission }),
   markPermissionResponded: (toolCallId) => {
     setLastRespondedPermissionToolCallId(toolCallId);
@@ -413,6 +432,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     agentId: 'default',
     todos: [],
     subAgentTodos: {},
+    swarmRuns: {},
     pendingPermission: null,
     pendingMessageData: {},
     checkpointsByMessageId: {},
@@ -428,7 +448,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   loadSessionMessages: (messages, pendingPermission, checkpoints, endReason) => {
     // Store raw snapshots for incremental merge support
-    set({ _lastSnapshots: messages, currentGoal: null }); // Reset goal on full session load (session switch)
+    set({ _lastSnapshots: messages, currentGoal: null, swarmRuns: {} }); // Reset goal + swarm tracking on full session load (session switch)
     // Safe cast: Zustand's set (Partial<ChatState>) is structurally compatible with
     // LoadSetFn (Partial<LoadSessionStateShape>) because ChatState extends LoadSessionStateShape.
     // The callback in loadSessionMessagesImpl currently ignores the state parameter.

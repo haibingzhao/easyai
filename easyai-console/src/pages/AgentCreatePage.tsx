@@ -12,7 +12,7 @@ import { ArrowLeft, Save, Loader2, Bot, Shield, Settings, Terminal, BookOpen, Us
 import { JinjaTemplateEditor, type JinjaTemplateEditorHandle } from '@/components/agent/JinjaTemplateEditor';
 import { type VariableGroup } from '@/components/agent/VariableDropdown';
 import { AiConfigPanel } from '@/components/ai/AiConfigPanel';
-import type { AgentCreateRequest, AgentType, AgentEnv, McpBindingDto, TemplateValidationError } from '@/types/agent';
+import type { AgentCreateRequest, AgentType, AgentEnv, McpBindingDto, InlineAgentSpec, TemplateValidationError } from '@/types/agent';
 import { agentService } from '@/services/agent-service';
 import { SWARM_EXCLUDED_TOOLS } from '@/constants/tools';
 import { i18n } from '@/utils/i18n';
@@ -53,7 +53,7 @@ export const AgentCreatePage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const isEdit = !!id;
 
-  const { agents, subAgents, selectedAgentId, createAgent, updateAgent, loadTools, loadSubAgents, loadSkills, fetchAgent } = useAgentStore();
+  const { agents, subAgents, tools, selectedAgentId, createAgent, updateAgent, loadTools, loadSubAgents, loadSkills, fetchAgent } = useAgentStore();
 
   // Use ref to avoid re-triggering the fetchAgent useEffect when agents list changes
   const agentsRef = useRef(agents);
@@ -70,6 +70,8 @@ export const AgentCreatePage: React.FC = () => {
   const [selectedTools, setSelectedTools] = useState<string[]>([]);
   const [selectedSubAgents, setSelectedSubAgents] = useState<string[]>([]);
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
+  const [customSubAgents, setCustomSubAgents] = useState<InlineAgentSpec[]>([]);
+  const [customMembers, setCustomMembers] = useState<InlineAgentSpec[]>([]);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [selectedMcpConfigs, setSelectedMcpConfigs] = useState<McpBindingDto[]>([]);
   const [selectedCommands, setSelectedCommands] = useState<string[]>([]);
@@ -157,6 +159,8 @@ export const AgentCreatePage: React.FC = () => {
         setSelectedTools(agent.toolNames);
         setSelectedSubAgents(agent.subAgentIds || []);
         setSelectedMembers(agent.memberIds || []);
+        setCustomSubAgents(agent.customSubAgents || []);
+        setCustomMembers(agent.customMembers || []);
         setSelectedSkills(agent.skillNames || []);
         setSelectedMcpConfigs(agent.mcpConfigs || []);
         setSelectedCommands(agent.commandNames || []);
@@ -181,6 +185,8 @@ export const AgentCreatePage: React.FC = () => {
         setSelectedTools(['glob', 'grep', 'ls', 'read']);
         setSelectedSubAgents([]);
         setSelectedMembers([]);
+        setCustomSubAgents([]);
+        setCustomMembers([]);
         setSelectedSkills([]);
         setSelectedMcpConfigs([]);
         setSelectedCommands([]);
@@ -240,6 +246,8 @@ export const AgentCreatePage: React.FC = () => {
     }
     if (Array.isArray(config.subAgentIds)) setSelectedSubAgents(config.subAgentIds as string[]);
     if (Array.isArray(config.memberIds)) setSelectedMembers(config.memberIds as string[]);
+    if (Array.isArray(config.customSubAgents)) setCustomSubAgents(config.customSubAgents as InlineAgentSpec[]);
+    if (Array.isArray(config.customMembers)) setCustomMembers(config.customMembers as InlineAgentSpec[]);
     if (Array.isArray(config.skillNames)) setSelectedSkills(config.skillNames as string[]);
     if (Array.isArray(config.mcpConfigs)) setSelectedMcpConfigs(config.mcpConfigs as McpBindingDto[]);
     if (Array.isArray(config.commandNames)) setSelectedCommands(config.commandNames as string[]);
@@ -254,10 +262,10 @@ export const AgentCreatePage: React.FC = () => {
     toolNames: selectedTools, subAgentIds: selectedSubAgents,
     skillNames: selectedSkills, mcpConfigs: selectedMcpConfigs,
     commandNames: selectedCommands, memberIds: selectedMembers, maxIterations,
-    promptTemplate,
+    promptTemplate, customSubAgents, customMembers,
   }), [callsign, name, description, agentType, agentContext, selectedTools, selectedSubAgents,
     selectedSkills, selectedMcpConfigs, selectedCommands, selectedMembers, maxIterations,
-    promptTemplate]);
+    promptTemplate, customSubAgents, customMembers]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -288,7 +296,7 @@ export const AgentCreatePage: React.FC = () => {
       return;
     }
 
-    if (agentType === 'TEAM' && selectedMembers.length === 0) {
+    if (agentType === 'TEAM' && selectedMembers.length === 0 && customMembers.length === 0) {
       setError('TEAM agent requires at least one member');
       return;
     }
@@ -306,6 +314,8 @@ export const AgentCreatePage: React.FC = () => {
       mcpConfigs: selectedMcpConfigs,
       commandNames: selectedCommands,
       memberIds: agentType === 'TEAM' ? selectedMembers : [],
+      customSubAgents: customSubAgents.length > 0 ? customSubAgents : undefined,
+      customMembers: customMembers.length > 0 ? customMembers : undefined,
       maxIterations,
       maxSubAgentDepth: 1,
       enabled: true,
@@ -532,7 +542,7 @@ export const AgentCreatePage: React.FC = () => {
                           : 'bg-muted hover:bg-muted/80'
                       } ${readOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                     >
-                      Both
+                      ALL
                     </button>
                   </div>
                 </div>
@@ -674,6 +684,9 @@ export const AgentCreatePage: React.FC = () => {
                 selectedSubAgents={selectedSubAgents}
                 onChange={setSelectedSubAgents}
                 availableSubAgents={subAgents}
+                customSubAgents={customSubAgents}
+                onCustomChange={setCustomSubAgents}
+                availableTools={tools}
                 disabled={readOnly}
               />
             )}
@@ -684,6 +697,9 @@ export const AgentCreatePage: React.FC = () => {
                 selectedMembers={selectedMembers}
                 onChange={setSelectedMembers}
                 availableAgents={agents}
+                customMembers={customMembers}
+                onCustomChange={setCustomMembers}
+                availableTools={tools}
                 disabled={readOnly}
               />
             )}

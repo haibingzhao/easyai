@@ -19,6 +19,7 @@ export { CalcToolMessage } from './CalcToolMessage';
 export { WebFetchToolMessage } from './WebFetchToolMessage';
 export { LoadSkillToolMessage } from './LoadSkillToolMessage';
 export { TeamToolMessage } from './TeamToolMessage';
+export { SwarmToolMessage } from './SwarmToolMessage';
 export { SubAgentPanel } from './SubAgentPanel';
 export { GenericToolMessage } from './GenericToolMessage';
 export { ReadLsGroupedMessage } from './ReadLsGroupedMessage';
