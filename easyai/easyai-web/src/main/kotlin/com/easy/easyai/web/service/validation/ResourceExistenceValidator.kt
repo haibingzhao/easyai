@@ -2,6 +2,7 @@ package com.easy.easyai.web.service.validation
 
 import com.easy.easyai.agent.api.model.AgentCreateRequest
 import com.easy.easyai.agent.registry.ToolRegistry
+import com.easy.easyai.core.agent.AgentEnv
 import com.easy.easyai.core.agent.AgentType
 import com.easy.easyai.core.agent.AsyncAgentStore
 import com.easy.easyai.skills.SkillRegistry
@@ -68,9 +69,51 @@ class ResourceExistenceValidator(
                     errors.add(ConfigValidationError("memberIds", "Member '$id' is ${member.agentType} — only ALL or SUBAGENT agents can be team members"))
                 }
             }
-            if (request.toolNames.isNotEmpty()) {
-                errors.add(ConfigValidationError("toolNames", "TEAM agent leader should have empty toolNames (leader coordinates, members execute)", "warning"))
+        }
+
+        // Validate agent-type-specific tool applicability (warnings — the config is
+        // technically savable, but the tools won't function for this agent type).
+        if (request.toolNames.isNotEmpty()) {
+            when (request.agentType) {
+                AgentType.SUBAGENT -> {
+                    // A SUBAGENT always runs with a parent: `task` is not built
+                    // (recursion guard) and `run_swarm` is mainAgentOnly-blocked.
+                    val blocked = request.toolNames.filter { it in SUBAGENT_BLOCKED_TOOLS }
+                    if (blocked.isNotEmpty()) {
+                        errors.add(ConfigValidationError(
+                            "toolNames",
+                            "SUBAGENT agents cannot use ${blocked.joinToString(", ")} at runtime (blocked for sub-agents); consider removing them",
+                            "warning"
+                        ))
+                    }
+                }
+                AgentType.TEAM -> {
+                    // `task` only launches agents in the subAgentIds whitelist, which
+                    // is always empty for TEAM (no Sub-Agent config) — never usable.
+                    val unusable = request.toolNames.filter { it in TEAM_UNUSABLE_TOOLS }
+                    if (unusable.isNotEmpty()) {
+                        errors.add(ConfigValidationError(
+                            "toolNames",
+                            "TEAM leaders coordinate members via delegate_to_member; ${unusable.joinToString(", ")} is not usable (no sub-agent whitelist). Consider removing it",
+                            "warning"
+                        ))
+                    }
+                }
+                else -> {}
             }
+        }
+
+        // Validate skill/tool consistency: skills require the load_skill tool to be
+        // accessible at runtime. In SWARM context load_skill is unavailable, so skip.
+        if (request.skillNames.isNotEmpty() &&
+            "load_skill" !in request.toolNames &&
+            request.agentContext != AgentEnv.SWARM
+        ) {
+            errors.add(ConfigValidationError(
+                "skillNames",
+                "Skills are configured but 'load_skill' tool is missing from toolNames — the agent cannot load skill content at runtime",
+                "warning"
+            ))
         }
 
         // Validate MCP configs
@@ -88,5 +131,13 @@ class ResourceExistenceValidator(
         }
 
         return errors
+    }
+
+    companion object {
+        /** Tools blocked at runtime for SUBAGENT agents (parentAgentId guard / mainAgentOnly). */
+        private val SUBAGENT_BLOCKED_TOOLS = setOf("task", "run_swarm")
+
+        /** Tools that can never function for a TEAM leader (empty sub-agent whitelist). */
+        private val TEAM_UNUSABLE_TOOLS = setOf("task")
     }
 }

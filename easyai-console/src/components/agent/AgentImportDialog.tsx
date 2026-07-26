@@ -42,12 +42,16 @@ export const AgentImportDialog: React.FC<AgentImportDialogProps> = ({ agent, onC
           ]);
 
         const toolNames = new Set(availableTools.map(t => t.name));
+        // Auto-injected tools (alwaysInclude, e.g. team coordination tools) are
+        // runtime-managed; drop them from imported toolNames so they are neither
+        // shown nor persisted redundantly.
+        const autoInjected = new Set(availableTools.filter(t => t.alwaysInclude).map(t => t.name));
         const skillNames = new Set(availableSkills.map(s => s.name));
         const subAgentIds = new Set(availableSubAgents.map(a => a.id));
         const mcpNames = new Set(availableMcpServers.map(s => s.name));
         const commandNames = new Set(availableCommands.map(c => c.name));
 
-        setTools((agent.toolNames ?? []).map(name => ({
+        setTools((agent.toolNames ?? []).filter(name => !autoInjected.has(name)).map(name => ({
           name,
           available: toolNames.has(name),
           checked: toolNames.has(name),

@@ -1,10 +1,41 @@
 import React from 'react';
 import type { InlineAgentSpec, ToolInfo, McpBindingDto } from '@/types/agent';
 import { JinjaTemplateEditor } from './JinjaTemplateEditor';
+import { type VariableGroup } from './VariableDropdown';
 import { McpSelector } from './McpSelector';
 import { SkillSelector } from './SkillSelector';
 import { ToolTooltip } from './ToolItem';
 import { Trash2, Plus, ChevronDown, ChevronRight } from 'lucide-react';
+import { selectableTools } from '@/constants/tools';
+import { i18n } from '@/utils/i18n';
+
+/**
+ * PromptContext variables available for inline custom member/sub-agent system prompts.
+ * These agents are rendered via PromptTemplateService with a restricted context:
+ * sub_agents and team_members are always empty (recursion guard) and thus excluded.
+ * custom_instructions contains the auto-generated role definition + delegated task.
+ */
+const INLINE_AGENT_PROMPT_VARIABLES: { name: string; description: string }[] = [
+  { name: 'custom_instructions', description: 'Auto-generated role definition + delegated task + response requirements.' },
+  { name: 'tools', description: 'Available tools (list of {name, description}).' },
+  { name: 'skills', description: 'Available skills (list of {name, description}).' },
+  { name: 'instructions', description: 'Project instructions from AGENTS.md (list of {name, content, source}).' },
+  { name: 'memory', description: 'Persistent cross-session memory content.' },
+  { name: 'model_id', description: 'Active model identifier (e.g. gpt-4o, claude-sonnet-4).' },
+  { name: 'protocol', description: 'Model protocol (e.g. openai, anthropic).' },
+  { name: 'os', description: 'Operating system name (e.g. Mac OS X, Linux).' },
+  { name: 'cwd', description: 'Current working directory absolute path.' },
+  { name: 'input', description: 'Structured input data passed from the parent agent.' },
+  { name: 'current_date_time', description: 'Current date/time (yyyy-MM-dd HH:mm:ss z).' },
+];
+
+const inlineAgentVariableGroups: VariableGroup[] = [
+  {
+    label: i18n('Agent Context'),
+    vars: INLINE_AGENT_PROMPT_VARIABLES,
+    dotColor: 'bg-primary',
+  },
+];
 
 interface InlineAgentEditorProps {
   value: InlineAgentSpec;
@@ -95,6 +126,7 @@ export const InlineAgentEditor: React.FC<InlineAgentEditorProps> = ({
               placeholder="You are a specialized agent..."
               rows={4}
               disabled={disabled}
+              variableGroups={inlineAgentVariableGroups}
             />
           </div>
 
@@ -102,7 +134,7 @@ export const InlineAgentEditor: React.FC<InlineAgentEditorProps> = ({
           <div>
             <label className="block text-xs font-medium mb-1">Tools</label>
             <div className="max-h-[120px] overflow-y-auto rounded-md border border-border p-2 space-y-1">
-              {availableTools.map((tool) => (
+              {selectableTools(availableTools).map((tool) => (
                 <ToolTooltip key={tool.name} name={tool.name} description={tool.description}>
                   <label className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5">
                     <input

@@ -73,7 +73,12 @@ export async function parseSSEStream(
           }
         }
 
-        if (eventType && eventData) {
+        // Dispatch any event that carries an explicit event type, even when its
+        // data payload is empty. Some signals (e.g. `thinking_end` / `stream_end`
+        // in the AI-config flow) are emitted as `event:xxx\ndata:` with no body;
+        // requiring non-empty data would silently drop them and leave the UI in a
+        // stale state (e.g. the thinking timer never stops).
+        if (eventType) {
           flushSync(() => callbacks.onEvent({ eventType, data: eventData }));
           await new Promise<void>(r => setTimeout(r, 0));
         }

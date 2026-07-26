@@ -201,6 +201,10 @@ class ListResourcesTool(
 
     private fun listTools(): String {
         val tools = toolRegistry.getAllTools()
+            // Auto-injected tools (alwaysInclude, e.g. team coordination tools) are
+            // runtime-managed and bypass toolNames filtering — never list them as
+            // valid toolNames values, or the AI would add them redundantly.
+            .filter { !it.alwaysInclude }
             .let { all -> if (swarmContext) all.filter { it.name !in SWARM_UNSUPPORTED_TOOLS } else all }
         if (tools.isEmpty()) return "No built-in tools available."
         return buildString {
@@ -208,6 +212,10 @@ class ListResourcesTool(
             tools.forEach { tool ->
                 appendLine("- **${tool.name}**: ${tool.description}")
             }
+            appendLine()
+            appendLine("NOTE: Team coordination tools (delegate_to_member, wait_for_member_events, resume_member) are auto-injected for TEAM agents — do NOT add them to toolNames.")
+            appendLine("NOTE: 'task' and 'run_swarm' are blocked at runtime for SUBAGENT agents — do NOT add them to a SUBAGENT's toolNames.")
+            appendLine("NOTE: 'task' is NOT usable for TEAM agents (no sub-agent whitelist) — do NOT add it to a TEAM agent's toolNames.")
             if (swarmContext) {
                 appendLine()
                 appendLine("NOTE: load_skill, task, and run_swarm are NOT available in swarm runtime and must NOT be used in toolNames.")

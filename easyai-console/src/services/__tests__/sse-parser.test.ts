@@ -108,10 +108,10 @@ describe('parseSSEStream', () => {
     expect(events[0].data).toBe('{"delta":"ok"}');
   });
 
-  it('should skip events missing eventType or data', async () => {
+  it('should skip events missing eventType but deliver events with empty data', async () => {
     const events: RawSSEEvent[] = [];
     const reader = createReader([
-      'data: orphan-data\n\nevent: no_data\n\nevent: valid\ndata: {"ok":true}\n\n',
+      'data: orphan-data\n\nevent: no_data\n\nevent: empty_data\ndata:\n\nevent: valid\ndata: {"ok":true}\n\n',
     ]);
 
     const promise = parseSSEStream(reader, {
@@ -121,9 +121,15 @@ describe('parseSSEStream', () => {
     const result = await promise;
 
     expect(result.completed).toBe(true);
-    // Only the event with both eventType and data should be delivered
-    expect(events).toHaveLength(1);
-    expect(events[0].eventType).toBe('valid');
+    // `data: orphan-data` has no event type -> skipped.
+    // `event: no_data` (no data line) and `event: empty_data` (empty data line) are
+    // valid SSE signals (e.g. thinking_end) and must be delivered with empty data.
+    expect(events).toHaveLength(3);
+    expect(events[0].eventType).toBe('no_data');
+    expect(events[0].data).toBe('');
+    expect(events[1].eventType).toBe('empty_data');
+    expect(events[1].data).toBe('');
+    expect(events[2].eventType).toBe('valid');
   });
 
   it('should call onComplete when stream ends normally', async () => {

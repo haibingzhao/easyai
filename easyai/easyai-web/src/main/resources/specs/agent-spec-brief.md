@@ -32,8 +32,8 @@
 | agentType | Behavior |
 |-----------|----------|
 | `PRIMARY` | Visible in agent selector |
-| `SUBAGENT` | Hidden, only via delegation |
-| `TEAM` | Team leader: coordinates member agents via delegate/wait/resume tools. Requires `memberIds`. toolNames should be empty or minimal (leader coordinates, members execute) |
+| `SUBAGENT` | Hidden, only via delegation. `task` and `run_swarm` are blocked at runtime — do NOT add them to `toolNames` |
+| `TEAM` | Team leader: coordinates member agents via delegate/wait/resume tools. Requires `memberIds`. `toolNames` is optional — the leader may keep its own tools (e.g. read/search) in addition to the auto-injected coordination tools. The coordination tools are auto-injected (do NOT add to `toolNames`); `task` is NOT usable (empty sub-agent whitelist) |
 | `ALL` | Visible + delegatable |
 
 | agentContext | Behavior |

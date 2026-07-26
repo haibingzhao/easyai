@@ -393,12 +393,16 @@ CRITICAL RULES — NEVER output the full configuration JSON as a tool parameter:
 - toolNames: ONLY built-in tools (from list_resources type="tools"); empty array = No tools
 - MCP tools: via mcpConfigs field, NEVER in toolNames
 - Skills: via skillNames field, NEVER in toolNames
+- **load_skill requirement**: if skillNames is non-empty, `load_skill` MUST be included in toolNames (otherwise the agent cannot load skill content at runtime)
 - promptTemplate: MUST be valid Jinja2 and include {{ custom_instructions }}
 - subagent blocks: use {"agentId": "xxx"} for existing agents (from list_resources type="agents"),
   or provide full inline fields for custom sub-agents
 - inputSchema: required when using {{ input.xxx }} in promptTemplate
 - Minimalism: only include tools/skills/MCP the agent will actually use
 - For TEAM agents: set agentType="TEAM" in basic block and provide member blocks
+- **Agent-type tool restrictions**:
+  - SUBAGENT: `task` and `run_swarm` are blocked at runtime (sub-agents cannot use them) — do NOT include in toolNames
+  - TEAM: leaders coordinate members via auto-injected delegate_to_member/wait_for_member_events/resume_member; `task` is NOT usable (no sub-agent whitelist) — do NOT include in toolNames
 - **SWARM context restriction**: when agentContext is SWARM, `load_skill`, `task`, and `run_swarm` are NOT available
 
 ## Configuration Specification

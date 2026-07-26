@@ -232,6 +232,9 @@ const translations: Record<string, Record<string, string>> = {
     'Tools': 'Tools',
     'Skills': 'Skills',
     'Sub Agents': 'Sub Agents',
+    'Runtime unavailable': 'Runtime unavailable',
+    'Blocked at runtime for Sub-Agent type': 'Blocked at runtime for Sub-Agent type',
+    'Skills require load_skill tool': 'Skills configured but load_skill tool is not selected — the agent cannot load skill content',
     // Right panel
     'Open Panel': 'Open Panel',
     'Close Panel': 'Close Panel',
@@ -573,6 +576,9 @@ const translations: Record<string, Record<string, string>> = {
     'Tools': '工具',
     'Skills': '技能',
     'Sub Agents': '子智能体',
+    'Runtime unavailable': '运行时不可用',
+    'Blocked at runtime for Sub-Agent type': '子智能体（Sub-Agent）类型在运行时会被禁用',
+    'Skills require load_skill tool': '已配置 Skill 但未选择 load_skill 工具，Agent 将无法在运行时加载技能内容',
     // Right panel
     'Open Panel': '打开面板',
     'Close Panel': '关闭面板',

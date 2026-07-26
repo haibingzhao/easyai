@@ -33,7 +33,8 @@ class DefaultToolRegistry(private val toolFactory: ToolFactory) : ToolRegistry {
                 description = builder.description,
                 permissionCategory = builder.permissionCategory,
                 uiRenderer = builder.uiRenderer,
-                isDefaultTool = builder.isDefaultTool
+                isDefaultTool = builder.isDefaultTool,
+                alwaysInclude = builder.alwaysInclude
             )
         }
     }

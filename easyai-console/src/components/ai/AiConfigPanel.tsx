@@ -142,9 +142,15 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
         },
         onThinkingEnd: () => {
           setSegments(prev => {
-            const last = prev[prev.length - 1];
-            if (last && last.type === 'thinking' && !last.isFinished) {
-              return [...prev.slice(0, -1), { ...last, isFinished: true }];
+            // Find the last unfinished thinking segment (not necessarily the last segment,
+            // e.g. a status_update may have been appended after it)
+            for (let i = prev.length - 1; i >= 0; i--) {
+              const s = prev[i];
+              if (s.type === 'thinking' && !s.isFinished) {
+                const updated = [...prev];
+                updated[i] = { ...s, isFinished: true };
+                return updated;
+              }
             }
             return prev;
           });

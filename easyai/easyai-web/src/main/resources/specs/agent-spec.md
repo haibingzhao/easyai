@@ -33,8 +33,8 @@ Use this as the authoritative reference when generating agent JSON configuration
 | Value | Behavior |
 |-------|----------|
 | `PRIMARY` | Visible in the user-facing agent selector. Cannot be used as a sub-agent delegation target. |
-| `SUBAGENT` | Hidden from the user-facing selector. Can ONLY be invoked via delegation from another agent. |
-| `TEAM` | Team leader visible in the agent selector. Coordinates member agents (from `memberIds`) via `delegate_to_member` / `wait_for_member_events` / `resume_member` tools. Members must be existing non-TEAM agents; nested teams are not allowed. `toolNames` should be empty or minimal — the leader coordinates, members execute. |
+| `SUBAGENT` | Hidden from the user-facing selector. Can ONLY be invoked via delegation from another agent. `task` and `run_swarm` are blocked at runtime for sub-agents — do NOT add them to `toolNames`. |
+| `TEAM` | Team leader visible in the agent selector. Coordinates member agents (from `memberIds`) via `delegate_to_member` / `wait_for_member_events` / `resume_member` tools. Members must be existing non-TEAM agents; nested teams are not allowed. `toolNames` is optional — the leader may keep its own tools (e.g. read/search) in addition to the auto-injected coordination tools. The three coordination tools are auto-injected (do NOT add them to `toolNames`); `task` is NOT usable for a TEAM leader (its sub-agent whitelist is always empty). |
 | `ALL` | Visible in the selector AND available as a delegation target. Use for versatile agents. |
 
 ## Agent Context Semantics
@@ -313,7 +313,7 @@ When `outputSchema` is set:
    - **Rule of thumb**: If you can't describe a concrete scenario where the agent would use a tool/MCP/skill during its task, remove it. Fewer tools → faster reasoning → fewer wrong tool calls → lower token cost.
 3. **Set appropriate `maxIterations`**: Simple Q&A agents can use 10–20; complex coding agents may need 50–100.
 4. **Use `agentType: SUBAGENT`** for specialized workers (e.g., a linter agent) that should only be invoked via delegation.
-5. **Use `agentType: TEAM`** to coordinate multiple existing agents: set `memberIds` referencing existing non-TEAM agents (discover via `list_resources`), keep `toolNames` empty (the leader coordinates via delegate/wait/resume tools; members do the actual work), and focus the `promptTemplate` on coordination strategy with `{% if team_members %}` member listing.
+5. **Use `agentType: TEAM`** to coordinate multiple existing agents: set `memberIds` referencing existing non-TEAM agents (discover via `list_resources`). The delegate/wait/resume coordination tools are auto-injected, so `toolNames` only needs the leader's own extra tools (e.g. read/search) if any — leave it empty when the leader purely coordinates. Focus the `promptTemplate` on coordination strategy with `{% if team_members %}` member listing.
 6. **Always include `{{ custom_instructions }}`** in your `promptTemplate` so users can add runtime tweaks.
 7. **Prefer `customInstructions` over hardcoding** behavioral tweaks into the prompt — it's easier to iterate on.
 8. **Set `instructionsEnabled: false`** for agents that should ignore project-level AGENTS.md (e.g., generic utility agents).

@@ -14,7 +14,7 @@ import { type VariableGroup } from '@/components/agent/VariableDropdown';
 import { AiConfigPanel } from '@/components/ai/AiConfigPanel';
 import type { AgentCreateRequest, AgentType, AgentEnv, McpBindingDto, InlineAgentSpec, TemplateValidationError } from '@/types/agent';
 import { agentService } from '@/services/agent-service';
-import { SWARM_EXCLUDED_TOOLS } from '@/constants/tools';
+import { SWARM_EXCLUDED_TOOLS, SUBAGENT_BLOCKED_TOOLS, TEAM_EXCLUDED_TOOLS } from '@/constants/tools';
 import { i18n } from '@/utils/i18n';
 import { useResizable } from '@/hooks/useResizable';
 
@@ -28,6 +28,7 @@ const PROMPT_CONTEXT_VARIABLES: { name: string; description: string }[] = [
   { name: 'tools', description: 'Available tools (list of {name, description}).' },
   { name: 'skills', description: 'Available skills (list of {name, description}).' },
   { name: 'sub_agents', description: 'Delegatable sub-agents (list of {name, description, inputSchema}).' },
+  { name: 'team_members', description: 'Team member agents for TEAM type (list of {name, description}).' },
   { name: 'instructions', description: 'Project instructions from AGENTS.md (list of {name, content, source}).' },
   { name: 'custom_instructions', description: 'Free-text instructions from the Custom Instructions field.' },
   { name: 'memory', description: 'Persistent cross-session memory content.' },
@@ -156,7 +157,7 @@ export const AgentCreatePage: React.FC = () => {
         setAgentType(agent.agentType);
         setAgentContext(agent.agentContext ?? 'CHAT');
         setPromptTemplate(agent.promptTemplate || '');
-        setSelectedTools(agent.toolNames);
+        setSelectedTools(stripAutoInjected(agent.toolNames));
         setSelectedSubAgents(agent.subAgentIds || []);
         setSelectedMembers(agent.memberIds || []);
         setCustomSubAgents(agent.customSubAgents || []);
@@ -203,6 +204,46 @@ export const AgentCreatePage: React.FC = () => {
   const isSwarmContext = agentContext === 'SWARM';
   const isChatContext = agentContext === 'CHAT';
 
+  // Names of auto-injected tools (alwaysInclude, e.g. team coordination tools).
+  // These are runtime-managed and never manually selectable, so strip them from
+  // any incoming toolNames (legacy data / AI-generated configs). A ref keeps the
+  // set fresh for effects whose closures were created before tools finished loading.
+  const autoInjectedToolNames = useMemo(
+    () => new Set(tools.filter(t => t.alwaysInclude).map(t => t.name)),
+    [tools]
+  );
+  const autoInjectedRef = useRef(autoInjectedToolNames);
+  autoInjectedRef.current = autoInjectedToolNames;
+  const stripAutoInjected = useCallback(
+    (names: string[]) => names.filter(n => !autoInjectedRef.current.has(n)),
+    []
+  );
+
+  // Tools hidden from the selection list for the current context/agent type:
+  // swarm-unsupported tools in SWARM context, plus task for TEAM (always-empty
+  // subAgent whitelist makes task unusable for a team leader).
+  const excludedTools = useMemo(() => [
+    ...(isSwarmContext ? SWARM_EXCLUDED_TOOLS : []),
+    ...(agentType === 'TEAM' ? TEAM_EXCLUDED_TOOLS : []),
+  ], [isSwarmContext, agentType]);
+
+  // Drop newly-excluded tools when context/type changes (e.g. task after switching
+  // to TEAM), so hidden tools are not silently persisted.
+  useEffect(() => {
+    if (excludedTools.length === 0) return;
+    const excluded = new Set(excludedTools);
+    setSelectedTools(prev => prev.filter(t => !excluded.has(t)));
+  }, [excludedTools]);
+
+  // Re-strip auto-injected tools once the tool list finishes loading. The edit-load
+  // effect (fetchAgent) and loadTools() race; if the agent detail arrives first the
+  // ref-based strip is a no-op, so this reactive pass guarantees removal regardless
+  // of order. Idempotent — these tools can never be manually selected.
+  useEffect(() => {
+    if (autoInjectedToolNames.size === 0) return;
+    setSelectedTools(prev => prev.filter(n => !autoInjectedToolNames.has(n)));
+  }, [autoInjectedToolNames]);
+
   const sections: NavSection[] = [
     { id: 'basic', label: i18n('Basic'), icon: <Settings className="w-4 h-4" /> },
     { id: 'tools', label: i18n('Tools'), icon: <Terminal className="w-4 h-4" /> },
@@ -240,9 +281,9 @@ export const AgentCreatePage: React.FC = () => {
       const effectiveContext = config.agentContext === 'SWARM' || config.agentContext === 'CHAT'
         ? config.agentContext : agentContext;
       const rawTools = config.toolNames as string[];
-      setSelectedTools(effectiveContext === 'SWARM'
+      setSelectedTools(stripAutoInjected(effectiveContext === 'SWARM'
         ? rawTools.filter(t => !SWARM_EXCLUDED_TOOLS.includes(t))
-        : rawTools);
+        : rawTools));
     }
     if (Array.isArray(config.subAgentIds)) setSelectedSubAgents(config.subAgentIds as string[]);
     if (Array.isArray(config.memberIds)) setSelectedMembers(config.memberIds as string[]);
@@ -665,17 +706,25 @@ export const AgentCreatePage: React.FC = () => {
                 selectedTools={selectedTools}
                 onChange={setSelectedTools}
                 disabled={readOnly}
-                excludeTools={isSwarmContext ? SWARM_EXCLUDED_TOOLS : undefined}
+                excludeTools={excludedTools}
+                unavailableTools={agentType === 'SUBAGENT' ? SUBAGENT_BLOCKED_TOOLS : undefined}
               />
             )}
 
             {/* === Skills Section === */}
             {activeSection === 'skills' && (
-              <SkillSelector
-                selectedSkills={selectedSkills}
-                onChange={setSelectedSkills}
-                disabled={readOnly}
-              />
+              <>
+                <SkillSelector
+                  selectedSkills={selectedSkills}
+                  onChange={setSelectedSkills}
+                  disabled={readOnly}
+                />
+                {selectedSkills.length > 0 && !selectedTools.includes('load_skill') && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                    ⚠ {i18n('Skills require load_skill tool')}
+                  </p>
+                )}
+              </>
             )}
 
             {/* === Sub Agents Section === */}

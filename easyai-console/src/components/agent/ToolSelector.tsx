@@ -1,6 +1,8 @@
 import React from 'react';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { Bot, Terminal, FileText, Search, FolderSearch, List, MessageSquare, CheckSquare } from 'lucide-react';
+import { selectableTools } from '@/constants/tools';
+import { i18n } from '@/utils/i18n';
 
 interface ToolSelectorProps {
   selectedTools: string[];
@@ -8,6 +10,12 @@ interface ToolSelectorProps {
   disabled?: boolean;
   /** Tool names to hide from the list (e.g., tools unavailable in swarm context). */
   excludeTools?: string[];
+  /**
+   * Tool names that stay selectable but are blocked at runtime for the current
+   * agent type (e.g. task/run_swarm for SUBAGENT). Rendered de-emphasized with a
+   * "runtime unavailable" hint instead of being hidden.
+   */
+  unavailableTools?: string[];
 }
 
 /** Icon mapping by permissionCategory */
@@ -33,12 +41,15 @@ function getToolIcon(name: string, category?: string): React.ReactNode {
   return NAME_ICONS[name] || <Bot className="w-4 h-4" />;
 }
 
-export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onChange, disabled, excludeTools }) => {
+export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onChange, disabled, excludeTools, unavailableTools }) => {
   const { tools } = useAgentStore();
 
-  const visibleTools = excludeTools && excludeTools.length > 0
-    ? tools.filter((tool) => !excludeTools.includes(tool.name))
-    : tools;
+  // Auto-injected tools (alwaysInclude) are never manually selectable;
+  // excludeTools removes context-specific tools (e.g. swarm-unsupported).
+  const visibleTools = selectableTools(tools).filter(
+    (tool) => !excludeTools || !excludeTools.includes(tool.name)
+  );
+  const unavailableSet = new Set(unavailableTools ?? []);
 
   const toggleTool = (toolName: string) => {
     if (selectedTools.includes(toolName)) {
@@ -58,11 +69,13 @@ export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onCha
       <div className="space-y-2">
         {visibleTools.map((tool) => {
           const isSelected = selectedTools.includes(tool.name);
-          return (
+          const isUnavailable = unavailableSet.has(tool.name);
+          const row = (
             <label
               key={tool.name}
+              title={isUnavailable ? i18n('Blocked at runtime for Sub-Agent type') : undefined}
               className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
-                disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+                disabled ? 'cursor-not-allowed opacity-60' : isUnavailable ? 'cursor-pointer opacity-60' : 'cursor-pointer'
               } ${
                 isSelected
                   ? 'border-primary bg-primary/5'
@@ -80,11 +93,19 @@ export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onCha
                 {getToolIcon(tool.name, tool.permissionCategory)}
               </span>
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium">{tool.name}</div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">{tool.name}</span>
+                  {isUnavailable && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground border border-border shrink-0">
+                      {i18n('Runtime unavailable')}
+                    </span>
+                  )}
+                </div>
                 <div className="text-xs text-muted-foreground">{tool.description}</div>
               </div>
             </label>
           );
+          return row;
         })}
       </div>
     </div>

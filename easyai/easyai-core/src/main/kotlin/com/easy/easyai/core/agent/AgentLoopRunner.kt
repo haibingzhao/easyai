@@ -165,6 +165,17 @@ internal class AgentLoopRunner(
                         // However, capture usage metadata before skipping — the Anthropic message_delta
                         // event carries token usage but has empty text content.
                         if (results.isEmpty() || results.all { r -> r.output.text.isNullOrEmpty() && r.output.toolCalls.isEmpty() }) {
+                            // Anthropic sends a signature chunk (empty text, metadata["signature"])
+                            // at the end of the thinking block, right before tool call generation
+                            // begins. Use it as the "thinking ended" signal so the frontend timer
+                            // stops immediately instead of running through the entire tool argument
+                            // generation phase (during which the adapter emits no chunks at all).
+                            if (!thinkingEnded && fullThinking.isNotEmpty() &&
+                                results.any { r -> r.output.metadata.containsKey("signature") }) {
+                                thinkingDuration = System.currentTimeMillis() - thinkingStartTime
+                                push(ThinkingEndEvent(messageId, turnId, context.sessionId ?: "default", thinkingDuration))
+                                thinkingEnded = true
+                            }
                             lastResponseWithUsage = chunk
                             continue
                         }
@@ -199,6 +210,17 @@ internal class AgentLoopRunner(
                                     push(MessageUpdateEvent(messageId, text, turnId, context.sessionId ?: "default"))
                                 }
                             }
+                        }
+
+                        // When the model transitions from thinking directly to tool call generation
+                        // (no intermediate text), emit ThinkingEndEvent as soon as the first tool
+                        // call chunk appears. Without this, the frontend thinking timer keeps
+                        // running during the entire tool argument generation phase.
+                        if (!thinkingEnded && fullThinking.isNotEmpty() &&
+                            results.any { it.output.toolCalls.isNotEmpty() }) {
+                            thinkingDuration = System.currentTimeMillis() - thinkingStartTime
+                            push(ThinkingEndEvent(messageId, turnId, context.sessionId ?: "default", thinkingDuration))
+                            thinkingEnded = true
                         }
                     }
                 }

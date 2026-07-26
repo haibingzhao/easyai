@@ -30,6 +30,11 @@ export interface ToolInfo {
   permissionCategory?: string;
   uiRenderer?: string;
   isDefaultTool?: boolean;
+  /**
+   * Auto-injected by the runtime, bypasses agent-level toolNames filtering
+   * (e.g. team coordination tools). Not offered for manual selection.
+   */
+  alwaysInclude?: boolean;
 }
 
 /**

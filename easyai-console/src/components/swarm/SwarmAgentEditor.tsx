@@ -8,7 +8,7 @@ import { ToolTooltip } from '@/components/agent/ToolItem';
 import { McpSelector } from '@/components/agent/McpSelector';
 import { type VariableGroup } from '@/components/agent/VariableDropdown';
 import { SWARM_PROMPT_VARIABLES } from '@/constants/swarm-variables';
-import { SWARM_EXCLUDED_TOOLS } from '@/constants/tools';
+import { SWARM_EXCLUDED_TOOLS, selectableTools } from '@/constants/tools';
 import { i18n } from '@/utils/i18n';
 import { safeParseInt } from '@/utils/format';
 
@@ -55,9 +55,9 @@ export const SwarmAgentEditor: React.FC<SwarmAgentEditorProps> = ({
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [agentSource, setAgentSource] = useState<AgentSource>('global');
 
-  /** Tools selectable for inline custom agents (swarm-unsupported tools excluded). */
-  const selectableTools = useMemo(
-    () => availableTools.filter((t) => !SWARM_EXCLUDED_TOOLS.includes(t.name)),
+  /** Tools selectable for inline custom agents (auto-injected and swarm-unsupported tools excluded). */
+  const selectableAgentTools = useMemo(
+    () => selectableTools(availableTools).filter((t) => !SWARM_EXCLUDED_TOOLS.includes(t.name)),
     [availableTools]
   );
 
@@ -295,7 +295,7 @@ export const SwarmAgentEditor: React.FC<SwarmAgentEditorProps> = ({
                   <div>
                     <label className="block text-sm font-medium mb-1">{i18n('Tools')}</label>
                     <div className="max-h-[120px] overflow-y-auto rounded-md border border-border p-2 space-y-1">
-                      {availableTools.map((tool) => (
+                      {selectableAgentTools.map((tool) => (
                         <ToolTooltip key={tool.name} name={tool.name} description={tool.description}>
                           <label className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5">
                             <input
@@ -547,7 +547,7 @@ export const SwarmAgentEditor: React.FC<SwarmAgentEditorProps> = ({
               <div>
                 <label className="block text-sm font-medium mb-1">{i18n('Tools')}</label>
                 <div className="max-h-[120px] overflow-y-auto rounded-md border border-border p-2 space-y-1">
-                  {selectableTools.map((tool) => (
+                  {selectableAgentTools.map((tool) => (
                     <ToolTooltip key={tool.name} name={tool.name} description={tool.description}>
                       <label className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5">
                         <input
