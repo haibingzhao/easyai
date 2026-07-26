@@ -3,6 +3,7 @@ import type { TeamMemberExecution, TeamFilter } from '@/types/team';
 import type { Message } from '@/types/message';
 import { teamService } from '@/services/team-service';
 import { sessionService } from '@/services/session-service';
+import type { MessageSnapshot } from '@/services/session-service';
 import { convertSnapshot } from './chat/message-converter';
 import { mergeToolResults } from './chat/session-loader';
 
@@ -15,6 +16,8 @@ interface TeamState {
   selectedMemberSessionId: string | null;
   /** Messages of the selected member's session */
   memberMessages: Message[];
+  /** Raw snapshots of the selected member's session (watermark source for incremental polling). */
+  memberSnapshots: MessageSnapshot[];
   /** Loading state for member messages */
   memberMessagesLoading: boolean;
   /** Active filter tab */
@@ -29,7 +32,7 @@ interface TeamState {
   refreshExecutions: (sessionId: string) => Promise<void>;
   /** Select a member card → load its session messages for the detail view. */
   selectMember: (execution: TeamMemberExecution) => Promise<void>;
-  /** Re-fetch messages for the currently selected member (polling while running). */
+  /** Incrementally fetch new messages for the currently selected member (polling while running). */
   refreshMemberMessages: () => Promise<void>;
   /** Back to team overview. */
   clearSelectedMember: () => void;
@@ -37,11 +40,37 @@ interface TeamState {
   resetTeam: () => void;
 }
 
+/**
+ * Full load of a member session's messages (initial selection + compaction fallback).
+ * Silently ignores errors — the next poll will retry.
+ */
+async function loadFullMessages(
+  memberSessionId: string,
+  set: (partial: Partial<TeamState>) => void,
+  get: () => TeamState
+): Promise<void> {
+  try {
+    const detail = await sessionService.getSessionDetail(memberSessionId);
+    // Guard: selection may have changed during fetch
+    if (get().selectedMemberSessionId !== memberSessionId) return;
+    set({
+      memberSnapshots: detail.messages,
+      memberMessages: mergeToolResults(detail.messages.map(convertSnapshot)),
+      memberMessagesLoading: false,
+    });
+  } catch {
+    if (get().selectedMemberSessionId === memberSessionId) {
+      set({ memberMessagesLoading: false });
+    }
+  }
+}
+
 export const useTeamStore = create<TeamState>((set, get) => ({
   memberExecutions: [],
   selectedExecutionId: null,
   selectedMemberSessionId: null,
   memberMessages: [],
+  memberSnapshots: [],
   memberMessagesLoading: false,
   teamFilter: 'ALL',
   activeSessionId: null,
@@ -69,34 +98,53 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       selectedExecutionId: execution.id,
       selectedMemberSessionId: memberSessionId ?? null,
       memberMessages: [],
+      memberSnapshots: [],
       memberMessagesLoading: true,
     });
     if (!memberSessionId) {
       set({ memberMessagesLoading: false });
       return;
     }
-    try {
-      const detail = await sessionService.getSessionDetail(memberSessionId);
-      // Guard: selection may have changed during fetch
-      if (get().selectedMemberSessionId !== memberSessionId) return;
-      const messages = mergeToolResults(detail.messages.map(convertSnapshot));
-      set({ memberMessages: messages, memberMessagesLoading: false });
-    } catch {
-      if (get().selectedMemberSessionId === memberSessionId) {
-        set({ memberMessagesLoading: false });
-      }
-    }
+    await loadFullMessages(memberSessionId, set, get);
   },
 
   refreshMemberMessages: async () => {
     const memberSessionId = get().selectedMemberSessionId;
     if (!memberSessionId) return;
+
+    const snapshots = get().memberSnapshots;
+    const watermark = snapshots.reduce((max, s) => Math.max(max, s.timestamp), 0);
+
+    // No baseline yet (e.g. initial load failed) → full load
+    if (watermark <= 0) {
+      await loadFullMessages(memberSessionId, set, get);
+      return;
+    }
+
     try {
-      const detail = await sessionService.getSessionDetail(memberSessionId);
+      // Overlap by 1ms so same-timestamp messages are never missed; dedup by id below.
+      const resp = await sessionService.getSessionMessagesAfter(memberSessionId, watermark - 1);
       // Guard: selection may have changed during fetch
       if (get().selectedMemberSessionId !== memberSessionId) return;
-      const messages = mergeToolResults(detail.messages.map(convertSnapshot));
-      set({ memberMessages: messages });
+
+      if (resp.compactionOccurredAfter || resp.contentUpdatedAt > watermark) {
+        // History may have been rewritten (compaction / in-place edit) → full reload
+        await loadFullMessages(memberSessionId, set, get);
+        return;
+      }
+
+      if (resp.messages.length === 0) return;
+
+      // Deduplicate by message id (overlap window may return already-known messages)
+      const existingIds = new Set(snapshots.map((s) => s.id).filter(Boolean));
+      const newSnapshots = resp.messages.filter((s) => !s.id || !existingIds.has(s.id));
+      if (newSnapshots.length === 0) return;
+
+      const merged = [...snapshots, ...newSnapshots];
+      set({
+        memberSnapshots: merged,
+        memberMessages: mergeToolResults(merged.map(convertSnapshot)),
+      });
     } catch {
       // Silently ignore — will retry on next poll
     }
@@ -107,6 +155,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       selectedExecutionId: null,
       selectedMemberSessionId: null,
       memberMessages: [],
+      memberSnapshots: [],
       memberMessagesLoading: false,
     }),
 
@@ -116,6 +165,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       selectedExecutionId: null,
       selectedMemberSessionId: null,
       memberMessages: [],
+      memberSnapshots: [],
       memberMessagesLoading: false,
       teamFilter: 'ALL',
       activeSessionId: null,
