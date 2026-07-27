@@ -383,9 +383,30 @@ export function handleChatEvent(
       set({ retryInfo: { attempt: retryEvent.attempt, maxRetries: retryEvent.maxRetries }, streamingBlocks: blocks });
       break;
     }
-    case 'compaction_start':
-      set({ isCompacting: true });
+    case 'compaction_start': {
+      // During streaming, immediately append an in-progress compaction block so the
+      // indicator card renders right away (with a live elapsed timer) instead of only
+      // appearing once compaction_end arrives. Manual compaction (not streaming) relies
+      // on the top-bar loading state and inserts the card on compaction_end.
+      if (state.isStreaming) {
+        const startedAt = Date.now();
+        const inProgressBlock: CompactionBlockData = {
+          type: 'compaction',
+          isFinished: false,
+          compactedCount: 0,
+          tokensSaved: 0,
+          timestamp: startedAt,
+          id: `compaction-${startedAt}`,
+        };
+        set((s) => ({
+          isCompacting: true,
+          streamingBlocks: [...s.streamingBlocks, inProgressBlock],
+        }));
+      } else {
+        set({ isCompacting: true });
+      }
       break;
+    }
     case 'compaction_end':
       handleCompactionEnd(event as CompactionEndEvent, state, set);
       break;
@@ -630,26 +651,41 @@ function handleCompactionEnd(
   const now = Date.now();
 
   if (state.isStreaming) {
-    // During streaming, the current run's turns live in streamingBlocks, which the
-    // MessageList renders AFTER the committed `messages` array. Adding the indicator
-    // card to `messages` would place it above all already-streamed turns — far outside
-    // the auto-scrolled viewport — so it would only become visible after the stream
-    // ends. Instead, append a compaction block to streamingBlocks so the card renders
-    // at the correct position (right after the compacted turns) in real time.
-    // commitStreamingMessage converts it back into a custom message when the stream ends.
-    const compactionBlock: CompactionBlockData = {
-      type: 'compaction',
-      compactedCount: event.compactedCount,
-      tokensSaved: event.tokensSaved,
-      durationMs: event.durationMs ?? 0,
-      currentTokens: event.currentTokens,
-      timestamp: now,
-      id: `compaction-${now}`,
-    };
-    set((s) => ({
-      isCompacting: false,
-      streamingBlocks: [...s.streamingBlocks, compactionBlock],
-    }));
+    // During streaming, an in-progress compaction block was already appended to
+    // streamingBlocks on compaction_start (so the card renders immediately with a live
+    // timer). Finalize it in place — preserving its position right after the compacted
+    // turns — filling in the final stats. commitStreamingMessage converts it into a
+    // custom message when the stream ends.
+    set((s) => {
+      const blocks = [...s.streamingBlocks];
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        const block = blocks[i];
+        if (block.type === 'compaction' && !block.isFinished) {
+          blocks[i] = {
+            ...block,
+            isFinished: true,
+            compactedCount: event.compactedCount,
+            tokensSaved: event.tokensSaved,
+            durationMs: event.durationMs ?? 0,
+            currentTokens: event.currentTokens,
+          };
+          return { isCompacting: false, streamingBlocks: blocks };
+        }
+      }
+      // Fallback: compaction_start was not observed (e.g. dropped event) — append a
+      // finished block so the indicator still appears.
+      const compactionBlock: CompactionBlockData = {
+        type: 'compaction',
+        isFinished: true,
+        compactedCount: event.compactedCount,
+        tokensSaved: event.tokensSaved,
+        durationMs: event.durationMs ?? 0,
+        currentTokens: event.currentTokens,
+        timestamp: now,
+        id: `compaction-${now}`,
+      };
+      return { isCompacting: false, streamingBlocks: [...s.streamingBlocks, compactionBlock] };
+    });
   } else {
     // Manual compaction (not streaming): there are no streaming blocks to interleave
     // with, so insert the indicator card directly into the message list.

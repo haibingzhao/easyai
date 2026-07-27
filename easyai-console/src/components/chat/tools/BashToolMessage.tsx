@@ -5,8 +5,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Terminal, ChevronsDown, ChevronsUp } from 'lucide-react';
 import type { ToolMessageProps } from './types';
-import { extractOutput } from './parsers';
+import { extractOutput, tryFormatJson } from './parsers';
 import { getToolDisplayName } from './icons';
+import { CodeBlock } from '../CodeBlock';
 
 /**
  * Extract bash command from arguments.
@@ -229,31 +230,43 @@ export function BashToolMessage({
 
       {/* Command area */}
       <div className="p-3 flex items-center">
-        <div className="text-sm font-mono text-muted-foreground break-all p-2 bg-muted rounded w-full overflow-hidden">
-          <div
-            className={`whitespace-pre-wrap ${!isCommandExpanded && commandLines > 5 ? 'max-h-[5em] overflow-y-auto' : isCommandExpanded && commandLines > 15 ? 'max-h-[15em] overflow-y-auto' : ''}`}
+        {(() => {
+          const formattedCommand = tryFormatJson(displayCommand);
+          if (formattedCommand) {
+            return (
+              <div className={`w-full overflow-hidden rounded-lg ${!isCommandExpanded && commandLines > 5 ? 'max-h-[5em] overflow-y-auto' : isCommandExpanded && commandLines > 15 ? 'max-h-[15em] overflow-y-auto' : ''}`}>
+                <CodeBlock className="language-json">{formattedCommand}</CodeBlock>
+              </div>
+            );
+          }
+          return (
+            <div className="text-sm font-mono text-muted-foreground break-all p-2 bg-muted rounded w-full overflow-hidden">
+              <div
+                className={`whitespace-pre-wrap ${!isCommandExpanded && commandLines > 5 ? 'max-h-[5em] overflow-y-auto' : isCommandExpanded && commandLines > 15 ? 'max-h-[15em] overflow-y-auto' : ''}`}
+              >
+                <span className="text-green-600">$</span> {displayCommand}
+              </div>
+            </div>
+          );
+        })()}
+        {!isStreaming && shouldShowCommandExpand && (
+          <button
+            onClick={() => setIsCommandExpanded(!isCommandExpanded)}
+            className="mt-2 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
-            <span className="text-green-600">$</span> {displayCommand}
-          </div>
-          {!isStreaming && shouldShowCommandExpand && (
-            <button
-              onClick={() => setIsCommandExpanded(!isCommandExpanded)}
-              className="mt-2 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {isCommandExpanded ? (
-                <>
-                  <ChevronsUp className="w-3 h-3" />
-                  <span>Collapse</span>
-                </>
-              ) : (
-                <>
-                  <ChevronsDown className="w-3 h-3" />
-                  <span>More ({commandLines} lines)</span>
-                </>
-              )}
-            </button>
-          )}
-        </div>
+            {isCommandExpanded ? (
+              <>
+                <ChevronsUp className="w-3 h-3" />
+                <span>Collapse</span>
+              </>
+            ) : (
+              <>
+                <ChevronsDown className="w-3 h-3" />
+                <span>More ({commandLines} lines)</span>
+              </>
+            )}
+          </button>
+        )}
       </div>
 
       {/* Output area */}
@@ -261,13 +274,29 @@ export function BashToolMessage({
         <>
           <div className="border-t border-border" />
           <div className="p-3">
-            <div
-              ref={outputRef}
-              onScroll={handleToolOutputScroll}
-              className={`text-sm font-mono whitespace-pre-wrap break-all ${isError ? 'text-destructive' : 'text-foreground'} ${!isExpanded ? 'max-h-[10em] overflow-y-auto' : 'max-h-[30em] overflow-y-auto'}`}
-            >
-              {output || (isError ? `Command failed with exit code ${result?.exitCode ?? 1}` : '')}
-            </div>
+            {(() => {
+              const formattedOutput = !isStreaming ? tryFormatJson(output) : null;
+              if (formattedOutput) {
+                return (
+                  <div
+                    ref={outputRef}
+                    onScroll={handleToolOutputScroll}
+                    className={`${!isExpanded ? 'max-h-[10em]' : 'max-h-[30em]'} overflow-y-auto rounded-lg overflow-hidden`}
+                  >
+                    <CodeBlock className="language-json">{formattedOutput}</CodeBlock>
+                  </div>
+                );
+              }
+              return (
+                <div
+                  ref={outputRef}
+                  onScroll={handleToolOutputScroll}
+                  className={`text-sm font-mono whitespace-pre-wrap break-all ${isError ? 'text-destructive' : 'text-foreground'} ${!isExpanded ? 'max-h-[10em] overflow-y-auto' : 'max-h-[30em] overflow-y-auto'}`}
+                >
+                  {output || (isError ? `Command failed with exit code ${result?.exitCode ?? 1}` : '')}
+                </div>
+              );
+            })()}
             {isStreaming && (
               <div className="mt-2 text-xs text-muted-foreground animate-pulse">
                 running...

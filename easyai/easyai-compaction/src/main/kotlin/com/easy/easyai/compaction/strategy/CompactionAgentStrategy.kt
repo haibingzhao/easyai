@@ -40,7 +40,7 @@ class CompactionAgentStrategy(
 
     companion object {
         private const val MAX_ITERATIONS = 3
-        private const val TIMEOUT_MS = 60_000L
+        private const val TIMEOUT_MS = 180_000L
 
         private const val COMPACTION_SYSTEM_PROMPT = """
 You are an expert conversation summarizer. Your task is to condense a conversation
@@ -115,7 +115,7 @@ After generating the summary, you MUST call the update_variable tool:
             withTimeout(TIMEOUT_MS.milliseconds) {
                 executeAgentCompaction(messages, context, chatModel)
             }
-        } catch (e: TimeoutCancellationException) {
+        } catch (_: TimeoutCancellationException) {
             logger.warn("Agent compaction timed out after {}ms, falling back to simple summary", TIMEOUT_MS)
             StrategyOutput(generateFallbackSummary(messages, context, "Agent compaction timed out"))
         } catch (e: Exception) {

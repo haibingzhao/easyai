@@ -35,6 +35,7 @@ export const TokenContextBar: React.FC = () => {
     isStreaming,
     isAwaitingAskQuestion,
     isCompacting,
+    setCompacting,
     handleEvent,
   } = useChatStore();
 
@@ -57,14 +58,23 @@ export const TokenContextBar: React.FC = () => {
 
   const handleCompact = useCallback(() => {
     if (!sessionId) return;
+    // Show the loading state immediately on click. The compaction_start SSE event also
+    // sets isCompacting, but it can take a moment to arrive; setting it here gives instant
+    // feedback (spinner + "compacting" tooltip) and disables the button to prevent a
+    // double-trigger.
+    setCompacting(true);
     compactSession(sessionId, {
       onEvent: (event) => handleEvent(event),
       onDone: () => {
         // Compaction complete — cumulativeUsage already updated via compaction_end event
       },
-      onError: (event) => handleEvent(event as ErrorEvent),
+      onError: (event) => {
+        // Reset the loading state so the spinner does not get stuck if compaction fails.
+        setCompacting(false);
+        handleEvent(event as ErrorEvent);
+      },
     });
-  }, [sessionId, handleEvent]);
+  }, [sessionId, handleEvent, setCompacting]);
 
   // Don't render if no active session
   if (!sessionId) {

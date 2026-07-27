@@ -140,13 +140,17 @@ function expandStreamingBlocks(blocks: NonNullable<TimelineBarProps['streamingBl
         tip: `subagent: ${block.agentName ?? 'unknown'} | ${formatTokens(tokens)}`,
       });
     } else if (block.type === 'compaction') {
-      const tokensSaved = block.tokensSaved ?? 0;
-      result.push({
-        type: 'compact',
-        size: tokensSaved,
-        duration: block.durationMs ?? 0,
-        tip: `compact | -${formatTokens(tokensSaved)}, ${formatDurationMs(block.durationMs ?? 0)}`,
-      });
+      // Skip in-progress compaction blocks (tokensSaved is still 0); the segment appears
+      // once compaction_end finalizes the block.
+      if (block.isFinished !== false) {
+        const tokensSaved = block.tokensSaved ?? 0;
+        result.push({
+          type: 'compact',
+          size: tokensSaved,
+          duration: block.durationMs ?? 0,
+          tip: `compact | -${formatTokens(tokensSaved)}, ${formatDurationMs(block.durationMs ?? 0)}`,
+        });
+      }
     }
   }
   return result;

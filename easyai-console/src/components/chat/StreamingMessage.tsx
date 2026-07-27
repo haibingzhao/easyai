@@ -256,6 +256,7 @@ export const StreamingMessage: React.FC<StreamingMessageProps> = ({ blocks, canc
               return (
                 <CompactionIndicator
                   key={block.id}
+                  isCompacting={!block.isFinished}
                   message={{
                     role: 'custom',
                     customType: 'compaction',

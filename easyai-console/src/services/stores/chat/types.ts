@@ -87,6 +87,12 @@ export interface ToolBlockData {
  */
 export interface CompactionBlockData {
   type: 'compaction';
+  /**
+   * False while compaction is in progress (between compaction_start and compaction_end),
+   * during which the indicator renders a spinner plus a live elapsed timer; flipped to
+   * true (in place, preserving list position) once compaction_end arrives.
+   */
+  isFinished: boolean;
   compactedCount: number;
   tokensSaved: number;
   durationMs?: number;

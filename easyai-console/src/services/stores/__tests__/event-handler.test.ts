@@ -344,7 +344,7 @@ describe('handleChatEvent', () => {
   });
 
   describe('compaction events', () => {
-    it('should set isCompacting on compaction_start', () => {
+    it('should append an in-progress compaction block and set isCompacting on compaction_start while streaming', () => {
       const event: SocketEvent = {
         type: 'compaction_start',
         turnId: 1,
@@ -354,10 +354,34 @@ describe('handleChatEvent', () => {
 
       handleChatEvent(event, get, set);
 
-      expect(set).toHaveBeenCalledWith({ isCompacting: true });
+      expect(mockState.isCompacting).toBe(true);
+      expect(mockState.streamingBlocks).toHaveLength(1);
+      expect(mockState.streamingBlocks[0]).toMatchObject({
+        type: 'compaction',
+        isFinished: false,
+      });
     });
 
-    it('should append a compaction block to streamingBlocks on compaction_end while streaming', () => {
+    it('should only set isCompacting on compaction_start when not streaming', () => {
+      mockState = createMockState({ isStreaming: false });
+      const event: SocketEvent = {
+        type: 'compaction_start',
+        turnId: 1,
+        reason: 'context_overflow',
+        messageCount: 50,
+      };
+
+      handleChatEvent(event, get, set);
+
+      expect(mockState.isCompacting).toBe(true);
+      expect(mockState.streamingBlocks).toHaveLength(0);
+    });
+
+    it('should finalize the in-progress compaction block in place on compaction_end while streaming', () => {
+      // Simulate compaction_start having appended an in-progress block.
+      mockState.streamingBlocks = [
+        { type: 'compaction', isFinished: false, compactedCount: 0, tokensSaved: 0, timestamp: 1, id: 'compaction-1' },
+      ];
       const event: SocketEvent = {
         type: 'compaction_end',
         turnId: 1,
@@ -369,12 +393,14 @@ describe('handleChatEvent', () => {
 
       handleChatEvent(event, get, set);
 
-      // isCompacting cleared and compaction block appended to streamingBlocks
-      // (so the indicator renders at the correct position during streaming).
+      // isCompacting is cleared and the in-progress block is finalized in place
+      // (preserving its position), so the indicator switches from the live timer to
+      // the final stats during streaming.
       expect(mockState.isCompacting).toBe(false);
       expect(mockState.streamingBlocks).toHaveLength(1);
       expect(mockState.streamingBlocks[0]).toMatchObject({
         type: 'compaction',
+        isFinished: true,
         compactedCount: 30,
         tokensSaved: 5000,
         currentTokens: 10000,
