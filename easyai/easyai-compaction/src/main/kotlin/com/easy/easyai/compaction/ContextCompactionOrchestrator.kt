@@ -198,7 +198,8 @@ class ContextCompactionOrchestrator(
             range = compactedRange,
             previousSummary = null, // Agent sees previous summary directly in transcript
             currentTurnId = turnId,
-            compactionRound = compactionRound
+            compactionRound = compactionRound,
+            modelConfig = agentContext.modelConfig
         )
 
         // Step 4: Generate summary via agent-based strategy (with usage + variable tracking)

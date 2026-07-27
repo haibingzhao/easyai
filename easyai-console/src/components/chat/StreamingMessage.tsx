@@ -5,6 +5,7 @@ import type { SubAgentInnerBlock } from './tools/SubAgentPanel';
 import { ReadLsGroupedMessage } from './tools/ReadLsGroupedMessage';
 import { EditedGroupedMessage } from './tools/EditedGroupedMessage';
 import { ToolMessage } from './ToolMessage';
+import { CompactionIndicator } from './CompactionIndicator';
 import { markdownCodeComponents } from './markdownCodeComponents';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -251,6 +252,24 @@ export const StreamingMessage: React.FC<StreamingMessageProps> = ({ blocks, canc
                 />
               );
             }
+            case 'compaction':
+              return (
+                <CompactionIndicator
+                  key={block.id}
+                  message={{
+                    role: 'custom',
+                    customType: 'compaction',
+                    metadata: {
+                      compactedCount: block.compactedCount,
+                      tokensSaved: block.tokensSaved,
+                      durationMs: block.durationMs,
+                      currentTokens: block.currentTokens,
+                      isCompactionIndicator: true,
+                    },
+                    timestamp: block.timestamp,
+                  }}
+                />
+              );
             default:
               return null;
           }

@@ -15,9 +15,9 @@ import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.messages.SystemMessage
 import org.springframework.ai.chat.model.ChatModel
 import org.springframework.ai.chat.model.ChatResponse
-import org.springframework.ai.chat.prompt.ChatOptions
 import org.springframework.ai.chat.prompt.Prompt
 import org.springframework.ai.model.tool.StructuredOutputChatOptions
+import org.springframework.ai.model.tool.ToolCallingChatOptions
 import java.util.concurrent.TimeoutException
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -375,7 +375,10 @@ internal class AgentLoopRunner(
                 toolCallbacks = toolCallbacks,
                 additionalOptions = context.options ?: emptyMap()
             )
-        } ?: ChatOptions.builder().model(context.modelId).build()
+        } ?: ToolCallingChatOptions.builder()
+            .model(context.modelId.ifEmpty { null })
+            .toolCallbacks(toolCallbacks)
+            .build()
 
         // Inject outputSchema for model-level structured output enforcement.
         // Protocol-specific options (OpenAI, Anthropic) implement StructuredOutputChatOptions,

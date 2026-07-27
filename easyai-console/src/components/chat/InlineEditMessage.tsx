@@ -5,7 +5,8 @@ import { useAgentStore } from '@/services/stores/agent-store';
 import { useProjectStore } from '@/services/stores/project-store';
 import { sendMessageToBackend } from '../../services/chat-service';
 import { sessionService } from '../../services/session-service';
-import { editMessage } from '@/services/checkpoint-service';
+import { editMessage, getCheckpoints } from '@/services/checkpoint-service';
+import type { CheckpointInfo } from '@/types/checkpoint';
 import { ModelSelector } from './ModelSelector';
 import { AgentSelector } from './AgentSelector';
 import { SlashCommandPopover } from './SlashCommandPopover';
@@ -567,9 +568,12 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
         handleEvent(event);
         // Full reconciliation after stream ends: recover any SSE events that may
         // have been lost (e.g., compaction indicators).
-        sessionService.getSessionDetail(sid).then((detail) => {
+        Promise.all([
+          sessionService.getSessionDetail(sid),
+          getCheckpoints(sid).catch(() => [] as CheckpointInfo[]),
+        ]).then(([detail, checkpoints]) => {
           useChatStore.getState().loadSessionMessages(
-            detail.messages, detail.pendingPermission, undefined, detail.endReason, detail.variables
+            detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables
           );
         }).catch(() => { /* best-effort */ });
       },

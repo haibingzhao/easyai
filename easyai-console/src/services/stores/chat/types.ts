@@ -79,7 +79,23 @@ export interface ToolBlockData {
   };
 }
 
-export type StreamingBlock = ThinkingBlockData | TextBlockData | ToolBlockData;
+/**
+ * Streaming-specific marker for context compaction that occurred mid-stream.
+ * Rendered inline within the streaming block list so the indicator appears at the
+ * correct position (right after the compacted turns) instead of being placed above
+ * all streaming content (which happens when it is added to the committed messages).
+ */
+export interface CompactionBlockData {
+  type: 'compaction';
+  compactedCount: number;
+  tokensSaved: number;
+  durationMs?: number;
+  currentTokens?: number;
+  timestamp: number;
+  id: string; // Unique identifier for React key
+}
+
+export type StreamingBlock = ThinkingBlockData | TextBlockData | ToolBlockData | CompactionBlockData;
 
 /** LLM timeout retry state for UI indicator display */
 export interface RetryInfo {

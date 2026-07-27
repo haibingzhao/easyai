@@ -23,6 +23,8 @@ import { i18n } from '../../utils/i18n';
 import { addQueueMessage, removeQueueMessage } from '../../services/chat-service';
 import { QueuedMessagesPanel } from './QueuedMessagesPanel';
 import { authFetch } from '@/services/api-client';
+import { getCheckpoints } from '@/services/checkpoint-service';
+import type { CheckpointInfo } from '@/types/checkpoint';
 
 /** Upload a base64 attachment to the backend and return filePath. */
 async function uploadBase64Attachment(att: { name: string; mimeType: string; data: string }, sessionId: string): Promise<string> {
@@ -433,9 +435,12 @@ export const MessageEditor: React.FC = () => {
           // have been lost (e.g., compaction indicators). Mirrors the watch path's
           // finalReconciliation in ChatPanel.
           if (sid) {
-            sessionService.getSessionDetail(sid).then((detail) => {
+            Promise.all([
+              sessionService.getSessionDetail(sid),
+              getCheckpoints(sid).catch(() => [] as CheckpointInfo[]),
+            ]).then(([detail, checkpoints]) => {
               useChatStore.getState().loadSessionMessages(
-                detail.messages, detail.pendingPermission, undefined, detail.endReason, detail.variables
+                detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables
               );
             }).catch(() => { /* best-effort */ });
           }

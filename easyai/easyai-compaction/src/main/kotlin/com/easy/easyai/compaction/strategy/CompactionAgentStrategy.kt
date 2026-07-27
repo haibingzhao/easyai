@@ -3,9 +3,9 @@ package com.easy.easyai.compaction.strategy
 import com.easy.easyai.compaction.estimator.TokenEstimator
 import com.easy.easyai.compaction.model.CompactionContext
 import com.easy.easyai.core.agent.*
-import com.easy.easyai.core.event.MessageUpdateEvent
-import com.easy.easyai.core.event.MessageEndEvent
 import com.easy.easyai.core.event.ErrorEvent
+import com.easy.easyai.core.event.MessageEndEvent
+import com.easy.easyai.core.event.MessageUpdateEvent
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.tool.*
 import com.fasterxml.jackson.annotation.JsonPropertyDescription
@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.model.ChatModel
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Agent-based compaction strategy that uses a lightweight Agent loop to generate
@@ -111,7 +112,7 @@ After generating the summary, you MUST call the update_variable tool:
         )
 
         return try {
-            withTimeout(TIMEOUT_MS) {
+            withTimeout(TIMEOUT_MS.milliseconds) {
                 executeAgentCompaction(messages, context, chatModel)
             }
         } catch (e: TimeoutCancellationException) {
@@ -140,6 +141,7 @@ After generating the summary, you MUST call the update_variable tool:
         // Build agent context (dry-run: no persistence, no default system prompt)
         val agentContext = AgentContext(
             agentId = "compaction-agent",
+            modelConfig = context.modelConfig,
             sessionId = null,
             tools = listOf(variableTool),
             maxIterations = MAX_ITERATIONS,
@@ -148,7 +150,10 @@ After generating the summary, you MUST call the update_variable tool:
         )
 
         // Create dry-run AgentService (no persistence, no observability)
-        val dryRunServices = CompactionDryRunAgentService(agentService)
+        // Override defaultChatModel with the session-specific model so the compaction agent
+        // uses the same model as the conversation (Agent.chatModel resolves via services.defaultChatModel)
+        val resolvedChatModel = chatModel ?: fallbackChatModel
+        val dryRunServices = CompactionDryRunAgentService(agentService, resolvedChatModel)
 
         // Wrap with completion check to enforce variable tool call
         val completionCheck = CompactionVariableCompletionCheck(toolCalled)
@@ -293,10 +298,16 @@ internal class CompactionVariableTool(
 
 /**
  * Delegating AgentService that disables all persistence and observability for compaction agent.
+ * Overrides defaultChatModel to use the session-specific model for the compaction agent.
  */
 internal class CompactionDryRunAgentService(
-    private val delegate: AgentService
+    private val delegate: AgentService,
+    private val sessionChatModel: ChatModel? = null
 ) : AgentService by delegate {
+
+    /** Use session-specific model so compaction agent uses the same model as the conversation. */
+    override val defaultChatModel: ChatModel
+        get() = sessionChatModel ?: delegate.defaultChatModel
 
     /** Disable message persistence. */
     override val messageListener: com.easy.easyai.core.event.MessageListener? = null

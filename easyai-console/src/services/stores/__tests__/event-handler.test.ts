@@ -357,7 +357,7 @@ describe('handleChatEvent', () => {
       expect(set).toHaveBeenCalledWith({ isCompacting: true });
     });
 
-    it('should add compaction indicator message on compaction_end', () => {
+    it('should append a compaction block to streamingBlocks on compaction_end while streaming', () => {
       const event: SocketEvent = {
         type: 'compaction_end',
         turnId: 1,
@@ -369,7 +369,34 @@ describe('handleChatEvent', () => {
 
       handleChatEvent(event, get, set);
 
-      expect(set).toHaveBeenCalledWith(expect.objectContaining({ isCompacting: false }));
+      // isCompacting cleared and compaction block appended to streamingBlocks
+      // (so the indicator renders at the correct position during streaming).
+      expect(mockState.isCompacting).toBe(false);
+      expect(mockState.streamingBlocks).toHaveLength(1);
+      expect(mockState.streamingBlocks[0]).toMatchObject({
+        type: 'compaction',
+        compactedCount: 30,
+        tokensSaved: 5000,
+        currentTokens: 10000,
+      });
+      // Must NOT be added to committed messages while streaming
+      expect(mockState.addMessage).not.toHaveBeenCalled();
+    });
+
+    it('should add compaction indicator message on compaction_end when not streaming', () => {
+      mockState = createMockState({ isStreaming: false });
+      const event: SocketEvent = {
+        type: 'compaction_end',
+        turnId: 1,
+        summary: 'Compacted 30 messages',
+        compactedCount: 30,
+        tokensSaved: 5000,
+        currentTokens: 10000,
+      };
+
+      handleChatEvent(event, get, set);
+
+      expect(mockState.isCompacting).toBe(false);
       expect(mockState.addMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           role: 'custom',

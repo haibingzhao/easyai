@@ -23,6 +23,7 @@ import {
   type ThinkingBlockData,
   type TextBlockData,
   type ToolBlockData,
+  type CompactionBlockData,
   type RetryInfo,
 } from './types';
 import { dispatchSubAgentEvent } from './sub-agent-handler';
@@ -626,23 +627,47 @@ function handleCompactionEnd(
   state: ChatStateShape,
   set: SetFn
 ) {
-  set({ isCompacting: false });
-
-  // Insert compaction indicator card into the message list for real-time rendering.
   const now = Date.now();
-  state.addMessage({
-    role: 'custom',
-    customType: 'compaction',
-    metadata: {
+
+  if (state.isStreaming) {
+    // During streaming, the current run's turns live in streamingBlocks, which the
+    // MessageList renders AFTER the committed `messages` array. Adding the indicator
+    // card to `messages` would place it above all already-streamed turns — far outside
+    // the auto-scrolled viewport — so it would only become visible after the stream
+    // ends. Instead, append a compaction block to streamingBlocks so the card renders
+    // at the correct position (right after the compacted turns) in real time.
+    // commitStreamingMessage converts it back into a custom message when the stream ends.
+    const compactionBlock: CompactionBlockData = {
+      type: 'compaction',
       compactedCount: event.compactedCount,
       tokensSaved: event.tokensSaved,
-      compactedAt: now,
       durationMs: event.durationMs ?? 0,
       currentTokens: event.currentTokens,
-      isCompactionIndicator: true,
-    },
-    timestamp: now,
-  });
+      timestamp: now,
+      id: `compaction-${now}`,
+    };
+    set((s) => ({
+      isCompacting: false,
+      streamingBlocks: [...s.streamingBlocks, compactionBlock],
+    }));
+  } else {
+    // Manual compaction (not streaming): there are no streaming blocks to interleave
+    // with, so insert the indicator card directly into the message list.
+    set({ isCompacting: false });
+    state.addMessage({
+      role: 'custom',
+      customType: 'compaction',
+      metadata: {
+        compactedCount: event.compactedCount,
+        tokensSaved: event.tokensSaved,
+        compactedAt: now,
+        durationMs: event.durationMs ?? 0,
+        currentTokens: event.currentTokens,
+        isCompactionIndicator: true,
+      },
+      timestamp: now,
+    });
+  }
 
   // Update contextTokens to reflect post-compaction context size.
   // cumulativeUsage is NOT reset — it tracks total LLM token consumption across the session,

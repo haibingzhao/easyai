@@ -6,7 +6,7 @@ interface TimelineBarProps {
   messages: Message[];
   /** Optional streaming blocks for real-time bar display during SSE streaming */
   streamingBlocks?: Array<{
-    type: 'thinking' | 'text' | 'tool' | 'subagent';
+    type: 'thinking' | 'text' | 'tool' | 'subagent' | 'compaction';
     content?: string;
     isFinished?: boolean;
     durationMs?: number;
@@ -18,6 +18,8 @@ interface TimelineBarProps {
     accumulatedUsage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
     /** Agent name for sub-agent blocks */
     agentName?: string;
+    /** Tokens saved by context compaction (compaction blocks) */
+    tokensSaved?: number;
     /** Sub-agent data nested inside tool blocks (from chat store ToolBlockData) */
     subAgent?: {
       agentName: string;
@@ -136,6 +138,14 @@ function expandStreamingBlocks(blocks: NonNullable<TimelineBarProps['streamingBl
         size: tokens || 1,
         duration: 0,
         tip: `subagent: ${block.agentName ?? 'unknown'} | ${formatTokens(tokens)}`,
+      });
+    } else if (block.type === 'compaction') {
+      const tokensSaved = block.tokensSaved ?? 0;
+      result.push({
+        type: 'compact',
+        size: tokensSaved,
+        duration: block.durationMs ?? 0,
+        tip: `compact | -${formatTokens(tokensSaved)}, ${formatDurationMs(block.durationMs ?? 0)}`,
       });
     }
   }

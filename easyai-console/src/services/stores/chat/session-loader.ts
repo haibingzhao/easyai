@@ -11,6 +11,7 @@ import {
   type ThinkingBlockData,
   type TextBlockData,
   type ToolBlockData,
+  type CompactionBlockData,
 } from './types';
 import { convertSubAgentBlocksToMessages, convertSnapshot } from './message-converter';
 
@@ -116,6 +117,25 @@ export function commitStreamingMessageImpl(state: CommitStateShape): Partial<Com
       if (toolBlock.toolResult) {
         currentToolResults.push(toolBlock.toolResult);
       }
+    } else if (block.type === 'compaction') {
+      // Flush any in-progress assistant message, then insert the compaction indicator
+      // as a custom message so it survives the commit (reconciliation re-adds it from
+      // persisted data, but this avoids a visual gap in between).
+      flushCurrentMessage();
+      const compBlock = block as CompactionBlockData;
+      newMessages.push({
+        role: 'custom',
+        customType: 'compaction',
+        metadata: {
+          compactedCount: compBlock.compactedCount,
+          tokensSaved: compBlock.tokensSaved,
+          compactedAt: compBlock.timestamp,
+          durationMs: compBlock.durationMs ?? 0,
+          currentTokens: compBlock.currentTokens,
+          isCompactionIndicator: true,
+        },
+        timestamp: compBlock.timestamp,
+      });
     }
   }
 
