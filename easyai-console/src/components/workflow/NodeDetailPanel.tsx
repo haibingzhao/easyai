@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
-import { X } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { X, FlaskConical } from 'lucide-react';
 import type { TaskSummary, PresetTask } from '@/services/swarm-service';
 import { NodeMessageList } from './NodeMessageList';
 import { SwarmTeamProgress } from '@/components/swarm/SwarmTeamProgress';
 import { SwarmDeliberationProgress } from '@/components/swarm/SwarmDeliberationProgress';
+import { markdownCodeComponents } from '@/components/chat/markdownCodeComponents';
 import { i18n } from '@/utils/i18n';
 
 interface NodeDetailPanelProps {
@@ -14,9 +17,18 @@ interface NodeDetailPanelProps {
   agentMap?: Map<string, string>;
   onClose: () => void;
   hideHeader?: boolean;
+  dryRun?: boolean;
 }
 
 type TabId = 'config' | 'messages' | 'team' | 'deliberation';
+
+/** Notice shown in Messages/Team/Deliberation tabs when the run is a dry run (no persisted data). */
+const DryRunNotice: React.FC = () => (
+  <div className="flex flex-col items-center justify-center h-full gap-2 p-6 text-center">
+    <FlaskConical className="w-6 h-6 text-amber-500" />
+    <p className="text-sm text-muted-foreground">{i18n('Details are not available in Dry Run mode')}</p>
+  </div>
+);
 
 export const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
   runId,
@@ -26,6 +38,7 @@ export const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
   agentMap,
   onClose,
   hideHeader = false,
+  dryRun = false,
 }) => {
   const [activeTab, setActiveTab] = useState<TabId>('config');
 
@@ -185,7 +198,11 @@ export const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
             {task.summary && (
               <div>
                 <div className="text-xs text-muted-foreground mb-1">{i18n('Summary')}</div>
-                <div className="text-sm text-foreground/80 line-clamp-4">{task.summary}</div>
+                <div className="rounded-md border border-border bg-muted/30 p-3 max-h-[60vh] overflow-y-auto prose prose-sm dark:prose-invert max-w-none break-words">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
+                    {task.summary}
+                  </ReactMarkdown>
+                </div>
               </div>
             )}
 
@@ -200,7 +217,9 @@ export const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
         )}
 
         {activeTab === 'messages' && (
-          runId ? (
+          dryRun ? (
+            <DryRunNotice />
+          ) : runId ? (
             <NodeMessageList runId={runId} taskId={taskId} taskStatus={task.status} />
           ) : (
             <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
@@ -209,12 +228,16 @@ export const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
           )
         )}
 
-        {activeTab === 'team' && task.type === 'TEAM' && runId && (
-          <SwarmTeamProgress runId={runId} taskId={taskId} taskStatus={task.status} />
+        {activeTab === 'team' && task.type === 'TEAM' && (
+          dryRun ? <DryRunNotice /> : runId && (
+            <SwarmTeamProgress runId={runId} taskId={taskId} taskStatus={task.status} />
+          )
         )}
 
-        {activeTab === 'deliberation' && task.type === 'DELIBERATION' && runId && (
-          <SwarmDeliberationProgress runId={runId} taskId={taskId} taskStatus={task.status} />
+        {activeTab === 'deliberation' && task.type === 'DELIBERATION' && (
+          dryRun ? <DryRunNotice /> : runId && (
+            <SwarmDeliberationProgress runId={runId} taskId={taskId} taskStatus={task.status} />
+          )
         )}
       </div>
     </div>

@@ -5,6 +5,7 @@ import com.easy.easyai.core.agent.AgentEventListener
 import com.easy.easyai.core.event.*
 import com.easy.easyai.core.model.AssistantMessage
 import com.easy.easyai.core.model.UserMessage
+import com.easy.easyai.core.team.TeamExecutionStore
 import com.easy.easyai.snapshot.model.FileDiff
 import com.easy.easyai.snapshot.model.GitCheckpoint
 import org.slf4j.LoggerFactory
@@ -16,23 +17,42 @@ import java.util.concurrent.ConcurrentHashMap
  * Uses synchronous batch hooks (called by AgentLoop) to attribute changes to either
  * the LLM agent or the user:
  *
- * - [beforeToolExecutionBatch]: Commits pending user changes as `ChangeAuthor.USER`,
- *   then establishes a baseline for LLM tracking.
+ * - [beforeToolExecutionBatch]: Commits pending changes, then establishes a baseline
+ *   for LLM tracking. In a team session the pending changes are attributed to the LLM
+ *   (they were made by member agents sharing the working tree); otherwise to the user.
  * - [afterToolExecutionBatch]: Commits tool-execution changes as `ChangeAuthor.LLM_AGENT`,
  *   computes diff, and pushes a checkpoint event for immediate UI feedback.
  * - On [AgentEndEvent]: Creates a final [GitCheckpoint] with the commit hash and
  *   pushes a checkpoint event for revert/rollback operations.
  *
  * @param snapshotService The snapshot service for Git operations
+ * @param teamExecutionStore Optional store used to detect team sessions so that
+ *   member-made changes are not misattributed to the user.
  */
 class SnapshotEventListener(
-    private val snapshotService: SnapshotService
+    private val snapshotService: SnapshotService,
+    private val teamExecutionStore: TeamExecutionStore? = null
 ) : AgentEventListener {
 
     private val logger = LoggerFactory.getLogger(javaClass)
 
     /** Tracks whether any file-modifying tool was used per session (thread-safe). */
     private val sessionFileModifications = ConcurrentHashMap<String, Boolean>()
+
+    /**
+     * Whether [sessionId] is a team session that has delegated to at least one member.
+     * Used to attribute pending working-tree changes to member agents instead of the user.
+     * Failures fall back to `false` (treat as a regular session).
+     */
+    private suspend fun isTeamSession(sessionId: String): Boolean {
+        val store = teamExecutionStore ?: return false
+        return try {
+            store.getExecutions(sessionId).isNotEmpty()
+        } catch (e: Exception) {
+            logger.debug("Failed to check team session status for {}: {}", sessionId, e.message)
+            false
+        }
+    }
 
     override suspend fun handle(agentContext: AgentContext, event: AgentEvent, push: suspend (AgentEvent) -> Unit) {
         // Guard: skip all snapshot operations if not enabled for this project
@@ -62,10 +82,17 @@ class SnapshotEventListener(
         val sessionId = agentContext.sessionId ?: return
 
         try {
-            // Commit user changes that happened since the last batch end
-            snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.USER, "user-changes")
+            // Commit changes that accumulated since the last batch. In a team session
+            // these were made by member agents (members share the working tree but commit
+            // under isolated session refs), so attribute them to the LLM to avoid
+            // mislabeling as "User" in the per-commit view.
+            if (isTeamSession(sessionId)) {
+                snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.LLM_AGENT, "member-changes")
+            } else {
+                snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.USER, "user-changes")
+            }
         } catch (e: Exception) {
-            logger.debug("No user changes to commit before batch: {}", e.message)
+            logger.debug("No pending changes to commit before batch: {}", e.message)
         }
 
         try {
@@ -194,18 +221,23 @@ class SnapshotEventListener(
         val assistantMessageId = messages.filterIsInstance<AssistantMessage>().lastOrNull()?.id
 
         try {
-            // Commit any remaining user changes before final snapshot
-            val userCommitHash = try {
-                snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.USER, "user-changes-final")
+            // Commit any remaining pending changes before final snapshot.
+            // In a team session these are member-made, so attribute to the LLM.
+            val pendingCommitHash = try {
+                if (isTeamSession(sessionId)) {
+                    snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.LLM_AGENT, "member-changes-final")
+                } else {
+                    snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.USER, "user-changes-final")
+                }
             } catch (e: Exception) {
-                logger.debug("No user changes to commit at agent end: {}", e.message)
+                logger.debug("No pending changes to commit at agent end: {}", e.message)
                 null
             }
 
-            // Update lastTrackedHash after user commit so the final diff
+            // Update lastTrackedHash after the pending commit so the final diff
             // only covers the LLM agent-end commit, matching per-commit view.
-            if (userCommitHash != null) {
-                snapshotService.saveLastTrackedHash(projectPath, sessionId, userCommitHash)
+            if (pendingCommitHash != null) {
+                snapshotService.saveLastTrackedHash(projectPath, sessionId, pendingCommitHash)
             }
 
             // Track final state via LLM commit

@@ -5,8 +5,9 @@ import { type VariableGroup } from './VariableDropdown';
 import { McpSelector } from './McpSelector';
 import { SkillSelector } from './SkillSelector';
 import { ToolTooltip } from './ToolItem';
-import { Trash2, Plus, ChevronDown, ChevronRight } from 'lucide-react';
+import { Trash2, Plus, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react';
 import { selectableTools } from '@/constants/tools';
+import { useWebSearchStatus } from '@/hooks/useWebSearchStatus';
 import { i18n } from '@/utils/i18n';
 
 /**
@@ -59,6 +60,8 @@ export const InlineAgentEditor: React.FC<InlineAgentEditorProps> = ({
   index,
 }) => {
   const [expanded, setExpanded] = React.useState(true);
+  const { configured: webSearchConfigured } = useWebSearchStatus();
+  const showWebSearchWarning = value.toolNames.includes('websearch') && webSearchConfigured === false;
 
   return (
     <div className="border border-border rounded-lg overflow-hidden">
@@ -133,6 +136,14 @@ export const InlineAgentEditor: React.FC<InlineAgentEditorProps> = ({
           {/* Tools */}
           <div>
             <label className="block text-xs font-medium mb-1">Tools</label>
+            {showWebSearchWarning && (
+              <div className="flex items-start gap-1.5 p-2 mb-1.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[11px]">
+                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                <span>
+                  {i18n('websearch requires an API key. Configure in Settings → Integrations.')}
+                </span>
+              </div>
+            )}
             <div className="max-h-[120px] overflow-y-auto rounded-md border border-border p-2 space-y-1">
               {selectableTools(availableTools).map((tool) => (
                 <ToolTooltip key={tool.name} name={tool.name} description={tool.description}>

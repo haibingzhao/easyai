@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Pencil, Trash2, Copy, ChevronDown, ChevronRight, X, Check } from 'lucide-react';
+import { Plus, Pencil, Trash2, Copy, ChevronDown, ChevronRight, X, Check, AlertTriangle } from 'lucide-react';
 import type { SwarmAgentSpecDto, SwarmVariableDto } from '@/services/swarm-service';
 import type { AgentDto, ToolInfo } from '@/types/agent';
 import type { ModelProviderConfig } from '@/types/settings';
@@ -9,6 +9,7 @@ import { McpSelector } from '@/components/agent/McpSelector';
 import { type VariableGroup } from '@/components/agent/VariableDropdown';
 import { SWARM_PROMPT_VARIABLES } from '@/constants/swarm-variables';
 import { SWARM_EXCLUDED_TOOLS, selectableTools } from '@/constants/tools';
+import { useWebSearchStatus } from '@/hooks/useWebSearchStatus';
 import { i18n } from '@/utils/i18n';
 import { safeParseInt } from '@/utils/format';
 
@@ -54,6 +55,7 @@ export const SwarmAgentEditor: React.FC<SwarmAgentEditorProps> = ({
   const [deleteConfirmIndex, setDeleteConfirmIndex] = useState<number | null>(null);
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [agentSource, setAgentSource] = useState<AgentSource>('global');
+  const { configured: webSearchConfigured } = useWebSearchStatus();
 
   /** Tools selectable for inline custom agents (auto-injected and swarm-unsupported tools excluded). */
   const selectableAgentTools = useMemo(
@@ -294,6 +296,12 @@ export const SwarmAgentEditor: React.FC<SwarmAgentEditorProps> = ({
                   </div>
                   <div>
                     <label className="block text-sm font-medium mb-1">{i18n('Tools')}</label>
+                    {(editForm.toolNames ?? []).includes('websearch') && webSearchConfigured === false && (
+                      <div className="flex items-start gap-1.5 p-2 mb-1.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[11px]">
+                        <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                        <span>{i18n('websearch requires an API key. Configure in Settings → Integrations.')}</span>
+                      </div>
+                    )}
                     <div className="max-h-[120px] overflow-y-auto rounded-md border border-border p-2 space-y-1">
                       {selectableAgentTools.map((tool) => (
                         <ToolTooltip key={tool.name} name={tool.name} description={tool.description}>
@@ -546,6 +554,12 @@ export const SwarmAgentEditor: React.FC<SwarmAgentEditorProps> = ({
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">{i18n('Tools')}</label>
+                {(editForm.toolNames ?? []).includes('websearch') && webSearchConfigured === false && (
+                  <div className="flex items-start gap-1.5 p-2 mb-1.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[11px]">
+                    <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                    <span>{i18n('websearch requires an API key. Configure in Settings → Integrations.')}</span>
+                  </div>
+                )}
                 <div className="max-h-[120px] overflow-y-auto rounded-md border border-border p-2 space-y-1">
                   {selectableAgentTools.map((tool) => (
                     <ToolTooltip key={tool.name} name={tool.name} description={tool.description}>

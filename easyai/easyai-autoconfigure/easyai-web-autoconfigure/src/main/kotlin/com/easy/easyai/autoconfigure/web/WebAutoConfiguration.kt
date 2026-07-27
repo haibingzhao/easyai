@@ -197,10 +197,11 @@ open class WebAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(SnapshotEventListener::class)
     open fun snapshotEventListener(
-        @Autowired(required = false) snapshotService: SnapshotService?
+        @Autowired(required = false) snapshotService: SnapshotService?,
+        @Autowired(required = false) teamExecutionStore: TeamExecutionStore?
     ): SnapshotEventListener? {
         if (snapshotService == null) return null
-        return SnapshotEventListener(snapshotService)
+        return SnapshotEventListener(snapshotService, teamExecutionStore)
     }
 
     @Bean

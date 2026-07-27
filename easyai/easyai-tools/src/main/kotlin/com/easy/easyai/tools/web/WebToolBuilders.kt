@@ -69,8 +69,8 @@ class WebSearchToolBuilder : ToolBuilder {
     )
 
     override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
-        val exaApiKey = System.getenv("EXA_API_KEY") ?: System.getProperty("EXA_API_KEY")
-        val parallelApiKey = System.getenv("PARALLEL_API_KEY")?: System.getProperty("PARALLEL_API_KEY")
+        val exaApiKey = IntegrationConfig.resolveExaApiKey()
+        val parallelApiKey = IntegrationConfig.resolveParallelApiKey()
 
         if (exaApiKey.isNullOrBlank() && parallelApiKey.isNullOrBlank()) {
             logger.debug("WebSearchTool disabled: neither EXA_API_KEY nor PARALLEL_API_KEY is set")
@@ -87,7 +87,7 @@ class WebSearchToolBuilder : ToolBuilder {
             providers.add(ParallelSearchProvider(client, parallelApiKey))
         }
 
-        val defaultProvider = System.getenv("EASYAI_WEBSEARCH_PROVIDER")
+        val defaultProvider = IntegrationConfig.resolveWebsearchProvider()
             ?: if (providers.any { it.providerName == "exa" }) "exa" else "parallel"
 
         logger.info("WebSearchTool initialized with providers: {}", providers.joinToString { it.providerName })

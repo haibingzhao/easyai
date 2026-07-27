@@ -1,7 +1,8 @@
 import React from 'react';
 import { useAgentStore } from '@/services/stores/agent-store';
-import { Bot, Terminal, FileText, Search, FolderSearch, List, MessageSquare, CheckSquare } from 'lucide-react';
+import { Bot, Terminal, FileText, Search, FolderSearch, List, MessageSquare, CheckSquare, AlertTriangle } from 'lucide-react';
 import { selectableTools } from '@/constants/tools';
+import { useWebSearchStatus } from '@/hooks/useWebSearchStatus';
 import { i18n } from '@/utils/i18n';
 
 interface ToolSelectorProps {
@@ -43,6 +44,7 @@ function getToolIcon(name: string, category?: string): React.ReactNode {
 
 export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onChange, disabled, excludeTools, unavailableTools }) => {
   const { tools } = useAgentStore();
+  const { configured: webSearchConfigured } = useWebSearchStatus();
 
   // Auto-injected tools (alwaysInclude) are never manually selectable;
   // excludeTools removes context-specific tools (e.g. swarm-unsupported).
@@ -50,6 +52,8 @@ export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onCha
     (tool) => !excludeTools || !excludeTools.includes(tool.name)
   );
   const unavailableSet = new Set(unavailableTools ?? []);
+
+  const showWebSearchWarning = selectedTools.includes('websearch') && webSearchConfigured === false;
 
   const toggleTool = (toolName: string) => {
     if (selectedTools.includes(toolName)) {
@@ -65,6 +69,15 @@ export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onCha
         <label className="text-sm font-medium">Tools</label>
         <p className="text-xs text-muted-foreground mt-1">Select tools this agent can use</p>
       </div>
+
+      {showWebSearchWarning && (
+        <div className="flex items-start gap-2 p-3 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs">
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>
+            {i18n('websearch tool requires an API key (Exa or Parallel) to function. Configure it in Settings → Integrations.')}
+          </span>
+        </div>
+      )}
 
       <div className="space-y-2">
         {visibleTools.map((tool) => {
