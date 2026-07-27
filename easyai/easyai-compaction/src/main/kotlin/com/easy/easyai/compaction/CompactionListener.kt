@@ -22,11 +22,9 @@ interface CompactionListener {
      * @param tokensSaved Estimated number of tokens saved by compaction.
      * @param currentTokens Estimated token count of the context after compaction.
      * @param compactionRound The compaction round number (1 = first, 2+ = subsequent).
-     * @param strategyName Name of the compaction strategy used ("summary" | "llm").
+     * @param strategyName Name of the compaction strategy used ("agent").
      * @param durationMs Total wall-clock time of the compaction in milliseconds.
-     * @param compactionUsage Full usage information from the compaction operation:
-     *   LLM strategy: actual inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens.
-     *   Summary strategy: outputTokens estimated by token estimator; other fields are 0.
+     * @param compactionUsage Full usage information from the compaction operation.
      */
     suspend fun onMessagesCompacted(
         agentContext: AgentContext,
@@ -36,8 +34,9 @@ interface CompactionListener {
         tokensSaved: Int = 0,
         currentTokens: Int = 0,
         compactionRound: Int = 1,
-        strategyName: String = "summary",
+        strategyName: String = "agent",
         durationMs: Long = 0,
-        compactionUsage: Usage = Usage()
+        compactionUsage: Usage = Usage(),
+        sessionVariables: Map<String, String> = emptyMap()
     )
 }

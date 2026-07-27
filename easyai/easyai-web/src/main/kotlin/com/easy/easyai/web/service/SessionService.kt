@@ -63,6 +63,9 @@ class SessionService(
         // Get last message config (agentId, configId) to allow frontend to restore selection
         val lastConfig = sessionStore.getLastMessageConfig(id)
 
+        // Load persisted session variables for frontend display (Summary -> References)
+        val variables = loadSessionVariablesMap(id, userId)
+
         return SessionDetail(
             id = session.id,
             title = extractTitle(session.messages),
@@ -73,8 +76,27 @@ class SessionService(
             pendingPermission = pendingPermission,
             endReason = endReason?.takeIf { it != "normal" },
             lastAgentId = lastConfig?.agentId,
-            lastConfigId = lastConfig?.configId
+            lastConfigId = lastConfig?.configId,
+            variables = variables
         )
+    }
+
+    /**
+     * Load persisted session variables as a key-value map for frontend display.
+     * Primary source: compaction summary message metadata (Phase 3 migration).
+     * Fallback: Session.variablesJson column (backward compatibility with old data).
+     * Returns null when absent or unparseable (best-effort, never fails the detail load).
+     */
+    private suspend fun loadSessionVariablesMap(id: String, userId: String): Map<String, String>? {
+        return try {
+            val json = sessionStore.loadVariablesFromCompactionSummary(id, userId)
+                ?: sessionStore.loadSessionVariables(id, userId)
+            if (json.isNullOrBlank()) null
+            else objectMapper.readValue(json, object : TypeReference<Map<String, String>>() {})
+        } catch (e: Exception) {
+            logger.warn("Failed to load session variables for {}: {}", id, e.message)
+            null
+        }
     }
 
     /**
@@ -434,10 +456,16 @@ class SessionService(
     }
 
     suspend fun deleteSession(id: String, userId: String = "system") {
-        // Clean up snapshot session files before closing (needs projectPath from session context)
+        // Resolve project path once for all file-based cleanups
+        val projectPath = try {
+            sessionManager.getSessionContext(id, userId)?.projectPath
+        } catch (e: Exception) {
+            logger.warn("Failed to resolve session context for {}: {}", id, e.message)
+            null
+        }
+
+        // Clean up snapshot session files before closing
         try {
-            val context = sessionManager.getSessionContext(id, userId)
-            val projectPath = context?.projectPath
             if (projectPath != null && snapshotService != null && snapshotService.isEnabled(projectPath)) {
                 snapshotService.cleanupSession(projectPath, id)
             }
@@ -450,6 +478,19 @@ class SessionService(
             fileStorageService?.cleanupSession(id)
         } catch (e: Exception) {
             logger.warn("Failed to clean up images for session {}: {}", id, e.message)
+        }
+
+        // Clean up session variable files (.easyai/vars/{sessionId}/)
+        try {
+            if (projectPath != null) {
+                val varsDir = projectPath.resolve(".easyai/vars/$id")
+                if (java.nio.file.Files.isDirectory(varsDir)) {
+                    varsDir.toFile().deleteRecursively()
+                    logger.info("Cleaned up session variable files for: {}", id)
+                }
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to clean up session variable files for {}: {}", id, e.message)
         }
 
         // Delete from DB with proper userId scoping

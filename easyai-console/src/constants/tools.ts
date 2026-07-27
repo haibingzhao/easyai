@@ -7,6 +7,8 @@ export const TOOL_NAMES = {
   ASK_QUESTION: 'ask_question',
   /** Tool that writes/updates the todo list */
   TODO_WRITE: 'todo_write',
+  /** Tool that stores/updates session-scoped variables (persists across compaction) */
+  UPDATE_VARIABLE: 'update_variable',
   /** Tool that manages goal state (update_status, update_objective, add_evidence) */
   GOAL: 'goal',
   /** Team coordination tools (TEAM agent only) */

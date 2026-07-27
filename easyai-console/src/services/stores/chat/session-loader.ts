@@ -188,6 +188,7 @@ interface LoadSessionStateShape {
   currentGoal: null;
   queuedMessages: QueuedMessage[];
   isStreaming: boolean;
+  sessionVariables: Record<string, string>;
 }
 
 type LoadSetFn = (partial: Partial<LoadSessionStateShape> | ((state: LoadSessionStateShape) => Partial<LoadSessionStateShape>)) => void;
@@ -202,7 +203,8 @@ export function loadSessionMessagesImpl(
   pendingPermission: PendingPermissionInfo | null | undefined,
   checkpoints: CheckpointInfo[] | undefined,
   set: LoadSetFn,
-  endReason?: string | null
+  endReason?: string | null,
+  variables?: Record<string, string>
 ): void {
   // Separate sub-agent messages (parentToolCallId != null) from parent-level messages
   const subAgentSnapshots = messages.filter((msg) => msg.parentToolCallId != null);
@@ -271,6 +273,8 @@ export function loadSessionMessagesImpl(
       subAgentName: pendingPermission.subAgentName,
     } satisfies PermissionRequestEvent : null,
     ...(pendingPermission ? { isStreaming: false } : {}),
+    // Restore persisted session variables on full load; omit on incremental to preserve live state
+    ...(variables !== undefined ? { sessionVariables: variables } : {}),
   }));
 }
 

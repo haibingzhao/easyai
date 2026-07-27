@@ -187,12 +187,26 @@ class ProjectController(
                 throw ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found: $id")
             }
             // Now safe to cascade delete
-            // Clean up stored images for all sessions before deletion
+            // Clean up stored images and session variable files for all sessions before deletion
+            val sessionIds = sessionStore.findIdsByProjectId(id, userId)
             if (fileStorageService != null) {
-                val sessionIds = sessionStore.findIdsByProjectId(id, userId)
                 for (sid in sessionIds) {
                     fileStorageService.cleanupSession(sid)
                 }
+            }
+            // Clean up session variable files (.easyai/vars/{sessionId}/)
+            try {
+                val projectPath = project.path?.let { java.nio.file.Path.of(it) }
+                if (projectPath != null) {
+                    for (sid in sessionIds) {
+                        val varsDir = projectPath.resolve(".easyai/vars/$sid")
+                        if (java.nio.file.Files.isDirectory(varsDir)) {
+                            varsDir.toFile().deleteRecursively()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                logger.warn("Failed to clean up variable files for project {}: {}", id, e.message)
             }
             val deletedSessions = sessionStore.deleteByProjectId(id, userId)
             if (deletedSessions > 0) {

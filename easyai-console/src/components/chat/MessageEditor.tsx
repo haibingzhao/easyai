@@ -435,7 +435,7 @@ export const MessageEditor: React.FC = () => {
           if (sid) {
             sessionService.getSessionDetail(sid).then((detail) => {
               useChatStore.getState().loadSessionMessages(
-                detail.messages, detail.pendingPermission, undefined, detail.endReason
+                detail.messages, detail.pendingPermission, undefined, detail.endReason, detail.variables
               );
             }).catch(() => { /* best-effort */ });
           }

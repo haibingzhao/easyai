@@ -10,7 +10,7 @@ import org.springframework.ai.chat.model.ChatModel
 
 /**
  * Strategy interface for generating compaction summaries.
- * Implementations can use local templates (fast, cheap) or LLM calls (high quality).
+ * Implementations use Agent-based LLM calls for high-quality summarization and variable extraction.
  */
 interface CompactionStrategy {
     /**
@@ -22,24 +22,24 @@ interface CompactionStrategy {
      *   When provided, takes precedence over any constructor-injected ChatModel.
      * @return Summary text that will be wrapped in a UserMessage and sent to LLM
      */
-    fun compact(
+    suspend fun compact(
         messages: List<EasyAiMessage>,
         context: CompactionContext,
         chatModel: ChatModel? = null
     ): String
 
     /**
-     * Generate a summary with token usage information.
+     * Generate a summary with token usage information and extracted variables.
      * Default implementation calls [compact] and estimates tokens using [tokenEstimator].
-     * LLM-based strategies should override to return actual usage from the API response.
+     * Agent-based strategies should override to return actual usage and variables.
      *
      * @param messages Messages that will be compacted
      * @param context Compaction context
      * @param chatModel Optional session-specific ChatModel
      * @param tokenEstimator Optional token estimator for fallback token estimation
-     * @return [StrategyOutput] containing summary text and usage info
+     * @return [StrategyOutput] containing summary text, usage info, and extracted variables
      */
-    fun compactWithUsage(
+    suspend fun compactWithUsage(
         messages: List<EasyAiMessage>,
         context: CompactionContext,
         chatModel: ChatModel? = null,

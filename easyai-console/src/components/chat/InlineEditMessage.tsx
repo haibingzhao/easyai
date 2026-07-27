@@ -502,8 +502,8 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     // Truncate frontend messages from the edit index
     truncateMessagesFrom(messageIndex);
 
-    // Set revert state if rollback occurred
-    if (editResult.rollback) {
+    // Set revert state if rollback occurred with actual file changes
+    if (editResult.rollback && editResult.rollback.filesCount > 0) {
       setRevertState({
         messageId: '',
         additions: editResult.rollback.additions,
@@ -569,7 +569,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
         // have been lost (e.g., compaction indicators).
         sessionService.getSessionDetail(sid).then((detail) => {
           useChatStore.getState().loadSessionMessages(
-            detail.messages, detail.pendingPermission, undefined, detail.endReason
+            detail.messages, detail.pendingPermission, undefined, detail.endReason, detail.variables
           );
         }).catch(() => { /* best-effort */ });
       },

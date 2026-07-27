@@ -55,6 +55,8 @@ interface ChatState {
   cancelReason: string | null;
   todos: TodoInfo[];
   subAgentTodos: Record<string, SubAgentTodoGroup>;
+  /** Session-scoped variables (key -> value) tracked from update_variable tool calls / restored from backend */
+  sessionVariables: Record<string, string>;
   swarmRuns: Record<string, SwarmRunTracking>;
   pendingPermission: PermissionRequestEvent | null;
   isCompacting: boolean;
@@ -103,6 +105,10 @@ interface ChatState {
   setTodos: (todos: TodoInfo[]) => void;
   setSubAgentTodos: (agentName: string, todos: TodoInfo[], toolCallId?: string) => void;
   setAllSubAgentTodos: (map: Record<string, SubAgentTodoGroup>) => void;
+  /** Replace the entire session variables map (used on session restore). */
+  setSessionVariables: (vars: Record<string, string>) => void;
+  /** Merge variable updates and apply deletions (used on update_variable tool events). */
+  applyVariableUpdate: (variables: Record<string, string>, deleteKeys?: string[]) => void;
   updateSwarmRun: (toolCallId: string, data: SwarmRunTracking) => void;
   setPendingPermission: (permission: PermissionRequestEvent | null) => void;
   markPermissionResponded: (toolCallId: string | null) => void;
@@ -118,9 +124,9 @@ interface ChatState {
   clearChat: () => void;
   handleEvent: (event: SocketEvent) => void;
   commitStreamingMessage: () => void;
-  loadSessionMessages: (messages: MessageSnapshot[], pendingPermission?: PendingPermissionInfo | null, checkpoints?: CheckpointInfo[], endReason?: string | null) => void;
+  loadSessionMessages: (messages: MessageSnapshot[], pendingPermission?: PendingPermissionInfo | null, checkpoints?: CheckpointInfo[], endReason?: string | null, variables?: Record<string, string> | null) => void;
   /** Merge delta snapshots into _lastSnapshots and re-process. Used for incremental recovery after streaming. */
-  loadSessionMessagesIncremental: (deltaSnapshots: MessageSnapshot[], pendingPermission?: PendingPermissionInfo | null, checkpoints?: CheckpointInfo[], endReason?: string | null) => void;
+  loadSessionMessagesIncremental: (deltaSnapshots: MessageSnapshot[], pendingPermission?: PendingPermissionInfo | null, checkpoints?: CheckpointInfo[], endReason?: string | null, variables?: Record<string, string> | null) => void;
   /** Refresh goal state from backend for the given session. Sets currentGoal to null if no goal exists. */
   refreshGoal: (sessionId: string) => Promise<void>;
   addQueuedMessage: (msg: QueuedMessage) => void;
@@ -147,6 +153,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   agentId: 'default',
   todos: [],
   subAgentTodos: {},
+  sessionVariables: {},
   swarmRuns: {},
   pendingPermission: null,
   isCompacting: false,
@@ -334,6 +341,18 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   setAllSubAgentTodos: (map) => set({ subAgentTodos: map }),
 
+  setSessionVariables: (vars) => set({ sessionVariables: vars }),
+
+  applyVariableUpdate: (variables, deleteKeys) => set((state) => {
+    const next = { ...state.sessionVariables, ...variables };
+    if (deleteKeys) {
+      for (const key of deleteKeys) {
+        delete next[key];
+      }
+    }
+    return { sessionVariables: next };
+  }),
+
   updateSwarmRun: (toolCallId, data) => set((state) => ({
     swarmRuns: { ...state.swarmRuns, [toolCallId]: data },
   })),
@@ -432,6 +451,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     agentId: 'default',
     todos: [],
     subAgentTodos: {},
+    sessionVariables: {},
     swarmRuns: {},
     pendingPermission: null,
     pendingMessageData: {},
@@ -446,16 +466,16 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   commitStreamingMessage: () => set((state) => commitStreamingMessageImpl(state)),
 
-  loadSessionMessages: (messages, pendingPermission, checkpoints, endReason) => {
+  loadSessionMessages: (messages, pendingPermission, checkpoints, endReason, variables) => {
     // Store raw snapshots for incremental merge support
     set({ _lastSnapshots: messages, currentGoal: null, swarmRuns: {} }); // Reset goal + swarm tracking on full session load (session switch)
     // Safe cast: Zustand's set (Partial<ChatState>) is structurally compatible with
     // LoadSetFn (Partial<LoadSessionStateShape>) because ChatState extends LoadSessionStateShape.
     // The callback in loadSessionMessagesImpl currently ignores the state parameter.
-    loadSessionMessagesImpl(messages, pendingPermission, checkpoints, set as Parameters<typeof loadSessionMessagesImpl>[3], endReason);
+    loadSessionMessagesImpl(messages, pendingPermission, checkpoints, set as Parameters<typeof loadSessionMessagesImpl>[3], endReason, variables ?? undefined);
   },
 
-  loadSessionMessagesIncremental: (deltaSnapshots, pendingPermission, checkpoints, endReason) => {
+  loadSessionMessagesIncremental: (deltaSnapshots, pendingPermission, checkpoints, endReason, variables) => {
     const existingSnapshots = get()._lastSnapshots;
     // Pre-compute merged snapshots for _lastSnapshots cache (so future incremental calls chain correctly)
     const snapshotMap = new Map<string, MessageSnapshot>();
@@ -471,7 +491,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       .sort((a, b) => a.timestamp - b.timestamp);
     // Update cache and re-run full processing pipeline on merged set
     set({ _lastSnapshots: mergedSnapshots });
-    loadSessionMessagesImpl(mergedSnapshots, pendingPermission, checkpoints, set as Parameters<typeof loadSessionMessagesImpl>[3], endReason);
+    loadSessionMessagesImpl(mergedSnapshots, pendingPermission, checkpoints, set as Parameters<typeof loadSessionMessagesImpl>[3], endReason, variables ?? undefined);
   },
 
   refreshGoal: async (sessionId) => {

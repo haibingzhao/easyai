@@ -175,41 +175,16 @@ class ContextCompactionOrchestrator(
             )
         }
 
-        // Step 2: Separate summary messages from compacted messages
-        val previousSummaryMessages = compactedMessages.filter { msg ->
+        // Step 2: Derive compaction round from summary message count in compacted range
+        val previousSummaryCount = compactedMessages.count { msg ->
             (msg as? UserMessage)?.metadata?.get("isCompactionSummary") == "true"
         }
-        val conversationMessages = compactedMessages.filter { msg ->
-            (msg as? UserMessage)?.metadata?.get("isCompactionSummary") != "true"
-        }
+        val compactionRound = previousSummaryCount + 1
 
-        // Step 3: Extract previousSummary (last summary only for incremental update)
-        // Round 1: no previous summary, pass all conversation messages
-        // Round 2+: pass only the last summary, LLM does incremental update
-        // No need to load original messages - the summary already contains all historical context
-        val previousSummary = previousSummaryMessages.lastOrNull()?.let { lastSummary ->
-            (lastSummary as? UserMessage)?.content
-                ?.filterIsInstance<TextContent>()
-                ?.joinToString("\n") { it.text }
-                ?.takeIf { it.isNotBlank() }
-        }
-
-        // Step 4: Derive compaction round from summary message count
-        val compactionRound = previousSummaryMessages.size + 1
-
-        val messagesForCompaction = conversationMessages
-
-        if (previousSummary != null) {
-            logger.info(
-                "Round {}: incremental update mode, passing last summary + {} new messages",
-                compactionRound, conversationMessages.size
-            )
-        } else {
-            logger.info(
-                "Round 1: fresh summary mode, {} messages to summarize",
-                conversationMessages.size
-            )
-        }
+        logger.info(
+            "Round {}: agent compaction mode, {} messages to compact (includes {} previous summaries)",
+            compactionRound, compactedMessages.size, previousSummaryCount
+        )
 
         // Step 5: Build compaction context
         val compactedRange = CompactedRange(
@@ -221,20 +196,25 @@ class ContextCompactionOrchestrator(
 
         val context = CompactionContext(
             range = compactedRange,
-            previousSummary = previousSummary,
+            previousSummary = null, // Agent sees previous summary directly in transcript
             currentTurnId = turnId,
             compactionRound = compactionRound
         )
 
-        // Step 6: Generate summary via strategy (with usage tracking)
+        // Step 4: Generate summary via agent-based strategy (with usage + variable tracking)
+        // All compactedMessages are passed directly as the agent's transcript
         val strategyOutput: StrategyOutput = strategy.compactWithUsage(
-            messagesForCompaction, context, chatModel, tokenEstimator
+            compactedMessages, context, chatModel, tokenEstimator
         )
         val summary = strategyOutput.summary
 
-        // Round 1 uses summary strategy (fast, free), all subsequent rounds use LLM strategy
-        // (incremental update). This ensures no two consecutive summary strategy compressions.
-        val strategyName = if (previousSummaryMessages.isEmpty()) "summary" else "llm"
+        // Update in-memory session variables so the current request's system prompt
+        // reflects the latest variables extracted during compaction
+        if (strategyOutput.variables.isNotEmpty()) {
+            agentContext.sessionVariables.loadAll(strategyOutput.variables)
+        }
+
+        val strategyName = "agent"
 
         // Step 7: Build replacement messages
         val summaryMessage = UserMessage(
@@ -280,7 +260,8 @@ class ContextCompactionOrchestrator(
                     compactionRound = compactionRound,
                     strategyName = strategyName,
                     durationMs = durationMs,
-                    compactionUsage = strategyOutput.usage
+                    compactionUsage = strategyOutput.usage,
+                    sessionVariables = strategyOutput.variables
                 )
             }
         }

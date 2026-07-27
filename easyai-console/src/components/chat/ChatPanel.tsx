@@ -32,7 +32,7 @@ const BREAKPOINT = 800;
 const SCROLL_BOTTOM_THRESHOLD = 50;
 
 export const ChatPanel: React.FC = () => {
-  const { messages, isStreaming, isFileWriting, hasArtifacts, artifactCount, clearChat, streamingBlocks, todos, subAgentTodos, swarmRuns, isAwaitingPermission, revertState, setRevertState, sessionId, runningSessionId, setRunningSessionId, setStreaming, loadSessionMessages, loadSessionMessagesIncremental, setTodos, setAllSubAgentTodos, setFileReviewOverrides, refreshGoal, currentGoal, pendingMessageData } = useChatStore();
+  const { messages, isStreaming, isFileWriting, hasArtifacts, artifactCount, clearChat, streamingBlocks, todos, subAgentTodos, swarmRuns, isAwaitingPermission, revertState, setRevertState, sessionId, runningSessionId, setRunningSessionId, setStreaming, loadSessionMessages, loadSessionMessagesIncremental, setTodos, setAllSubAgentTodos, setFileReviewOverrides, refreshGoal, currentGoal, pendingMessageData, sessionVariables } = useChatStore();
   const { loadAgents, loadTools, agents, selectedAgentId } = useAgentStore();
   const [showArtifactPanel, setShowArtifactPanel] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
@@ -277,7 +277,7 @@ export const ChatPanel: React.FC = () => {
           if (cancelled) return false;
           hasPendingPermission = !!detail?.pendingPermission;
           if (detail) {
-            loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason);
+            loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables);
           }
         } else {
           // Safe to use incremental merge — pass pendingPermission from backend
@@ -289,7 +289,7 @@ export const ChatPanel: React.FC = () => {
         if (cancelled) return false;
         hasPendingPermission = !!detail?.pendingPermission;
         if (detail) {
-          loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason);
+          loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables);
         }
       }
 
@@ -354,7 +354,7 @@ export const ChatPanel: React.FC = () => {
         ]);
         if (cancelled) return;
         if (detail) {
-          loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason);
+          loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables);
         }
         setTodos(groupedTodos.main);
         setAllSubAgentTodos(
@@ -648,7 +648,7 @@ export const ChatPanel: React.FC = () => {
         {/* Right panel (Files/Summary/Review/Sessions) */}
         {showRightPanel && (
           <div className="h-full right-panel shrink-0" style={{ width: rightPanelWidth }}>
-            <RightPanel onClose={() => setRightPanelOpen(false)} references={aggregatedReferences} mainTodos={todos} subAgentTodos={subAgentTodos} swarmRuns={swarmRuns} goal={currentGoal} isTeamAgent={isTeamAgent} />
+            <RightPanel onClose={() => setRightPanelOpen(false)} references={aggregatedReferences} sessionVariables={sessionVariables} mainTodos={todos} subAgentTodos={subAgentTodos} swarmRuns={swarmRuns} goal={currentGoal} isTeamAgent={isTeamAgent} />
           </div>
         )}
 

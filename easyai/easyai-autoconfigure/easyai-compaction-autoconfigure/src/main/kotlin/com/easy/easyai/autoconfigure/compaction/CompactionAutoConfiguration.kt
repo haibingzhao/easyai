@@ -6,14 +6,14 @@ import com.easy.easyai.compaction.CompactionListener
 import com.easy.easyai.compaction.OriginalMessageLoader
 import com.easy.easyai.compaction.estimator.TokenEstimator
 import com.easy.easyai.compaction.estimator.UsageAwareTokenEstimator
+import com.easy.easyai.compaction.strategy.CompactionAgentStrategy
 import com.easy.easyai.compaction.strategy.CompactionStrategy
-import com.easy.easyai.compaction.strategy.CompositeCompactionStrategy
-import com.easy.easyai.compaction.strategy.LlmSummaryStrategy
-import com.easy.easyai.compaction.strategy.SummaryStrategy
+import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.agent.TransformContextService
 import com.easy.easyai.core.memory.MemoryFlushAgent
 import com.easy.easyai.core.memory.MemoryStore
 import org.springframework.ai.chat.model.ChatModel
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
@@ -43,23 +43,16 @@ class CompactionAutoConfiguration(
     @Bean
     @ConditionalOnMissingBean
     fun compactionStrategy(
+        agentServiceProvider: ObjectProvider<AgentService>,
         @Autowired(required = false) chatModel: ChatModel?
     ): CompactionStrategy {
-        val summaryStrategy = SummaryStrategy()
-        return when (properties.strategy) {
-            "llm" -> {
-                // Explicitly configured LLM strategy
-                // Uses session-specific ChatModel at runtime, falls back to system-level if provided
-                LlmSummaryStrategy(chatModel)
-            }
-            "summary" -> summaryStrategy
-            else -> {
-                // "auto" (default): layered progressive strategy
-                // Round 1 uses SummaryStrategy (fast, free), Round 2+ uses LlmSummaryStrategy (high quality)
-                // LlmSummaryStrategy uses session-specific ChatModel at runtime
-                CompositeCompactionStrategy(summaryStrategy, LlmSummaryStrategy(chatModel))
-            }
-        }
+        // Agent-based compaction: uses a lightweight Agent loop with update_variable tool.
+        // ObjectProvider resolves AgentService lazily to avoid circular dependency:
+        // AgentService -> TransformContextService -> CompactionStrategy -> AgentService
+        return CompactionAgentStrategy(
+            agentServiceProvider = { agentServiceProvider.getObject() },
+            fallbackChatModel = chatModel
+        )
     }
 
     @Bean

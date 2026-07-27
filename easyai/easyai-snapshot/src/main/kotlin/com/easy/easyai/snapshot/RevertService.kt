@@ -559,10 +559,7 @@ class RevertService(
             getSessionBaseline(projectPath, sessionId) ?: return null
         }
 
-        // 4. Restore files to parent hash state
-        snapshotService.restore(projectPath, parentHash, sessionId)
-
-        // 5. Compute diff between parent and the latest checkpoint being rolled back
+        // 4. Compute diff between parent and the latest checkpoint being rolled back
         // The latest checkpoint being rolled back is the one at the lowest index
         // that is still > messageCreatedAt. But for simplicity, we diff from
         // parent to the newest checkpoint (checkpoints[0]) to capture all changes
@@ -574,6 +571,15 @@ class RevertService(
             logger.warn("Failed to compute rollback diff: {}", e.message)
             emptyList()
         }
+
+        // No actual file changes — skip restore and report nothing to rollback
+        if (diffs.isEmpty()) {
+            logger.info("No file changes to roll back for session {} before messageCreatedAt {}", sessionId, messageCreatedAt)
+            return null
+        }
+
+        // 5. Restore files to parent hash state
+        snapshotService.restore(projectPath, parentHash, sessionId)
 
         logger.info("Rolled back session {} to before messageCreatedAt {} ({} files changed)",
             sessionId, messageCreatedAt, diffs.size)

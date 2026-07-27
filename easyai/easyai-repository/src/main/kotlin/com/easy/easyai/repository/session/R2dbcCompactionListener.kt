@@ -39,7 +39,8 @@ class R2dbcCompactionListener(
         compactionRound: Int,
         strategyName: String,
         durationMs: Long,
-        compactionUsage: Usage
+        compactionUsage: Usage,
+        sessionVariables: Map<String, String>
     ) {
         val sessionId = agentContext.sessionId ?: error("agentContext.sessionId must not be null for compaction")
 
@@ -51,15 +52,20 @@ class R2dbcCompactionListener(
         val compactedAt = System.currentTimeMillis()
 
         // Enrich summary message metadata with compaction metadata
+        val enrichedMetadata = mutableMapOf(
+            "tokensSaved" to tokensSaved.toString(),
+            "durationMs" to durationMs.toString(),
+            "currentTokens" to currentTokens.toString(),
+            "compactionStrategy" to strategyName,
+            "compactedMessageIds" to objectMapper.writeValueAsString(compactedMessageIds),
+            "compactionRound" to compactionRound.toString()
+        )
+        // Persist session variables in the summary message metadata (Phase 3: variable storage migration)
+        if (sessionVariables.isNotEmpty()) {
+            enrichedMetadata["sessionVariables"] = objectMapper.writeValueAsString(sessionVariables)
+        }
         val enrichedSummary = summaryMessage.copy(
-            metadata = summaryMessage.metadata + mapOf(
-                "tokensSaved" to tokensSaved.toString(),
-                "durationMs" to durationMs.toString(),
-                "currentTokens" to currentTokens.toString(),
-                "compactionStrategy" to strategyName,
-                "compactedMessageIds" to objectMapper.writeValueAsString(compactedMessageIds),
-                "compactionRound" to compactionRound.toString()
-            )
+            metadata = summaryMessage.metadata + enrichedMetadata
         )
 
         // 1. Mark old messages as compacted first (soft delete)

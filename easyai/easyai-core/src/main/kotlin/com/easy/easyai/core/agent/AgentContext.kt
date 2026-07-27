@@ -87,6 +87,8 @@ data class AgentContext(
     val swarmTaskId: String? = null,
     /** Per-session tracker for memory entries accessed by memory_read / memory_search tools. */
     val memoryAccessTracker: MemoryAccessTracker = MemoryAccessTracker(),
+    /** Mutable session-scoped variables. Survives compaction, persisted to DB for resume. */
+    val sessionVariables: SessionVariables = SessionVariables(),
     /**
      * Abort signal propagated from the parent ChatSession.
      * Returns true when the user has requested cancellation (e.g., via Stop button).

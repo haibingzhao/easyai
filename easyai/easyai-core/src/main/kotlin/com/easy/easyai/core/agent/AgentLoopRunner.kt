@@ -421,7 +421,8 @@ internal class AgentLoopRunner(
             tools = toolsData,
             outputSchema = context.outputSchema,
             inputVariables = context.inputVariables,
-            scriptLlmAvailable = context.scriptEnv.isNotEmpty()
+            scriptLlmAvailable = context.scriptEnv.isNotEmpty(),
+            sessionVariables = context.sessionVariables.getAll()
         )
         val systemPromptText = services.promptTemplateService.build(
             context.promptTemplate, promptContext

@@ -14,6 +14,7 @@ import com.easy.easyai.repository.todo.AsyncTodoStore
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
+import tools.jackson.core.type.TypeReference
 import java.nio.file.Path
 import java.time.Instant
 import java.util.*
@@ -242,6 +243,9 @@ class DatabaseSessionManager(
             subAgents = agentContext.subAgents.ifEmpty { resolvedSubAgents }
         )
 
+        // Load persisted session variables BEFORE tool creation (tools get the same reference)
+        restoreSessionVariables(resolvedContext, id, agentContext.userId ?: "system")
+
         // Agent-based path: look up agent definition and resolve tools
         val agentDef = agentLookup?.invoke(agentId, agentContext.userId ?: "system")
         if (agentDef != null) {
@@ -292,6 +296,30 @@ class DatabaseSessionManager(
             persistNewSession(id, agentContext.userId ?: "system", projectId)
         }
         return chatSession
+    }
+
+    /**
+     * Restore session variables from DB into the context's SessionVariables instance.
+     * Called before tool creation so tools receive an already-populated reference.
+     * Primary source: compaction summary message metadata (Phase 3 migration).
+     * Fallback: Session.variablesJson column (backward compatibility with old data).
+     */
+    private suspend fun restoreSessionVariables(context: AgentContext, sessionId: String, userId: String) {
+        try {
+            val json = sessionStore.loadVariablesFromCompactionSummary(sessionId, userId)
+                ?: sessionStore.loadSessionVariables(sessionId, userId)
+            if (!json.isNullOrBlank()) {
+                val map: Map<String, String> = com.easy.easyai.common.util.SharedObjectMapper.instance.readValue(
+                    json, object : TypeReference<Map<String, String>>() {}
+                )
+                context.sessionVariables.loadAll(map)
+                logger.debug("Restored {} session variables for session {}", map.size, sessionId)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("Failed to restore session variables for {}: {}", sessionId, e.message)
+        }
     }
 
     /**
@@ -379,7 +407,7 @@ class DatabaseSessionManager(
 
         // Apply skill filtering for this agent
         val subAgentsData = resolveSubAgentsData(agentId, userId)
-        val (agentContext, resolvedTools) = resolveAgentContextAndTools(agentDef, AgentContext(
+        val baseContext = AgentContext(
             agentId = agentId,
             modelConfig = config,
             sessionId = sessionId,
@@ -387,7 +415,10 @@ class DatabaseSessionManager(
             projectId = projectId,
             projectPath = projectPath,
             subAgents = subAgentsData
-        ), projectPath)
+        )
+        // Load persisted session variables BEFORE tool creation
+        restoreSessionVariables(baseContext, sessionId, userId)
+        val (agentContext, resolvedTools) = resolveAgentContextAndTools(agentDef, baseContext, projectPath)
         val agent = agentFactory.createAgentWithAgentDef(agentDef, sessionId, config, null, resolvedTools, agentContext)
         return ChatSession(sessionId, agent)
     }
@@ -414,6 +445,8 @@ class DatabaseSessionManager(
             subAgents = subAgentsData,
             instructions = emptyList()
         )
+        // Load persisted session variables BEFORE tool creation
+        restoreSessionVariables(agentContext, sessionId, userId)
         val resolvedTools = toolResolver.createSessionTools(agentContext)
         val agent = agentFactory.createAgentWithConfig(sessionId, config, null, resolvedTools, agentContext)
         return ChatSession(sessionId, agent)

@@ -16,7 +16,9 @@ data class SessionDetail(
     /** Agent ID from the last message — used by frontend to restore agent selection. */
     val lastAgentId: String? = null,
     /** Model config ID from the last message — used by frontend to restore model selection. */
-    val lastConfigId: String? = null
+    val lastConfigId: String? = null,
+    /** Session-scoped variables (key -> value) persisted for this session, for frontend display. */
+    val variables: Map<String, String>? = null
 )
 
 /**

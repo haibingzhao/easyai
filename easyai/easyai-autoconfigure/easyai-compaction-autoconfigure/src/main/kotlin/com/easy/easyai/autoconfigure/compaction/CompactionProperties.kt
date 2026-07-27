@@ -46,11 +46,11 @@ data class CompactionProperties(
 
     /**
      * Strategy to use for compaction summaries.
-     * - "auto": Layered progressive (Round 1 = SummaryStrategy, Round 2+ = LlmSummaryStrategy)
-     * - "summary": Always use SummaryStrategy (fast, free)
-     * - "llm": Always use LlmSummaryStrategy (high quality, requires ChatModel)
+     * - "llm" (default): Agent-based LLM compaction (high quality, requires ChatModel)
+     * - "summary": Deprecated, falls back to "llm"
+     * - "auto": Deprecated, falls back to "llm"
      */
-    var strategy: String = "auto",
+    var strategy: String = "llm",
 
     /**
      * Context usage ratio that triggers memory flush before compaction (0.75 = 75%).

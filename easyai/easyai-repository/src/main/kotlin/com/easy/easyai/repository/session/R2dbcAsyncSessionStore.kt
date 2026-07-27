@@ -1027,4 +1027,53 @@ class R2dbcAsyncSessionStore(
                 ?.getOrNull(Tables.Session.endReason)
         }
     }
+
+    override suspend fun saveSessionVariables(sessionId: String, variablesJson: String?, userId: String) {
+        suspendTransaction(db) {
+            val userFilter = UserScope.filterStrict(Tables.Session.userId, userId)
+            Tables.Session.update(
+                where = { (Tables.Session.id eq sessionId) and userFilter }
+            ) {
+                it[Tables.Session.variablesJson] = variablesJson
+                it[Tables.Session.updatedAt] = System.currentTimeMillis()
+            }
+        }
+        logger.debug("Saved session variables for session {}: {}", sessionId, if (variablesJson != null) "set" else "cleared")
+    }
+
+    override suspend fun loadSessionVariables(sessionId: String, userId: String): String? {
+        return suspendTransaction(db) {
+            val userFilter = UserScope.filterStrict(Tables.Session.userId, userId)
+            Tables.Session
+                .select(Tables.Session.variablesJson)
+                .where { (Tables.Session.id eq sessionId) and userFilter }
+                .limit(1)
+                .firstOrNull()
+                ?.getOrNull(Tables.Session.variablesJson)
+        }
+    }
+
+    override suspend fun loadVariablesFromCompactionSummary(sessionId: String, userId: String): String? {
+        return suspendTransaction(db) {
+            // Find the latest compaction summary message (USER role with isCompactionSummary metadata)
+            val row = Tables.Message
+                .select(Tables.Message.metadata)
+                .where {
+                    (Tables.Message.sessionId eq sessionId) and
+                        (Tables.Message.role eq "USER") and
+                        (Tables.Message.compactedAt.isNull())
+                }
+                .orderBy(Tables.Message.createdAt to SortOrder.DESC)
+                .toList()
+                .firstOrNull { r ->
+                    val meta = parseMetadata(r[Tables.Message.metadata])
+                    meta["isCompactionSummary"] == "true"
+                }
+
+            row?.let {
+                val meta = parseMetadata(it[Tables.Message.metadata])
+                meta["sessionVariables"]
+            }
+        }
+    }
 }

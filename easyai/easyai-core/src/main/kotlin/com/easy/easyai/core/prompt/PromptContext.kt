@@ -28,6 +28,8 @@ data class PromptContext(
     val inputVariables: Map<String, Any?> = emptyMap(),
     /** Whether script LLM access is available (env vars injected into bash processes). */
     val scriptLlmAvailable: Boolean = false,
+    /** Session-scoped variables that persist across compaction. Appended unconditionally to system prompt. */
+    val sessionVariables: Map<String, String> = emptyMap(),
     /** Current date and time for injection into prompts. */
     val currentDateTime: String = java.time.ZonedDateTime.now()
         .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z"))

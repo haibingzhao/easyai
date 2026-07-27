@@ -29,6 +29,7 @@ function createMockState(overrides: Partial<ChatStateShape> = {}): ChatStateShap
     contextTokens: 0,
     todos: [],
     subAgentTodos: {},
+    sessionVariables: {},
     isCompacting: false,
     retryInfo: null,
     checkpointsByMessageId: {},
@@ -49,6 +50,7 @@ function createMockState(overrides: Partial<ChatStateShape> = {}): ChatStateShap
     removeQueuedMessage: vi.fn(),
     setIsFileWriting: vi.fn(),
     refreshGoal: vi.fn().mockResolvedValue(undefined),
+    applyVariableUpdate: vi.fn(),
     ...overrides,
   };
 }
@@ -152,6 +154,65 @@ describe('handleChatEvent', () => {
       handleChatEvent(event, get, set);
 
       expect(mockState.appendToolArgs).toHaveBeenCalledWith('tc-1', '{"path": "/src"}');
+    });
+  });
+
+  describe('tool_execution_start event (update_variable)', () => {
+    it('should apply object-shaped variables', () => {
+      const event: SocketEvent = {
+        type: 'tool_execution_start',
+        toolCallId: 'tc-1',
+        toolName: 'update_variable',
+        args: { variables: { revenue: '1.23B' }, deleteKeys: ['stale'] },
+      };
+
+      handleChatEvent(event, get, set);
+
+      expect(mockState.applyVariableUpdate).toHaveBeenCalledWith({ revenue: '1.23B' }, ['stale']);
+    });
+
+    it('should coerce string-encoded variables instead of spreading per-character', () => {
+      // Regression: some models send `variables` as a JSON string. Spreading the raw string
+      // would decompose it into index keys ({0:'{', 1:'"', ...}).
+      const event: SocketEvent = {
+        type: 'tool_execution_start',
+        toolCallId: 'tc-1',
+        toolName: 'update_variable',
+        args: { variables: '{"revenue":"1.23B","margin":"23.4%"}' },
+      };
+
+      handleChatEvent(event, get, set);
+
+      expect(mockState.applyVariableUpdate).toHaveBeenCalledWith(
+        { revenue: '1.23B', margin: '23.4%' },
+        []
+      );
+    });
+
+    it('should coerce string-encoded deleteKeys into an array', () => {
+      const event: SocketEvent = {
+        type: 'tool_execution_start',
+        toolCallId: 'tc-1',
+        toolName: 'update_variable',
+        args: { deleteKeys: '["a","b"]' },
+      };
+
+      handleChatEvent(event, get, set);
+
+      expect(mockState.applyVariableUpdate).toHaveBeenCalledWith({}, ['a', 'b']);
+    });
+
+    it('should not apply update when args are unparseable', () => {
+      const event: SocketEvent = {
+        type: 'tool_execution_start',
+        toolCallId: 'tc-1',
+        toolName: 'update_variable',
+        args: { variables: 'not-json' },
+      };
+
+      handleChatEvent(event, get, set);
+
+      expect(mockState.applyVariableUpdate).not.toHaveBeenCalled();
     });
   });
 

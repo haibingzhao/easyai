@@ -128,18 +128,39 @@ class PromptTemplateService(
      */
     fun build(promptTemplate: String?, context: PromptContext): String {
         // null = use default SystemPromptBuilder; blank = no system prompt at all
-        if (promptTemplate == null) {
-            return defaultBuilder.build(buildDefaultConfig(context)).joinToString("\n\n")
+        if (promptTemplate != null && promptTemplate.isBlank()) {
+            return ""  // Preserve contract: blank = no system prompt
         }
-        if (promptTemplate.isBlank()) {
-            return ""
+        val base = when {
+            promptTemplate == null ->
+                defaultBuilder.build(buildDefaultConfig(context)).joinToString("\n\n")
+            else -> try {
+                renderer.renderLiteralTemplate(promptTemplate, context.toModel())
+            } catch (e: Exception) {
+                logger.error("Failed to render prompt template, falling back to default: {}", e.message, e)
+                defaultBuilder.build(buildDefaultConfig(context, includeTools = false)).joinToString("\n\n")
+            }
         }
+        // Unconditionally append session variables (regardless of default or custom template)
+        val varsSegment = buildSessionVariablesSegment(context.sessionVariables)
+        return when {
+            varsSegment != null && base.isNotBlank() -> "$base\n\n$varsSegment"
+            varsSegment != null -> varsSegment
+            else -> base
+        }
+    }
 
-        return try {
-            renderer.renderLiteralTemplate(promptTemplate, context.toModel())
-        } catch (e: Exception) {
-            logger.error("Failed to render prompt template, falling back to default: {}", e.message, e)
-            defaultBuilder.build(buildDefaultConfig(context, includeTools = false)).joinToString("\n\n")
+    private fun buildSessionVariablesSegment(vars: Map<String, String>): String? {
+        if (vars.isEmpty()) return null
+        return buildString {
+            appendLine("## Session Variables")
+            appendLine("The following data was extracted during context compaction and persists across compaction rounds.")
+            appendLine("IMPORTANT: When you need data that might have been discussed earlier, ALWAYS check")
+            appendLine("this list first before relying on your memory of the conversation. This ensures")
+            appendLine("data consistency throughout the session.")
+            appendLine("Use these values as authoritative — do NOT fabricate or approximate them.")
+            appendLine("For variables marked [file: path], use the read tool to load the full content.")
+            vars.forEach { (k, v) -> appendLine("- $k: ${v.replace("\n", "\\n")}") }
         }
     }
 

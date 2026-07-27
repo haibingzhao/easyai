@@ -48,6 +48,7 @@ export interface ChatStateShape {
   contextTokens: number;
   todos: TodoInfo[];
   subAgentTodos: Record<string, SubAgentTodoGroup>;
+  sessionVariables: Record<string, string>;
   isCompacting: boolean;
   retryInfo: RetryInfo | null;
   checkpointsByMessageId: Record<string, CheckpointInfo>;
@@ -70,6 +71,7 @@ export interface ChatStateShape {
   removeQueuedMessage: (id: string) => void;
   setIsFileWriting: (v: boolean) => void;
   refreshGoal: (sessionId: string) => Promise<void>;
+  applyVariableUpdate: (variables: Record<string, string>, deleteKeys?: string[]) => void;
 }
 
 type SetFn = (partial: Partial<ChatStateShape> | ((state: ChatStateShape) => Partial<ChatStateShape>)) => void;
@@ -102,6 +104,54 @@ let lastRespondedPermissionToolCallId: string | null = null;
  */
 export function setLastRespondedPermissionToolCallId(toolCallId: string | null) {
   lastRespondedPermissionToolCallId = toolCallId;
+}
+
+/**
+ * Coerce a tool argument into a string-valued record.
+ *
+ * Some models serialize nested tool parameters as JSON strings rather than structured
+ * objects (e.g. `variables` arrives as `"{\"k\":\"v\"}"` instead of `{"k":"v"}`). Spreading
+ * a raw string would decompose it into per-character index keys, so we must coerce it back
+ * to an object first. Non-object results yield an empty record.
+ */
+function coerceToStringRecord(value: unknown): Record<string, string> {
+  let parsed: unknown = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return {};
+  }
+  const result: Record<string, string> = {};
+  for (const [key, val] of Object.entries(parsed as Record<string, unknown>)) {
+    result[key] = typeof val === 'string' ? val : JSON.stringify(val);
+  }
+  return result;
+}
+
+/**
+ * Coerce a tool argument into a string array.
+ *
+ * Handles both a genuine array and a JSON-string-encoded array. A plain non-JSON string
+ * is treated as a single element; anything else yields an empty array.
+ */
+function coerceToStringArray(value: unknown): string[] {
+  let parsed: unknown = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return value.length > 0 ? [value] : [];
+    }
+  }
+  if (Array.isArray(parsed)) {
+    return parsed.filter((item): item is string => typeof item === 'string');
+  }
+  return [];
 }
 
 /**
@@ -228,6 +278,14 @@ export function handleChatEvent(
               createdAt: Date.now(),
             })),
           });
+        }
+      }
+      // Detect update_variable tool and apply variable set/delete operations from args
+      if (event.toolName === TOOL_NAMES.UPDATE_VARIABLE) {
+        const variables = coerceToStringRecord(event.args?.variables);
+        const deleteKeys = coerceToStringArray(event.args?.deleteKeys);
+        if (Object.keys(variables).length > 0 || deleteKeys.length > 0) {
+          state.applyVariableUpdate(variables, deleteKeys);
         }
       }
       // Check if this tool call is already committed in messages (e.g., after permission pause).

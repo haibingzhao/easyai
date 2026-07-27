@@ -196,6 +196,7 @@ class SubAgentTool(
             agentRunId = toolCallId,
             inputVariables = inputVariables,
             abortSignal = agentContext.abortSignal, // Inherit parent's abort signal for graceful cancel
+            sessionVariables = agentContext.sessionVariables, // Share parent's session variables reference
         )
 
         onUpdate(ToolUpdate.Progress("Running ${resolvedDefinition.name} sub-agent..."))
