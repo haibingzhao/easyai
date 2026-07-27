@@ -1,10 +1,6 @@
 package com.easy.easyai.skills.team
 
-import com.easy.easyai.core.agent.AgentContext
-import com.easy.easyai.core.agent.AgentService
-import com.easy.easyai.core.agent.AsyncAgentStore
-import com.easy.easyai.core.agent.SubAgentContextResolver
-import com.easy.easyai.core.agent.SubAgentMessageListenerFactory
+import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.permission.PermissionAction
 import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.team.TeamExecutionStore
@@ -67,7 +63,7 @@ abstract class TeamToolBuilderBase(
 class DelegateToMemberToolBuilder(
     agentStore: AsyncAgentStore?,
     stateRegistry: TeamCoordinationStateRegistry,
-    @param:Lazy contextResolver: SubAgentContextResolver? = null,
+    @Lazy contextResolver: SubAgentContextResolver? = null,
     listenerFactory: SubAgentMessageListenerFactory? = null,
     executionStore: TeamExecutionStore? = null,
 ) : TeamToolBuilderBase(agentStore, stateRegistry, contextResolver, listenerFactory, executionStore) {
@@ -111,7 +107,7 @@ class DelegateToMemberToolBuilder(
 class WaitForMemberEventsToolBuilder(
     agentStore: AsyncAgentStore?,
     stateRegistry: TeamCoordinationStateRegistry,
-    @param:Lazy contextResolver: SubAgentContextResolver? = null,
+    @Lazy contextResolver: SubAgentContextResolver? = null,
     listenerFactory: SubAgentMessageListenerFactory? = null,
     executionStore: TeamExecutionStore? = null,
 ) : TeamToolBuilderBase(agentStore, stateRegistry, contextResolver, listenerFactory, executionStore) {
@@ -143,7 +139,7 @@ class WaitForMemberEventsToolBuilder(
 class ResumeMemberToolBuilder(
     agentStore: AsyncAgentStore?,
     stateRegistry: TeamCoordinationStateRegistry,
-    @param:Lazy contextResolver: SubAgentContextResolver? = null,
+    @Lazy contextResolver: SubAgentContextResolver? = null,
     listenerFactory: SubAgentMessageListenerFactory? = null,
     executionStore: TeamExecutionStore? = null,
     private val historyLoader: TeamMemberHistoryLoader? = null,

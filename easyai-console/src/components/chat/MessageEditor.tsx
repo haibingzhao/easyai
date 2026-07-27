@@ -4,7 +4,7 @@ import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { useProjectStore } from '@/services/stores/project-store';
 import { ChatService, sendMessageToBackend, abortAllActiveStreams, cancelChat } from '../../services/chat-service';
-import { SessionService } from '../../services/session-service';
+import { SessionService, sessionService } from '../../services/session-service';
 import { isImageAttachment, isTextAttachment, toChatAttachment, buildMessageWithTextAttachments, buildFileRef, buildFolderRef } from '../../utils/attachment-utils';
 import { useMention } from '@/hooks/useMention';
 import type { MentionItem } from '@/hooks/useMention';
@@ -427,7 +427,19 @@ export const MessageEditor: React.FC = () => {
         options: currentOptions,
         attachments: chatAttachments.length > 0 ? chatAttachments : undefined,
         onEvent: handleEvent,
-        onDone: handleEvent as unknown as (event: import('@/types/socket-event').DoneEvent) => void,
+        onDone: (event) => {
+          handleEvent(event);
+          // Full reconciliation after stream ends: recover any SSE events that may
+          // have been lost (e.g., compaction indicators). Mirrors the watch path's
+          // finalReconciliation in ChatPanel.
+          if (sid) {
+            sessionService.getSessionDetail(sid).then((detail) => {
+              useChatStore.getState().loadSessionMessages(
+                detail.messages, detail.pendingPermission, undefined, detail.endReason
+              );
+            }).catch(() => { /* best-effort */ });
+          }
+        },
         onError: handleEvent as unknown as (event: import('@/types/socket-event').ErrorEvent) => void,
       });
     } catch (error) {

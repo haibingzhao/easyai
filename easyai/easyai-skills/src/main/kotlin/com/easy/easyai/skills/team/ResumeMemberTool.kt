@@ -4,20 +4,13 @@ import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.event.MessageListener
 import com.easy.easyai.core.model.TextContent
-import com.easy.easyai.core.team.BlockedMemberState
-import com.easy.easyai.core.team.MemberSignalTool
-import com.easy.easyai.core.team.TeamExecutionStore
-import com.easy.easyai.core.team.TeamMemberEvent
-import com.easy.easyai.core.team.TeamMemberExecution
-import com.easy.easyai.core.team.TeamMemberExecutionEntity
-import com.easy.easyai.core.team.TeamMemberHistoryLoader
-import com.easy.easyai.core.team.TeamMemberStatus
+import com.easy.easyai.core.team.*
 import com.easy.easyai.core.tool.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
-import java.util.UUID
+import java.util.*
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -94,32 +87,18 @@ class ResumeMemberTool(
             return errorResult("Error: Member '$memberId' is already running.")
         }
 
-        // 3. Look up member AgentDefinition (DB lookup with inline fallback)
-        val userId = agentContext.userId ?: "system"
-        val definition = agentStore.findById(memberId, userId)
-            ?: resolveInlineMember(memberId, agentContext)
+        // 3. Look up member AgentDefinition (DB lookup with inline fallback) and resolve effective context
+        val resolved = TeamMemberResolver.resolve(memberId, agentContext, agentStore)
             ?: return errorResult("Error: Member agent '$memberId' not found in agent store.")
+        val definition = resolved.definition
+        val effectiveContext = resolved.effectiveContext
 
-        // 4. Resolve member context and tools
-        val inlineEntry = if (definition.id.startsWith("inline:")) {
-            agentContext.teamMembers.find { it["id"] == definition.id }
-        } else null
-        val effectiveContext = if (inlineEntry != null) {
-            agentContext.copy(
-                mcpConfigs = com.easy.easyai.skills.subagent.SubAgentTool.parseInlineMcpConfigs(inlineEntry),
-                allowedSkillNames = com.easy.easyai.skills.subagent.SubAgentTool.parseInlineSkillNames(inlineEntry)
-            )
-        } else agentContext
-
-        val (resolvedBaseContext, derivedTools) = if (contextResolver != null) {
-            contextResolver.resolve(definition, effectiveContext)
-        } else {
-            effectiveContext.copy(
+        val (resolvedBaseContext, derivedTools) = contextResolver?.resolve(definition, effectiveContext)
+            ?: (effectiveContext.copy(
                 agentId = definition.id,
                 promptTemplate = definition.promptTemplate,
                 subAgents = emptyList()
-            ) to effectiveContext.tools
-        }
+            ) to effectiveContext.tools)
 
         // 5. Load member's conversation history for continuity
         val history = try {
@@ -211,7 +190,7 @@ class ResumeMemberTool(
                     output = output.usage.outputTokens.toLong(),
                     cacheRead = output.usage.cacheReadTokens.toLong(),
                     cacheWrite = output.usage.cacheWriteTokens.toLong(),
-                    duration = output.usage.durationMs.toLong()
+                    duration = output.usage.durationMs
                 )
 
                 val reblocked = blockedRef.get()
@@ -349,17 +328,6 @@ class ResumeMemberTool(
         } catch (e: Exception) {
             logger.warn("Failed to mark execution {} as RESUMED: {}", originalExecutionId, e.message)
         }
-    }
-
-    /**
-     * Resolve an inline custom member from agentContext.teamMembers.
-     * Returns null if the memberId does not match any inline entry.
-     */
-    private fun resolveInlineMember(memberId: String, agentContext: AgentContext): AgentDefinition? {
-        val inlineEntry = agentContext.teamMembers.find {
-            (it["inline"] == true) && (it["id"] == memberId || it["name"] == memberId)
-        } ?: return null
-        return com.easy.easyai.skills.subagent.SubAgentTool.synthesizeInlineDefinition(inlineEntry)
     }
 
     companion object {

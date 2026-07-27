@@ -313,7 +313,7 @@ class ChatController(
     }
 
     /**
-     * Resume a cancelled or errored chat session with SSE streaming.
+     * Resume a canceled or errored chat session with SSE streaming.
      * Optionally accepts a user message to guide the resumption.
      */
     @PostMapping(

@@ -2,6 +2,7 @@ package com.easy.easyai.core.team
 
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Shared channel debounce/drain utility for team coordination event loops.
@@ -32,7 +33,7 @@ object TeamEventDrain {
         first: T,
         debounceMs: Long = DEFAULT_DEBOUNCE_MS,
     ): List<T> {
-        delay(debounceMs)
+        delay(debounceMs.milliseconds)
         val batch = mutableListOf(first)
         while (true) {
             val next = channel.tryReceive().getOrNull() ?: break

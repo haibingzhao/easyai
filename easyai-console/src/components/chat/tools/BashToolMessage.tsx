@@ -66,6 +66,7 @@ export function BashToolMessage({
   const commandLines = countLines(displayCommand);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isCommandExpanded, setIsCommandExpanded] = useState(false);
+  const [isOutputOverflowing, setIsOutputOverflowing] = useState(false);
 
   // Execution timer (ref: ThinkingBlock): update elapsed seconds every second during streaming
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -169,8 +170,22 @@ export function BashToolMessage({
     }
   }, [isCommandExpanded, scrollToolOutputToBottom]);
 
+  // Detect actual overflow: only show "More" button when content is genuinely clipped
+  useEffect(() => {
+    if (isStreaming) return;
+    const el = outputRef.current;
+    if (!el) {
+      setIsOutputOverflowing(false);
+      return;
+    }
+    // Measure after layout settles
+    requestAnimationFrame(() => {
+      setIsOutputOverflowing(el.scrollHeight > el.clientHeight + 2);
+    });
+  }, [output, isStreaming, isExpanded]);
+
   const shouldShowCommandExpand = commandLines > 5;
-  const shouldShowOutputExpand = outputLines > 5;
+  const shouldShowOutputExpand = isOutputOverflowing || isExpanded;
 
   const statusText = status === 'RUNNING'
     ? `Running... ${elapsedSec}s / ${timeoutSec}s`
@@ -242,16 +257,16 @@ export function BashToolMessage({
       </div>
 
       {/* Output area */}
-      {(output || isStreaming) && (
+      {(output || isStreaming || isError) && (
         <>
           <div className="border-t border-border" />
           <div className="p-3">
             <div
               ref={outputRef}
               onScroll={handleToolOutputScroll}
-              className={`text-sm font-mono whitespace-pre-wrap break-all ${isError ? 'text-destructive' : 'text-foreground'} ${!isExpanded && outputLines > 5 ? 'max-h-[5em] overflow-y-auto' : isExpanded && outputLines > 15 ? 'max-h-[15em] overflow-y-auto' : ''}`}
+              className={`text-sm font-mono whitespace-pre-wrap break-all ${isError ? 'text-destructive' : 'text-foreground'} ${!isExpanded ? 'max-h-[10em] overflow-y-auto' : 'max-h-[30em] overflow-y-auto'}`}
             >
-              {output}
+              {output || (isError ? `Command failed with exit code ${result?.exitCode ?? 1}` : '')}
             </div>
             {isStreaming && (
               <div className="mt-2 text-xs text-muted-foreground animate-pulse">
@@ -271,7 +286,7 @@ export function BashToolMessage({
                 ) : (
                   <>
                     <ChevronsDown className="w-3 h-3" />
-                    <span>More ({outputLines} lines)</span>
+                    <span>More ({outputLines > 5 ? `${outputLines} lines` : `${output.length} chars`})</span>
                   </>
                 )}
               </button>

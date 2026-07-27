@@ -10,7 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
-import java.util.UUID
+import java.util.*
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -83,32 +83,18 @@ class DelegateToMemberTool(
             )
         }
 
-        // 3. Look up member AgentDefinition (DB lookup with inline fallback)
-        val userId = agentContext.userId ?: "system"
-        val definition = agentStore.findById(memberId, userId)
-            ?: resolveInlineMember(memberId, agentContext)
+        // 3. Look up member AgentDefinition (DB lookup with inline fallback) and resolve effective context
+        val resolved = TeamMemberResolver.resolve(memberId, agentContext, agentStore)
             ?: return errorResult("Error: Member agent '$memberId' not found in agent store.")
+        val definition = resolved.definition
+        val effectiveContext = resolved.effectiveContext
 
-        // 4. Resolve member context and tools independently
-        val inlineEntry = if (definition.id.startsWith("inline:")) {
-            agentContext.teamMembers.find { it["id"] == definition.id }
-        } else null
-        val effectiveContext = if (inlineEntry != null) {
-            agentContext.copy(
-                mcpConfigs = com.easy.easyai.skills.subagent.SubAgentTool.parseInlineMcpConfigs(inlineEntry),
-                allowedSkillNames = com.easy.easyai.skills.subagent.SubAgentTool.parseInlineSkillNames(inlineEntry)
-            )
-        } else agentContext
-
-        val (resolvedBaseContext, derivedTools) = if (contextResolver != null) {
-            contextResolver.resolve(definition, effectiveContext)
-        } else {
-            effectiveContext.copy(
+        val (resolvedBaseContext, derivedTools) = contextResolver?.resolve(definition, effectiveContext)
+            ?: (effectiveContext.copy(
                 agentId = definition.id,
                 promptTemplate = definition.promptTemplate,
                 subAgents = emptyList()
-            ) to effectiveContext.tools.filter { it.name !in FORBIDDEN_MEMBER_TOOLS }
-        }
+            ) to effectiveContext.tools.filter { it.name !in FORBIDDEN_MEMBER_TOOLS })
 
         // 5. Create blocked-state holder + ask_leader signal tool
         val blockedRef = AtomicReference<Pair<String, String>?>(null)
@@ -231,7 +217,7 @@ class DelegateToMemberTool(
                 output = output.usage.outputTokens.toLong(),
                 cacheRead = output.usage.cacheReadTokens.toLong(),
                 cacheWrite = output.usage.cacheWriteTokens.toLong(),
-                duration = output.usage.durationMs.toLong()
+                duration = output.usage.durationMs
             )
 
             val blocked = blockedRef.get()
@@ -281,7 +267,7 @@ class DelegateToMemberTool(
                 }
             }
         } catch (e: CancellationException) {
-            // Scope cancelled (session ended) — propagate without sending events
+            // Scope canceled (session ended) — propagate without sending events
             throw e
         } catch (e: Exception) {
             logger.error("Team session {}: member '{}' unexpected error: {}", state.sessionId, memberId, e.message, e)
@@ -323,17 +309,6 @@ class DelegateToMemberTool(
         } catch (e: Exception) {
             logger.warn("Failed to update team execution record: {}", e.message)
         }
-    }
-
-    /**
-     * Resolve an inline custom member from agentContext.teamMembers.
-     * Returns null if the memberId does not match any inline entry.
-     */
-    private fun resolveInlineMember(memberId: String, agentContext: AgentContext): AgentDefinition? {
-        val inlineEntry = agentContext.teamMembers.find {
-            (it["inline"] == true) && (it["id"] == memberId || it["name"] == memberId)
-        } ?: return null
-        return com.easy.easyai.skills.subagent.SubAgentTool.synthesizeInlineDefinition(inlineEntry)
     }
 
     companion object {

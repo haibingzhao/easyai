@@ -11,6 +11,7 @@ import com.easy.easyai.core.tool.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Team tool: block until member events arrive, then return them as a batch.
@@ -56,12 +57,9 @@ class WaitForMemberEventsTool(
         // 1. No running members → check for queued events, otherwise return status
         if (state.activeMemberCount() == 0) {
             val queued = state.eventChannel.tryReceive()
-            val queuedEvent = queued.getOrNull()
-            if (queuedEvent == null) {
-                return ToolResult(
-                    content = listOf(TextContent(buildNoActiveMembersResponse()))
-                )
-            }
+            val queuedEvent = queued.getOrNull() ?: return ToolResult(
+                content = listOf(TextContent(buildNoActiveMembersResponse()))
+            )
             // Process the queued event along with any others
             val events = TeamEventDrain.drain(state.eventChannel, queuedEvent)
             return buildEventBatchResult(events)
@@ -69,7 +67,7 @@ class WaitForMemberEventsTool(
 
         // 2. Wait for the first event with timeout
         val timeoutMs = params.timeoutSeconds.coerceIn(10, 1800) * 1000L
-        val first = withTimeoutOrNull(timeoutMs) {
+        val first = withTimeoutOrNull(timeoutMs.milliseconds) {
             state.eventChannel.receive()
         }
 

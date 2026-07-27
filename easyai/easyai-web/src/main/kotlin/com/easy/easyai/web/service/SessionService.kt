@@ -518,7 +518,11 @@ class SessionService(
             content = msg.content,
             timestamp = msgWithTs.timestamp,
             stopReason = assistantMsg?.stopReason?.name,
-            metadata = (msg as? UserMessage)?.metadata?.ifEmpty { null },
+            metadata = when (msg) {
+                is UserMessage -> msg.metadata.ifEmpty { null }
+                is CustomMessage -> msg.metadata.ifEmpty { null }
+                else -> null
+            },
             usage = extractUsage(msg)?.let {
                 UsageSnapshot(
                     inputTokens = it.inputTokens,

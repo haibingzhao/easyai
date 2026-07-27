@@ -82,7 +82,7 @@ suspend fun executeAgentWithProtection(
     timeoutMs: Long,
     abortSignal: () -> Boolean = { false },
     onEvent: suspend (AgentEvent) -> Unit = {},
-    maxSummaryLength: Int = 10_000,
+    maxSummaryLength: Int = 10_0000,
     truncateLabel: String = "Summary",
     label: String = "Agent",
     initialMessages: List<EasyAiMessage> = emptyList(),

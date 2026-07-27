@@ -4,6 +4,7 @@ import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { useProjectStore } from '@/services/stores/project-store';
 import { sendMessageToBackend } from '../../services/chat-service';
+import { sessionService } from '../../services/session-service';
 import { editMessage } from '@/services/checkpoint-service';
 import { ModelSelector } from './ModelSelector';
 import { AgentSelector } from './AgentSelector';
@@ -562,7 +563,16 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
       options: currentOptions,
       attachments: chatAttachments.length > 0 ? chatAttachments : undefined,
       onEvent: handleEvent,
-      onDone: handleEvent as unknown as (event: import('@/types/socket-event').DoneEvent) => void,
+      onDone: (event) => {
+        handleEvent(event);
+        // Full reconciliation after stream ends: recover any SSE events that may
+        // have been lost (e.g., compaction indicators).
+        sessionService.getSessionDetail(sid).then((detail) => {
+          useChatStore.getState().loadSessionMessages(
+            detail.messages, detail.pendingPermission, undefined, detail.endReason
+          );
+        }).catch(() => { /* best-effort */ });
+      },
       onError: handleEvent as unknown as (event: import('@/types/socket-event').ErrorEvent) => void,
     });
     setAttachments([]);
