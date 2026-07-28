@@ -84,11 +84,21 @@ Output your summary in this structure:
 - [Relevant file paths or directories]
 
 ## Variable Extraction
-After generating the summary, you MUST call the update_variable tool EXACTLY ONCE:
+After generating the summary, you MUST call the update_variable tool EXACTLY ONCE.
+This is CRITICAL — the variables you extract will be the ONLY persistent memory of this conversation.
+
+Rules:
 - Include ALL variables in a SINGLE call — do NOT split across multiple calls
-- Extract key data points (financial figures, analysis results, configuration values) that must persist
+- You MUST extract at least one variable if the conversation contains ANY of:
+  * Financial figures, prices, amounts, percentages
+  * Analysis results, conclusions, recommendations
+  * Configuration values, settings, parameters
+  * User preferences, decisions, constraints
+  * Intermediate computation results
+  * Key entities (names, IDs, dates, versions)
 - Store intermediate computation results that downstream conversation may reference
-- If no variables need updating, call with empty: {"variables": {}}
+- ONLY call with empty {"variables": {}} if the conversation is purely trivial (greetings, small talk)
+- An empty call on a substantive conversation is a FAILURE
 - This MUST be your ONLY tool call and your final action before finishing
 """
     }
@@ -217,9 +227,10 @@ After generating the summary, you MUST call the update_variable tool EXACTLY ONC
             appendLine("Create a new structured summary from the conversation history above.")
         }
         appendLine()
-        appendLine("After generating the summary, call update_variable ONCE with ALL variables in a single call.")
+        appendLine("IMPORTANT: After generating the summary, call update_variable ONCE with ALL extracted variables.")
         appendLine("Do NOT split variables across multiple calls.")
-        appendLine("If no variables need updating, call with: {\"variables\": {}}")
+        appendLine("You MUST extract meaningful variables (key data points, results, configs, decisions) from the conversation.")
+        appendLine("Calling with empty variables on a substantive conversation is NOT acceptable.")
     }
 
     /**
@@ -260,15 +271,18 @@ internal class CompactionVariableTool(
     ToolMetadata(
         name = "update_variable",
         description = "Store or update session variables extracted from the conversation. " +
-            "Call with variables to persist, or with empty map if nothing needs updating.",
+            "You MUST extract all key data points (figures, results, configs, decisions). " +
+            "Only call with empty map if the conversation is purely trivial.",
         permissionCategory = "variable",
         isDefaultTool = false
     )
 ) {
+    private val logger = LoggerFactory.getLogger(javaClass)
+
     override val executionMode: ToolExecutionMode = ToolExecutionMode.SEQUENTIAL
 
     data class Parameters(
-        @param:JsonPropertyDescription("Key-value pairs to store. Keys are variable names, values are the data to persist.")
+        @param:JsonPropertyDescription("Key-value pairs to store. Keys are variable names, values are the data to persist. MUST NOT be empty for substantive conversations.")
         val variables: Map<String, String>? = null,
         @param:JsonPropertyDescription("List of variable keys to delete.")
         val deleteKeys: List<String>? = null
@@ -287,6 +301,8 @@ internal class CompactionVariableTool(
     ): ToolResult {
         toolCalled.set(true)
 
+        logger.debug("update_variable called with args: {}", args)
+
         val variables = (args["variables"] as? Map<String, Any?>)
             ?.mapValues { it.value?.toString() ?: "" }
             ?: emptyMap()
@@ -297,7 +313,8 @@ internal class CompactionVariableTool(
             (existing + variables) - deleteKeys.toSet()
         }
 
-        val summary = if (variables.isEmpty()) {
+        val summary = if (variables.isEmpty() && deleteKeys.isEmpty()) {
+            logger.warn("update_variable called with empty variables — conversation data will NOT be persisted")
             "No variables to update."
         } else {
             "Updated ${variables.size} variable(s): ${variables.keys.joinToString(", ")}"

@@ -716,10 +716,12 @@ class R2dbcAsyncSessionStore(
 
     /**
      * Load active (non-compacted) parent-level messages for a session.
-     * Excludes messages where compactedAt IS NOT NULL, role is CUSTOM,
+     * Excludes messages where compactedAt IS NOT NULL, role is CUSTOM or SYSTEM,
      * or parentToolCallId IS NOT NULL (sub-agent messages).
      * Sub-agent messages are persisted with parentToolCallId for frontend display
      * but must not be included in the LLM context.
+     * SYSTEM messages are persisted for frontend display/audit only — the agent loop
+     * always rebuilds a fresh system prompt via PromptTemplateService on each turn.
      */
     override suspend fun loadActiveMessages(sessionId: String): List<EasyAiMessage> {
         return suspendTransaction(db) {
@@ -729,6 +731,7 @@ class R2dbcAsyncSessionStore(
                     (Tables.Message.sessionId eq sessionId) and 
                     (Tables.Message.compactedAt.isNull()) and
                     (Tables.Message.role neq Role.CUSTOM.name) and
+                    (Tables.Message.role neq Role.SYSTEM.name) and
                     (Tables.Message.parentToolCallId.isNull())
                 }
                 .orderBy(Tables.Message.createdAt to SortOrder.ASC)
