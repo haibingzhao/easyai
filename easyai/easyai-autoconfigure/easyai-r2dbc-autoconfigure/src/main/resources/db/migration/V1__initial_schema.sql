@@ -36,7 +36,7 @@ CREATE INDEX IF NOT EXISTS idx_refresh_token_token_hash ON refresh_token (token_
 -- =============================================
 
 CREATE TABLE IF NOT EXISTS agent (
-    id VARCHAR(255) PRIMARY KEY,
+    id VARCHAR(255),
     name VARCHAR(255) NOT NULL,
     agent_type VARCHAR(32) NOT NULL DEFAULT 'PRIMARY',
     agent_context VARCHAR(32) NOT NULL DEFAULT 'CHAT',
@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS agent (
     output_schema TEXT,
     user_id VARCHAR(255) NOT NULL DEFAULT 'system',
     created_at BIGINT NOT NULL,
-    updated_at BIGINT NOT NULL
+    updated_at BIGINT NOT NULL,
+    CONSTRAINT agent_pkey PRIMARY KEY (id)
 );
 
 CREATE TABLE IF NOT EXISTS agent_tool (
