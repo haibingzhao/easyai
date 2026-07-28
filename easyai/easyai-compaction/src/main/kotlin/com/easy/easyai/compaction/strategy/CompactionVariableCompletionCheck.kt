@@ -45,9 +45,9 @@ class CompactionVariableCompletionCheck(
     companion object {
         private const val NUDGE_PROMPT = """
 You have not called the 'update_variable' tool yet. You MUST call it EXACTLY ONCE before finishing.
-Include ALL variables in a single call — do NOT split across multiple calls.
-Extract key data points: financial figures, analysis results, configuration values, decisions, user preferences.
-Example: {"variables": {"key1": "value1", "key2": "value2"}}
+Include ALL numeric/data variables in a single call (prices, figures, percentages, IDs, configs).
+Do NOT store analysis conclusions or narrative text — those belong in the summary.
+Example: {"variables": {"current_price": "170.69", "pe_ttm": "80.28", "revenue_yoy_pct": "25.49%"}}
 """
     }
 }

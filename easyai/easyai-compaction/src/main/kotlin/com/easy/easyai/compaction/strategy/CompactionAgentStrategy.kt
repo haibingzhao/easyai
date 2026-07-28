@@ -2,6 +2,7 @@ package com.easy.easyai.compaction.strategy
 
 import com.easy.easyai.api.model.ModelOptions
 import com.easy.easyai.api.model.ModelProviderConfig
+import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.compaction.estimator.TokenEstimator
 import com.easy.easyai.compaction.model.CompactionContext
 import com.easy.easyai.core.agent.*
@@ -14,6 +15,7 @@ import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import kotlinx.coroutines.CoroutineScope
 import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.model.ChatModel
+import tools.jackson.core.type.TypeReference
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -38,7 +40,7 @@ class CompactionAgentStrategy(
     private val logger = LoggerFactory.getLogger(javaClass)
 
     companion object {
-        private const val MAX_ITERATIONS = 2
+        private const val MAX_ITERATIONS = 1
 
         private const val COMPACTION_SYSTEM_PROMPT = """
 You are an expert conversation summarizer. Your task is to condense a conversation
@@ -85,20 +87,22 @@ Output your summary in this structure:
 
 ## Variable Extraction
 After generating the summary, you MUST call the update_variable tool EXACTLY ONCE.
-This is CRITICAL — the variables you extract will be the ONLY persistent memory of this conversation.
 
 Rules:
 - Include ALL variables in a SINGLE call — do NOT split across multiple calls
-- You MUST extract at least one variable if the conversation contains ANY of:
-  * Financial figures, prices, amounts, percentages
-  * Analysis results, conclusions, recommendations
-  * Configuration values, settings, parameters
-  * User preferences, decisions, constraints
-  * Intermediate computation results
-  * Key entities (names, IDs, dates, versions)
-- Store intermediate computation results that downstream conversation may reference
-- ONLY call with empty {"variables": {}} if the conversation is purely trivial (greetings, small talk)
-- An empty call on a substantive conversation is a FAILURE
+- Variables are for NUMERIC/DATA facts ONLY that downstream conversation may reference:
+  * Prices, amounts, percentages, ratios, financial figures
+  * Dates, IDs, codes, versions, quantities
+  * Configuration values, parameters, thresholds
+  * Computation results (EPS, PE, revenue, margins, market share)
+- DO NOT store in variables (these belong in the summary above):
+  * Analysis conclusions, opinions, recommendations, ratings
+  * Causal reasoning, risk assessments, impact analysis
+  * Customer names, competitor names (unless needed as lookup keys)
+  * Tool paths, executable names, environment configs
+  * Narrative text, strategies, suggestions
+- Values MUST be strings; use concise numeric representations (e.g., "170.69", "25.49%")
+- ONLY call with empty {"variables": {}} if the conversation contains NO numeric/data facts
 - This MUST be your ONLY tool call and your final action before finishing
 """
     }
@@ -227,10 +231,9 @@ Rules:
             appendLine("Create a new structured summary from the conversation history above.")
         }
         appendLine()
-        appendLine("IMPORTANT: After generating the summary, call update_variable ONCE with ALL extracted variables.")
+        appendLine("IMPORTANT: After generating the summary, call update_variable ONCE with extracted numeric/data variables.")
+        appendLine("Only store data facts (prices, figures, percentages, IDs, configs). Analysis/conclusions go in the summary.")
         appendLine("Do NOT split variables across multiple calls.")
-        appendLine("You MUST extract meaningful variables (key data points, results, configs, decisions) from the conversation.")
-        appendLine("Calling with empty variables on a substantive conversation is NOT acceptable.")
     }
 
     /**
@@ -270,9 +273,10 @@ internal class CompactionVariableTool(
 ) : BaseToolDefinition(
     ToolMetadata(
         name = "update_variable",
-        description = "Store or update session variables extracted from the conversation. " +
-            "You MUST extract all key data points (figures, results, configs, decisions). " +
-            "Only call with empty map if the conversation is purely trivial.",
+        description = "Store numeric/data variables extracted from the conversation. " +
+            "Only store data facts: prices, figures, percentages, IDs, configs, computation results. " +
+            "Do NOT store analysis, conclusions, or narrative text. " +
+            "Call with empty map only if no numeric data exists.",
         permissionCategory = "variable",
         isDefaultTool = false
     )
@@ -282,7 +286,7 @@ internal class CompactionVariableTool(
     override val executionMode: ToolExecutionMode = ToolExecutionMode.SEQUENTIAL
 
     data class Parameters(
-        @param:JsonPropertyDescription("Key-value pairs to store. Keys are variable names, values are the data to persist. MUST NOT be empty for substantive conversations.")
+        @param:JsonPropertyDescription("Numeric/data key-value pairs to store. Keys are variable names, values are data strings (prices, percentages, IDs). Do NOT include analysis or narrative text.")
         val variables: Map<String, String>? = null,
         @param:JsonPropertyDescription("List of variable keys to delete.")
         val deleteKeys: List<String>? = null
@@ -303,10 +307,8 @@ internal class CompactionVariableTool(
 
         logger.debug("update_variable called with args: {}", args)
 
-        val variables = (args["variables"] as? Map<String, Any?>)
-            ?.mapValues { it.value?.toString() ?: "" }
-            ?: emptyMap()
-        val deleteKeys = (args["deleteKeys"] as? List<*>)?.filterIsInstance<String>() ?: emptyList()
+        val variables = coerceToMap(args["variables"])
+        val deleteKeys = coerceToStringList(args["deleteKeys"])
 
         // Merge extracted variables (accumulate across calls, apply deletions)
         extractedVariables.updateAndGet { existing ->
@@ -321,6 +323,43 @@ internal class CompactionVariableTool(
         }
 
         return ToolResult(content = listOf(TextContent(summary)))
+    }
+
+    /**
+     * Coerces the raw value into a Map<String, String>.
+     * Handles: Map (normal), String (LLM double-encoded JSON), null.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun coerceToMap(value: Any?): Map<String, String> = when (value) {
+        is Map<*, *> -> (value as Map<String, Any?>).mapValues { it.value?.toString() ?: "" }
+        is String -> try {
+            val parsed = SharedObjectMapper.instance.readValue(value, object : TypeReference<Map<String, Any?>>() {})
+            parsed.mapValues { it.value?.toString() ?: "" }
+        } catch (e: Exception) {
+            logger.warn("update_variable: failed to parse string-encoded variables: {}", e.message)
+            emptyMap()
+        }
+        null -> emptyMap()
+        else -> {
+            logger.warn("update_variable: unexpected variables type: {}", value::class.qualifiedName)
+            emptyMap()
+        }
+    }
+
+    /**
+     * Coerces the raw value into a List<String>.
+     * Handles: List (normal), String (LLM double-encoded JSON array), null.
+     */
+    private fun coerceToStringList(value: Any?): List<String> = when (value) {
+        is List<*> -> value.filterIsInstance<String>()
+        is String -> try {
+            SharedObjectMapper.instance.readValue(value, object : TypeReference<List<String>>() {})
+        } catch (e: Exception) {
+            logger.warn("update_variable: failed to parse string-encoded deleteKeys: {}", e.message)
+            emptyList()
+        }
+        null -> emptyList()
+        else -> emptyList()
     }
 }
 
