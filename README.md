@@ -40,7 +40,7 @@ EasyAI is a **full-stack LLM Agent framework** (Kotlin / Spring Boot) with deskt
 
 <table>
 <tr>
-<td width="50%">
+<td width="50%" valign="top">
 
 ### 🏛️ AI Deliberation Debates
 
@@ -52,7 +52,7 @@ EasyAI is a **full-stack LLM Agent framework** (Kotlin / Spring Boot) with deskt
 - Eliminates single-agent analysis bias
 
 </td>
-<td width="50%">
+<td width="50%" valign="top">
 
 ### 🪄 AI Creates AI
 
@@ -66,7 +66,7 @@ EasyAI is a **full-stack LLM Agent framework** (Kotlin / Spring Boot) with deskt
 </td>
 </tr>
 <tr>
-<td width="50%">
+<td width="50%" valign="top">
 
 ### 🌐 DAG Swarm Orchestration
 
@@ -78,7 +78,7 @@ EasyAI is a **full-stack LLM Agent framework** (Kotlin / Spring Boot) with deskt
 - Real-time progress streaming via SSE
 
 </td>
-<td width="50%">
+<td width="50%" valign="top">
 
 ### 📦 One Download, Zero Setup
 

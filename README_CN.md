@@ -40,7 +40,7 @@ EasyAI 是一个**全栈 LLM 智能体框架**（Kotlin / Spring Boot），提�
 
 <table>
 <tr>
-<td width="50%">
+<td width="50%" valign="top">
 
 ### 🏛️ AI 对抗辩论
 
@@ -52,7 +52,7 @@ EasyAI 是一个**全栈 LLM 智能体框架**（Kotlin / Spring Boot），提�
 - 消除单 Agent 分析偏见
 
 </td>
-<td width="50%">
+<td width="50%" valign="top">
 
 ### 🪄 AI 创造 AI
 
@@ -66,7 +66,7 @@ EasyAI 是一个**全栈 LLM 智能体框架**（Kotlin / Spring Boot），提�
 </td>
 </tr>
 <tr>
-<td width="50%">
+<td width="50%" valign="top">
 
 ### 🌐 DAG Swarm 编排
 
@@ -78,7 +78,7 @@ EasyAI 是一个**全栈 LLM 智能体框架**（Kotlin / Spring Boot），提�
 - 通过 SSE 实时流式推送进度
 
 </td>
-<td width="50%">
+<td width="50%" valign="top">
 
 ### 📦 一次下载，零配置
 
