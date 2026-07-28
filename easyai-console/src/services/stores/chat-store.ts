@@ -472,7 +472,9 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     // Safe cast: Zustand's set (Partial<ChatState>) is structurally compatible with
     // LoadSetFn (Partial<LoadSessionStateShape>) because ChatState extends LoadSessionStateShape.
     // The callback in loadSessionMessagesImpl currently ignores the state parameter.
-    loadSessionMessagesImpl(messages, pendingPermission, checkpoints, set as Parameters<typeof loadSessionMessagesImpl>[3], endReason, variables ?? undefined);
+    // Use `variables ?? {}` (not `?? undefined`) so that switching to a session without
+    // variables explicitly clears the previous session's variables (fixes #1).
+    loadSessionMessagesImpl(messages, pendingPermission, checkpoints, set as Parameters<typeof loadSessionMessagesImpl>[3], endReason, variables ?? {});
   },
 
   loadSessionMessagesIncremental: (deltaSnapshots, pendingPermission, checkpoints, endReason, variables) => {
