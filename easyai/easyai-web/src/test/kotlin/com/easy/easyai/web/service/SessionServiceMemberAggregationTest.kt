@@ -2,10 +2,12 @@ package com.easy.easyai.web.service
 
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.SessionManager
+import com.easy.easyai.core.model.UserMessage
 import com.easy.easyai.core.team.TeamExecutionStore
 import com.easy.easyai.core.team.TeamMemberExecutionEntity
 import com.easy.easyai.core.team.TeamMemberStatus
 import com.easy.easyai.repository.session.AsyncSessionStore
+import com.easy.easyai.repository.session.MessageWithTimestamp
 import com.easy.easyai.snapshot.SnapshotService
 import com.easy.easyai.snapshot.model.FileChangeStatus
 import com.easy.easyai.snapshot.model.FileDiff
@@ -231,7 +233,9 @@ class SessionServiceMemberAggregationTest {
             )
             coEvery { snapshotService.determineFileAuthors(projectPath, "parent-baseline", "parent-hash") } returns mapOf("parent.kt" to "llm")
             coEvery { snapshotService.getStagedChanges(projectPath, sessionId) } returns emptyList()
-            coEvery { sessionStore.loadMessagesWithTimestamps(sessionId) } returns emptyList()
+            coEvery { sessionStore.loadMessagesWithTimestamps(sessionId) } returns listOf(
+                MessageWithTimestamp(message = UserMessage("user-msg-1", "hello"), timestamp = 1000L)
+            )
 
             // Team store throws
             coEvery { teamExecutionStore.getExecutions(sessionId) } throws RuntimeException("DB error")

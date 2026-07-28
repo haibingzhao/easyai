@@ -1,5 +1,5 @@
 -- V1: Initial schema for EasyAI
--- Translated from Tables.kt (Exposed DSL) to portable DDL.
+-- Complete schema in final state (consolidated from original V1–V6).
 -- Compatible with H2 (MODE=MYSQL) and PostgreSQL.
 -- All statements use IF NOT EXISTS for safe re-execution on existing databases.
 
@@ -32,11 +32,11 @@ CREATE INDEX IF NOT EXISTS idx_refresh_token_user_id ON refresh_token (user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_token_token_hash ON refresh_token (token_hash);
 
 -- =============================================
--- Agent
+-- Agent (composite PK: id + user_id)
 -- =============================================
 
 CREATE TABLE IF NOT EXISTS agent (
-    id VARCHAR(255) PRIMARY KEY,
+    id VARCHAR(255),
     name VARCHAR(255) NOT NULL,
     agent_type VARCHAR(32) NOT NULL DEFAULT 'PRIMARY',
     agent_context VARCHAR(32) NOT NULL DEFAULT 'CHAT',
@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS agent (
     output_schema TEXT,
     user_id VARCHAR(255) NOT NULL DEFAULT 'system',
     created_at BIGINT NOT NULL,
-    updated_at BIGINT NOT NULL
+    updated_at BIGINT NOT NULL,
+    PRIMARY KEY (id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS agent_tool (
@@ -144,6 +145,19 @@ CREATE INDEX IF NOT EXISTS idx_message_session_created ON message (session_id, c
 -- Model Configuration
 -- =============================================
 
+CREATE TABLE IF NOT EXISTS model_config_group (
+    id VARCHAR(255) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    protocol VARCHAR(64) NOT NULL,
+    is_custom BOOLEAN NOT NULL,
+    base_url VARCHAR(512),
+    api_key TEXT,
+    timeout_seconds BIGINT NOT NULL DEFAULT 600,
+    user_id VARCHAR(255) NOT NULL DEFAULT 'system',
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS model_provider_config (
     id VARCHAR(255) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -158,6 +172,7 @@ CREATE TABLE IF NOT EXISTS model_provider_config (
     options TEXT,
     capabilities TEXT,
     timeout_seconds BIGINT NOT NULL DEFAULT 600,
+    group_id VARCHAR(255),
     user_id VARCHAR(255) NOT NULL DEFAULT 'system',
     created_at BIGINT NOT NULL,
     updated_at BIGINT NOT NULL
@@ -318,6 +333,7 @@ CREATE TABLE IF NOT EXISTS swarm_team_member_execution (
     status VARCHAR(32) NOT NULL,
     summary TEXT,
     escalation_reason TEXT,
+    member_session_id VARCHAR(64),
     input_tokens BIGINT NOT NULL DEFAULT 0,
     output_tokens BIGINT NOT NULL DEFAULT 0,
     created_at BIGINT NOT NULL
@@ -356,3 +372,39 @@ CREATE TABLE IF NOT EXISTS swarm_preset (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_swarm_preset_user_name ON swarm_preset (user_id, name);
+
+-- =============================================
+-- Team Agent (chat-context coordination)
+-- =============================================
+
+CREATE TABLE IF NOT EXISTS team_member_execution (
+    id VARCHAR(64) PRIMARY KEY,
+    team_session_id VARCHAR(64) NOT NULL,
+    member_id VARCHAR(128) NOT NULL,
+    round INT NOT NULL DEFAULT 1,
+    assignment TEXT NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    summary TEXT,
+    escalation_reason TEXT,
+    member_session_id VARCHAR(64),
+    tool_call_id VARCHAR(128),
+    input_tokens BIGINT DEFAULT 0,
+    output_tokens BIGINT DEFAULT 0,
+    started_at BIGINT,
+    completed_at BIGINT
+);
+
+CREATE INDEX IF NOT EXISTS idx_team_exec_session ON team_member_execution(team_session_id);
+
+CREATE TABLE IF NOT EXISTS team_round_record (
+    id VARCHAR(64) PRIMARY KEY,
+    team_session_id VARCHAR(64) NOT NULL,
+    round INT NOT NULL,
+    delegated_members TEXT,
+    completed_members TEXT,
+    blocked_members TEXT,
+    resumed_members TEXT,
+    created_at BIGINT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_team_round_session ON team_round_record(team_session_id);

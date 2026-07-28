@@ -110,8 +110,8 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
     }
 
     const effectiveIsCustomModel = isCustomModel || isCustomProvider || !selectedModelId;
-    let modelId = effectiveIsCustomModel ? customModelName.trim() : selectedModelId;
-    let modelName: string | undefined = customModelName.trim();
+    const modelId = effectiveIsCustomModel ? customModelName.trim() : selectedModelId;
+    const modelName: string | undefined = customModelName.trim();
 
     try {
       setLoading(true);
