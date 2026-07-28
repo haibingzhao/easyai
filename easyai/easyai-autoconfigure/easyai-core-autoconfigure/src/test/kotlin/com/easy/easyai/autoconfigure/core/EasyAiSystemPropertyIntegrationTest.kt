@@ -1,5 +1,6 @@
 package com.easy.easyai.autoconfigure.core
 
+import com.easy.easyai.core.goal.GoalStore
 import io.mockk.mockk
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
@@ -29,6 +30,9 @@ class EasyAiSystemPropertyIntegrationTest {
     open class MockBeans {
         @Bean
         open fun chatModel(): ChatModel = mockk(relaxed = true)
+
+        @Bean
+        open fun goalStore(): GoalStore = mockk(relaxed = true)
     }
 
     @Autowired

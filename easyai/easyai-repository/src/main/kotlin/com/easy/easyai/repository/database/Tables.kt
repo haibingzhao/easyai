@@ -159,8 +159,6 @@ object Tables {
         val endReason = varchar("end_reason", 32).nullable()
         /** JSON-serialized GoalState when a /goal is active; null when no goal is set. */
         val goalJson = text("goal_json").nullable()
-        /** JSON-serialized session variables map; null when no variables are set. */
-        val variablesJson = text("variables_json").nullable()
 
         override val primaryKey = PrimaryKey(id)
     }

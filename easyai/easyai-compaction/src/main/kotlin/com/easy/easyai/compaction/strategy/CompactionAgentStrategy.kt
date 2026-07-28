@@ -1,5 +1,7 @@
 package com.easy.easyai.compaction.strategy
 
+import com.easy.easyai.api.model.ModelOptions
+import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.compaction.estimator.TokenEstimator
 import com.easy.easyai.compaction.model.CompactionContext
 import com.easy.easyai.core.agent.*
@@ -10,13 +12,10 @@ import com.easy.easyai.core.model.*
 import com.easy.easyai.core.tool.*
 import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withTimeout
 import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.model.ChatModel
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Agent-based compaction strategy that uses a lightweight Agent loop to generate
@@ -26,7 +25,7 @@ import kotlin.time.Duration.Companion.milliseconds
  * - History messages are passed directly as the agent's transcript (preserving structure)
  * - The agent has a single tool: update_variable (for variable extraction)
  * - AgentCompletionCheck ensures the tool is called before the agent finishes
- * - maxIterations=3 for bounded execution (summary + tool call + finish)
+ * - maxIterations=2 for bounded execution (summary + tool call in one turn, nudge as fallback)
  *
  * @param agentServiceProvider Lazy provider for AgentService (avoids circular dependency)
  * @param fallbackChatModel ChatModel to use as fallback when no session-specific model is provided
@@ -39,8 +38,7 @@ class CompactionAgentStrategy(
     private val logger = LoggerFactory.getLogger(javaClass)
 
     companion object {
-        private const val MAX_ITERATIONS = 3
-        private const val TIMEOUT_MS = 180_000L
+        private const val MAX_ITERATIONS = 2
 
         private const val COMPACTION_SYSTEM_PROMPT = """
 You are an expert conversation summarizer. Your task is to condense a conversation
@@ -86,11 +84,12 @@ Output your summary in this structure:
 - [Relevant file paths or directories]
 
 ## Variable Extraction
-After generating the summary, you MUST call the update_variable tool:
+After generating the summary, you MUST call the update_variable tool EXACTLY ONCE:
+- Include ALL variables in a SINGLE call — do NOT split across multiple calls
 - Extract key data points (financial figures, analysis results, configuration values) that must persist
 - Store intermediate computation results that downstream conversation may reference
 - If no variables need updating, call with empty: {"variables": {}}
-- You MUST call update_variable as your final action before finishing
+- This MUST be your ONLY tool call and your final action before finishing
 """
     }
 
@@ -112,12 +111,7 @@ After generating the summary, you MUST call the update_variable tool:
         )
 
         return try {
-            withTimeout(TIMEOUT_MS.milliseconds) {
-                executeAgentCompaction(messages, context, chatModel)
-            }
-        } catch (_: TimeoutCancellationException) {
-            logger.warn("Agent compaction timed out after {}ms, falling back to simple summary", TIMEOUT_MS)
-            StrategyOutput(generateFallbackSummary(messages, context, "Agent compaction timed out"))
+            executeAgentCompaction(messages, context, chatModel)
         } catch (e: Exception) {
             logger.warn("Agent compaction failed, falling back to simple summary", e)
             StrategyOutput(generateFallbackSummary(messages, context, "Agent compaction failed: ${e.message}"))
@@ -139,9 +133,11 @@ After generating the summary, you MUST call the update_variable tool:
         val variableTool = CompactionVariableTool(toolCalled, extractedVariables)
 
         // Build agent context (dry-run: no persistence, no default system prompt)
+        // Disable thinking mode for compaction: summarization is a structured task that
+        // doesn't benefit from extended reasoning, and thinking adds significant latency.
         val agentContext = AgentContext(
             agentId = "compaction-agent",
-            modelConfig = context.modelConfig,
+            modelConfig = disableThinking(context.modelConfig),
             sessionId = null,
             tools = listOf(variableTool),
             maxIterations = MAX_ITERATIONS,
@@ -221,8 +217,20 @@ After generating the summary, you MUST call the update_variable tool:
             appendLine("Create a new structured summary from the conversation history above.")
         }
         appendLine()
-        appendLine("After generating the summary, you MUST call the update_variable tool.")
+        appendLine("After generating the summary, call update_variable ONCE with ALL variables in a single call.")
+        appendLine("Do NOT split variables across multiple calls.")
         appendLine("If no variables need updating, call with: {\"variables\": {}}")
+    }
+
+    /**
+     * Disable thinking mode on the model config for compaction.
+     * Thinking adds significant latency with minimal quality benefit for structured summarization.
+     */
+    private fun disableThinking(config: ModelProviderConfig?): ModelProviderConfig? {
+        if (config == null) return null
+        val opts = config.options ?: ModelOptions()
+        if (opts.thinking != true) return config  // Already disabled or unset
+        return config.copy(options = opts.copy(thinking = false))
     }
 
     private fun generateFallbackSummary(
@@ -282,9 +290,12 @@ internal class CompactionVariableTool(
         val variables = (args["variables"] as? Map<String, Any?>)
             ?.mapValues { it.value?.toString() ?: "" }
             ?: emptyMap()
+        val deleteKeys = (args["deleteKeys"] as? List<*>)?.filterIsInstance<String>() ?: emptyList()
 
-        // Store extracted variables
-        extractedVariables.set(variables)
+        // Merge extracted variables (accumulate across calls, apply deletions)
+        extractedVariables.updateAndGet { existing ->
+            (existing + variables) - deleteKeys.toSet()
+        }
 
         val summary = if (variables.isEmpty()) {
             "No variables to update."

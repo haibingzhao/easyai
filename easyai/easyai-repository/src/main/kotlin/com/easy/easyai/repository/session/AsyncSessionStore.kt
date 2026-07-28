@@ -323,34 +323,11 @@ interface AsyncSessionStore {
     suspend fun findEndReason(sessionId: String, userId: String = "system"): String? = null
 
     /**
-     * Save session variables as JSON for cross-request persistence.
-     * Called after each variable update (fire-and-forget).
-     *
-     * @param sessionId The session ID
-     * @param variablesJson JSON-serialized map of variables, or null to clear
-     * @param userId User ID for data isolation
-     */
-    @Deprecated("Variables are now stored in compaction message metadata. Retained for backward compatibility.")
-    suspend fun saveSessionVariables(sessionId: String, variablesJson: String?, userId: String = "system") {}
-
-    /**
-     * Load session variables JSON from database.
-     * Used during session restoration to recover variables after server restart.
-     *
-     * @param sessionId The session ID
-     * @param userId User ID for data isolation
-     * @return JSON-serialized variables map, or null if none stored
-     */
-    @Deprecated("Variables are now stored in compaction message metadata. Use loadVariablesFromCompactionSummary() first.")
-    suspend fun loadSessionVariables(sessionId: String, userId: String = "system"): String? = null
-
-    /**
      * Load session variables from the latest compaction summary message's metadata.
      * Queries the most recent message with isCompactionSummary metadata and extracts
      * the sessionVariables field from its metadata JSON.
      *
-     * This is the primary source for session variables (Phase 3 migration).
-     * Falls back to [loadSessionVariables] (Session table) for backward compatibility.
+     * This is the single source of truth for session variable restoration.
      *
      * @param sessionId The session ID
      * @param userId User ID for data isolation

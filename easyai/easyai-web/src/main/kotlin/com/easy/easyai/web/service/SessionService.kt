@@ -1,5 +1,6 @@
 package com.easy.easyai.web.service
 
+import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.SessionManager
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.team.TeamExecutionStore
@@ -11,7 +12,6 @@ import com.easy.easyai.snapshot.model.FileDiff
 import com.easy.easyai.web.model.*
 import org.slf4j.LoggerFactory
 import tools.jackson.core.type.TypeReference
-import com.easy.easyai.common.util.SharedObjectMapper
 
 class SessionService(
     private val sessionManager: SessionManager,
@@ -83,14 +83,12 @@ class SessionService(
 
     /**
      * Load persisted session variables as a key-value map for frontend display.
-     * Primary source: compaction summary message metadata (Phase 3 migration).
-     * Fallback: Session.variablesJson column (backward compatibility with old data).
+     * Source: compaction summary message metadata (single source of truth).
      * Returns null when absent or unparseable (best-effort, never fails the detail load).
      */
     private suspend fun loadSessionVariablesMap(id: String, userId: String): Map<String, String>? {
         return try {
             val json = sessionStore.loadVariablesFromCompactionSummary(id, userId)
-                ?: sessionStore.loadSessionVariables(id, userId)
             if (json.isNullOrBlank()) null
             else objectMapper.readValue(json, object : TypeReference<Map<String, String>>() {})
         } catch (e: Exception) {
@@ -318,11 +316,7 @@ class SessionService(
                 mutableListOf() // Parent has no checkpoints yet — still aggregate member diffs below
             } else {
                 val baseline = snapshotService.ensureBaseline(projectPath, sessionId)
-                if (baseline != null) {
-                    snapshotService.diff(projectPath, baseline, checkpoints.first().commitHash).toMutableList()
-                } else {
-                    mutableListOf()
-                }
+                snapshotService.diff(projectPath, baseline, checkpoints.first().commitHash).toMutableList()
             }
         } catch (e: Exception) {
             logger.warn("Failed to compute session diff for {}: {}", sessionId, e.message)
@@ -340,7 +334,7 @@ class SessionService(
                     if (memberCheckpoints.isEmpty()) continue
                     val memberBaseline = try {
                         snapshotService.ensureBaseline(projectPath, memberSessionId)
-                    } catch (e: Exception) { continue }
+                    } catch (_: Exception) { continue }
                     val memberDiffs = snapshotService.diff(projectPath, memberBaseline, memberCheckpoints.first().commitHash)
                     for (d in memberDiffs) {
                         if (existingPaths.add(d.path)) {

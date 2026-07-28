@@ -146,9 +146,9 @@ open class EasyAiCoreAutoConfiguration {
     open fun commandRegistry(
         @Autowired(required = false) skillRegistry: SkillRegistry? = null,
         @Autowired(required = false) promptProvider: McpPromptProvider? = null,
-        @Autowired(required = false) builtinHandlers: List<BuiltinCommandHandler> = emptyList(),
+        @Autowired(required = false) builtinHandlers: List<BuiltinCommandHandler>? = null,
     ): CommandRegistry {
-        return DefaultCommandRegistry(skillRegistry, promptProvider, builtinHandlers)
+        return DefaultCommandRegistry(skillRegistry, promptProvider, builtinHandlers ?: emptyList())
     }
 
     @Bean
@@ -158,8 +158,8 @@ open class EasyAiCoreAutoConfiguration {
         commandRegistry: CommandRegistry,
         @Autowired(required = false) promptProvider: McpPromptProvider? = null,
         @Autowired(required = false) userCommandStore: AsyncUserCommandStore? = null,
-        @Autowired(required = false) builtinHandlers: List<BuiltinCommandHandler> = emptyList(),
-    ): CommandService = CommandService(commandRegistry, promptProvider, userCommandStore, builtinHandlers)
+        @Autowired(required = false) builtinHandlers: List<BuiltinCommandHandler>? = null,
+    ): CommandService = CommandService(commandRegistry, promptProvider, userCommandStore, builtinHandlers ?: emptyList())
 
     @Bean
     @ConditionalOnMissingBean(AgentService::class)

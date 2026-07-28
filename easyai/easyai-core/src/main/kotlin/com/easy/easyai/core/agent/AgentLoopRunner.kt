@@ -454,6 +454,25 @@ internal class AgentLoopRunner(
             springAiMessages
         }
 
+        // Diagnostic: log the actual prompt size being sent to the LLM so it can be
+        // compared against the gateway-reported usage (input + cache_read + cache_write).
+        // A large gap (sent >> reported) indicates a gateway usage-accounting anomaly
+        // (e.g. prompt-cache miss serving tokens from an unreported cache tier).
+        // The assistant/tool message counts are the decisive signal: if turn 0 of a run
+        // already shows the full prior-run assistant count, the history WAS loaded & sent.
+        if (logger.isDebugEnabled) {
+            val approxChars = allSpringAiMessages.sumOf { it.text?.length ?: 0 }
+            val assistantCount = transformedMessages.count { it.role == Role.ASSISTANT }
+            val toolCount = transformedMessages.count { it.role == Role.TOOL }
+            val userCount = transformedMessages.count { it.role == Role.USER }
+            logger.debug(
+                "{}preparePrompt: messages={} (user={}, assistant={}, tool={}), springAiMessages={}, " +
+                    "systemPromptChars={}, approxPromptChars={}, approxTokens=~{}",
+                logPrefix, transformedMessages.size, userCount, assistantCount, toolCount,
+                allSpringAiMessages.size, systemPromptText.length, approxChars, approxChars / 4
+            )
+        }
+
         return Prompt(allSpringAiMessages, chatOptions)
     }
 

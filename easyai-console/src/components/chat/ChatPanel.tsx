@@ -12,7 +12,6 @@ import { Badge } from '../ui/Badge';
 import { TokenContextBar } from './TokenContextBar';
 import { PermissionBar } from './PermissionBar';
 import { RevertBanner } from './RevertBanner';
-import { FileChangesPanel } from './FileChangesPanel';
 import { UserMessagePreview } from './UserMessagePreview';
 import type { CheckpointInfo } from '../../types/checkpoint';
 import type { ContextReferences, AssistantMessage as AssistantMessageType } from '../../types/message';
@@ -24,7 +23,6 @@ import { TeamMemberDetail } from './team/TeamMemberDetail';
 import { useNavStore } from '@/services/stores/nav-store';
 import { useTeamStore } from '@/services/stores/team-store';
 import { useResizable } from '@/hooks/useResizable';
-import { useSessionFileChanges } from '@/hooks/useSessionFileChanges';
 
 const BREAKPOINT = 800;
 
@@ -32,7 +30,7 @@ const BREAKPOINT = 800;
 const SCROLL_BOTTOM_THRESHOLD = 50;
 
 export const ChatPanel: React.FC = () => {
-  const { messages, isStreaming, isFileWriting, hasArtifacts, artifactCount, clearChat, streamingBlocks, todos, subAgentTodos, swarmRuns, isAwaitingPermission, revertState, setRevertState, sessionId, runningSessionId, setRunningSessionId, setStreaming, loadSessionMessages, loadSessionMessagesIncremental, setTodos, setAllSubAgentTodos, setFileReviewOverrides, refreshGoal, currentGoal, pendingMessageData, sessionVariables } = useChatStore();
+  const { messages, isStreaming, hasArtifacts, artifactCount, clearChat, streamingBlocks, todos, subAgentTodos, swarmRuns, isAwaitingPermission, revertState, setRevertState, sessionId, runningSessionId, setRunningSessionId, setStreaming, loadSessionMessages, loadSessionMessagesIncremental, setTodos, setAllSubAgentTodos, setFileReviewOverrides, refreshGoal, currentGoal, pendingMessageData, sessionVariables } = useChatStore();
   const { loadAgents, loadTools, agents, selectedAgentId } = useAgentStore();
   const [showArtifactPanel, setShowArtifactPanel] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
@@ -54,9 +52,6 @@ export const ChatPanel: React.FC = () => {
     clearSelectedMember();
   }, [sessionId, clearSelectedMember]);
 
-  // Use shared hook for session file changes + accept/reject handlers
-  const { sessionFileChanges, handleAcceptFile, handleRejectFile, handleAcceptAll, handleRejectAll } = useSessionFileChanges();
-  
   // Active user message preview — tracks the user message currently visible at the top of the scroll container
   const [activeUserMessage, setActiveUserMessage] = useState<string | null>(null);
   const activeMsgRafRef = useRef<number | null>(null);
@@ -607,21 +602,6 @@ export const ChatPanel: React.FC = () => {
               }}
               onContinue={() => setRevertState(null)}
             />
-          )}
-
-          {/* Session-level file changes panel - above input area */}
-          {sessionFileChanges.length > 0 && (
-            <div className="px-4">
-              <FileChangesPanel
-                state={isStreaming && isFileWriting ? 'generating' : 'applied'}
-                files={sessionFileChanges}
-                sessionId={sessionId || undefined}
-                onAcceptFile={handleAcceptFile}
-                onRejectFile={handleRejectFile}
-                onAcceptAll={handleAcceptAll}
-                onRejectAll={handleRejectAll}
-              />
-            </div>
           )}
 
           {/* Input area */}

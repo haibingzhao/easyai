@@ -44,9 +44,10 @@ class CompactionVariableCompletionCheck(
 
     companion object {
         private const val NUDGE_PROMPT = """
-You have not called the 'update_variable' tool yet. You MUST call it before finishing.
+You have not called the 'update_variable' tool yet. You MUST call it EXACTLY ONCE before finishing.
+Include ALL variables in a single call — do NOT split across multiple calls.
 If no variables need updating, call it with an empty variables map: {"variables": {}}
-If variables need updating, provide them: {"variables": {"key": "value"}}
+If variables need updating, provide ALL of them: {"variables": {"key1": "value1", "key2": "value2"}}
 """
     }
 }

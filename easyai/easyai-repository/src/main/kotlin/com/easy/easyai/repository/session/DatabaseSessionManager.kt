@@ -107,15 +107,15 @@ class DatabaseSessionManager(
             val node = com.easy.easyai.common.util.SharedObjectMapper.instance.readTree(json)
             val toolNames = mutableListOf<String>()
             val skillNames = mutableListOf<String>()
-            node.get("toolNames")?.let { arr -> if (arr.isArray) { for (el in arr) { toolNames.add(el.asText()) } } }
-            node.get("skillNames")?.let { arr -> if (arr.isArray) { for (el in arr) { skillNames.add(el.asText()) } } }
+            node.get("toolNames")?.let { arr -> if (arr.isArray) { for (el in arr) { toolNames.add(el.asString()) } } }
+            node.get("skillNames")?.let { arr -> if (arr.isArray) { for (el in arr) { skillNames.add(el.asString()) } } }
             mapOf(
                 "id" to targetName,
-                "name" to (node.get("name")?.asText() ?: targetName.removePrefix("inline:")),
-                "description" to (node.get("description")?.asText() ?: ""),
+                "name" to (node.get("name")?.asString() ?: targetName.removePrefix("inline:")),
+                "description" to (node.get("description")?.asString() ?: ""),
                 "inputSchema" to null,
                 "inline" to true,
-                "systemPrompt" to (node.get("systemPrompt")?.asText() ?: ""),
+                "systemPrompt" to (node.get("systemPrompt")?.asString() ?: ""),
                 "toolNames" to toolNames,
                 "skillNames" to skillNames,
                 "mcpConfigs" to metadata // raw JSON for downstream parsing
@@ -301,13 +301,11 @@ class DatabaseSessionManager(
     /**
      * Restore session variables from DB into the context's SessionVariables instance.
      * Called before tool creation so tools receive an already-populated reference.
-     * Primary source: compaction summary message metadata (Phase 3 migration).
-     * Fallback: Session.variablesJson column (backward compatibility with old data).
+     * Source: compaction summary message metadata (single source of truth).
      */
     private suspend fun restoreSessionVariables(context: AgentContext, sessionId: String, userId: String) {
         try {
             val json = sessionStore.loadVariablesFromCompactionSummary(sessionId, userId)
-                ?: sessionStore.loadSessionVariables(sessionId, userId)
             if (!json.isNullOrBlank()) {
                 val map: Map<String, String> = com.easy.easyai.common.util.SharedObjectMapper.instance.readValue(
                     json, object : TypeReference<Map<String, String>>() {}

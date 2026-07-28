@@ -1028,31 +1028,6 @@ class R2dbcAsyncSessionStore(
         }
     }
 
-    override suspend fun saveSessionVariables(sessionId: String, variablesJson: String?, userId: String) {
-        suspendTransaction(db) {
-            val userFilter = UserScope.filterStrict(Tables.Session.userId, userId)
-            Tables.Session.update(
-                where = { (Tables.Session.id eq sessionId) and userFilter }
-            ) {
-                it[Tables.Session.variablesJson] = variablesJson
-                it[Tables.Session.updatedAt] = System.currentTimeMillis()
-            }
-        }
-        logger.debug("Saved session variables for session {}: {}", sessionId, if (variablesJson != null) "set" else "cleared")
-    }
-
-    override suspend fun loadSessionVariables(sessionId: String, userId: String): String? {
-        return suspendTransaction(db) {
-            val userFilter = UserScope.filterStrict(Tables.Session.userId, userId)
-            Tables.Session
-                .select(Tables.Session.variablesJson)
-                .where { (Tables.Session.id eq sessionId) and userFilter }
-                .limit(1)
-                .firstOrNull()
-                ?.getOrNull(Tables.Session.variablesJson)
-        }
-    }
-
     override suspend fun loadVariablesFromCompactionSummary(sessionId: String, userId: String): String? {
         return suspendTransaction(db) {
             // Find the latest compaction summary message (USER role with isCompactionSummary metadata)
