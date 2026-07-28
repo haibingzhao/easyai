@@ -180,6 +180,9 @@ internal class AgentLoop(
             } else {
                 return false
             }
+        } else {
+            // Within normal limit: discard any stale pending bonus (it was for a turn that didn't need it)
+            completionCheckBonusPending = false
         }
 
         // Clear memory access tracker for this turn
@@ -376,14 +379,16 @@ internal class AgentLoop(
                 }
                 if (result is CompletionCheckResult.Continue) {
                     logger.info("${logPrefix}[Turn {}] Completion check {} requested continuation", turnId, check::class.simpleName)
-                    // Beyond maxIterations: only continue if bonus budget allows
-                    if (turnId >= context.maxIterations) {
-                        if (completionCheckBonusBudget <= 0) {
+                    // Grant bonus only if the next iteration will hit maxIterations
+                    if (turnId + 1 >= context.maxIterations) {
+                        if (completionCheckBonusBudget > 0) {
+                            completionCheckBonusBudget--
+                            completionCheckBonusPending = true
+                        } else {
+                            // Budget exhausted and next turn is past limit → cannot continue
                             logger.info("${logPrefix}[Turn {}] Completion-check bonus budget exhausted, stopping", turnId)
                             break
                         }
-                        completionCheckBonusBudget--
-                        completionCheckBonusPending = true
                     }
                     continueLoop = true
                     // Inject prompt as UserMessage with metadata for frontend
