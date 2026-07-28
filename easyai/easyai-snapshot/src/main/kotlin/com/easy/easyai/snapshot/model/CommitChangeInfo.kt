@@ -9,11 +9,14 @@ package com.easy.easyai.snapshot.model
  * @param message Commit message
  * @param timestamp Commit timestamp (epoch millis)
  * @param files Per-file diffs against the parent commit
+ * @param agentId The agent ID that made this commit. Non-null for LLM commits authored
+ *   after agent attribution was introduced; null for user commits and legacy LLM commits.
  */
 data class CommitChangeInfo(
     val commitHash: String,
     val author: String,
     val message: String,
     val timestamp: Long,
-    val files: List<FileDiff>
+    val files: List<FileDiff>,
+    val agentId: String? = null
 )

@@ -153,7 +153,16 @@ class SessionService(
             // Load messages to build userMessageId → assistantMessageId mapping
             val messagesWithTs = sessionStore.loadMessagesWithTimestamps(sessionId)
             val messages = messagesWithTs.map { it.message }
-            logger.info("getCheckpoints: loaded {} checkpoints, {} messages for session {}", checkpoints.size, messages.size, sessionId)
+
+            // Filter out checkpoints whose messageId no longer exists in the message list
+            // (e.g., removed by compaction or message editing/truncation)
+            val messageIdSet = messages.map { it.id }.toHashSet()
+            val validCheckpoints = checkpoints.filter { it.messageId in messageIdSet }
+            if (validCheckpoints.size < checkpoints.size) {
+                logger.debug("getCheckpoints: filtered {} stale checkpoints (messageId not in current messages), {} remaining for session {}",
+                    checkpoints.size - validCheckpoints.size, validCheckpoints.size, sessionId)
+            }
+            logger.info("getCheckpoints: loaded {} checkpoints ({} valid), {} messages for session {}", checkpoints.size, validCheckpoints.size, messages.size, sessionId)
 
             // Pre-resolve session ref for fallback when checkpoint hashes are all identical
             // (due to tree-dedup in commitAs returning the same hash when no new tree is created).
@@ -165,12 +174,12 @@ class SessionService(
                 null
             }
 
-            checkpoints.mapIndexed { index, checkpoint ->
+            validCheckpoints.mapIndexed { index, checkpoint ->
                 val assistantMessageId = findAssistantMessageIdAfter(messages, checkpoint.messageId)
                 if (assistantMessageId == null) {
-                    logger.warn("getCheckpoints: no assistant message found after user message {} for checkpoint {}", checkpoint.messageId, checkpoint.commitHash)
+                    logger.debug("getCheckpoints: no assistant message found after user message {} for checkpoint {}", checkpoint.messageId, checkpoint.commitHash)
                 }
-                val baseline = if (index + 1 >= checkpoints.size) {
+                val baseline = if (index + 1 >= validCheckpoints.size) {
                     // Oldest checkpoint — use session baseline
                     try {
                         snapshotService.ensureBaseline(projectPath, sessionId)
@@ -179,8 +188,8 @@ class SessionService(
                         null
                     }
                 } else null
-                val parent = if (index + 1 < checkpoints.size) {
-                    checkpoints[index + 1].commitHash
+                val parent = if (index + 1 < validCheckpoints.size) {
+                    validCheckpoints[index + 1].commitHash
                 } else {
                     baseline
                 }
@@ -367,7 +376,7 @@ class SessionService(
                 return msg.id
             }
         }
-        logger.warn("findAssistantMessageIdAfter: no match found for userMessageId={}", userMessageId)
+        logger.debug("findAssistantMessageIdAfter: no match found for userMessageId={}", userMessageId)
         return null
     }
 

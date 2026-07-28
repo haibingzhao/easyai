@@ -86,8 +86,12 @@ class SnapshotEventListener(
             // these were made by member agents (members share the working tree but commit
             // under isolated session refs), so attribute them to the LLM to avoid
             // mislabeling as "User" in the per-commit view.
+            //
+            // Note: in a team session agentContext is the LEADER's context, so the encoded
+            // agentId is the leader's, not the actual member's. Precise per-member attribution
+            // is a follow-up enhancement (see plan: Team/Swarm member aggregation).
             if (isTeamSession(sessionId)) {
-                snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.LLM_AGENT, "member-changes")
+                snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.LLM_AGENT, "member-changes", agentId = agentContext.agentId)
             } else {
                 snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.USER, "user-changes")
             }
@@ -142,7 +146,7 @@ class SnapshotEventListener(
             }
 
             // Commit LLM agent changes
-            val commitHash = snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.LLM_AGENT, "llm-batch")
+            val commitHash = snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.LLM_AGENT, "llm-batch", agentId = agentContext.agentId)
 
             // Save for next tool/agent-end
             snapshotService.saveLastTrackedHash(projectPath, sessionId, commitHash)
@@ -225,7 +229,7 @@ class SnapshotEventListener(
             // In a team session these are member-made, so attribute to the LLM.
             val pendingCommitHash = try {
                 if (isTeamSession(sessionId)) {
-                    snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.LLM_AGENT, "member-changes-final")
+                    snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.LLM_AGENT, "member-changes-final", agentId = agentContext.agentId)
                 } else {
                     snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.USER, "user-changes-final")
                 }
@@ -241,7 +245,7 @@ class SnapshotEventListener(
             }
 
             // Track final state via LLM commit
-            val commitHash = snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.LLM_AGENT, "agent-end")
+            val commitHash = snapshotService.commitAs(projectPath, sessionId, ChangeAuthor.LLM_AGENT, "agent-end", agentId = agentContext.agentId)
 
             // Get the last tracked hash to compute final diff
             val lastTrackedHash = snapshotService.getLastTrackedHash(projectPath, sessionId)

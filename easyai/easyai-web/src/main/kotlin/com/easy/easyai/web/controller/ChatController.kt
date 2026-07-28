@@ -645,7 +645,8 @@ class ChatController(
                         author = commit.author,
                         message = commit.message,
                         timestamp = commit.timestamp,
-                        files = commit.files.map { it.toDiffResponse() }
+                        files = commit.files.map { it.toDiffResponse() },
+                        agentId = commit.agentId
                     )
                 }
             }
@@ -972,7 +973,8 @@ data class CommitHistoryResponse(
     val author: String,
     val message: String,
     val timestamp: Long,
-    val files: List<DiffResponse>
+    val files: List<DiffResponse>,
+    val agentId: String? = null
 )
 
 /**

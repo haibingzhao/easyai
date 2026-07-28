@@ -105,4 +105,6 @@ export interface CommitChangeInfo {
   message: string;
   timestamp: number;
   files: FileDiff[];
+  /** Agent ID that made this commit (LLM commits only; undefined for user/legacy commits). */
+  agentId?: string;
 }

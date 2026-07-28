@@ -49,18 +49,24 @@ export const CommitHistoryList: React.FC<CommitHistoryListProps> = ({ commits, r
     }
   };
 
-  const authorIcon = (author: 'llm' | 'user') => {
+  const authorIcon = (author: 'llm' | 'user', agentId?: string) => {
     if (author === 'llm') {
-      return <span title="LLM Agent"><Bot className="w-3 h-3 text-cyan-400" /></span>;
+      return <span title={agentId ? `LLM Agent · ${agentId}` : 'LLM Agent'}><Bot className="w-3 h-3 text-cyan-400" /></span>;
     }
     return <span title="User"><User className="w-3 h-3 text-gray-400" /></span>;
   };
 
-  const authorLabel = (author: 'llm' | 'user') => {
-    return author === 'llm' ? 'LLM' : i18n('User');
+  const authorLabel = (author: 'llm' | 'user', agentId?: string) => {
+    if (author === 'llm') return agentId ?? 'LLM';
+    return i18n('User');
   };
 
-  if (commits.length === 0) {
+  // Filter out user commits with no file changes
+  const visibleCommits = commits.filter(
+    (c) => !(c.author === 'user' && c.files.length === 0)
+  );
+
+  if (visibleCommits.length === 0) {
     return (
       <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
         {i18n('No commit history')}
@@ -70,7 +76,7 @@ export const CommitHistoryList: React.FC<CommitHistoryListProps> = ({ commits, r
 
   return (
     <div className="divide-y divide-border">
-      {commits.map((commit) => {
+      {visibleCommits.map((commit) => {
         const isCommitExpanded = expandedCommits.has(commit.commitHash);
         return (
           <div key={commit.commitHash}>
@@ -83,8 +89,8 @@ export const CommitHistoryList: React.FC<CommitHistoryListProps> = ({ commits, r
                 ? <ChevronDown className="w-3 h-3 shrink-0 text-muted-foreground" />
                 : <ChevronRight className="w-3 h-3 shrink-0 text-muted-foreground" />
               }
-              {authorIcon(commit.author)}
-              <span className="font-medium">{authorLabel(commit.author)}</span>
+              {authorIcon(commit.author, commit.agentId)}
+              <span className="font-medium">{authorLabel(commit.author, commit.agentId)}</span>
               <span className="text-muted-foreground">·</span>
               <span className="text-muted-foreground">{commit.message}</span>
               <span className="ml-auto text-muted-foreground/60 shrink-0">{formatTime(commit.timestamp)}</span>

@@ -57,6 +57,35 @@ class GitSnapshotService(
         /** Git's well-known empty tree hash (git hash-object -t tree /dev/null) */
         private const val EMPTY_TREE_HASH = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
+        /** Separator between the base LLM author name and the encoded agent ID. */
+        private const val AGENT_ID_SEPARATOR = "::"
+
+        /** Characters unsafe for the git author name / `git log --format` line parsing. */
+        private val AGENT_ID_UNSAFE_CHARS = Regex("[|<>\\r\\n]")
+
+        /**
+         * Build the git author name for an LLM commit, encoding [agentId] (when present)
+         * as `"EasyAI Agent::<agentId>"`. The agent ID is sanitized so it cannot break the
+         * `|`-delimited `git log` output or line-based parsing. Returns the plain base name
+         * when [agentId] is null/blank, preserving backward compatibility with legacy commits.
+         */
+        internal fun llmAuthorName(agentId: String?): String {
+            val base = ChangeAuthor.LLM_AGENT.gitAuthorName
+            if (agentId.isNullOrBlank()) return base
+            val safe = agentId.replace(AGENT_ID_UNSAFE_CHARS, "-")
+            return "$base$AGENT_ID_SEPARATOR$safe"
+        }
+
+        /**
+         * Extract the agent ID encoded by [llmAuthorName] from a git author name.
+         * Returns null for legacy names without the separator (e.g. plain "EasyAI Agent")
+         * and for user commit names. Takes everything after the first separator, so an
+         * agent ID that itself contains "::" is reconstructed intact.
+         */
+        internal fun parseAgentId(authorName: String): String? =
+            authorName.substringAfter(AGENT_ID_SEPARATOR, missingDelimiterValue = "")
+                .takeIf { it.isNotBlank() }
+
         /** Directories to always exclude from snapshot tracking */
         val EXCLUDED_DIRS = setOf(
             "node_modules", "dist", "build", ".idea", "target",
@@ -86,12 +115,13 @@ class GitSnapshotService(
         projectPath: Path,
         sessionId: String,
         author: ChangeAuthor,
-        message: String
+        message: String,
+        agentId: String?
     ): String =
         mutexFor(projectPath).withLock {
             withContext(Dispatchers.IO) {
                 val snapshotRepoDir = getSnapshotRepoDir(projectPath)
-                commitAsInternal(snapshotRepoDir, projectPath, sessionId, author, message)
+                commitAsInternal(snapshotRepoDir, projectPath, sessionId, author, message, agentId)
             }
         }
 
@@ -531,10 +561,10 @@ class GitSnapshotService(
             }
             if (!refExists) return@withContext emptyList()
 
-            // Walk the commit chain: format = hash|authorEmail|subject|timestamp
+            // Walk the commit chain: format = hash|authorEmail|authorName|subject|timestamp
             val logOutput = runGitQuiet(
                 snapshotRepoDir, projectPath,
-                "log", "--format=%H|%ae|%s|%at", "--reverse", sessionRef
+                "log", "--format=%H|%ae|%an|%s|%at", "--reverse", sessionRef
             )
             if (logOutput.isBlank()) return@withContext emptyList()
 
@@ -542,15 +572,18 @@ class GitSnapshotService(
             val lines = logOutput.lines().filter { it.isNotBlank() }
 
             for (line in lines) {
-                val parts = line.split("|", limit = 4)
-                if (parts.size < 4) continue
+                val parts = line.split("|", limit = 5)
+                if (parts.size < 5) continue
 
                 val commitHash = parts[0]
                 val authorEmail = parts[1]
-                val message = parts[2]
-                val timestampSec = parts[3].toLongOrNull() ?: 0L
+                val authorName = parts[2]
+                val message = parts[3]
+                val timestampSec = parts[4].toLongOrNull() ?: 0L
 
+                // llm/user determination stays email-based (unaffected by the encoded agent name).
                 val author = if (authorEmail == ChangeAuthor.LLM_AGENT.gitAuthorEmail) "llm" else "user"
+                val agentId = if (author == "llm") parseAgentId(authorName) else null
 
                 // Get per-file diff for this commit (against its parent)
                 val files = try {
@@ -570,7 +603,8 @@ class GitSnapshotService(
                         author = author,
                         message = message,
                         timestamp = timestampSec * 1000,
-                        files = files.map { it.copy(changedBy = author) }
+                        files = files.map { it.copy(changedBy = author) },
+                        agentId = agentId
                     )
                 )
             }
@@ -675,7 +709,8 @@ class GitSnapshotService(
         projectPath: Path,
         sessionId: String,
         author: ChangeAuthor,
-        message: String
+        message: String,
+        agentId: String? = null
     ): String {
         ensureRepoInitialized(snapshotRepoDir, projectPath)
         ensureGitIgnore(snapshotRepoDir, projectPath)
@@ -711,11 +746,14 @@ class GitSnapshotService(
 
         val parentArgs = if (parentHash != null) arrayOf("-p", parentRef) else emptyArray()
 
-        // Create commit with specified author
+        // Create commit with specified author. For LLM commits the author name encodes the
+        // agent ID (see llmAuthorName); the author email is left unchanged so that the
+        // email-based llm/user determination in listCommitsWithDiffs is unaffected.
+        val authorName = if (author == ChangeAuthor.LLM_AGENT) llmAuthorName(agentId) else author.gitAuthorName
         val commitEnv = env + mapOf(
-            "GIT_AUTHOR_NAME" to author.gitAuthorName,
+            "GIT_AUTHOR_NAME" to authorName,
             "GIT_AUTHOR_EMAIL" to author.gitAuthorEmail,
-            "GIT_COMMITTER_NAME" to author.gitAuthorName,
+            "GIT_COMMITTER_NAME" to authorName,
             "GIT_COMMITTER_EMAIL" to author.gitAuthorEmail
         )
         val commitHash = runGitQuiet(

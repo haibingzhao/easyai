@@ -43,13 +43,18 @@ interface SnapshotService {
      * @param sessionId Session ID for per-session ref tracking
      * @param author The author to attribute this change to
      * @param message Commit message
+     * @param agentId Optional agent identifier. Only effective when [author] is
+     *   [ChangeAuthor.LLM_AGENT]; it is encoded into the git author name so that the
+     *   per-commit view can attribute the commit to a specific agent. Ignored for
+     *   [ChangeAuthor.USER] commits.
      * @return Commit hash (40-char hex)
      */
     suspend fun commitAs(
         projectPath: Path,
         sessionId: String,
         author: ChangeAuthor,
-        message: String = "snapshot"
+        message: String = "snapshot",
+        agentId: String? = null
     ): String
 
     /**

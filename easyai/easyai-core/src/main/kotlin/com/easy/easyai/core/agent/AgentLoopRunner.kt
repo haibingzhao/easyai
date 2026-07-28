@@ -1,5 +1,6 @@
 package com.easy.easyai.core.agent
 
+import com.easy.easyai.core.agent.AgentLoopRunner.Companion.MAX_PLAUSIBLE_CHARS_PER_TOKEN
 import com.easy.easyai.core.event.*
 import com.easy.easyai.core.memory.MemoryLoadResult
 import com.easy.easyai.core.memory.MemoryLoader
@@ -52,6 +53,14 @@ internal class AgentLoopRunner(
          * of the HTTP read timeout configured on the model provider.
          */
         private const val STREAM_STALL_TIMEOUT_SECONDS = 120L
+
+        /**
+         * Maximum plausible characters per token, used to detect gateway usage
+         * under-reporting. Even the most token-efficient content (code, JSON, base64)
+         * rarely exceeds 8 chars/token, so a reported prompt-token total below
+         * (promptChars / 8) must be an undercount. See [correctAnomalousUsage].
+         */
+        private const val MAX_PLAUSIBLE_CHARS_PER_TOKEN = 8.0
     }
 
     /** Cached memory content loaded once per session to avoid repeated file I/O on every turn. */
@@ -336,6 +345,16 @@ internal class AgentLoopRunner(
         val usage = lastResponseWithUsage?.metadata?.usage?.takeIf { it.promptTokens > 0 || it.completionTokens > 0 }
             ?: finalResponse?.metadata?.usage?.takeIf { it.promptTokens > 0 || it.completionTokens > 0 }
 
+        val rawUsage = usage?.let { u ->
+            Usage(
+                inputTokens = u.promptTokens,
+                outputTokens = u.completionTokens,
+                cacheReadTokens = u.cacheReadInputTokens?.toInt() ?: 0,
+                cacheWriteTokens = u.cacheWriteInputTokens?.toInt() ?: 0,
+                durationMs = streamDuration
+            )
+        } ?: Usage(durationMs = streamDuration)
+
         return AssistantMessage(
             id = messageId,
             content = contentBlocks,
@@ -345,16 +364,87 @@ internal class AgentLoopRunner(
                 "tool_calls" -> StopReason.TOOL_USE
                 else -> StopReason.STOP
             },
-            usage = usage?.let { u ->
-                Usage(
-                    inputTokens = u.promptTokens,
-                    outputTokens = u.completionTokens,
-                    cacheReadTokens = u.cacheReadInputTokens?.toInt() ?: 0,
-                    cacheWriteTokens = u.cacheWriteInputTokens?.toInt() ?: 0,
-                    durationMs = streamDuration
-                )
-            } ?: Usage(durationMs = streamDuration)
+            usage = correctAnomalousUsage(rawUsage, transcript)
         )
+    }
+
+    /**
+     * Correct an anomalously undercounted usage report from the LLM gateway.
+     *
+     * Some Anthropic-protocol proxy gateways (with prompt caching enabled) occasionally
+     * under-report the input/cache token counts on the first request after a prompt-cache
+     * invalidation (e.g. right after a new user message arrives) — reporting ~17K total
+     * for a prompt that actually contained ~148K tokens. The harness verifiably sends the
+     * full transcript every turn (see the preparePrompt diagnostic logging), so the
+     * undercount is purely in the gateway's usage accounting.
+     *
+     * Left uncorrected, the raw report flows into [MessageEndEvent] (the frontend token
+     * bar shows a sudden, confusing drop) and into message persistence (inconsistent
+     * historical token stats).
+     *
+     * Detection: the reported prompt tokens (input + cacheRead + cacheWrite) must at least
+     * cover (transcript text+tool chars / [MAX_PLAUSIBLE_CHARS_PER_TOKEN]). Thinking blocks
+     * are excluded from the char count because they are not sent back to the LLM as input.
+     *
+     * Correction: restore cacheReadTokens so the prompt total matches the most recent
+     * plausible usage found in the transcript. The transcript only grows within a run, so
+     * that baseline is a conservative estimate of the true current prompt size.
+     * inputTokens / cacheWriteTokens / outputTokens are kept as-is (they are reported
+     * correctly; the anomaly is in cacheReadTokens). Note this only redistributes the
+     * undercount into the cache bucket — it never changes the (correct) output tokens.
+     *
+     * This mirrors the compaction-side defense in
+     * com.easy.easyai.compaction.estimator.UsageAwareTokenEstimator, which cannot be reused
+     * here because easyai-core must not depend on easyai-compaction.
+     */
+    private fun correctAnomalousUsage(rawUsage: Usage, transcript: List<EasyAiMessage>): Usage {
+        val floor = (countTranscriptPromptChars(transcript) / MAX_PLAUSIBLE_CHARS_PER_TOKEN).toInt()
+        val reportedPromptTotal = rawUsage.inputTokens + rawUsage.cacheReadTokens + rawUsage.cacheWriteTokens
+
+        if (floor <= 0 || reportedPromptTotal >= floor) {
+            return rawUsage // plausible, or no transcript content to cross-check against
+        }
+
+        // Walk newest → oldest for the most recent assistant usage that is itself plausible
+        // (>= half the current floor, allowing for transcript growth since that turn). Its
+        // prompt total is a conservative baseline for the true current prompt size.
+        val baselineMsg = transcript.filterIsInstance<AssistantMessage>()
+            .asReversed()
+            .firstOrNull { msg ->
+                val u = msg.usage
+                (u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens) >= floor / 2
+            }
+        val baselinePromptTotal = baselineMsg?.let {
+            it.usage.inputTokens + it.usage.cacheReadTokens + it.usage.cacheWriteTokens
+        }
+
+        if (baselinePromptTotal == null) {
+            logger.warn("${logPrefix}Anomalous gateway usage detected (promptTotal={} < floor={}) but no plausible baseline in transcript; keeping raw usage",
+                reportedPromptTotal, floor)
+            return rawUsage
+        }
+
+        val correctedCacheRead = (baselinePromptTotal - rawUsage.inputTokens - rawUsage.cacheWriteTokens).coerceAtLeast(0)
+        logger.warn("${logPrefix}Anomalous gateway usage corrected: cacheRead {} -> {} (prompt total {} -> {}, floor={})",
+            rawUsage.cacheReadTokens, correctedCacheRead,
+            reportedPromptTotal, rawUsage.inputTokens + correctedCacheRead + rawUsage.cacheWriteTokens, floor)
+        return rawUsage.copy(cacheReadTokens = correctedCacheRead)
+    }
+
+    /**
+     * Count characters of transcript content actually sent to the LLM as INPUT:
+     * text + tool call arguments + tool result output. Excludes thinking blocks
+     * (not sent back as input — see DefaultMessageConverter.toSpringAiMessages).
+     */
+    private fun countTranscriptPromptChars(transcript: List<EasyAiMessage>): Int = transcript.sumOf { msg ->
+        msg.content.sumOf { block ->
+            when (block) {
+                is TextContent -> block.text.length
+                is ToolCallContent -> block.arguments.length
+                is ToolResultContent -> block.output.length
+                else -> 0
+            }
+        }
     }
 
     /**
@@ -453,26 +543,6 @@ internal class AgentLoopRunner(
         } else {
             springAiMessages
         }
-
-        // Diagnostic: log the actual prompt size being sent to the LLM so it can be
-        // compared against the gateway-reported usage (input + cache_read + cache_write).
-        // A large gap (sent >> reported) indicates a gateway usage-accounting anomaly
-        // (e.g. prompt-cache miss serving tokens from an unreported cache tier).
-        // The assistant/tool message counts are the decisive signal: if turn 0 of a run
-        // already shows the full prior-run assistant count, the history WAS loaded & sent.
-        if (logger.isDebugEnabled) {
-            val approxChars = allSpringAiMessages.sumOf { it.text?.length ?: 0 }
-            val assistantCount = transformedMessages.count { it.role == Role.ASSISTANT }
-            val toolCount = transformedMessages.count { it.role == Role.TOOL }
-            val userCount = transformedMessages.count { it.role == Role.USER }
-            logger.debug(
-                "{}preparePrompt: messages={} (user={}, assistant={}, tool={}), springAiMessages={}, " +
-                    "systemPromptChars={}, approxPromptChars={}, approxTokens=~{}",
-                logPrefix, transformedMessages.size, userCount, assistantCount, toolCount,
-                allSpringAiMessages.size, systemPromptText.length, approxChars, approxChars / 4
-            )
-        }
-
         return Prompt(allSpringAiMessages, chatOptions)
     }
 
