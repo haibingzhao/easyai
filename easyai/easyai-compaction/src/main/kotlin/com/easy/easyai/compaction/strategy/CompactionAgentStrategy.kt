@@ -256,20 +256,102 @@ Rules:
         return config.copy(options = opts.copy(thinking = false))
     }
 
+    /**
+     * Fallback summary using local mechanical extraction (no LLM required).
+     * Extracts tool activity, file references, and recent highlights from messages,
+     * so critical context is preserved even when agent-based compaction fails.
+     */
     private fun generateFallbackSummary(
         messages: List<EasyAiMessage>,
         context: CompactionContext,
         reason: String
-    ): String = """
-        Context summary (fallback - $reason):
+    ): String = buildString {
+        appendLine("Context summary (fallback - $reason):")
+        appendLine()
+        appendLine("## Compacted Range")
+        appendLine("- Messages compacted: ${messages.size}")
+        appendLine("- Turn: ${context.currentTurnId}")
+        appendLine("- Estimated tokens before compaction: ${context.range.estimatedTokensBefore}")
 
-        ## Compacted Range
-        - Messages compacted: ${messages.size}
-        - Turn: ${context.currentTurnId}
+        val tools = extractToolNames(messages)
+        if (tools.isNotEmpty()) {
+            appendLine()
+            appendLine("## Tool Activity")
+            tools.forEach { appendLine("- $it") }
+        }
 
-        Note: Agent-based summary generation failed. The conversation contained
-        ${messages.size} messages that have been removed from context to save space.
-    """.trimIndent()
+        val files = extractFileReferences(messages)
+        if (files.isNotEmpty()) {
+            appendLine()
+            appendLine("## Files Mentioned")
+            files.forEach { appendLine("- $it") }
+        }
+
+        val highlights = extractHighlights(messages)
+        if (highlights.isNotEmpty()) {
+            appendLine()
+            appendLine("## Recent Highlights From Compacted History")
+            highlights.forEach { appendLine("- $it") }
+        }
+    }
+
+    private fun extractToolNames(messages: List<EasyAiMessage>): List<String> {
+        val toolNames = mutableSetOf<String>()
+        messages.forEach { msg ->
+            when (msg) {
+                is AssistantMessage -> msg.content.filterIsInstance<ToolCallContent>()
+                    .forEach { toolNames.add(it.name) }
+                is ToolResultMessage -> msg.toolResults.forEach { toolNames.add(it.toolName) }
+                else -> {}
+            }
+        }
+        return toolNames.sorted()
+    }
+
+    private fun extractFileReferences(messages: List<EasyAiMessage>): List<String> {
+        val files = mutableSetOf<String>()
+        val filePattern = Regex("([\\w./-]+\\.[a-zA-Z0-9]+)")
+
+        messages.forEach { msg ->
+            msg.content.forEach { block ->
+                when (block) {
+                    is TextContent -> filePattern.findAll(block.text)
+                        .forEach { match -> match.groupValues[1].takeIf { isValidFilePath(it) }?.let(files::add) }
+                    is ToolCallContent -> filePattern.findAll(block.arguments)
+                        .forEach { match -> match.groupValues[1].takeIf { isValidFilePath(it) }?.let(files::add) }
+                    is ToolResultContent -> filePattern.findAll(block.output)
+                        .forEach { match -> match.groupValues[1].takeIf { isValidFilePath(it) }?.let(files::add) }
+                    else -> {}
+                }
+            }
+        }
+        return files.sorted().take(50)
+    }
+
+    private fun isValidFilePath(path: String): Boolean =
+        path.contains("/") && path.contains(".") && path.length > 3 && path.length < 200
+
+    private fun extractHighlights(messages: List<EasyAiMessage>, maxHighlights: Int = 6): List<String> =
+        messages.takeLast(maxHighlights).map { msg ->
+            when (msg) {
+                is UserMessage -> "[user]: ${previewMessage(msg)}"
+                is AssistantMessage -> {
+                    val toolCalls = msg.content.filterIsInstance<ToolCallContent>()
+                    if (toolCalls.isNotEmpty()) "[assistant tool call]: ${toolCalls.first().name}(...)"
+                    else "[assistant]: ${previewMessage(msg)}"
+                }
+                is ToolResultMessage -> {
+                    val firstResult = msg.toolResults.firstOrNull()
+                    "[tool result]: ${firstResult?.toolName ?: "unknown"} -> ${firstResult?.result?.take(100) ?: ""}"
+                }
+                else -> "[${msg.role}]: ${previewMessage(msg)}"
+            }
+        }
+
+    private fun previewMessage(msg: EasyAiMessage): String {
+        val text = msg.content.filterIsInstance<TextContent>().joinToString("") { it.text }
+        return text.take(100).replace("\n", " ")
+    }
 }
 
 /**
