@@ -71,6 +71,15 @@ internal class AgentLoop(
 
     private val loopRunner = AgentLoopRunner(context, chatModel, services)
 
+    /**
+     * Bonus iteration budget: allows completion checks to grant extra iterations
+     * beyond [AgentContext.maxIterations]. Each grant decrements the budget;
+     * once exhausted, completion checks can no longer extend the loop.
+     * Initialized to [MAX_COMPLETION_CHECK_BONUS].
+     */
+    private var completionCheckBonusBudget = MAX_COMPLETION_CHECK_BONUS
+    private var completionCheckBonusPending = false
+
     /** Why the loop ended — set during run() before end() is called. */
     @Volatile
     var endReason: String = "normal"
@@ -164,7 +173,13 @@ internal class AgentLoop(
     ): Boolean {
         logger.debug("${logPrefix}[Turn {}] runInnerLoop started, transcript size={}, maxIterations={}", turnId, transcript.size, context.maxIterations)
         if (turnId >= context.maxIterations) {
-            return false
+            // Completion check may grant bonus iterations beyond maxIterations (budget-capped)
+            if (completionCheckBonusPending) {
+                completionCheckBonusPending = false
+                logger.info("${logPrefix}[Turn {}] Using completion-check bonus iteration (budget left={})", turnId, completionCheckBonusBudget)
+            } else {
+                return false
+            }
         }
 
         // Clear memory access tracker for this turn
@@ -361,6 +376,15 @@ internal class AgentLoop(
                 }
                 if (result is CompletionCheckResult.Continue) {
                     logger.info("${logPrefix}[Turn {}] Completion check {} requested continuation", turnId, check::class.simpleName)
+                    // Beyond maxIterations: only continue if bonus budget allows
+                    if (turnId >= context.maxIterations) {
+                        if (completionCheckBonusBudget <= 0) {
+                            logger.info("${logPrefix}[Turn {}] Completion-check bonus budget exhausted, stopping", turnId)
+                            break
+                        }
+                        completionCheckBonusBudget--
+                        completionCheckBonusPending = true
+                    }
                     continueLoop = true
                     // Inject prompt as UserMessage with metadata for frontend
                     result.prompt?.let { promptText ->
@@ -651,5 +675,13 @@ internal class AgentLoop(
             }
             throw e
         }
+    }
+
+    companion object {
+        /**
+         * Maximum number of bonus iterations a completion check can grant beyond maxIterations.
+         * Prevents infinite loop extension while allowing nudges to reach the LLM.
+         */
+        private const val MAX_COMPLETION_CHECK_BONUS = 1
     }
 }
