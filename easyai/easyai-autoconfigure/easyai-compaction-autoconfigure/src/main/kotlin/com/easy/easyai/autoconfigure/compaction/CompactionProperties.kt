@@ -40,11 +40,6 @@ data class CompactionProperties(
     var minMessages: Int = 10,
 
     /**
-     * Check compaction every N turns.
-     */
-    var checkInterval: Int = 3,
-
-    /**
      * Strategy to use for compaction summaries.
      * - "llm" (default): Agent-based LLM compaction (high quality, requires ChatModel)
      * - "summary": Deprecated, falls back to "llm"

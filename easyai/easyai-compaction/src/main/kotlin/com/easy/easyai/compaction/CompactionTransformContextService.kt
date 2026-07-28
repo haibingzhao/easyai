@@ -35,69 +35,48 @@ class CompactionTransformContextService(
         originalMessageLoader = originalMessageLoader
     )
 
-    /**
-     * Message count at which compaction was last checked.
-     * Uses message count instead of turnId because turnId resets to 0
-     * when resuming from a historical session, which would prevent
-     * compaction from ever being triggered for sessions with many messages.
-     */
-    private var lastCheckMessageCount = 0
-
     override suspend fun transform(input: TransformContextInput): List<EasyAiMessage> {
         if (!config.enabled) {
             return input.messages
         }
 
-        // For Manual and Overflow triggers, bypass the check interval and evaluate immediately.
-        // For Auto triggers, use message count delta to throttle expensive token estimation checks.
-        // This ensures compaction works correctly when resuming from historical sessions
-        // where turnId resets to 0 but messages may already exceed the threshold.
-        val isUrgentTrigger = input.compactionTriggerType is CompactionTriggerType.Manual ||
-            input.compactionTriggerType is CompactionTriggerType.Overflow
-        val messageCountDelta = input.messages.size - lastCheckMessageCount
-        val shouldCheck = isUrgentTrigger || messageCountDelta >= config.checkInterval
+        val triggerChecker = CompactionTriggerChecker(config, tokenEstimator)
+        val shouldCompact = triggerChecker.shouldCompact(
+            input.messages,
+            input.modelContextLength,
+            input.compactionTriggerType
+        )
 
-        if (shouldCheck) {
-            lastCheckMessageCount = input.messages.size
-
-            val triggerChecker = CompactionTriggerChecker(config, tokenEstimator)
-            val shouldCompact = triggerChecker.shouldCompact(
-                input.messages,
-                input.modelContextLength,
-                input.compactionTriggerType
-            )
-
-            if (shouldCompact) {
-                // Flush memory before compaction to prevent losing important facts
-                val chatModel = input.chatModel
-                if (memoryFlushAgent != null && chatModel != null) {
-                    try {
-                        memoryFlushAgent.maybeFlush(
-                            agentContext = input.agentContext,
-                            messages = input.messages,
-                            modelContextLength = input.modelContextLength,
-                            estimatedTokenCount = tokenEstimator.estimate(input.messages),
-                            chatModel = chatModel
-                        )
-                    } catch (e: Exception) {
-                        // Flush failure should not prevent compaction
-                        logger.warn("Memory flush failed, proceeding with compaction: {}", e.message)
-                    }
+        if (shouldCompact) {
+            // Flush memory before compaction to prevent losing important facts
+            val chatModel = input.chatModel
+            if (memoryFlushAgent != null && chatModel != null) {
+                try {
+                    memoryFlushAgent.maybeFlush(
+                        agentContext = input.agentContext,
+                        messages = input.messages,
+                        modelContextLength = input.modelContextLength,
+                        estimatedTokenCount = tokenEstimator.estimate(input.messages),
+                        chatModel = chatModel
+                    )
+                } catch (e: Exception) {
+                    // Flush failure should not prevent compaction
+                    logger.warn("Memory flush failed, proceeding with compaction: {}", e.message)
                 }
-
-                val eventPusher = input.eventPusher?.let { pusher ->
-                    ContextCompactionOrchestrator.EventPusher { event -> pusher(event) }
-                }
-                return orchestrator.compact(
-                    agentContext = input.agentContext,
-                    messages = input.messages,
-                    turnId = input.turnId,
-                    modelContextLength = input.modelContextLength,
-                    eventScope = eventPusher,
-                    messageTimestamps = input.messageTimestamps,
-                    chatModel = input.chatModel
-                )
             }
+
+            val eventPusher = input.eventPusher?.let { pusher ->
+                ContextCompactionOrchestrator.EventPusher { event -> pusher(event) }
+            }
+            return orchestrator.compact(
+                agentContext = input.agentContext,
+                messages = input.messages,
+                turnId = input.turnId,
+                modelContextLength = input.modelContextLength,
+                eventScope = eventPusher,
+                messageTimestamps = input.messageTimestamps,
+                chatModel = input.chatModel
+            )
         }
 
         return input.messages
@@ -105,7 +84,6 @@ class CompactionTransformContextService(
 
     /**
      * Trigger manual compaction with a real-time event pusher.
-     * Bypasses the check interval and always evaluates compaction.
      * Events are pushed to the provided [eventPusher] in real-time during compaction.
      * Returns the compacted messages.
      * If compaction is not needed or fails, returns original messages.

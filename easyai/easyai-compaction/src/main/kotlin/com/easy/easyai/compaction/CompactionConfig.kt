@@ -9,7 +9,6 @@ package com.easy.easyai.compaction
  * @property tailTurns Number of recent conversation turns to preserve
  * @property preserveRecentTokensRatio Ratio of context to preserve as recent turns (0.25 = 25%)
  * @property minMessagesForCompaction Minimum message count before compaction checks begin
- * @property checkInterval Check compaction every N turns (avoids expensive estimation every turn)
  */
 data class CompactionConfig(
     val enabled: Boolean = true,
@@ -17,6 +16,5 @@ data class CompactionConfig(
     val reservedTokens: Int = 10_000,
     val tailTurns: Int = 2,
     val preserveRecentTokensRatio: Double = 0.25,
-    val minMessagesForCompaction: Int = 10,
-    val checkInterval: Int = 5
+    val minMessagesForCompaction: Int = 10
 )

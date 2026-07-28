@@ -63,8 +63,7 @@ class CompactionAutoConfiguration(
         reservedTokens = properties.reservedTokens,
         tailTurns = properties.tailTurns,
         preserveRecentTokensRatio = properties.preserveRecentTokensRatio,
-        minMessagesForCompaction = properties.minMessages,
-        checkInterval = properties.checkInterval
+        minMessagesForCompaction = properties.minMessages
     )
 
     /**

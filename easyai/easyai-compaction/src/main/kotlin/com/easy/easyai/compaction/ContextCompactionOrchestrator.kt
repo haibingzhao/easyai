@@ -88,8 +88,6 @@ class ContextCompactionOrchestrator(
         }
         eventScope?.push(CompactionStartEvent(turnId, reason, messages.size, agentContext.sessionId ?: "default"))
 
-        val compactionStartTime = System.currentTimeMillis()
-
         logger.info(
             "[Turn {}] Starting context compaction (reason={}, messages={})",
             turnId, reason, messages.size
