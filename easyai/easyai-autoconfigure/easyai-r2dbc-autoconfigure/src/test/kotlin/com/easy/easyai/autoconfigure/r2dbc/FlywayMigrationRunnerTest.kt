@@ -78,40 +78,14 @@ class FlywayMigrationRunnerTest {
                 .load()
 
             val result = flyway.migrate()
-            assertTrue(result.migrationsExecuted >= 6, "V1 through V6 should be executed")
-            assertEquals("6", result.targetSchemaVersion)
+            assertTrue(result.migrationsExecuted >= 1, "V1 should be executed")
+            assertEquals("1", result.targetSchemaVersion)
         }
 
         @Test
-        fun `V2 adds group_id column to a pre-existing model_provider_config table`() {
-            // Simulates upgrading a legacy database created before the config-group feature:
-            // model_provider_config already exists without group_id, then V1 (skipped by
-            // IF NOT EXISTS) and V2 (ALTER TABLE ADD COLUMN) run on top of it
-            val jdbcUrl = "jdbc:h2:mem:flyway_upgrade_test;MODE=MYSQL;DB_CLOSE_DELAY=-1"
-            DriverManager.getConnection(jdbcUrl, "sa", "").use { conn ->
-                conn.createStatement().execute(
-                    """
-                    CREATE TABLE model_provider_config (
-                        id VARCHAR(255) PRIMARY KEY,
-                        name VARCHAR(255) NOT NULL,
-                        protocol VARCHAR(64) NOT NULL,
-                        is_custom BOOLEAN NOT NULL,
-                        base_url VARCHAR(512),
-                        api_key TEXT,
-                        model_id VARCHAR(255) NOT NULL,
-                        model_name VARCHAR(255),
-                        is_custom_model BOOLEAN NOT NULL,
-                        enabled BOOLEAN NOT NULL,
-                        options TEXT,
-                        capabilities TEXT,
-                        timeout_seconds BIGINT NOT NULL DEFAULT 600,
-                        user_id VARCHAR(255) NOT NULL DEFAULT 'system',
-                        created_at BIGINT NOT NULL,
-                        updated_at BIGINT NOT NULL
-                    )
-                    """.trimIndent()
-                )
-            }
+        fun `V1 creates all expected tables on fresh database`() {
+            // Validates that the consolidated V1 schema contains all tables
+            val jdbcUrl = "jdbc:h2:mem:flyway_tables_test;MODE=MYSQL;DB_CLOSE_DELAY=-1"
 
             val flyway = Flyway.configure()
                 .dataSource(jdbcUrl, "sa", "")
@@ -120,15 +94,18 @@ class FlywayMigrationRunnerTest {
                 .baselineVersion("0")
                 .load()
             val result = flyway.migrate()
-            assertEquals("6", result.targetSchemaVersion)
+            assertEquals("1", result.targetSchemaVersion)
 
             DriverManager.getConnection(jdbcUrl, "sa", "").use { conn ->
-                conn.createStatement().executeQuery(
-                    "SELECT group_id FROM model_provider_config"
-                ).close()
-                conn.createStatement().executeQuery(
-                    "SELECT id, name, protocol FROM model_config_group"
-                ).close()
+                // Core tables
+                conn.createStatement().executeQuery("SELECT id, user_id FROM agent").close()
+                conn.createStatement().executeQuery("SELECT group_id FROM model_provider_config").close()
+                conn.createStatement().executeQuery("SELECT id, name, protocol FROM model_config_group").close()
+                // Team agent tables
+                conn.createStatement().executeQuery("SELECT member_session_id FROM team_member_execution").close()
+                conn.createStatement().executeQuery("SELECT id FROM team_round_record").close()
+                // Swarm tables
+                conn.createStatement().executeQuery("SELECT member_session_id FROM swarm_team_member_execution").close()
             }
         }
     }
