@@ -5,7 +5,9 @@
     <artifactId>easyai</artifactId>
     <version>${revision}</version>
     <packaging>pom</packaging>
-    <name>EasyAi Parent</name>
+    <name>EasyAI Parent</name>
+    <description>Full-stack LLM Agent framework with DAG swarm orchestration, built on Kotlin and Spring Boot</description>
+    <url>https://github.com/haibingzhao/easyai</url>
 
     <licenses>
         <license>
@@ -13,6 +15,20 @@
             <url>https://www.apache.org/licenses/LICENSE-2.0</url>
         </license>
     </licenses>
+
+    <developers>
+        <developer>
+            <name>Haibing Zhao</name>
+            <email>haibingzhao@foxmail.com</email>
+            <url>https://github.com/haibingzhao</url>
+        </developer>
+    </developers>
+
+    <scm>
+        <url>https://github.com/haibingzhao/easyai</url>
+        <connection>scm:git:git://github.com/haibingzhao/easyai.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/haibingzhao/easyai.git</developerConnection>
+    </scm>
 
     <properties>
         <argLine/>

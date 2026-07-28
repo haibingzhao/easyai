@@ -1,171 +1,173 @@
-# Investment Analysis — AI 全流程投资分析工作流
+# Investment Analysis — AI Full-Pipeline Investment Analysis Workflow
 
-## 场景描述
+[🇨🇳 中文版](README_CN.md)
 
-14 个 AI 分析师组成投资委员会，对指定标的执行完整的投资分析流程：
+## Scenario
 
-```
-数据采集 → 四维并行分析 → 多空辩论 → 交易方案 → 风控辩论 → 最终决策
-```
-
-适用场景：
-- 个股/ETF/加密货币的深度投资研究
-- 多维度（技术面 + 新闻面 + 情绪面 + 基本面）交叉验证
-- 通过对抗式辩论（Bull vs Bear）减少分析偏见
-- 生成结构化交易方案（Action / Entry / StopLoss / PositionSize）
-
-## 工作流 DAG 拓扑
+14 AI analysts form an investment committee to execute a complete investment analysis pipeline on a specified instrument:
 
 ```
-[AnalystStater] ─── 获取标的上下文，更新变量
+Data Collection → 4D Parallel Analysis → Bull/Bear Debate → Trade Plan → Risk Debate → Final Decision
+```
+
+Use cases:
+- Deep investment research on stocks / ETFs / cryptocurrencies
+- Multi-dimensional cross-validation (technical + news + sentiment + fundamentals)
+- Reduce analysis bias through adversarial debates (Bull vs Bear)
+- Generate structured trade plans (Action / Entry / StopLoss / PositionSize)
+
+## Workflow DAG Topology
+
+```
+[AnalystStater] ─── Fetch instrument context, update variables
        │
        ▼
 ┌──────────────────────────────────────────┐
-│  [Market]  [News]  [Sentiment]  [Fundamentals]  │  ← 4 路并行
+│  [Market]  [News]  [Sentiment]  [Fundamentals]  │  ← 4-way parallel
 └──────────────────────────────────────────┘
        │
        ▼
-[BullBearDebate] ─── Bull vs Bear 辩论, Research Manager 裁决
+[BullBearDebate] ─── Bull vs Bear debate, Research Manager judges
        │
        ▼
-[Trader] ─── 制定结构化交易方案
+[Trader] ─── Formulate structured trade plan
        │
        ▼
-[RiskDebate] ─── Aggressive vs Conservative vs Neutral, Portfolio Manager 裁决
+[RiskDebate] ─── Aggressive vs Conservative vs Neutral, Portfolio Manager judges
 ```
 
-## 前置条件
+## Prerequisites
 
-1. **启用 Swarm**：`application.properties` 中设置 `easyai.swarm.enabled=true`
-2. **配置 trading MCP Server**：在 Console → MCP 页面添加名为 `trading` 的 Server，需提供以下工具：
+1. **Enable Swarm**: Set `easyai.swarm.enabled=true` in `application.properties`
+2. **Configure trading MCP Server**: Add a server named `trading` in Console → MCP page, providing the following tools:
 
-   | 工具 | 用途 | 使用者 |
-   |------|------|--------|
-   | `instrument_context` | 标的身份信息 | Analyst (Stater) |
-   | `market_data` | 历史行情数据 | Market Analyst |
-   | `market_snapshot` | 实时行情快照 | Market Analyst |
-   | `technical_indicators` | 技术指标计算 | Market Analyst |
-   | `company_news` | 个股新闻 | News Analyst, Sentiment Analyst |
-   | `global_news` | 全球宏观新闻 | News Analyst |
-   | `fred_data` | FRED 宏观经济数据 | News Analyst |
-   | `prediction_market` | 预测市场概率 | News Analyst |
-   | `social_sentiment` | 社交媒体情绪 | Sentiment Analyst |
-   | `stock_profile` | 公司概况 | Fundamentals Analyst |
-   | `sector_info` | 行业信息 | Fundamentals Analyst |
-   | `financial_statements` | 财务报表 | Fundamentals Analyst |
+   | Tool | Purpose | Used By |
+   |------|---------|---------|
+   | `instrument_context` | Instrument identity info | Analyst (Stater) |
+   | `market_data` | Historical market data | Market Analyst |
+   | `market_snapshot` | Real-time market snapshot | Market Analyst |
+   | `technical_indicators` | Technical indicator calculation | Market Analyst |
+   | `company_news` | Company-specific news | News Analyst, Sentiment Analyst |
+   | `global_news` | Global macro news | News Analyst |
+   | `fred_data` | FRED macroeconomic data | News Analyst |
+   | `prediction_market` | Prediction market probabilities | News Analyst |
+   | `social_sentiment` | Social media sentiment | Sentiment Analyst |
+   | `stock_profile` | Company overview | Fundamentals Analyst |
+   | `sector_info` | Sector information | Fundamentals Analyst |
+   | `financial_statements` | Financial statements | Fundamentals Analyst |
 
-3. **已配置 LLM Model Provider**（建议 Claude Sonnet 或 GPT-4o 以上）
+3. **LLM Model Provider configured** (Claude Sonnet or GPT-4o+ recommended)
 
-## AI 生成 Prompt
+## AI Generation Prompt
 
-将以下内容粘贴到 **Workflow → Create Preset → AI Panel（✨ 按钮）** 中：
+Paste the following into **Workflow → Create Preset → AI Panel (✨ button)**:
 
 ---
 
-创建一个投资分析 Swarm Workflow，名称 "easy-trading"，标题 "Trading Pipeline"，语言 zh-CN。
+Create an investment analysis Swarm Workflow named "easy-trading", titled "Trading Pipeline", language en-US.
 
-## 工作流 DAG 设计
+## Workflow DAG Design
 
-**Layer 0 — 标的初始化（SINGLE）**
-- Agent: "Analyst"（首席分析师）
-- 职责：调用 instrument_context 获取标的身份信息，更新变量 symbol、analyze_date、instrument_context
-- MCP 工具：instrument_context
-- 该 task 设置 updatableVariables: [instrument_context, symbol, analyze_date]
+**Layer 0 — Instrument Initialization (SINGLE)**
+- Agent: "Analyst" (Chief Analyst)
+- Responsibility: Call instrument_context to fetch instrument identity info, update variables symbol, analyze_date, instrument_context
+- MCP tools: instrument_context
+- Set updatableVariables: [instrument_context, symbol, analyze_date] for this task
 
-**Layer 1 — 四维并行分析（4 个 SINGLE task，dependsOn Layer 0）**
+**Layer 1 — 4D Parallel Analysis (4 SINGLE tasks, dependsOn Layer 0)**
 
-1. Market Analyst — 技术面分析
-   MCP 工具：market_data, market_snapshot, technical_indicators
-   内置工具：calc
-   输出：详细技术分析报告（含支撑/阻力位、指标信号、Markdown 表格）
+1. Market Analyst — Technical analysis
+   MCP tools: market_data, market_snapshot, technical_indicators
+   Built-in tools: calc
+   Output: Detailed technical analysis report (support/resistance levels, indicator signals, Markdown tables)
 
-2. News Analyst — 宏观新闻分析
-   MCP 工具：company_news, global_news, fred_data, prediction_market
-   内置工具：calc
-   输出：宏观事件影响评估报告
+2. News Analyst — Macro news analysis
+   MCP tools: company_news, global_news, fred_data, prediction_market
+   Built-in tools: calc
+   Output: Macro event impact assessment report
 
-3. Sentiment Analyst — 市场情绪分析
-   MCP 工具：company_news, social_sentiment
-   内置工具：calc
-   输出：多源情绪评分（Bullish/Bearish）+ 叙事分析
+3. Sentiment Analyst — Market sentiment analysis
+   MCP tools: company_news, social_sentiment
+   Built-in tools: calc
+   Output: Multi-source sentiment scores (Bullish/Bearish) + narrative analysis
 
-4. Fundamentals Analyst — 财务基本面分析
-   MCP 工具：stock_profile, sector_info, financial_statements
-   内置工具：calc
-   输出：三大报表分析 + 估值评估
+4. Fundamentals Analyst — Financial fundamentals analysis
+   MCP tools: stock_profile, sector_info, financial_statements
+   Built-in tools: calc
+   Output: Three-statement analysis + valuation assessment
 
-**Layer 2 — 多空辩论（DELIBERATION，dependsOn Layer 1 全部）**
-- participants: Bull Researcher（看多）, Bear Researcher（看空）
+**Layer 2 — Bull/Bear Debate (DELIBERATION, dependsOn all of Layer 1)**
+- participants: Bull Researcher (bullish), Bear Researcher (bearish)
 - judge: Research Manager
 - maxRounds: 3
-- contextTemplate：注入 4 份分析报告 + instrument_context 作为辩论素材
-- Judge 输出：投资计划（含评级 Buy/Overweight/Hold/Underweight/Sell）
+- contextTemplate: Inject 4 analysis reports + instrument_context as debate material
+- Judge output: Investment plan (with rating Buy/Overweight/Hold/Underweight/Sell)
 
-**Layer 3 — 交易方案（SINGLE，dependsOn Layer 2）**
+**Layer 3 — Trade Plan (SINGLE, dependsOn Layer 2)**
 - Agent: Trader
-- 输入：辩论裁决结果（inputFrom: BullBearDebate）
-- 输出：结构化交易方案（Action, Reasoning, Entry Price, Stop Loss, Position Sizing）
+- Input: Debate verdict (inputFrom: BullBearDebate)
+- Output: Structured trade plan (Action, Reasoning, Entry Price, Stop Loss, Position Sizing)
 
-**Layer 4 — 风控辩论（DELIBERATION，dependsOn Layer 3）**
+**Layer 4 — Risk Debate (DELIBERATION, dependsOn Layer 3)**
 - participants: Aggressive Analyst, Conservative Analyst, Neutral Analyst
 - judge: Portfolio Manager
 - maxRounds: 3
-- contextTemplate：注入 Trader 决策 + 4 份分析报告
-- Judge 输出：最终交易决策
+- contextTemplate: Inject Trader decision + 4 analysis reports
+- Judge output: Final trade decision
 
 ## Variables
-- user_input（required）：用户分析请求
-- symbol（updatable）：标的代码
-- analyze_date（updatable）：分析日期
-- instrument_context（updatable）：标的上下文信息
+- user_input (required): User's analysis request
+- symbol (updatable): Instrument ticker
+- analyze_date (updatable): Analysis date
+- instrument_context (updatable): Instrument context information
 
-## 所有 agent 使用 inline 模式（agentDefinitionId 为空），每个 agent 的 timeoutSeconds=900, maxRetries=2
+## All agents use inline mode (agentDefinitionId is empty), each agent's timeoutSeconds=900, maxRetries=2
 
 ---
 
-## 预期生成结果
+## Expected Generation Result
 
-AI 将生成完整的 Swarm Preset：
-- 14 个 inline agents（各含 systemPrompt + toolNames + mcpConfigs）
-- 9 个 tasks（含 dependsOn 依赖关系、DELIBERATION 配置、inputFrom 路由）
-- 4 个 variables（含 updatable 标记）
-- DAG 拓扑自动验证通过
+AI will generate a complete Swarm Preset:
+- 14 inline agents (each with systemPrompt + toolNames + mcpConfigs)
+- 9 tasks (with dependsOn dependencies, DELIBERATION configs, inputFrom routing)
+- 4 variables (with updatable flags)
+- DAG topology auto-validation passes
 
-生成后点击 "Apply to Form" 检查配置，确认无误后 Save。
+After generation, click "Apply to Form" to inspect the config, then Save once confirmed.
 
-## 使用示例
+## Usage Example
 
-保存后在 Workflow 页面选择 "Easy Trading" preset，输入变量：
+After saving, select the "Easy Trading" preset on the Workflow page and enter variables:
 
-| 变量 | 示例值 | 说明 |
-|------|--------|------|
-| user_input | "分析苹果公司近期投资价值" | 必填，分析请求 |
-| symbol | "AAPL.US" | 可选，Stater 会自动解析 |
-| analyze_date | "2026-07-25" | 可选，默认今天 |
+| Variable | Example Value | Description |
+|----------|---------------|-------------|
+| user_input | "Analyze Apple's recent investment value" | Required, analysis request |
+| symbol | "AAPL.US" | Optional, Stater will auto-resolve |
+| analyze_date | "2026-07-25" | Optional, defaults to today |
 
-点击 Run 后预期耗时 10-20 分钟，最终输出包含：
-- 四维分析报告（技术面 / 新闻面 / 情绪面 / 基本面）
-- 多空辩论记录（3 轮 Bull vs Bear 对抗）
-- 结构化交易方案（BUY/HOLD/SELL + 入场价 + 止损位 + 仓位建议）
-- 风控辩论 + Portfolio Manager 最终决策
+Click Run — expected duration is 10-20 minutes. Final output includes:
+- 4D analysis reports (Technical / News / Sentiment / Fundamentals)
+- Bull/Bear debate transcript (3 rounds of adversarial debate)
+- Structured trade plan (BUY/HOLD/SELL + entry price + stop loss + position sizing)
+- Risk debate + Portfolio Manager final decision
 
-## 自定义建议
+## Customization Tips
 
-生成后可在表单中调整，或对 AI Panel 追加指令：
+After generation, adjust in the form or give additional instructions to the AI Panel:
 
-- "把 maxRounds 改为 2，辩论太长了"
-- "添加一个 Options Analyst，分析期权市场隐含波动率"
-- "把 language 改为 en-US"
-- "给 Market Analyst 的 timeoutSeconds 改为 1200，技术分析比较慢"
-- "去掉 RiskDebate 阶段，直接输出 Trader 结果"
+- "Change maxRounds to 2, the debates are too long"
+- "Add an Options Analyst to analyze implied volatility from the options market"
+- "Change language to zh-CN"
+- "Set Market Analyst's timeoutSeconds to 1200, technical analysis is slow"
+- "Remove the RiskDebate stage, output Trader results directly"
 
-## Prompt 设计要点
+## Prompt Design Principles
 
-这个 prompt 的设计遵循以下原则（供你编写自己的 prompt 参考）：
+This prompt follows these design principles (for reference when writing your own):
 
-1. **分层描述 DAG**：用 Layer 0/1/2/3/4 明确拓扑层级和并行关系
-2. **指定 dependsOn**：每层明确依赖上一层的哪些 task
-3. **工具白名单**：每个 agent 精确列出 MCP 工具，不让 AI 猜测
-4. **DELIBERATION 三要素**：participants + judge + maxRounds
-5. **变量路由**：明确 updatable 和 inputFrom 的数据流向
-6. **全局约束**：inline 模式、timeout、maxRetries 统一指定
+1. **Layered DAG description**: Use Layer 0/1/2/3/4 to clarify topology levels and parallelism
+2. **Explicit dependsOn**: Each layer specifies which tasks from the previous layer it depends on
+3. **Tool whitelist**: Each agent precisely lists MCP tools — don't let AI guess
+4. **DELIBERATION essentials**: participants + judge + maxRounds
+5. **Variable routing**: Clearly define updatable and inputFrom data flow
+6. **Global constraints**: Inline mode, timeout, maxRetries specified uniformly

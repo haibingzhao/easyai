@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "description": "EasyAI desktop client: Electron shell with an embedded JVM backend (Spring Boot fat jar + bundled JRE)",
+  "author": "Haibing Zhao <haibingzhao@foxmail.com>",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haibingzhao/easyai.git",
+    "directory": "easyai-desktop"
+  },
+  "homepage": "https://github.com/haibingzhao/easyai/tree/main/easyai-desktop",
   "main": "dist-electron/main.js",
   "scripts": {
     "build:main": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --outdir=dist-electron --external:electron --external:electron-updater",

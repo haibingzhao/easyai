@@ -1,114 +1,116 @@
-# Coding Team Agent — AI 专家团协作编码
+# Coding Team Agent — AI Expert Team Collaborative Coding
 
-## 场景描述
+[🇨🇳 中文版](README_CN.md)
 
-创建一个技术专家团 TEAM Agent，Leader 自动分析用户问题并协调 6 名专业成员并行工作。
+## Scenario
 
-适用场景：
-- 需要多角色协作的复杂编码任务（研究 → 实现 → 测试 → 审查）
-- 跨栈开发（前端 + 后端 + 数据库）
-- Bug 诊断与修复（复现 → 定位 → 修复 → 验证）
+Create a TEAM Agent of technical experts where the Leader automatically analyzes user problems and coordinates 6 specialized members working in parallel.
 
-## 团队成员
+Use cases:
+- Complex coding tasks requiring multi-role collaboration (Research → Implement → Test → Review)
+- Cross-stack development (frontend + backend + database)
+- Bug diagnosis and fixing (reproduce → locate → fix → verify)
 
-| 成员 | 职责 | 工具权限 |
-|------|------|----------|
-| Researcher | 研究分析、代码定位、依赖映射、环境检查、报告生成 | read, grep, glob, ls, bash, webfetch, websearch |
-| Full-Stack Engineer | 前后端代码实现与修改、跨栈通用编码 | read, write, edit, grep, glob, ls, bash |
-| QA | 运行测试和构建、收集验证证据、报告通过/失败 | read, bash, grep, glob, ls |
-| Code Reviewer | 代码审查、识别潜在风险、提供改进建议（只读） | read, grep, glob, ls |
-| UI Operator | 浏览器 UI 端到端验证、视觉 Bug 复现 | read, bash + MCP: browser-use |
-| Debug Engineer | 故障复现、根因定位、缺陷诊断、修复建议 | read, grep, glob, ls, bash |
+## Team Members
 
-## 前置条件
+| Member | Responsibilities | Tool Permissions |
+|--------|-----------------|------------------|
+| Researcher | Research analysis, code location, dependency mapping, environment checks, report generation | read, grep, glob, ls, bash, webfetch, websearch |
+| Full-Stack Engineer | Frontend/backend code implementation and modification, cross-stack coding | read, write, edit, grep, glob, ls, bash |
+| QA | Run tests and builds, collect verification evidence, report pass/fail | read, bash, grep, glob, ls |
+| Code Reviewer | Code review, identify potential risks, provide improvement suggestions (read-only) | read, grep, glob, ls |
+| UI Operator | Browser UI end-to-end verification, visual bug reproduction | read, bash + MCP: browser-use |
+| Debug Engineer | Fault reproduction, root cause analysis, defect diagnosis, fix recommendations | read, grep, glob, ls, bash |
 
-- EasyAI 后端已启动（easyai-web-server 或 desktop）
-- 已配置 LLM Model Provider（建议 Claude Sonnet 或 GPT-4o 以上）
-- （可选）UI Operator 需连接 `browser-use` MCP Server
+## Prerequisites
 
-## AI 生成 Prompt
+- EasyAI backend is running (easyai-web-server or desktop)
+- LLM Model Provider configured (Claude Sonnet or GPT-4o+ recommended)
+- (Optional) UI Operator requires a connected `browser-use` MCP Server
 
-将以下内容粘贴到 **Agents → Create Agent → AI Panel（✨ 按钮）** 中：
+## AI Generation Prompt
 
----
-
-创建一个名为 "Experts" 的 TEAM 类型 Agent，作为技术专家团 Leader 协调成员解决编码问题。
-
-Leader 职责：分析用户问题 → 拆解子任务 → 分派合适成员 → 等待结果 → 综合输出。
-Leader 自身只有只读工具（read, grep, glob, ls），不亲自写代码。
-
-需要以下 6 个成员（customMembers）：
-
-1. **Researcher** — 研究分析、代码定位、依赖映射、环境检查、报告生成
-   工具：read, grep, glob, ls, bash, webfetch, websearch
-
-2. **Full-Stack Engineer** — 前后端代码实现与修改、跨栈通用编码
-   工具：read, write, edit, grep, glob, ls, bash
-
-3. **QA** — 运行测试和构建、收集验证证据、报告通过/失败
-   工具：read, bash, grep, glob, ls
-
-4. **Code Reviewer** — 代码审查、识别潜在风险、提供改进建议（只读）
-   工具：read, grep, glob, ls
-
-5. **UI Operator** — 浏览器 UI 端到端验证、视觉 Bug 复现
-   工具：read, bash
-   MCP：browser-use（全部工具）
-
-6. **Debug Engineer** — 故障复现、根因定位、缺陷诊断、修复建议
-   工具：read, grep, glob, ls, bash
-
-协调策略要求：
-- 先派 Researcher 定位问题范围和上下文
-- 再派 Full-Stack Engineer 实现代码修改
-- QA 验证 + Code Reviewer 审查可并行
-- 遇到 UI 问题时加入 UI Operator
-- 遇到疑难 Bug 加入 Debug Engineer
-- 独立子任务尽量并行分派
-- 最终综合所有成员结果输出完整方案
+Paste the following into **Agents → Create Agent → AI Panel (✨ button)**:
 
 ---
 
-## 预期生成结果
+Create a TEAM-type Agent named "Experts" that acts as a technical expert team Leader coordinating members to solve coding problems.
 
-AI 将生成：
+Leader responsibilities: analyze user problem → decompose subtasks → assign appropriate members → wait for results → synthesize output.
+The Leader itself only has read-only tools (read, grep, glob, ls) and never writes code directly.
+
+The following 6 members (customMembers) are needed:
+
+1. **Researcher** — Research analysis, code location, dependency mapping, environment checks, report generation
+   Tools: read, grep, glob, ls, bash, webfetch, websearch
+
+2. **Full-Stack Engineer** — Frontend/backend code implementation and modification, cross-stack coding
+   Tools: read, write, edit, grep, glob, ls, bash
+
+3. **QA** — Run tests and builds, collect verification evidence, report pass/fail
+   Tools: read, bash, grep, glob, ls
+
+4. **Code Reviewer** — Code review, identify potential risks, provide improvement suggestions (read-only)
+   Tools: read, grep, glob, ls
+
+5. **UI Operator** — Browser UI end-to-end verification, visual bug reproduction
+   Tools: read, bash
+   MCP: browser-use (all tools)
+
+6. **Debug Engineer** — Fault reproduction, root cause analysis, defect diagnosis, fix recommendations
+   Tools: read, grep, glob, ls, bash
+
+Coordination strategy requirements:
+- First dispatch Researcher to locate the problem scope and context
+- Then dispatch Full-Stack Engineer to implement code changes
+- QA verification + Code Reviewer review can run in parallel
+- Add UI Operator when encountering UI issues
+- Add Debug Engineer for tricky bugs
+- Dispatch independent subtasks in parallel whenever possible
+- Finally synthesize all member results into a complete solution
+
+---
+
+## Expected Generation Result
+
+AI will generate:
 - `agentType`: TEAM
-- `promptTemplate`: 包含协调策略和成员列表渲染（Jinja2）
-- `customMembers`: 6 个成员，各含 systemPrompt + toolNames
-- `toolNames`: [read, grep, glob, ls]（Leader 只读）
+- `promptTemplate`: Contains coordination strategy and member list rendering (Jinja2)
+- `customMembers`: 6 members, each with systemPrompt + toolNames
+- `toolNames`: [read, grep, glob, ls] (Leader is read-only)
 
-生成后点击 "Apply to Form" 检查配置，确认无误后 Save。
+After generation, click "Apply to Form" to inspect the config, then Save once confirmed.
 
-## 使用示例
+## Usage Examples
 
-创建完成后，在 Chat 中选择 "Experts" agent，输入：
+After creation, select the "Experts" agent in Chat and type:
 
-- "给 UserService 添加分页查询，包含单元测试"
-- "这个 NPE 怎么修？堆栈在 logs/app.log 第 42 行"
-- "把 Dashboard 页面从 Class 组件重构为 Hooks"
-- "分析这个项目的依赖关系，找出循环依赖"
+- "Add paginated queries to UserService, including unit tests"
+- "How do I fix this NPE? Stack trace is at logs/app.log line 42"
+- "Refactor the Dashboard page from Class components to Hooks"
+- "Analyze this project's dependencies and find circular dependencies"
 
-Leader 会自动：
-1. 分析问题类型和复杂度
-2. 选择合适的成员组合
-3. 拆解并行子任务并分派
-4. 等待成员完成，综合输出最终方案
+The Leader will automatically:
+1. Analyze the problem type and complexity
+2. Select the appropriate member combination
+3. Decompose parallel subtasks and dispatch
+4. Wait for members to complete, then synthesize the final solution
 
-## 自定义建议
+## Customization Tips
 
-生成后可在表单中继续调整，或对 AI Panel 追加指令：
+After generation, adjust in the form or give additional instructions to the AI Panel:
 
-- "把 Code Reviewer 的 systemPrompt 改为遵循我们团队的审查清单"
-- "添加一个 DBA 成员，负责数据库 Schema 设计和 SQL 优化"
-- "去掉 UI Operator，我们项目没有前端"
-- "把 maxIterations 调到 80，任务比较复杂"
+- "Change the Code Reviewer's systemPrompt to follow our team's review checklist"
+- "Add a DBA member responsible for database schema design and SQL optimization"
+- "Remove UI Operator, our project has no frontend"
+- "Set maxIterations to 80, the tasks are complex"
 
-## Prompt 设计要点
+## Prompt Design Principles
 
-这个 prompt 的设计遵循以下原则（供你编写自己的 prompt 参考）：
+This prompt follows these design principles (for reference when writing your own):
 
-1. **明确类型**：开头就说 "TEAM 类型 Agent"
-2. **角色分离**：Leader 只协调不执行（只读工具）
-3. **工具最小权限**：每个成员只给必需工具
-4. **行为约束**：明确协调策略（先研究后实现，验证与审查并行）
-5. **弹性调度**：UI Operator 和 Debug Engineer 按需加入
+1. **Explicit type**: State "TEAM-type Agent" at the very beginning
+2. **Role separation**: Leader only coordinates, never executes (read-only tools)
+3. **Least privilege**: Each member gets only the tools they need
+4. **Behavioral constraints**: Explicit coordination strategy (research first, then implement; verification and review in parallel)
+5. **Elastic scheduling**: UI Operator and Debug Engineer join on demand

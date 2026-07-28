@@ -11,7 +11,7 @@
 
 ![EasyAI Hero Banner](assets/hero-banner.png)
 
-[⬇️ Quick Start](#-quick-start) · [✨ Examples](easyai-examples/) · [🏗️ Architecture](#-architecture)
+[⬇️ Quick Start](#-quick-start) · [✨ Examples](easyai-examples/) · [🏗️ Architecture](#-architecture) · [🇨🇳 中文版](README_CN.md)
 
 </div>
 
@@ -197,6 +197,81 @@ Open `http://localhost:5173` → Settings → configure your LLM API key → sta
   <img src="https://img.shields.io/badge/Electron-33-47848F?logo=electron&logoColor=white" alt="Electron" />
   <img src="https://img.shields.io/badge/PostgreSQL-R2DBC-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL" />
 </p>
+
+---
+
+## 🔬 Under the Hood — Engineering Highlights
+
+EasyAI is not a thin wrapper around LLM APIs. It's a **production-grade agent runtime** built from the ground up with Kotlin coroutines. Here's what's inside:
+
+### 🔄 Fully Controllable ReAct Loop
+
+- **Hand-rolled agent loop** — not Spring AI's built-in tool calling. Every iteration is inspectable, interruptible, and extensible.
+- **3-phase tool execution**: permission check → parallel batch execution → post-hooks. Blocked tools auto-skip remaining calls.
+- **Completion Check bonus iterations** — Goal-driven agents can grant themselves extra turns (budget-capped) to finish work.
+- **Context overflow self-healing** — detects LLM token-limit errors, auto-compacts context, and retries transparently.
+- **Runtime message injection** — steering/follow-up messages can be injected mid-loop with late-arrival catch-up logic.
+
+### 📡 Channel-Based Event Streaming
+
+- `EventStream<TEvent, TResult>` built on Kotlin `Channel` + `CompletableDeferred` — producer/consumer fully decoupled.
+- 15+ typed SSE events (thinking, tool lifecycle, permission requests, compaction, sub-agent forwarding).
+- Sub-agent events transparently enriched with parent context (`withSubAgentContext`) for nested rendering.
+- `CustomEvent` extension point — inject domain events without modifying the sealed hierarchy.
+
+### 🐝 DAG Swarm Orchestration
+
+- **Kahn's algorithm** for layer-based topological scheduling — same-layer tasks run in parallel, layers execute sequentially.
+- **DFS cycle detection** (white-gray-black coloring) with human-readable cycle path reporting.
+- **Failure cascade** — BFS propagation marks all transitive dependents as BLOCKED.
+- **Semaphore-bounded concurrency** + runtime pause/resume/cancel via atomic signals.
+
+### ⚔️ AI Deliberation Debates
+
+- Judge uses a **neutral orchestrator prompt** (persona stripped) to eliminate bias during facilitation.
+- Each round: Judge reviews full history → generates **personalized prompts** per participant (JSON Schema constrained).
+- **Autonomous convergence** — Judge decides when consensus is reached via structured `converged` output.
+- **Resume from checkpoint** — rebuilds token counters and locates last completed round on restart.
+
+### 👥 Leader-Member Reactive Teams
+
+- Event-driven coordination: member results flow through a `Channel`, debounced/drained, then presented to Leader.
+- Leader outputs **structured decisions** (new tasks, reassignments, suspend-and-assist, user consultation).
+- Members can be **blocked, assisted by peers, or escalated** — the Leader adapts dynamically.
+- Full persistence: round records + member executions enable crash recovery and resume.
+
+### 🗜️ Incremental Context Compaction
+
+- **Bounded data per round**: only "previous summary + new messages" — never reloads full history.
+- Three triggers: Auto (token threshold), Manual, Overflow (emergency post-error compression).
+- `UsageAwareTokenEstimator` — calibrates chars/token ratio from actual LLM usage feedback.
+- Extracts **session variables** during compaction for real-time frontend state.
+
+### 🔐 Defense-in-Depth Permission System
+
+- **Open-Closed design** — each ToolBuilder declares its own `permissionEvaluator`; new tools need zero core changes.
+- Shell commands classified into 3 safety tiers (SAFE_READ / SAFE_WRITE / UNSAFE) with compound-command splitting.
+- Git subcommand granularity: `git log` auto-approved, `git push` requires explicit consent.
+- Permission requests pause the agent loop via SSE → frontend approval card → resume.
+
+### 📸 Shadow Git Snapshots
+
+- **Independent Git repository** per project (`--git-dir` isolated) — never pollutes your project's `.git` history.
+- Author attribution: distinguishes USER commits from LLM_AGENT commits (agent ID encoded in author name).
+- Per-repo `Mutex` prevents concurrent snapshot writes; file-level revert to any checkpoint.
+
+### ⚡ Resilience & Error Classification
+
+- Type-safe error classification via Spring AI exception hierarchy (`NonTransientAiException` / `TransientAiException`).
+- 4-level detection: structured exception → HTTP status → provider-specific → keyword fallback.
+- Cross-provider robustness: OpenAI, Anthropic, DashScope handled uniformly.
+- Dual stream-stall detection: 240s TTFT timeout + 120s inter-chunk idle timeout (independent of HTTP layer).
+
+### 🔌 Async MCP Integration
+
+- `McpAsyncClient` with Reactor Mono → coroutine `awaitSingle` bridge — fully non-blocking.
+- Per-user lazy initialization with double-check locking; system servers connect at startup.
+- Supports both **Stdio** and **StreamableHTTP** transports with per-user-per-server tool caching.
 
 ---
 

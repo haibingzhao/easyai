@@ -2,6 +2,13 @@
   "name": "@easyai/web-ui",
   "private": true,
   "version": "0.1.0",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haibingzhao/easyai.git",
+    "directory": "easyai-console"
+  },
+  "homepage": "https://github.com/haibingzhao/easyai/tree/main/easyai-console",
   "type": "module",
   "scripts": {
     "dev": "vite",
