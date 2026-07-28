@@ -29,4 +29,10 @@ class SessionVariables {
     fun loadAll(data: Map<String, String>) {
         vars.putAll(data)
     }
+
+    /** Replace the entire variable set (used when compaction LLM outputs the authoritative full state). */
+    fun replaceAll(data: Map<String, String>) {
+        vars.clear()
+        vars.putAll(data)
+    }
 }

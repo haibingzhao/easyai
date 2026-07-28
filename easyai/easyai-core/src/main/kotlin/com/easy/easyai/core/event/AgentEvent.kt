@@ -180,7 +180,9 @@ data class CompactionEndEvent(
     val tailStartMessageId: String? = null,
     val currentTokens: Int = 0,
     val durationMs: Long = 0,
-    val usage: Usage = Usage()
+    val usage: Usage = Usage(),
+    /** Session variables extracted during compaction (for real-time frontend update). */
+    val variables: Map<String, String> = emptyMap()
 ) : AgentEvent {
     override val type: String get() = "compaction_end"
 }

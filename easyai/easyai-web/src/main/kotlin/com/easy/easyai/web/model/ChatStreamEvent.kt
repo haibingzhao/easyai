@@ -269,7 +269,9 @@ sealed interface ChatStreamEvent {
         val tailStartMessageId: String? = null,
         val currentTokens: Int = 0,
         val durationMs: Long = 0,
-        val usage: UsageInfo? = null
+        val usage: UsageInfo? = null,
+        /** Session variables extracted during compaction (for real-time frontend update). */
+        val variables: Map<String, String>? = null
     ) : ChatStreamEvent {
         override val type: String get() = "compaction_end"
     }

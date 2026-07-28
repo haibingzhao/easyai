@@ -724,6 +724,13 @@ function handleCompactionEnd(
       };
     });
   }
+
+  // Apply session variables extracted during compaction in real-time.
+  // The compaction agent's update_variable tool call is not visible in the main SSE
+  // stream, so variables are delivered via the compaction_end event instead.
+  if (event.variables && Object.keys(event.variables).length > 0) {
+    state.applyVariableUpdate(event.variables);
+  }
 }
 
 /**

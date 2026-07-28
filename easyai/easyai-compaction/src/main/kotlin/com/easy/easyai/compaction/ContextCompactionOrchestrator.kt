@@ -107,7 +107,8 @@ class ContextCompactionOrchestrator(
                     tailStartMessageId = result.tailStartMessageId,
                     currentTokens = result.currentTokens,
                     durationMs = result.durationMs,
-                    usage = result.usage
+                    usage = result.usage,
+                    variables = result.variables
                 )
             )
 
@@ -140,7 +141,8 @@ class ContextCompactionOrchestrator(
         val currentTokens: Int,
         val tokensSaved: Int,
         val durationMs: Long,
-        val usage: Usage = Usage()
+        val usage: Usage = Usage(),
+        val variables: Map<String, String> = emptyMap()
     )
 
     private suspend fun executeCompaction(
@@ -197,7 +199,8 @@ class ContextCompactionOrchestrator(
             previousSummary = null, // Agent sees previous summary directly in transcript
             currentTurnId = turnId,
             compactionRound = compactionRound,
-            modelConfig = agentContext.modelConfig
+            modelConfig = agentContext.modelConfig,
+            existingVariables = agentContext.sessionVariables.getAll()
         )
 
         // Step 4: Generate summary via agent-based strategy (with usage + variable tracking)
@@ -208,10 +211,17 @@ class ContextCompactionOrchestrator(
         val summary = strategyOutput.summary
 
         // Update in-memory session variables so the current request's system prompt
-        // reflects the latest variables extracted during compaction
+        // reflects the latest variables extracted during compaction.
+        // REPLACE semantics: the compaction LLM sees all existing variables (via
+        // CompactionContext.existingVariables) and outputs the authoritative full state.
+        // Variables it omits are intentionally dropped (stale/superseded).
         if (strategyOutput.variables.isNotEmpty()) {
-            agentContext.sessionVariables.loadAll(strategyOutput.variables)
+            agentContext.sessionVariables.replaceAll(strategyOutput.variables)
         }
+        // Full accumulated variables (all rounds merged) for DB persistence.
+        // Session restore only reads the LATEST summary message, so it must contain
+        // the complete variable set, not just this round's delta.
+        val allVariables = agentContext.sessionVariables.getAll()
 
         val strategyName = "agent"
 
@@ -260,7 +270,7 @@ class ContextCompactionOrchestrator(
                     strategyName = strategyName,
                     durationMs = durationMs,
                     compactionUsage = strategyOutput.usage,
-                    sessionVariables = strategyOutput.variables
+                    sessionVariables = allVariables
                 )
             }
         }
@@ -274,7 +284,8 @@ class ContextCompactionOrchestrator(
             currentTokens = currentTokens,
             tokensSaved = tokensSaved,
             durationMs = durationMs,
-            usage = strategyOutput.usage
+            usage = strategyOutput.usage,
+            variables = strategyOutput.variables
         )
     }
 

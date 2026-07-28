@@ -17,5 +17,7 @@ data class CompactionContext(
     val previousSummary: String? = null,
     val currentTurnId: Int,
     val compactionRound: Int = 1,
-    val modelConfig: ModelProviderConfig? = null
+    val modelConfig: ModelProviderConfig? = null,
+    /** Variables accumulated from previous compaction rounds (shown to LLM for incremental update). */
+    val existingVariables: Map<String, String> = emptyMap()
 )

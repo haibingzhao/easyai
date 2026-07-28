@@ -45,9 +45,10 @@ class CompactionVariableCompletionCheck(
     companion object {
         private const val NUDGE_PROMPT = """
 You have not called the 'update_variable' tool yet. You MUST call it EXACTLY ONCE before finishing.
-Include ALL numeric/data variables in a single call (prices, figures, percentages, IDs, configs).
+Output the COMPLETE updated variable set (still-valid existing + new). Your output REPLACES the entire store.
+Only numeric/data facts (prices, figures, percentages, IDs, configs). Arrays/objects allowed as JSON values.
 Do NOT store analysis conclusions or narrative text — those belong in the summary.
-Example: {"variables": {"current_price": "170.69", "pe_ttm": "80.28", "revenue_yoy_pct": "25.49%"}}
+Example: {"variables": {"current_price": "170.69", "pe_ttm": "80.28", "customers": ["SMIC", "CXMT"]}}
 """
     }
 }

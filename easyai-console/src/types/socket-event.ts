@@ -214,6 +214,8 @@ export interface CompactionEndEvent extends BaseEvent {
   currentTokens: number;
   durationMs?: number;
   usage?: UsageInfo;
+  /** Session variables extracted during compaction */
+  variables?: Record<string, string>;
 }
 
 export interface PermissionRequestEvent extends BaseEvent {

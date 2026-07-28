@@ -125,7 +125,7 @@ const SummaryTab: React.FC<{
   const emptyRefs: ContextReferences = { memories: [], rules: [] };
   const hasSwarms = swarmRuns && Object.keys(swarmRuns).length > 0;
   return (
-    <div className="p-2 space-y-0">
+    <div className="h-full overflow-y-auto p-2 space-y-0">
       {goal && (
         <>
           <GoalCard goal={goal} />

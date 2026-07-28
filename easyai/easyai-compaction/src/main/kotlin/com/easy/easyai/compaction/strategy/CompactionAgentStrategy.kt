@@ -89,7 +89,9 @@ Output your summary in this structure:
 After generating the summary, you MUST call the update_variable tool EXACTLY ONCE.
 
 Rules:
-- Include ALL variables in a SINGLE call — do NOT split across multiple calls
+- Your output is the COMPLETE variable set — it REPLACES the entire store.
+  Include still-valid existing variables, update changed values, add new ones,
+  and OMIT variables that are stale or superseded.
 - Variables are for NUMERIC/DATA facts ONLY that downstream conversation may reference:
   * Prices, amounts, percentages, ratios, financial figures
   * Dates, IDs, codes, versions, quantities
@@ -102,7 +104,8 @@ Rules:
   * Tool paths, executable names, environment configs
   * Narrative text, strategies, suggestions
 - Values MUST be strings; use concise numeric representations (e.g., "170.69", "25.49%")
-- ONLY call with empty {"variables": {}} if the conversation contains NO numeric/data facts
+- Arrays or objects ARE allowed as values — pass them as JSON (e.g., "customers": ["SMIC", "CXMT"], "share": {"Entegris": "25-30%"}). They will be stored as JSON strings.
+- ONLY call with empty {"variables": {}} if NO numeric/data facts exist (neither new nor existing)
 - This MUST be your ONLY tool call and your final action before finishing
 """
     }
@@ -231,7 +234,13 @@ Rules:
             appendLine("Create a new structured summary from the conversation history above.")
         }
         appendLine()
-        appendLine("IMPORTANT: After generating the summary, call update_variable ONCE with extracted numeric/data variables.")
+        if (context.existingVariables.isNotEmpty()) {
+            appendLine("CURRENT SESSION VARIABLES (from previous rounds):")
+            context.existingVariables.forEach { (k, v) -> appendLine("- $k: $v") }
+            appendLine()
+        }
+        appendLine("IMPORTANT: After generating the summary, call update_variable ONCE with the COMPLETE updated variable set.")
+        appendLine("Your output REPLACES the entire variable store — include still-valid existing variables, update changed values, add new ones, and OMIT stale/superseded ones.")
         appendLine("Only store data facts (prices, figures, percentages, IDs, configs). Analysis/conclusions go in the summary.")
         appendLine("Do NOT split variables across multiple calls.")
     }
@@ -275,6 +284,7 @@ internal class CompactionVariableTool(
         name = "update_variable",
         description = "Store numeric/data variables extracted from the conversation. " +
             "Only store data facts: prices, figures, percentages, IDs, configs, computation results. " +
+            "Arrays/objects are allowed as values (stored as JSON strings). " +
             "Do NOT store analysis, conclusions, or narrative text. " +
             "Call with empty map only if no numeric data exists.",
         permissionCategory = "variable",
@@ -286,7 +296,7 @@ internal class CompactionVariableTool(
     override val executionMode: ToolExecutionMode = ToolExecutionMode.SEQUENTIAL
 
     data class Parameters(
-        @param:JsonPropertyDescription("Numeric/data key-value pairs to store. Keys are variable names, values are data strings (prices, percentages, IDs). Do NOT include analysis or narrative text.")
+        @param:JsonPropertyDescription("Numeric/data key-value pairs to store. Keys are variable names, values are data strings (prices, percentages, IDs). Arrays/objects are allowed as values (passed as JSON, stored as JSON string). Do NOT include analysis or narrative text.")
         val variables: Map<String, String>? = null,
         @param:JsonPropertyDescription("List of variable keys to delete.")
         val deleteKeys: List<String>? = null
@@ -328,13 +338,14 @@ internal class CompactionVariableTool(
     /**
      * Coerces the raw value into a Map<String, String>.
      * Handles: Map (normal), String (LLM double-encoded JSON), null.
+     * Nested Map/List values are serialized to JSON strings.
      */
     @Suppress("UNCHECKED_CAST")
     private fun coerceToMap(value: Any?): Map<String, String> = when (value) {
-        is Map<*, *> -> (value as Map<String, Any?>).mapValues { it.value?.toString() ?: "" }
+        is Map<*, *> -> (value as Map<String, Any?>).mapValues { stringifyValue(it.value) }
         is String -> try {
             val parsed = SharedObjectMapper.instance.readValue(value, object : TypeReference<Map<String, Any?>>() {})
-            parsed.mapValues { it.value?.toString() ?: "" }
+            parsed.mapValues { stringifyValue(it.value) }
         } catch (e: Exception) {
             logger.warn("update_variable: failed to parse string-encoded variables: {}", e.message)
             emptyMap()
@@ -344,6 +355,21 @@ internal class CompactionVariableTool(
             logger.warn("update_variable: unexpected variables type: {}", value::class.qualifiedName)
             emptyMap()
         }
+    }
+
+    /**
+     * Converts a variable value to its string representation.
+     * Primitives use toString(); nested Map/List (arrays, object arrays) are serialized as JSON.
+     */
+    private fun stringifyValue(v: Any?): String = when (v) {
+        null -> ""
+        is Map<*, *>, is List<*> -> try {
+            SharedObjectMapper.instance.writeValueAsString(v)
+        } catch (e: Exception) {
+            logger.warn("update_variable: failed to serialize nested value: {}", e.message)
+            v.toString()
+        }
+        else -> v.toString()
     }
 
     /**

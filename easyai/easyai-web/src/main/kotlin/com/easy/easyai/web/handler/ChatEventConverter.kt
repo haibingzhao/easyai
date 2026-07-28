@@ -142,7 +142,8 @@ object ChatEventConverter {
                 tailStartMessageId = event.tailStartMessageId,
                 currentTokens = event.currentTokens,
                 durationMs = event.durationMs,
-                usage = event.usage.toUsageInfo(includeDuration = false)
+                usage = event.usage.toUsageInfo(includeDuration = false),
+                variables = event.variables.ifEmpty { null }
             )
         )
         is PermissionRequestEvent -> listOf(

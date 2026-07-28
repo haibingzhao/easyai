@@ -138,22 +138,30 @@ function parseFileRef(value: string): string | null {
 }
 
 const SessionVariablesSection: React.FC<{ variables: Record<string, string> }> = ({ variables }) => {
+  const [collapsed, setCollapsed] = useState(false);
   const entries = Object.entries(variables);
   if (entries.length === 0) return null;
   return (
     <div className="space-y-1">
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium uppercase tracking-wider">
+      <div
+        className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium uppercase tracking-wider cursor-pointer hover:text-foreground transition-colors select-none"
+        onClick={() => setCollapsed((c) => !c)}
+        title={collapsed ? i18n('Expand') : i18n('Collapse')}
+      >
+        {collapsed ? <ChevronRight className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}
         <Variable className="w-3 h-3" />
         {i18n('Session Variables')}
         <span className="ml-auto shrink-0 px-1.5 py-px rounded-full text-[10px] leading-none font-medium bg-violet-500/10 text-violet-600 dark:text-violet-400">
           {entries.length}
         </span>
       </div>
-      <div className="space-y-1">
-        {entries.map(([key, value]) => (
-          <VariableRow key={key} varKey={key} value={value} />
-        ))}
-      </div>
+      {!collapsed && (
+        <div className="space-y-1">
+          {entries.map(([key, value]) => (
+            <VariableRow key={key} varKey={key} value={value} />
+          ))}
+        </div>
+      )}
     </div>
   );
 };
