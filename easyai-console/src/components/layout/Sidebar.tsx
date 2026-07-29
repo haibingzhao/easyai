@@ -2,7 +2,7 @@ import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { MessageSquare, GitBranch, Settings, Bot, Database, Blocks, Brain, Terminal, Cpu, PanelLeftClose, PanelLeft } from 'lucide-react';
 import { useChatStore } from '@/services/stores/chat-store';
-import { NAV_ITEMS } from '@/constants/navigation';
+import { NAV_ITEMS, EXTRA_NAV_ITEMS, APP_CONFIG, ICON_REGISTRY } from '@/constants/navigation';
 import { useNavStore } from '@/services/stores/nav-store';
 import { SIDEBAR_COLLAPSED_WIDTH } from './AppLayout';
 import { i18n } from '@/utils/i18n';
@@ -18,6 +18,11 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Database,
   Settings,
 };
+
+/** Resolve icon by name: built-in map first, then external registry. */
+function resolveIcon(name: string): React.ComponentType<{ className?: string }> | undefined {
+  return ICON_MAP[name] ?? ICON_REGISTRY[name];
+}
 
 export const Sidebar: React.FC = () => {
   const navigate = useNavigate();
@@ -58,7 +63,7 @@ export const Sidebar: React.FC = () => {
         {/* Logo area */}
         <div className={`h-12 flex items-center ${sidebarCollapsed ? 'justify-center px-1' : 'justify-between px-3'} border-b border-border shrink-0`}>
           {!sidebarCollapsed && (
-            <span className="font-semibold text-sm truncate">{i18n('Easy AI')}</span>
+            <span className="font-semibold text-sm truncate">{APP_CONFIG.appName}</span>
           )}
           <button
             onClick={toggleSidebar}
@@ -74,8 +79,8 @@ export const Sidebar: React.FC = () => {
 
         {/* Navigation items */}
         <nav className={`flex-1 py-2 ${sidebarCollapsed ? 'px-1' : 'px-2'} space-y-1 overflow-y-auto`}>
-          {NAV_ITEMS.map((item) => {
-            const Icon = ICON_MAP[item.icon];
+          {[...EXTRA_NAV_ITEMS, ...NAV_ITEMS].map((item) => {
+            const Icon = resolveIcon(item.icon);
             const active = isActive(item.path);
             return (
               <button

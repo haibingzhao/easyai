@@ -1,3 +1,4 @@
+import type React from 'react';
 import type { NavItem } from '@/types/layout';
 
 export const NAV_ITEMS: NavItem[] = [
@@ -10,3 +11,34 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'models', label: 'Models', labelKey: 'Models', icon: 'Cpu', path: '/models' },
   { id: 'config', label: 'Config', labelKey: 'Config', icon: 'Settings', path: '/settings' },
 ];
+
+/**
+ * Extra navigation items that external consumers (e.g. trading-console)
+ * can push to extend the sidebar. Rendered before the default items.
+ */
+export const EXTRA_NAV_ITEMS: NavItem[] = [];
+
+/**
+ * Icon registry. External consumers can register additional icons
+ * via `registerIcons()` so the Sidebar can render them by name.
+ */
+export const ICON_REGISTRY: Record<string, React.ComponentType<{ className?: string }>> = {};
+
+/**
+ * Register custom icons for use in NavItem.icon.
+ * Call this before rendering the app (e.g. in main.tsx / App.tsx).
+ *
+ * @example
+ * import { LayoutDashboard, TrendingUp } from 'lucide-react';
+ * registerIcons({ LayoutDashboard, TrendingUp });
+ */
+export function registerIcons(icons: Record<string, React.ComponentType<{ className?: string }>>): void {
+  Object.assign(ICON_REGISTRY, icons);
+}
+
+/**
+ * App-level configuration that external consumers can override.
+ */
+export const APP_CONFIG = {
+  appName: 'Easy AI',
+};
