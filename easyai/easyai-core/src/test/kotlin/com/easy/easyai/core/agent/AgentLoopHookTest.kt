@@ -96,14 +96,12 @@ class AgentLoopHookTest {
 
         override fun createChatModel(
             config: com.easy.easyai.api.model.ModelProviderConfig,
-            toolCallbacks: List<org.springframework.ai.tool.ToolCallback>,
-            additionalOptions: Map<String, Any?>
+            toolCallbacks: List<org.springframework.ai.tool.ToolCallback>
         ) = chatModel
 
         override fun buildChatOptions(
             config: com.easy.easyai.api.model.ModelProviderConfig,
-            toolCallbacks: List<org.springframework.ai.tool.ToolCallback>,
-            additionalOptions: Map<String, Any?>
+            toolCallbacks: List<org.springframework.ai.tool.ToolCallback>
         ) = org.springframework.ai.chat.prompt.ChatOptions.builder().model("test-model").build()
     }
 

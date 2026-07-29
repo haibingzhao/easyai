@@ -33,7 +33,6 @@ import java.nio.file.Path
  * @param maxRetries Maximum number of retries for LLM call failures.
  * @param initialMessages Initial messages to seed the agent transcript.
  * @param modelContextLength Total context window size of the current model in tokens.
- * @param options Raw chat options map (temperature, maxTokens, etc.) for deferred ChatOptions building.
  */
 data class AgentContext(
     // Identity
@@ -72,8 +71,7 @@ data class AgentContext(
     val maxIterations: Int = 100,
     val maxRetries: Int = 3,
     val initialMessages: List<EasyAiMessage> = emptyList(),
-    val modelContextLength: Int = 200_000,  // Default context window size
-    val options: Map<String, Any?>? = null,
+    val modelContextLength: Int = 204_800,  // Default context window size (200K)
     /** JSON Schema for structured output enforcement. Injected into ChatOptions and system prompt. */
     val outputSchema: String? = null,
     /** JSON Schema for structured input validation. Validated against inputVariables before agent loop. */

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Plus, Pencil, Trash2, Copy, ChevronDown, ChevronRight, X, Check, AlertTriangle } from 'lucide-react';
 import type { SwarmAgentSpecDto, SwarmVariableDto } from '@/services/swarm-service';
 import type { AgentDto, ToolInfo } from '@/types/agent';
@@ -56,6 +57,60 @@ export const SwarmAgentEditor: React.FC<SwarmAgentEditorProps> = ({
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [agentSource, setAgentSource] = useState<AgentSource>('global');
   const { configured: webSearchConfigured } = useWebSearchStatus();
+
+  // Model override dropdown state
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const [modelDropdownPos, setModelDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const modelBtnRef = useRef<HTMLButtonElement>(null);
+  const modelDropdownRef = useRef<HTMLDivElement>(null);
+
+  const toggleModelDropdown = useCallback(() => {
+    if (!modelDropdownOpen && modelBtnRef.current) {
+      const rect = modelBtnRef.current.getBoundingClientRect();
+      setModelDropdownPos({ top: rect.bottom + 4, left: rect.left, width: rect.width });
+    }
+    setModelDropdownOpen(prev => !prev);
+  }, [modelDropdownOpen]);
+
+  useLayoutEffect(() => {
+    if (!modelDropdownOpen || !modelDropdownPos || !modelDropdownRef.current) return;
+    const dd = modelDropdownRef.current;
+    const margin = 8;
+    const ddHeight = dd.offsetHeight;
+    let top = modelDropdownPos.top;
+    if (top + ddHeight > window.innerHeight - margin) {
+      top = Math.max(margin, window.innerHeight - ddHeight - margin);
+    }
+    let left = modelDropdownPos.left;
+    const ddWidth = dd.offsetWidth;
+    left = Math.max(margin, Math.min(left, window.innerWidth - ddWidth - margin));
+    dd.style.top = `${top}px`;
+    dd.style.left = `${left}px`;
+  }, [modelDropdownOpen, modelDropdownPos]);
+
+  useEffect(() => {
+    if (!modelDropdownOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        modelDropdownRef.current && !modelDropdownRef.current.contains(e.target as Node) &&
+        modelBtnRef.current && !modelBtnRef.current.contains(e.target as Node)
+      ) {
+        setModelDropdownOpen(false);
+      }
+    };
+    const handleScroll = (e: Event) => {
+      if (modelDropdownRef.current && modelDropdownRef.current.contains(e.target as Node)) return;
+      setModelDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('scroll', handleScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [modelDropdownOpen]);
+
+  const selectedModelConfig = availableModels.find(m => m.id === editForm.modelName);
 
   /** Tools selectable for inline custom agents (auto-injected and swarm-unsupported tools excluded). */
   const selectableAgentTools = useMemo(
@@ -365,18 +420,50 @@ export const SwarmAgentEditor: React.FC<SwarmAgentEditorProps> = ({
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">{i18n('Model Override')}</label>
-                <select
-                  className="w-full px-3 py-2 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
-                  value={editForm.modelName ?? ''}
-                  onChange={(e) => setEditForm({ ...editForm, modelName: e.target.value || undefined })}
-                >
-                  <option value="">{i18n('Default (inherit)')}</option>
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.modelName || m.name}
-                    </option>
-                  ))}
-                </select>
+                <div className="relative">
+                  <button
+                    type="button"
+                    ref={modelBtnRef}
+                    onClick={toggleModelDropdown}
+                    className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md border border-border bg-background hover:bg-muted transition-colors focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <span className="flex-1 text-left truncate">
+                      {selectedModelConfig ? (selectedModelConfig.modelName || selectedModelConfig.name) : i18n('Default (inherit)')}
+                    </span>
+                    <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${modelDropdownOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {modelDropdownOpen && modelDropdownPos && createPortal(
+                    <div
+                      ref={modelDropdownRef}
+                      className="fixed max-h-[280px] overflow-y-auto bg-popover border border-border rounded-md shadow-lg z-[9999]"
+                      style={{ top: modelDropdownPos.top, left: modelDropdownPos.left, width: Math.max(modelDropdownPos.width, 220) }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => { setEditForm({ ...editForm, modelName: undefined }); setModelDropdownOpen(false); }}
+                        className={`w-full text-left px-3 py-2 hover:bg-muted transition-colors ${
+                          !editForm.modelName ? 'bg-muted' : ''
+                        }`}
+                      >
+                        <div className="text-sm font-medium">{i18n('Default (inherit)')}</div>
+                      </button>
+                      {availableModels.map(m => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => { setEditForm({ ...editForm, modelName: m.id }); setModelDropdownOpen(false); }}
+                          className={`w-full text-left px-3 py-2 hover:bg-muted transition-colors ${
+                            editForm.modelName === m.id ? 'bg-muted' : ''
+                          }`}
+                        >
+                          <div className="text-sm font-medium truncate">{m.name}</div>
+                          <div className="text-xs text-muted-foreground mt-0.5 truncate">{m.modelName || m.modelId}</div>
+                        </button>
+                      ))}
+                    </div>,
+                    document.body
+                  )}
+                </div>
               </div>
               <div className="flex gap-2">
                 <button
@@ -623,18 +710,50 @@ export const SwarmAgentEditor: React.FC<SwarmAgentEditorProps> = ({
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">{i18n('Model Override')}</label>
-            <select
-              className="w-full px-3 py-2 text-sm rounded-md border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
-              value={editForm.modelName ?? ''}
-              onChange={(e) => setEditForm({ ...editForm, modelName: e.target.value || undefined })}
-            >
-              <option value="">{i18n('Default (inherit)')}</option>
-              {availableModels.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.modelName || m.name}
-                </option>
-              ))}
-            </select>
+            <div className="relative">
+              <button
+                type="button"
+                ref={modelBtnRef}
+                onClick={toggleModelDropdown}
+                className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md border border-border bg-background hover:bg-muted transition-colors focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                <span className="flex-1 text-left truncate">
+                  {selectedModelConfig ? (selectedModelConfig.modelName || selectedModelConfig.name) : i18n('Default (inherit)')}
+                </span>
+                <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${modelDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {modelDropdownOpen && modelDropdownPos && createPortal(
+                <div
+                  ref={modelDropdownRef}
+                  className="fixed max-h-[280px] overflow-y-auto bg-popover border border-border rounded-md shadow-lg z-[9999]"
+                  style={{ top: modelDropdownPos.top, left: modelDropdownPos.left, width: Math.max(modelDropdownPos.width, 220) }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => { setEditForm({ ...editForm, modelName: undefined }); setModelDropdownOpen(false); }}
+                    className={`w-full text-left px-3 py-2 hover:bg-muted transition-colors ${
+                      !editForm.modelName ? 'bg-muted' : ''
+                    }`}
+                  >
+                    <div className="text-sm font-medium">{i18n('Default (inherit)')}</div>
+                  </button>
+                  {availableModels.map(m => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => { setEditForm({ ...editForm, modelName: m.id }); setModelDropdownOpen(false); }}
+                      className={`w-full text-left px-3 py-2 hover:bg-muted transition-colors ${
+                        editForm.modelName === m.id ? 'bg-muted' : ''
+                      }`}
+                    >
+                      <div className="text-sm font-medium truncate">{m.name}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5 truncate">{m.modelName || m.modelId}</div>
+                    </button>
+                  ))}
+                </div>,
+                document.body
+              )}
+            </div>
           </div>
           <div className="flex gap-2">
             <button

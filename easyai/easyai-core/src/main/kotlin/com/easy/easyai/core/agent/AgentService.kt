@@ -74,13 +74,11 @@ interface AgentService {
      *
      * @param config model provider configuration
      * @param toolCallbacks tool callback list
-     * @param additionalOptions extra options (temperature, maxTokens, etc.)
      * @return ChatModel instance
      */
     fun createChatModel(
         config: ModelProviderConfig,
-        toolCallbacks: List<ToolCallback> = emptyList(),
-        additionalOptions: Map<String, Any?> = emptyMap()
+        toolCallbacks: List<ToolCallback> = emptyList()
     ): ChatModel
 
     /**
@@ -88,13 +86,11 @@ interface AgentService {
      *
      * @param config model provider configuration
      * @param toolCallbacks tool callback list
-     * @param additionalOptions extra options
      * @return ChatOptions instance
      */
     fun buildChatOptions(
         config: ModelProviderConfig,
-        toolCallbacks: List<ToolCallback> = emptyList(),
-        additionalOptions: Map<String, Any?> = emptyMap()
+        toolCallbacks: List<ToolCallback> = emptyList()
     ): ChatOptions
 
     /**

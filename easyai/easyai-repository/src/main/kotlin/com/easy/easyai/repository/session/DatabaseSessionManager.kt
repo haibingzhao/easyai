@@ -72,18 +72,19 @@ class DatabaseSessionManager(
      * Resolve sub-agents data for prompt rendering from agent store.
      * Applies whitelist filtering based on the parent agent's SUBAGENT tool configs.
      * Also includes inline custom sub-agents (targetName starts with "inline:").
+     * No configured sub-agents = empty list (consistent with Skill/Tool semantics).
      */
     private suspend fun resolveSubAgentsData(agentId: String?, userId: String): List<Map<String, Any?>> {
         val store = agentStore ?: return emptyList()
-        val allSubAgents = store.findSubAgents(userId)
-        if (agentId == null) return allSubAgents.map { it.toSubAgentMap() }
+        if (agentId == null) return emptyList()
         val allowedConfigs = store.getAgentToolConfigs(agentId, TargetType.SUBAGENT)
-        if (allowedConfigs.isEmpty()) return allSubAgents.map { it.toSubAgentMap() }  // No whitelist = all sub-agents
+        if (allowedConfigs.isEmpty()) return emptyList()  // No whitelist = no sub-agents
 
         // Separate global references from inline custom specs
         val globalConfigs = allowedConfigs.filter { !it.targetName.startsWith("inline:") }
         val inlineConfigs = allowedConfigs.filter { it.targetName.startsWith("inline:") }
 
+        val allSubAgents = store.findSubAgents(userId)
         val allowedSet = globalConfigs.map { it.targetName }.toSet()
         val globalEntries = allSubAgents.filter { it.id in allowedSet }.map { it.toSubAgentMap() }
         val inlineEntries = inlineConfigs.mapNotNull { config -> config.toInlineSubAgentMap() }
@@ -217,7 +218,7 @@ class DatabaseSessionManager(
      *
      * Always builds a fresh ChatSession using the request-provided parameters.
      * If the session exists in DB, restores history but always applies the provided
-     * config/agentId/options (frontend parameters always override DB values).
+     * config/agentId (frontend parameters always override DB values).
      *
      * Identity fields (sessionId, agentId, projectId, projectPath, tools)
      * are read from [agentContext]. Only model connection params are passed separately.
@@ -225,8 +226,7 @@ class DatabaseSessionManager(
     override suspend fun getOrCreateSession(
         agentContext: AgentContext,
         config: ModelProviderConfig,
-        chatOptionsFactory: ChatModelFactory,
-        options: Map<String, Any?>?
+        chatOptionsFactory: ChatModelFactory
     ): ChatSession {
         val id = agentContext.sessionId ?: UUID.randomUUID().toString()
         val agentId = agentContext.agentId
@@ -266,7 +266,7 @@ class DatabaseSessionManager(
             val finalContext = if (isTeamAgent && persistedSession != null) {
                 contextWithSkills.copy(teamStatusSummary = buildTeamStatusSummary(id))
             } else contextWithSkills
-            val agent = agentFactory.createAgentWithAgentDef(agentDef, id, config, options, resolvedTools, finalContext)
+            val agent = agentFactory.createAgentWithAgentDef(agentDef, id, config, resolvedTools, finalContext)
             val chatSession = ChatSession(id, agent)
             if (persistedSession != null) {
                 logger.info("Restoring session from database with agent {}: {}", agentId, id)
@@ -286,7 +286,7 @@ class DatabaseSessionManager(
 
         // Check database for existing session (to restore endReason)
         val persistedSession = sessionStore.findById(id, agentContext.userId ?: "system")
-        val agent = agentFactory.createAgentWithConfig(id, config, options, resolvedTools, resolvedContext)
+        val agent = agentFactory.createAgentWithConfig(id, config, resolvedTools, resolvedContext)
         val chatSession = ChatSession(id, agent)
         if (persistedSession != null) {
             logger.info("Restoring session from database with config {}: {}", config.id, id)
@@ -412,12 +412,13 @@ class DatabaseSessionManager(
             userId = userId,
             projectId = projectId,
             projectPath = projectPath,
-            subAgents = subAgentsData
+            subAgents = subAgentsData,
+            modelContextLength = config.options?.contextToken ?: 204_800
         )
         // Load persisted session variables BEFORE tool creation
         restoreSessionVariables(baseContext, sessionId, userId)
         val (agentContext, resolvedTools) = resolveAgentContextAndTools(agentDef, baseContext, projectPath)
-        val agent = agentFactory.createAgentWithAgentDef(agentDef, sessionId, config, null, resolvedTools, agentContext)
+        val agent = agentFactory.createAgentWithAgentDef(agentDef, sessionId, config, resolvedTools, agentContext)
         return ChatSession(sessionId, agent)
     }
 
@@ -441,12 +442,13 @@ class DatabaseSessionManager(
             projectPath = projectPath,
             skills = skills,
             subAgents = subAgentsData,
-            instructions = emptyList()
+            instructions = emptyList(),
+            modelContextLength = config.options?.contextToken ?: 204_800
         )
         // Load persisted session variables BEFORE tool creation
         restoreSessionVariables(agentContext, sessionId, userId)
         val resolvedTools = toolResolver.createSessionTools(agentContext)
-        val agent = agentFactory.createAgentWithConfig(sessionId, config, null, resolvedTools, agentContext)
+        val agent = agentFactory.createAgentWithConfig(sessionId, config, resolvedTools, agentContext)
         return ChatSession(sessionId, agent)
     }
 
@@ -571,7 +573,8 @@ class DatabaseSessionManager(
             modelConfig = modelConfig,
             userId = userId,
             projectId = persistedSession.projectId,
-            projectPath = projectPath
+            projectPath = projectPath,
+            modelContextLength = modelConfig?.options?.contextToken ?: 204_800
         )
     }
 

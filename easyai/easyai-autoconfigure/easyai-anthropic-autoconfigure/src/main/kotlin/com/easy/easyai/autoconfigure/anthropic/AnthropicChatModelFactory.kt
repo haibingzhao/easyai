@@ -60,17 +60,28 @@ class AnthropicChatModelFactory : ChatModelFactory {
 
     override fun build(
         config: ModelProviderConfig,
-        toolCallbacks: List<ToolCallback>,
-        additionalOptions: Map<String, Any?>
+        toolCallbacks: List<ToolCallback>
     ): ChatOptions {
         val builder = AnthropicChatOptions.builder()
             .model(config.modelId)
             .toolCallbacks(toolCallbacks)
 
         config.options?.let {
-            builder.temperature(it.temperature)
-            builder.maxTokens(it.maxTokens)
+            if (it.thinking) {
+                // Anthropic requires temperature=1 when thinking is enabled
+                builder.thinkingEnabled(DEFAULT_THINKING_BUDGET_TOKENS)
+                // max_tokens must be > budget_tokens; enforce a safe floor
+                builder.maxTokens(maxOf(it.maxTokens, DEFAULT_THINKING_BUDGET_TOKENS.toInt() + 1))
+            } else {
+                builder.temperature(it.temperature)
+                builder.maxTokens(it.maxTokens)
+            }
         }
         return builder.build()
+    }
+
+    companion object {
+        /** Default token budget for extended thinking when enabled. */
+        private const val DEFAULT_THINKING_BUDGET_TOKENS = 10_000L
     }
 }

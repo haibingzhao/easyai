@@ -80,6 +80,10 @@ class R2dbcModelConfigGroupStore(
         val id = request.id ?: UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
 
+        // Resolve effective apiKey: null means "keep existing" for updates
+        val existingGroup = if (request.id != null) getGroup(id, userId) else null
+        val effectiveApiKey = request.apiKey ?: existingGroup?.apiKey
+
         suspendTransaction(db) {
             val existing = Tables.ModelConfigGroupTable
                 .selectAll()
@@ -94,7 +98,7 @@ class R2dbcModelConfigGroupStore(
                     it[protocol] = request.protocol.name
                     it[isCustom] = request.isCustom
                     it[baseUrl] = request.baseUrl
-                    it[apiKey] = request.apiKey
+                    it[apiKey] = effectiveApiKey
                     it[timeoutSeconds] = request.timeoutSeconds
                     it[updatedAt] = now
                 }
@@ -106,7 +110,7 @@ class R2dbcModelConfigGroupStore(
                     it[protocol] = request.protocol.name
                     it[isCustom] = request.isCustom
                     it[baseUrl] = request.baseUrl
-                    it[apiKey] = request.apiKey
+                    it[apiKey] = effectiveApiKey
                     it[timeoutSeconds] = request.timeoutSeconds
                     it[Tables.ModelConfigGroupTable.userId] = userId
                     it[createdAt] = now

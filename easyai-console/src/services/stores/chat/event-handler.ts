@@ -776,8 +776,11 @@ function handleMessageEnd(
             cacheReadTokens: (prev?.cacheReadTokens ?? 0) + (u.cacheReadTokens ?? 0),
             cacheWriteTokens: (prev?.cacheWriteTokens ?? 0) + (u.cacheWriteTokens ?? 0),
           },
-          // inputTokens is cumulative (full context), so override rather than accumulate
-          contextTokens: u.inputTokens + (u.cacheReadTokens ?? 0) + (u.cacheWriteTokens ?? 0) + u.outputTokens,
+          // inputTokens is cumulative (full context), so override rather than accumulate.
+          // Take max to guard against gateway under-reporting (e.g. after prompt-cache
+          // invalidation) which would make the token bar visually drop then jump back.
+          // compaction_end legitimately overrides with a lower post-compaction value.
+          contextTokens: Math.max(s.contextTokens, u.inputTokens + (u.cacheReadTokens ?? 0) + (u.cacheWriteTokens ?? 0) + u.outputTokens),
         };
       });
 

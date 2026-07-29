@@ -53,12 +53,21 @@ data class SaveModelProviderConfigRequest(
 
 /**
  * Model generation options.
+ *
+ * @property temperature Sampling temperature (0.0 - 2.0). Default 0.7.
+ * @property maxTokens Maximum output tokens in raw token count (e.g. 16384 = 16K). Default 16384.
+ * @property thinking Whether to enable extended thinking / reasoning. Default false.
+ * @property maxContextTokens Model's maximum supported context window in raw tokens. Hard upper bound. Default 204800 (200K).
+ * @property contextToken Active working context window in raw tokens. Compaction triggers when this is reached.
+ *   Must be <= maxContextTokens. Default 204800 (200K).
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class ModelOptions(
-    val temperature: Double? = null,
-    val maxTokens: Int? = null,
-    val thinking: Boolean? = null
+    val temperature: Double = 0.7,
+    val maxTokens: Int = 16_384,
+    val thinking: Boolean = false,
+    val maxContextTokens: Int = 204_800,
+    val contextToken: Int = 204_800
 )
 
 /**

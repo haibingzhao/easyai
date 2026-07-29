@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { i18n } from '../../utils/i18n';
+import { TokenInput } from '../TokenInput';
 import { modelConfigService } from '@/services/model-config-service';
 import { Box, Pencil, Trash2, ChevronRight, ChevronDown, Plus, FolderOpen, FolderX } from 'lucide-react';
 import { InlineAddModelForm } from '@/components/models/InlineAddModelForm';
@@ -90,7 +91,7 @@ export const ModelProviderSelector = forwardRef<ModelProviderSelectorRef, ModelP
           protocol: config.protocol,
           isCustom: config.isCustom,
           baseUrl: config.baseUrl,
-          apiKey: config.apiKey,
+          // Do not send masked apiKey back — null means "keep existing"
           modelId: config.modelId,
           modelName: config.modelName,
           isCustomModel: config.isCustomModel,
@@ -540,6 +541,11 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
       alert(i18n('Please enter Model Name'));
       return;
     }
+    if (options.contextToken != null && options.maxContextTokens != null
+      && options.contextToken > options.maxContextTokens) {
+      alert(i18n('Context Token must not exceed Max Context Tokens'));
+      return;
+    }
 
     const useCustomName = isCustomModel || config.isCustom;
     const modelId = useCustomName ? customModelName.trim() : selectedModelId;
@@ -557,7 +563,7 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
       protocol: config.protocol,
       isCustom: config.isCustom,
       baseUrl: config.baseUrl,
-      apiKey: config.apiKey,
+      // Do not send masked apiKey back — null means "keep existing"
       modelId,
       modelName,
       isCustomModel,
@@ -572,7 +578,8 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
       await onSave(request);
       onClose();
     } catch (e) {
-      console.error('Failed to save:', e);
+      const msg = e instanceof Error ? (() => { try { return JSON.parse(e.message).error; } catch { return e.message; } })() : 'Save failed';
+      alert(msg);
     } finally {
       setLoading(false);
     }
@@ -646,6 +653,22 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
             </div>
           )}
 
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-medium">{i18n('Vision (Image Input)')}</label>
+            <button
+              onClick={() => setCapabilities(prev => ({ ...prev, vision: !prev.vision }))}
+              className={`relative w-9 h-5 rounded-full transition-colors ${
+                capabilities.vision ? 'bg-green-500' : 'bg-muted-foreground/30'
+              }`}
+            >
+              <div
+                className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                  capabilities.vision ? 'translate-x-4' : 'translate-x-0.5'
+                }`}
+              />
+            </button>
+          </div>
+
           <div>
             <button
               onClick={() => setShowOptions(!showOptions)}
@@ -674,15 +697,10 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
                 </div>
                 <div>
                   <label className="text-xs font-medium mb-1 block">{i18n('Max Tokens')}</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={options.maxTokens ?? ''}
-                    onChange={(e) => setOptions(prev => ({
-                      ...prev,
-                      maxTokens: e.target.value ? parseInt(e.target.value) : undefined,
-                    }))}
-                    placeholder="4096"
+                  <TokenInput
+                    value={options.maxTokens}
+                    onChange={(v) => setOptions(prev => ({ ...prev, maxTokens: v }))}
+                    placeholder="16"
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                   />
                 </div>
@@ -701,24 +719,26 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
                     />
                   </button>
                 </div>
+                <div>
+                  <label className="text-xs font-medium mb-1 block">{i18n('Max Context Tokens')}</label>
+                  <TokenInput
+                    value={options.maxContextTokens}
+                    onChange={(v) => setOptions(prev => ({ ...prev, maxContextTokens: v }))}
+                    placeholder="200"
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium mb-1 block">{i18n('Context Token')}</label>
+                  <TokenInput
+                    value={options.contextToken}
+                    onChange={(v) => setOptions(prev => ({ ...prev, contextToken: v }))}
+                    placeholder="200"
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                  />
+                </div>
               </div>
             )}
-          </div>
-
-          <div className="flex items-center justify-between">
-            <label className="text-sm font-medium">{i18n('Vision (Image Input)')}</label>
-            <button
-              onClick={() => setCapabilities(prev => ({ ...prev, vision: !prev.vision }))}
-              className={`relative w-9 h-5 rounded-full transition-colors ${
-                capabilities.vision ? 'bg-green-500' : 'bg-muted-foreground/30'
-              }`}
-            >
-              <div
-                className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                  capabilities.vision ? 'translate-x-4' : 'translate-x-0.5'
-                }`}
-              />
-            </button>
           </div>
         </div>
         <div className="px-6 py-4 border-t border-border flex justify-end gap-2">

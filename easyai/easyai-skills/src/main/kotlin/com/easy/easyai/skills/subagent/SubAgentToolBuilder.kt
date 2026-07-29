@@ -43,6 +43,11 @@ class SubAgentToolBuilder(
             return null
         }
 
+        // If no sub-agents are configured for this agent, don't register the tool
+        if (context.subAgents.isEmpty()) {
+            return null
+        }
+
         // If no agentStore is available, don't register the tool
         val store = agentStore ?: return null
 

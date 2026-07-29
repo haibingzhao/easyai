@@ -142,16 +142,31 @@ interface AsyncSessionStore {
     suspend fun getMessageCreatedAt(sessionId: String, messageId: String): Long? = null
 
     /**
-     * Find the earliest compaction event that occurred at or after the given timestamp.
-     * Lightweight query — only reads role + metadata, avoids parsing content_blocks.
+     * Find the earliest compaction indicator that occurred at or after the given timestamp.
+     * Lightweight query — only reads CUSTOM role messages and checks isCompactionIndicator metadata.
      *
-     * Checks both:
-     * 1. Compaction indicators (role = 'CUSTOM' with isCompactionIndicator metadata)
-     * 2. Compaction summaries (role = 'USER' with isCompactionSummary metadata)
+     * Only checks compaction indicators (role = 'CUSTOM' with isCompactionIndicator metadata).
+     * Indicators' createdAt = compactedAt (wall-clock time), which is always after the
+     * triggering user message, making them the reliable entry point for compaction detection.
+     * Orphaned summaries (whose indicators were deleted) are handled by deleteMessagesFromTimestamp
+     * naturally and do not need to be detected here.
      *
-     * @return The timestamp (epoch millis) of the earliest compaction, or null.
+     * @return The timestamp (epoch millis) of the earliest compaction indicator, or null.
      */
     suspend fun getFirstCompactionAfter(sessionId: String, messageCreatedAt: Long): Long? = null
+
+    /**
+     * Check if any compaction SUMMARY exists with createdAt >= the given timestamp.
+     * Used to determine whether editing a message requires a full compaction undo.
+     *
+     * If no summary exists at/after the timestamp, the message is NOT in any compacted set
+     * (it was in the "recent" portion during compaction). In that case, the expensive
+     * undoCompactionAfter (restore + re-delete) can be skipped — deleteMessagesFromTimestamp alone
+     * is sufficient, and the summary remains valid as context for the re-sent message.
+     *
+     * @return true if a compaction summary exists at/after the timestamp.
+     */
+    suspend fun hasCompactionSummaryAtOrAfter(sessionId: String, messageCreatedAt: Long): Boolean = false
 
     /**
      * Lightweight query for Session.contentUpdatedAt dirty marker.
@@ -172,15 +187,17 @@ interface AsyncSessionStore {
      * Undo compaction that occurred at or after [messageCreatedAt].
      * Entry point: compaction indicators (CUSTOM role) with createdAt >= messageCreatedAt.
      * Traces indicator → summary → compactedMessageIds to precisely restore only the messages
-     * compacted by those specific rounds, and removes summary + indicator artifacts.
+     * compacted by rounds whose summary is at/after the edit point.
      *
-     * Called before editing a historical message so that deleteMessagesFrom operates on a
-     * clean message chain. The next LLM call will naturally re-trigger compaction if needed.
+     * Compactions whose summary is BEFORE the edit point are left intact (their context
+     * does not include the edited message). Their indicator IDs are returned so the caller
+     * can exclude them from the subsequent [deleteMessagesFromTimestamp] call.
      *
      * @param sessionId The session ID
      * @param messageCreatedAt The createdAt timestamp of the message being edited
+     * @return IDs of preserved indicators (not undone, should survive deleteMessagesFromTimestamp)
      */
-    suspend fun undoCompactionAfter(sessionId: String, messageCreatedAt: Long) {}
+    suspend fun undoCompactionAfter(sessionId: String, messageCreatedAt: Long): Set<String> = emptySet()
 
     /**
      * Mark messages as compacted by setting compactedAt timestamp.
@@ -241,14 +258,15 @@ interface AsyncSessionStore {
     suspend fun loadMessagesByIds(messageIds: List<String>): List<EasyAiMessage>
 
     /**
-     * Delete all messages with createdAt >= the given message's createdAt (inclusive).
+     * Delete all messages with createdAt >= [fromTimestamp] (inclusive).
      * Used for editing a historical user message: deletes the message and all subsequent ones.
      *
      * @param sessionId The session ID
-     * @param messageId The message ID whose timestamp determines the deletion boundary
+     * @param fromTimestamp The timestamp boundary (messages at or after this time are deleted)
+     * @param excludeIds Message IDs to exclude from deletion (e.g. preserved compaction indicators)
      * @return Number of messages deleted
      */
-    suspend fun deleteMessagesFrom(sessionId: String, messageId: String): Int
+    suspend fun deleteMessagesFromTimestamp(sessionId: String, fromTimestamp: Long, excludeIds: Set<String> = emptySet()): Int
 
     /**
      * Save or clear the pending permission request for a session.
@@ -275,6 +293,16 @@ interface AsyncSessionStore {
      *               When non-null, only the specified fields are written; session contentUpdatedAt is NOT bumped.
      */
     suspend fun updateMessage(sessionId: String, messageId: String, message: EasyAiMessage, fields: Set<MessageUpdateField>? = null)
+
+    /**
+     * Delete a single message by ID.
+     * Used to remove orphaned skipped-placeholder ToolResultMessages after permission
+     * approval merges real results into the target message.
+     *
+     * @param sessionId The session ID
+     * @param messageId The ID of the message to delete
+     */
+    suspend fun deleteMessage(sessionId: String, messageId: String)
 
     /**
      * Find a session ID by swarm run and task IDs.

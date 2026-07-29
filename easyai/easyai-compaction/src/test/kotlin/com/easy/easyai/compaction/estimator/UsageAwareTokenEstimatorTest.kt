@@ -2,20 +2,16 @@ package com.easy.easyai.compaction.estimator
 
 import com.easy.easyai.core.model.AssistantMessage
 import com.easy.easyai.core.model.TextContent
-import com.easy.easyai.core.model.ThinkingContent
 import com.easy.easyai.core.model.Usage
 import com.easy.easyai.core.model.UserMessage
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
- * Tests for [UsageAwareTokenEstimator], focusing on the gateway under-reporting defense:
- * some LLM proxy gateways return usage reports that dramatically undercount the real
- * prompt size (e.g. ~17K reported for a ~148K prompt) on the first request after a
- * prompt-cache invalidation. The estimator must not trust such reports for compaction
- * trigger decisions.
+ * Tests for [UsageAwareTokenEstimator], focusing on the monotonicity-based anomaly detection:
+ * without compaction, context only grows so inputTokens must be non-decreasing.
+ * If latest < previous, the estimator uses previous + delta of intervening messages.
  */
 class UsageAwareTokenEstimatorTest {
 
@@ -46,13 +42,12 @@ class UsageAwareTokenEstimatorTest {
         @Test
         fun `uses exact input tokens plus delta estimate when report is plausible`() {
             val estimator = UsageAwareTokenEstimator()
-            // 8000 prompt chars -> plausibility floor = 8000 / 8 = 1000 tokens
             val messages = listOf(
                 textMessage(8000),
                 assistantWithUsage(inputTokens = 5000, cacheReadTokens = 2000, cacheWriteTokens = 500, outputTokens = 300)
             )
-            // base = 5000 + 2000 + 500 + 300 = 7800 >= 1000 -> plausible
-            // delta = 0 (nothing after the assistant)
+            // single assistant with usage -> trust directly
+            // base = 5000 + 2000 + 500 + 300 = 7800, delta = 0 (nothing after)
             assertEquals(7800, estimator.estimateContextTokens(messages))
         }
 
@@ -70,26 +65,34 @@ class UsageAwareTokenEstimatorTest {
         }
 
         @Test
-        fun `walks back to older usage when latest report is implausibly low`() {
+        fun `anomaly uses previous plus delta when latest is lower`() {
             val estimator = UsageAwareTokenEstimator()
-            // floor = 8000 / 8 = 1000
-            val older = assistantWithUsage(inputTokens = 5000, outputTokens = 500) // totalInput 5000, plausible
+            val older = assistantWithUsage(inputTokens = 5000, outputTokens = 500) // totalInput 5000
             val newer = assistantWithUsage(inputTokens = 100, outputTokens = 50) // totalInput 100, anomalous
             val messages = listOf(textMessage(8000), older, newer)
-            // newest (100) fails the floor -> walk back to older
-            // base = 5000 + 500 = 5500, delta = estimate([newer(empty)]) = 0
+            // latest(100) < previous(5000) -> anomaly -> use previous + deltaAfter(previous)
+            // base = 5000 + 500 = 5500, delta = estimate([newer(empty content)]) = 0
             assertEquals(5500, estimator.estimateContextTokens(messages))
         }
 
         @Test
-        fun `falls back to char-based estimate when all reports are implausibly low`() {
+        fun `single assistant with low usage is trusted directly`() {
             val estimator = UsageAwareTokenEstimator()
-            // floor = 8000 / 8 = 1000; reported totalInput 100 is below it
+            // Only one assistant with usage -> trust directly, no comparison needed
             val messages = listOf(textMessage(8000), assistantWithUsage(inputTokens = 100, outputTokens = 50))
-            val result = estimator.estimateContextTokens(messages)
-            // must not trust the anomalous 100; falls back to char-based estimate
-            assertTrue(result > 150, "expected fallback > anomalous report, got $result")
-            assertEquals(estimator.estimate(messages), result)
+            // base = 100 + 50 = 150, delta = 0 (assistant is last)
+            assertEquals(150, estimator.estimateContextTokens(messages))
+        }
+
+        @Test
+        fun `trusts latest when latest is not less than previous`() {
+            val estimator = UsageAwareTokenEstimator()
+            val previous = assistantWithUsage(inputTokens = 3000, outputTokens = 200)
+            val latest = assistantWithUsage(inputTokens = 5000, outputTokens = 300)
+            val messages = listOf(textMessage(8000), previous, latest)
+            // latest(5000) >= previous(3000) -> trust latest
+            // base = 5000 + 300 = 5300, delta = 0 (latest is last)
+            assertEquals(5300, estimator.estimateContextTokens(messages))
         }
 
         @Test
@@ -97,22 +100,6 @@ class UsageAwareTokenEstimatorTest {
             val estimator = UsageAwareTokenEstimator()
             val messages = listOf(textMessage(8000))
             assertEquals(estimator.estimate(messages), estimator.estimateContextTokens(messages))
-        }
-
-        @Test
-        fun `excludes thinking blocks from plausibility floor`() {
-            val estimator = UsageAwareTokenEstimator()
-            // 80 text chars -> floor = 80 / 8 = 10.
-            // 8000 thinking chars must NOT inflate the floor (thinking is not sent back as input).
-            val thinking = AssistantMessage(
-                content = listOf(ThinkingContent("z".repeat(8000))),
-                usage = Usage(inputTokens = 40, outputTokens = 10) // totalInput 40 >= 10 -> plausible
-            )
-            val messages = listOf(textMessage(80), thinking)
-            // If thinking were counted in the floor, it would be (80 + 8000) / 8 = 1010 and 40 would be
-            // wrongly rejected. The usage-based path is used (not char-based fallback).
-            // base = 40 + 10 = 50, delta = 0 (nothing after)
-            assertEquals(50, estimator.estimateContextTokens(messages))
         }
     }
 

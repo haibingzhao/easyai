@@ -252,7 +252,7 @@ Rules:
     private fun disableThinking(config: ModelProviderConfig?): ModelProviderConfig? {
         if (config == null) return null
         val opts = config.options ?: ModelOptions()
-        if (opts.thinking != true) return config  // Already disabled or unset
+        if (!opts.thinking) return config  // Already disabled
         return config.copy(options = opts.copy(thinking = false))
     }
 

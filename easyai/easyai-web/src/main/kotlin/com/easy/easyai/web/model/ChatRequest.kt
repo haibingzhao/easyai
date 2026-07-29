@@ -42,11 +42,6 @@ data class ChatRequest(
      */
     val model: String? = null,
 
-    /**
-     * Chat options.
-     */
-    val options: ChatOptions? = null,
-
     /** Structured input data for agents with input schema. Validated against agent's inputSchema. */
     val inputData: Map<String, Any?>? = null,
 
@@ -55,14 +50,7 @@ data class ChatRequest(
      * Images are forwarded to the LLM as Media objects; text files are inlined into the message.
      */
     val attachments: List<ChatAttachment>? = null
-) {
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    data class ChatOptions(
-        val temperature: Double? = null,
-        val maxTokens: Int? = null,
-        val thinking: Boolean? = null
-    )
-}
+)
 
 /**
  * File attachment sent from the frontend.

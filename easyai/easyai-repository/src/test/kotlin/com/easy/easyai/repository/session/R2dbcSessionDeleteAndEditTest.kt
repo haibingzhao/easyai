@@ -234,10 +234,10 @@ class R2dbcSessionDeleteAndEditTest {
     }
 
     @Nested
-    inner class `edit history - deleteMessagesFrom` {
+    inner class `edit history - deleteMessagesFromTimestamp` {
 
         @Test
-        fun `deleteMessagesFrom removes target and subsequent messages`() = runTest {
+        fun `deleteMessagesFromTimestamp removes target and subsequent messages`() = runTest {
             val sessionId = "edit-msgs-${UUID.randomUUID()}"
             createSession(sessionId)
             val baseTime = System.currentTimeMillis()
@@ -250,15 +250,15 @@ class R2dbcSessionDeleteAndEditTest {
 
             assertEquals(3, countMessages(sessionId))
 
-            // Delete from msgId2 onwards (inclusive)
-            val deleted = sessionStore.deleteMessagesFrom(sessionId, msgId2)
+            // Delete from baseTime + 1000 onwards (inclusive)
+            val deleted = sessionStore.deleteMessagesFromTimestamp(sessionId, baseTime + 1000)
 
             assertEquals(2, deleted, "Should delete msg2 and msg3")
             assertEquals(1, countMessages(sessionId), "Only msg1 should remain")
         }
 
         @Test
-        fun `deleteMessagesFrom preserves earlier messages`() = runTest {
+        fun `deleteMessagesFromTimestamp preserves earlier messages`() = runTest {
             val sessionId = "edit-preserve-${UUID.randomUUID()}"
             createSession(sessionId)
             val baseTime = System.currentTimeMillis()
@@ -271,8 +271,8 @@ class R2dbcSessionDeleteAndEditTest {
             insertMessage(sessionId, msgId3, "third", createdAt = baseTime + 2000)
             insertMessage(sessionId, msgId4, "fourth", createdAt = baseTime + 3000)
 
-            // Delete from msgId3 onwards
-            val deleted = sessionStore.deleteMessagesFrom(sessionId, msgId3)
+            // Delete from baseTime + 2000 onwards
+            val deleted = sessionStore.deleteMessagesFromTimestamp(sessionId, baseTime + 2000)
 
             assertEquals(2, deleted)
             val remaining = sessionStore.loadMessagesWithTimestamps(sessionId)
@@ -282,19 +282,20 @@ class R2dbcSessionDeleteAndEditTest {
         }
 
         @Test
-        fun `deleteMessagesFrom returns 0 for non-existent message`() = runTest {
+        fun `deleteMessagesFromTimestamp returns 0 when no messages after timestamp`() = runTest {
             val sessionId = "edit-noexist-${UUID.randomUUID()}"
             createSession(sessionId)
-            insertMessage(sessionId, "some-msg-${UUID.randomUUID()}", createdAt = System.currentTimeMillis())
+            val baseTime = System.currentTimeMillis()
+            insertMessage(sessionId, "some-msg-${UUID.randomUUID()}", createdAt = baseTime)
 
-            val deleted = sessionStore.deleteMessagesFrom(sessionId, "non-existent-id")
+            val deleted = sessionStore.deleteMessagesFromTimestamp(sessionId, baseTime + 99999)
 
-            assertEquals(0, deleted, "Should return 0 for non-existent message")
+            assertEquals(0, deleted, "Should return 0 when no messages at/after timestamp")
             assertEquals(1, countMessages(sessionId), "No messages should be deleted")
         }
 
         @Test
-        fun `deleteMessagesFrom on first message deletes all`() = runTest {
+        fun `deleteMessagesFromTimestamp on first message deletes all`() = runTest {
             val sessionId = "edit-all-${UUID.randomUUID()}"
             createSession(sessionId)
             val baseTime = System.currentTimeMillis()
@@ -303,7 +304,7 @@ class R2dbcSessionDeleteAndEditTest {
             insertMessage(sessionId, "all-m2-${UUID.randomUUID()}", "second", createdAt = baseTime + 1000)
             insertMessage(sessionId, "all-m3-${UUID.randomUUID()}", "third", createdAt = baseTime + 2000)
 
-            val deleted = sessionStore.deleteMessagesFrom(sessionId, msgId1)
+            val deleted = sessionStore.deleteMessagesFromTimestamp(sessionId, baseTime)
 
             assertEquals(3, deleted, "All messages should be deleted")
             assertEquals(0, countMessages(sessionId))
@@ -469,8 +470,8 @@ class R2dbcSessionDeleteAndEditTest {
             )
 
             // Simulate edit-message flow:
-            // 1. Delete messages from msgId2 onwards
-            val deletedMsgs = sessionStore.deleteMessagesFrom(sessionId, msgId2)
+            // 1. Delete messages from editTimestamp onwards
+            val deletedMsgs = sessionStore.deleteMessagesFromTimestamp(sessionId, editTimestamp)
             assertEquals(2, deletedMsgs, "msg2 and msg3 should be deleted")
 
             // 2. Delete team records from editTimestamp

@@ -462,8 +462,7 @@ internal class AgentLoopRunner(
         val baseChatOptions = context.modelConfig?.let { config ->
             services.buildChatOptions(
                 config = config,
-                toolCallbacks = toolCallbacks,
-                additionalOptions = context.options ?: emptyMap()
+                toolCallbacks = toolCallbacks
             )
         } ?: ToolCallingChatOptions.builder()
             .model(context.modelId.ifEmpty { null })
