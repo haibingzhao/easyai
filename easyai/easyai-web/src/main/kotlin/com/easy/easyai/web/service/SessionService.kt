@@ -381,11 +381,11 @@ class SessionService(
     }
 
     /**
-     * Delete all messages from the given messageId onwards (by createdAt timestamp).
+     * Delete all messages with createdAt >= [fromTimestamp] (inclusive).
      * @return Number of messages deleted.
      */
-    suspend fun deleteMessagesFrom(sessionId: String, messageId: String): Int {
-        return sessionStore.deleteMessagesFrom(sessionId, messageId)
+    suspend fun deleteMessagesFromTimestamp(sessionId: String, fromTimestamp: Long, excludeIds: Set<String> = emptySet()): Int {
+        return sessionStore.deleteMessagesFromTimestamp(sessionId, fromTimestamp, excludeIds)
     }
 
     /**
@@ -433,23 +433,32 @@ class SessionService(
     }
 
     /**
-     * Check if any compaction occurred after the given message timestamp.
-     * Returns the timestamp of the earliest compaction after the message, or null.
+     * Check if any compaction indicator exists after the given message timestamp.
+     * Returns the timestamp of the earliest compaction indicator, or null.
      *
-     * Checks both:
-     * 1. Compaction indicators (role = 'CUSTOM' with isCompactionIndicator metadata)
-     * 2. Compaction summaries (role = 'USER' with isCompactionSummary metadata)
+     * Only checks compaction indicators (role = 'CUSTOM' with isCompactionIndicator metadata).
      */
     suspend fun getFirstCompactionAfter(sessionId: String, messageCreatedAt: Long): Long? {
         return sessionStore.getFirstCompactionAfter(sessionId, messageCreatedAt)
     }
 
     /**
+     * Check if a compaction summary exists at/after the given timestamp.
+     * Used to determine whether editing a message requires a full compaction undo.
+     *
+     * If false, the message is NOT in any compacted set and the expensive undo can be skipped.
+     */
+    suspend fun hasCompactionSummaryAtOrAfter(sessionId: String, messageCreatedAt: Long): Boolean {
+        return sessionStore.hasCompactionSummaryAtOrAfter(sessionId, messageCreatedAt)
+    }
+
+    /**
      * Undo compaction that occurred at or after [messageCreatedAt].
      * Delegates to [AsyncSessionStore.undoCompactionAfter].
+     * @return IDs of preserved indicators (should be excluded from subsequent deletion)
      */
-    suspend fun undoCompactionAfter(sessionId: String, messageCreatedAt: Long) {
-        sessionStore.undoCompactionAfter(sessionId, messageCreatedAt)
+    suspend fun undoCompactionAfter(sessionId: String, messageCreatedAt: Long): Set<String> {
+        return sessionStore.undoCompactionAfter(sessionId, messageCreatedAt)
     }
 
     suspend fun createSession(userId: String = "system"): String {

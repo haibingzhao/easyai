@@ -245,7 +245,6 @@ class ChatStreamService(
             ?: return flowOf(errorSse("No ChatModelFactory for protocol: ${config.protocol}"))
 
         val agentId = request.agentId
-        val optionsMap = buildOptionsMap(request.options)
 
         return try {
             val agentContext = createAgentContext(agentId, config, request.sessionId, request.projectId, userId).let { ctx ->
@@ -255,8 +254,7 @@ class ChatStreamService(
             val session = sessionManager.getOrCreateSession(
                 agentContext = agentContext,
                 config = config,
-                chatOptionsFactory = factory,
-                options = optionsMap
+                chatOptionsFactory = factory
             )
             chatFlow(agentContext, session, request.message, request.attachments)
         } catch (e: Exception) {
@@ -592,15 +590,6 @@ class ChatStreamService(
         }
     }
 
-    private fun buildOptionsMap(options: ChatRequest.ChatOptions?): Map<String, Any?> {
-        if (options == null) return emptyMap()
-        return mutableMapOf<String, Any?>().apply {
-            options.temperature?.let { put("temperature", it) }
-            options.maxTokens?.let { put("maxTokens", it) }
-            options.thinking?.let { put("thinking", it) }
-        }
-    }
-
     private suspend fun createAgentContext(
         agentId: String,
         config: ModelProviderConfig,
@@ -630,6 +619,7 @@ class ChatStreamService(
             projectId = projectId,
             projectPath = project?.let { java.nio.file.Path.of(it.path) },
             memoryAutoGeneration = project?.memoryAutoGeneration ?: true,
+            modelContextLength = config.options?.contextToken ?: 204_800,
             scriptEnv = scriptEnv
         )
     }

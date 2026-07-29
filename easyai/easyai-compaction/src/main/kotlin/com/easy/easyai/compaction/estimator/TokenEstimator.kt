@@ -16,36 +16,11 @@ interface TokenEstimator {
 
     /**
      * Estimate the current context window token count.
-     * Uses the last AssistantMessage's actual input token count as a precise base,
-     * then adds a character-based estimate of messages added after that call.
+     * Compares the latest two AssistantMessage usage reports for monotonicity:
+     * if latest >= previous, trusts latest; otherwise falls back to previous + delta.
      * Falls back to [estimate] when no usage data is available.
      */
     fun estimateContextTokens(messages: List<EasyAiMessage>): Int = estimate(messages)
-}
-
-/**
- * Simple character-based token estimator.
- * Assumes ~3.5 characters per token on average (English text).
- * This is fast but imprecise; use for quick estimates only.
- */
-class CharBasedTokenEstimator(
-    private val charsPerToken: Double = 3.5
-) : TokenEstimator {
-
-    override fun estimate(messages: List<EasyAiMessage>): Int {
-        val totalChars = countChars(messages)
-        return (totalChars / charsPerToken).toInt()
-    }
-
-    private fun countChars(messages: List<EasyAiMessage>): Int = messages.sumOf { msg ->
-        msg.content.sumOf { block ->
-            when (block) {
-                is TextContent -> block.text.length
-                is ThinkingContent -> block.thinking.length
-                else -> 0
-            }
-        }
-    }
 }
 
 /**
@@ -53,8 +28,9 @@ class CharBasedTokenEstimator(
  *
  * Uses a hybrid strategy:
  * - [estimate]: pure character-based estimation for all messages (used for sizing subsets).
- * - [estimateContextTokens]: uses the last AssistantMessage's actual input token count as base,
- *   plus a character-based estimate of messages added after that call (used for compaction triggers).
+ * - [estimateContextTokens]: compares the latest two AssistantMessage usage reports for
+ *   monotonicity (context only grows without compaction). Trusts latest if >= previous;
+ *   otherwise uses previous + char-based delta of intervening messages.
  * - [updateRatio]: calibrates the charsPerToken ratio from the full message list's character count
  *   vs the last AssistantMessage's inputTokens (which represents the full context).
  */
@@ -133,61 +109,54 @@ class UsageAwareTokenEstimator(
     /**
      * Estimate the current context window token count.
      *
-     * Strategy: find the most recent AssistantMessage with a plausible usage report,
-     * use its exact token counts as the base (inputTokens covers system prompt + all
-     * prior messages; outputTokens covers the assistant's own response), then add a
-     * character-based estimate of messages added AFTER that call (tool results, new
-     * user messages). This gives high accuracy with minimal estimation error.
+     * Strategy: compare the latest two AssistantMessage usage reports. Without compaction,
+     * context only grows, so inputTokens must be monotonically non-decreasing.
      *
-     * Formula:
+     * - latest >= previous → trust latest (normal growth)
+     * - latest < previous → anomaly (gateway under-reported), use previous + estimate(between)
+     * - only one usage report → trust it directly
+     * - no usage → fall back to char-based [estimate]
+     *
+     * Formula (normal case):
      *   base = inputTokens + cacheReadTokens + cacheWriteTokens + outputTokens  (all exact)
      *   delta = estimate(messages strictly after that assistant message)         (small, char-based)
      *   total = base + delta
-     *
-     * ## Gateway under-reporting defense
-     *
-     * Some LLM proxy gateways occasionally return usage reports that dramatically
-     * undercount the real prompt size. Defense:
-     * 1. Plausibility floor: reported tokens must >= (promptChars / MAX_CHARS_PER_TOKEN).
-     * 2. Walk-back: try older assistant messages if the newest fails the floor.
-     * 3. Final fallback: character-based [estimate] when no plausible usage exists.
      */
     override fun estimateContextTokens(messages: List<EasyAiMessage>): Int {
-        val minPlausibleTokens = (countPromptChars(messages) / MAX_CHARS_PER_TOKEN).toInt()
+        val withUsage = messages.filterIsInstance<AssistantMessage>()
+            .filter { it.usage.inputTokens + it.usage.cacheReadTokens + it.usage.cacheWriteTokens > 0 }
 
-        // Walk newest → oldest, find the first plausible usage report
-        val assistantMessages = messages.filterIsInstance<AssistantMessage>()
-        for (i in assistantMessages.indices.reversed()) {
-            val msg = assistantMessages[i]
-            val u = msg.usage
-            val totalInput = u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens
-            if (totalInput <= 0 || totalInput < minPlausibleTokens) continue
+        if (withUsage.isEmpty()) return estimate(messages)
 
-            // Found plausible usage.
-            // Base = exact tokens: input (system prompt + prior messages) + output (assistant response)
-            val base = totalInput + u.outputTokens
+        val latest = withUsage.last()
+        val latestInput = latest.usage.inputTokens + latest.usage.cacheReadTokens + latest.usage.cacheWriteTokens
 
-            // Delta = estimate of messages added strictly AFTER this assistant response
-            // (tool results, new user messages, etc.)
-            val assistantIndex = messages.indexOfLast { it.id == msg.id }
-            val delta = if (assistantIndex >= 0 && assistantIndex < messages.size - 1) {
-                estimate(messages.subList(assistantIndex + 1, messages.size))
-            } else {
-                0
-            }
-            return base + delta
+        // First call: trust directly
+        if (withUsage.size == 1) {
+            return latestInput + latest.usage.outputTokens + deltaAfter(latest, messages)
         }
 
-        // No plausible usage report found: fall back to character-based estimation.
-        val fallback = estimate(messages)
-        if (minPlausibleTokens > 0) {
+        val previous = withUsage[withUsage.size - 2]
+        val previousInput = previous.usage.inputTokens + previous.usage.cacheReadTokens + previous.usage.cacheWriteTokens
+
+        return if (latestInput >= previousInput) {
+            // Normal: context grows monotonically, trust latest
+            latestInput + latest.usage.outputTokens + deltaAfter(latest, messages)
+        } else {
+            // Anomaly: gateway under-reported, use previous + estimate(messages between)
             logger.warn(
-                "All LLM usage reports implausibly low (floor={} derived from prompt chars), " +
-                    "gateway likely under-reported usage; falling back to char-based estimate: {}",
-                minPlausibleTokens, fallback
+                "Usage anomaly: latest totalInput={} < previous totalInput={}, using previous as base",
+                latestInput, previousInput
             )
+            previousInput + previous.usage.outputTokens + deltaAfter(previous, messages)
         }
-        return fallback
+    }
+
+    private fun deltaAfter(assistant: AssistantMessage, messages: List<EasyAiMessage>): Int {
+        val idx = messages.indexOfLast { it.id == assistant.id }
+        return if (idx >= 0 && idx < messages.size - 1) {
+            estimate(messages.subList(idx + 1, messages.size))
+        } else 0
     }
 
     /**

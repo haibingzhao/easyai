@@ -15,7 +15,7 @@ import { useAttachmentManager } from '@/hooks/useAttachmentManager';
 import { AttachmentPreviewBar } from './AttachmentPreviewBar';
 import type { SlashCommand } from '@/types/command';
 import type { Message } from '../../types/message';
-import type { ModelOptions, ModelCapabilities } from '@/types/settings';
+import type { ModelCapabilities } from '@/types/settings';
 import { isImageAttachment, isTextAttachment, toChatAttachment, buildMessageWithTextAttachments, buildFileRef, buildFolderRef, splitByFileRefs } from '../../utils/attachment-utils';
 import { useMention } from '@/hooks/useMention';
 import type { MentionItem } from '@/hooks/useMention';
@@ -52,7 +52,6 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentModelId, setCurrentModelId] = useState('');
-  const [currentOptions, setCurrentOptions] = useState<ModelOptions | undefined>();
   const [currentCapabilities, setCurrentCapabilities] = useState<ModelCapabilities | undefined>();
   const [isModelLoading, setIsModelLoading] = useState(true);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
@@ -345,9 +344,8 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     setEditorValue(getEditorText());
   }, [mention, removeAtTriggerText, insertNodeAtCursor, insertTextAfterNode, getEditorText]);
 
-  const handleModelChange = useCallback((configId: string, options?: ModelOptions, capabilities?: ModelCapabilities) => {
+  const handleModelChange = useCallback((configId: string, capabilities?: ModelCapabilities) => {
     setCurrentModelId(configId);
-    setCurrentOptions(options);
     setCurrentCapabilities(capabilities);
     setIsModelLoading(false);
   }, []);
@@ -561,7 +559,6 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
       agentId: selectedAgentId,
       modelId: currentModelId,
       projectId: currentProjectId,
-      options: currentOptions,
       attachments: chatAttachments.length > 0 ? chatAttachments : undefined,
       onEvent: handleEvent,
       onDone: (event) => {
@@ -580,7 +577,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
       onError: handleEvent as unknown as (event: import('@/types/socket-event').ErrorEvent) => void,
     });
     setAttachments([]);
-  }, [sessionId, messageIndex, truncateMessagesFrom, setRevertState, addMessage, setStreaming, handleEvent, selectedAgentId, currentModelId, currentOptions, currentProjectId, onSubmit, attachments, setAttachments]);
+  }, [sessionId, messageIndex, truncateMessagesFrom, setRevertState, addMessage, setStreaming, handleEvent, selectedAgentId, currentModelId, currentProjectId, onSubmit, attachments, setAttachments]);
 
   /** Phase 1: Validate and show confirm dialog if files will be reverted */
   const handleSubmit = useCallback(async () => {

@@ -18,7 +18,7 @@ import { useAttachmentManager } from '@/hooks/useAttachmentManager';
 import { AttachmentPreviewBar } from './AttachmentPreviewBar';
 import type { SlashCommand } from '@/types/command';
 import type { QueuedMessage } from '../../types/message';
-import type { ModelOptions, ModelCapabilities } from '@/types/settings';
+import type { ModelCapabilities } from '@/types/settings';
 import { i18n } from '../../utils/i18n';
 import { addQueueMessage, removeQueueMessage } from '../../services/chat-service';
 import { QueuedMessagesPanel } from './QueuedMessagesPanel';
@@ -47,7 +47,6 @@ export const MessageEditor: React.FC = () => {
   const [selectedCommand, setSelectedCommand] = useState<SlashCommand | null>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const [currentModelId, setCurrentModelId] = useState('');
-  const [currentOptions, setCurrentOptions] = useState<ModelOptions | undefined>();
   const [currentCapabilities, setCurrentCapabilities] = useState<ModelCapabilities | undefined>();
   const [isModelLoading, setIsModelLoading] = useState(true);
   const [showAutoApprove, setShowAutoApprove] = useState(false);
@@ -311,9 +310,8 @@ export const MessageEditor: React.FC = () => {
 
   // --- Send handler ---
 
-  const handleModelChange = useCallback((configId: string, options?: ModelOptions, capabilities?: ModelCapabilities) => {
+  const handleModelChange = useCallback((configId: string, capabilities?: ModelCapabilities) => {
     setCurrentModelId(configId);
-    setCurrentOptions(options);
     setCurrentCapabilities(capabilities);
     setIsModelLoading(false);
   }, []);
@@ -426,7 +424,6 @@ export const MessageEditor: React.FC = () => {
         agentId: selectedAgentId,
         modelId: currentModelId,
         projectId: currentProjectId,
-        options: currentOptions,
         attachments: chatAttachments.length > 0 ? chatAttachments : undefined,
         onEvent: handleEvent,
         onDone: (event) => {
@@ -462,7 +459,7 @@ export const MessageEditor: React.FC = () => {
         timestamp: Date.now(),
       });
     }
-  }, [editorValue, isStreaming, sessionId, attachments, addMessage, setStreaming, handleEvent, setSessionId, currentModelId, selectedAgentId, currentOptions, currentProjectId, isModelLoading, isAwaitingAskQuestion, isAwaitingPermission, selectedCommand]);
+  }, [editorValue, isStreaming, sessionId, attachments, addMessage, setStreaming, handleEvent, setSessionId, currentModelId, selectedAgentId, currentProjectId, isModelLoading, isAwaitingAskQuestion, isAwaitingPermission, selectedCommand]);
 
   /** Extract text content, excluding command chip text and replacing mention chips with encoded refs */
   const getEditorText = useCallback((): string => {

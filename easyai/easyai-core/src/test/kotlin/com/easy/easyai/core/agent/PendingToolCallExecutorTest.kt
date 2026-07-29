@@ -278,7 +278,7 @@ class PendingToolCallExecutorTest {
     inner class `Skipped placeholder cleanup` {
 
         @Test
-        fun `removes skipped entries and re-executes unresolved toolCalls`() = runBlocking {
+        fun `merges new results into existing ToolResultMessage instead of creating new one`() = runBlocking {
             val tool = createTestTool("bash")
             val engine = mockk<ToolExecutionEngine>()
             // Both call1 and call2 executed in a single batch invocation
@@ -300,6 +300,17 @@ class PendingToolCallExecutorTest {
             coEvery { messageListener.onMessageAdded(any()) } returns Unit
             coEvery { messageListener.onMessageUpdated(any(), any()) } returns Unit
 
+            val skippedMsg = ToolResultMessage(
+                toolResults = listOf(
+                    ToolResultEntry(
+                        toolCallId = "call2",
+                        toolName = "bash",
+                        result = "Skipped: waiting for permission on bash",
+                        isError = false,
+                        isSkipped = true
+                    )
+                )
+            )
             val transcript = mutableListOf<EasyAiMessage>(
                 AssistantMessage(
                     content = listOf(
@@ -309,17 +320,7 @@ class PendingToolCallExecutorTest {
                     stopReason = StopReason.TOOL_USE
                 ),
                 // ToolResultMessage with skipped placeholder for call2 (from permission pause)
-                ToolResultMessage(
-                    toolResults = listOf(
-                        ToolResultEntry(
-                            toolCallId = "call2",
-                            toolName = "bash",
-                            result = "Skipped: waiting for permission on bash",
-                            isError = false,
-                            isSkipped = true
-                        )
-                    )
-                )
+                skippedMsg
             )
             val executor = PendingToolCallExecutor(
                 toolExecutor = engine,
@@ -332,6 +333,15 @@ class PendingToolCallExecutorTest {
 
             // Both call1 and call2 executed in one batch call (skipped placeholder is filtered out)
             coVerify(exactly = 1) { engine.executeToolCalls(any(), any(), any(), any(), any(), any(), any()) }
+            // Results merged into existing message via onMessageUpdated (NOT onMessageAdded)
+            coVerify(exactly = 1) { messageListener.onMessageUpdated(skippedMsg.id, any()) }
+            coVerify(exactly = 0) { messageListener.onMessageAdded(any()) }
+            // Transcript still has 2 messages (AssistantMessage + merged ToolResultMessage)
+            assertEquals(2, transcript.size)
+            val mergedMsg = transcript[1] as ToolResultMessage
+            assertEquals(skippedMsg.id, mergedMsg.id, "Should reuse the existing message ID")
+            assertEquals(2, mergedMsg.toolResults.size, "Should have 2 results (call1 + call2)")
+            assertTrue(mergedMsg.toolResults.none { it.isSkipped }, "No skipped entries should remain")
         }
     }
 }

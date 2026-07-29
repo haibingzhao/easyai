@@ -1,6 +1,5 @@
 import type { DoneEvent, ErrorEvent, ChatStreamEvent } from '../types/socket-event';
 import type { ChatRequest, ChatAttachment } from '../types/socket-request';
-import type { ModelOptions } from '@/types/settings';
 import { authFetch, JSON_HEADERS } from '@/services/api-client';
 import { parseSSEStream, SSEConnectionError } from '@/services/sse-parser';
 import type { RawSSEEvent } from '@/services/sse-parser';
@@ -142,7 +141,6 @@ export interface SendMessageParams {
   agentId: string | null;
   modelId: string;
   projectId?: string | null;
-  options?: ModelOptions;
   attachments?: ChatAttachment[];
   onEvent: (event: ChatStreamEvent) => void;
   onDone: (event: DoneEvent) => void;
@@ -155,7 +153,7 @@ export interface SendMessageParams {
  * Returns the ChatService instance for abort control.
  */
 export async function sendMessageToBackend(params: SendMessageParams): Promise<ChatService> {
-  const { message, sessionId, agentId, modelId, projectId, options, attachments, onEvent, onDone, onError } = params;
+  const { message, sessionId, agentId, modelId, projectId, attachments, onEvent, onDone, onError } = params;
 
   const chatService = new ChatService({
     onEvent,
@@ -163,15 +161,12 @@ export async function sendMessageToBackend(params: SendMessageParams): Promise<C
     onError: onError as (event: ErrorEvent) => void,
   });
 
-  const optionsToSend = options && Object.keys(options).length > 0 ? options : undefined;
-
   await chatService.sendMessage({
     sessionId: sessionId!,
     projectId: projectId ?? undefined,
     message: message,
     agentId: agentId ?? 'default',
     modelProviderConfigId: modelId,
-    options: optionsToSend,
     attachments: attachments && attachments.length > 0 ? attachments : undefined,
   });
 

@@ -161,7 +161,7 @@ class ContextCompactionOrchestrator(
 
         if (compactedMessages.isEmpty()) {
             logger.warn("No messages to compact, returning original")
-            val contextTokens = tokenEstimator.estimateContextTokens(messages)
+            val contextTokens = contextTokensFromUsage(messages)
             val durationMs = System.currentTimeMillis() - executionStartTime
             return CompactionResult(
                 messages = messages,
@@ -189,7 +189,7 @@ class ContextCompactionOrchestrator(
         // Step 5: Build compaction context
         val compactedRange = CompactedRange(
             messageIds = compactedMessages.map { it.id },
-            estimatedTokensBefore = tokenEstimator.estimateContextTokens(messages),
+            estimatedTokensBefore = contextTokensFromUsage(messages),
             userRoleCount = compactedMessages.count { it.role == Role.USER },
             assistantRoleCount = compactedMessages.count { it.role == Role.ASSISTANT }
         )
@@ -357,5 +357,17 @@ class ContextCompactionOrchestrator(
         val compactedMessages = messages.take(messages.size - recentMessages.size)
 
         return Pair(recentMessages, compactedMessages)
+    }
+
+    /**
+     * Extract context token count directly from the last AssistantMessage's usage data.
+     * Avoids redundant estimation when usage is already available.
+     */
+    private fun contextTokensFromUsage(messages: List<EasyAiMessage>): Int {
+        val last = messages.filterIsInstance<AssistantMessage>()
+            .lastOrNull { it.usage.inputTokens + it.usage.cacheReadTokens + it.usage.cacheWriteTokens > 0 }
+            ?: return tokenEstimator.estimate(messages)
+        val u = last.usage
+        return u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens + u.outputTokens
     }
 }

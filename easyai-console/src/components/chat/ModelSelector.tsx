@@ -3,12 +3,12 @@ import { createPortal } from 'react-dom';
 import { useSettingsStore } from '@/services/stores/settings-store';
 import { modelConfigService } from '@/services/model-config-service';
 import { storageService } from '@/services/storage-service';
-import type { ModelProviderConfig, ModelOptions, ModelCapabilities } from '@/types/settings';
+import type { ModelProviderConfig, ModelCapabilities } from '@/types/settings';
 import { i18n } from '@/utils/i18n';
 import { ChevronDown } from 'lucide-react';
 
 interface ModelSelectorProps {
-  onModelChange: (configId: string, options?: ModelOptions, capabilities?: ModelCapabilities) => void;
+  onModelChange: (configId: string, capabilities?: ModelCapabilities) => void;
 }
 
 export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange }) => {
@@ -51,7 +51,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange }) =
             // Sync store & localStorage so the UI reflects the resolved model
             // (handles stale IDs left over from a different user's session).
             setSelectedModelConfig(currentConfig.id);
-            onModelChange(currentConfig.id, currentConfig.options, currentConfig.capabilities);
+            onModelChange(currentConfig.id, currentConfig.capabilities);
           }
         }
       } catch (e) {
@@ -65,7 +65,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange }) =
 
   const handleSelect = (config: ModelProviderConfig) => {
     setSelectedModelConfig(config.id);
-    onModelChange(config.id, config.options, config.capabilities);
+    onModelChange(config.id, config.capabilities);
     setDropdownOpen(false);
   };
 

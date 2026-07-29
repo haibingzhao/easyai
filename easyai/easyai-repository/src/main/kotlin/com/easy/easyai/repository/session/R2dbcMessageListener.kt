@@ -45,4 +45,9 @@ class R2dbcMessageListener(
         store.updateMessage(sessionId, messageId, message, fields)
         logger.debug("Updated message {} in session {}", messageId, sessionId)
     }
+
+    override suspend fun onMessageDeleted(messageId: String) {
+        store.deleteMessage(sessionId, messageId)
+        logger.debug("Deleted message {} from session {}", messageId, sessionId)
+    }
 }

@@ -2,6 +2,7 @@ package com.easy.easyai.api.config
 
 import com.easy.easyai.api.model.ModelConfigGroup
 import com.easy.easyai.api.model.ModelInfo
+import com.easy.easyai.api.model.ModelOptions
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo
 import com.easy.easyai.api.model.SaveModelConfigGroupRequest
@@ -49,14 +50,20 @@ class DefaultModelConfigService(
     }
 
     override suspend fun saveUserConfiguration(request: SaveModelProviderConfigRequest, userId: String): ModelProviderConfig {
+        request.options?.let { validateOptions(it) }
         val id = request.id ?: UUID.randomUUID().toString()
+        // When apiKey is null, preserve existing key or resolve from group
+        // (frontend sends null for masked/unchanged keys to avoid overwriting with masked values)
+        val effectiveApiKey = request.apiKey
+            ?: configStore.getConfig(id, userId)?.apiKey
+            ?: request.groupId?.let { groupStore?.getGroup(it, userId)?.apiKey }
         val config = ModelProviderConfig(
             id = id,
             name = request.name,
             protocol = request.protocol,
             isCustom = request.isCustom,
             baseUrl = request.baseUrl,
-            apiKey = request.apiKey,
+            apiKey = effectiveApiKey,
             modelId = request.modelId,
             modelName = request.modelName,
             isCustomModel = request.isCustomModel,
@@ -106,5 +113,23 @@ class DefaultModelConfigService(
             isCustom = config.isCustom,
             models = listOf(ModelInfo(id = config.modelId, name = config.modelName ?: config.modelId))
         )
+    }
+
+    private fun validateOptions(options: ModelOptions) {
+        require(options.temperature in 0.0..2.0) {
+            "temperature must be between 0.0 and 2.0, got: ${options.temperature}"
+        }
+        require(options.maxTokens > 0) {
+            "maxTokens must be positive, got: ${options.maxTokens}"
+        }
+        require(options.maxContextTokens > 0) {
+            "maxContextTokens must be positive, got: ${options.maxContextTokens}"
+        }
+        require(options.contextToken > 0) {
+            "contextToken must be positive, got: ${options.contextToken}"
+        }
+        require(options.contextToken <= options.maxContextTokens) {
+            "contextToken (${options.contextToken}) must not exceed maxContextTokens (${options.maxContextTokens})"
+        }
     }
 }

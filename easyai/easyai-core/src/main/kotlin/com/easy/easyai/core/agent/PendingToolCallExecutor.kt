@@ -136,7 +136,7 @@ internal class PendingToolCallExecutor(
             }
         }
 
-        // Build and add ToolResultMessage
+        // Build ToolResultEntries from execution results
         val toolCallMap = executableToolCalls.associateBy { it.id }
         val toolResultEntries = results.mapNotNull { r ->
             val tc = toolCallMap[r.toolCallId]
@@ -160,32 +160,36 @@ internal class PendingToolCallExecutor(
         }
 
         if (toolResultEntries.isNotEmpty()) {
-            val toolResultMessage = ToolResultMessage(toolResults = toolResultEntries)
-            transcript.add(toolResultMessage)
-            messageListener?.onMessageAdded(listOf(toolResultMessage))
-            logger.info("${logPrefix}Added ToolResultMessage with {} entries for resume scenario", toolResultEntries.size)
-        }
-
-        // Clean up skipped placeholder entries from old ToolResultMessages
-        // This ensures DB consistency after tool re-execution
-        for (oldMsg in skippedToolResultMessages) {
-            val nonSkippedResults = oldMsg.toolResults.filter { !it.isSkipped }
-            if (nonSkippedResults.isEmpty()) {
-                // All entries were skipped - remove the message from transcript
-                transcript.remove(oldMsg)
-                logger.info("${logPrefix}Removed empty ToolResultMessage {} (all entries were skipped)", oldMsg.id)
-                // Skip DB update — the skipped entries are already filtered in existingResultToolCallIds
-            } else {
-                // Update the message with non-skipped entries only
-                val updatedMsg = oldMsg.copy(toolResults = nonSkippedResults)
-                val index = transcript.indexOf(oldMsg)
+            val targetMsg = skippedToolResultMessages.firstOrNull()
+            if (targetMsg != null) {
+                // Merge into the existing ToolResultMessage that contains skipped placeholders.
+                // Keep non-skipped entries (from previously executed tools) and append new results.
+                // This avoids creating consecutive ToolResultMessages which would confuse the LLM.
+                val nonSkippedResults = targetMsg.toolResults.filter { !it.isSkipped }
+                val mergedResults = nonSkippedResults + toolResultEntries
+                val updatedMsg = ToolResultMessage(id = targetMsg.id, toolResults = mergedResults)
+                val index = transcript.indexOf(targetMsg)
                 if (index >= 0) {
                     transcript[index] = updatedMsg
+                } else {
+                    transcript.add(updatedMsg)
                 }
-                // Persist the update to DB
-                messageListener?.onMessageUpdated(oldMsg.id, updatedMsg)
-                logger.info("${logPrefix}Cleaned {} skipped entries from ToolResultMessage {}", 
-                    oldMsg.toolResults.size - nonSkippedResults.size, oldMsg.id)
+                messageListener?.onMessageUpdated(targetMsg.id, updatedMsg)
+                logger.info("${logPrefix}Merged {} new results into ToolResultMessage {} ({} non-skipped kept, {} skipped replaced)",
+                    toolResultEntries.size, targetMsg.id, nonSkippedResults.size, targetMsg.toolResults.size - nonSkippedResults.size)
+
+                // Delete any additional skipped messages (rare edge case — normally only one exists)
+                for (extraMsg in skippedToolResultMessages.drop(1)) {
+                    transcript.remove(extraMsg)
+                    messageListener?.onMessageDeleted(extraMsg.id)
+                    logger.info("${logPrefix}Deleted redundant skipped ToolResultMessage {}", extraMsg.id)
+                }
+            } else {
+                // No existing skipped message — create a new ToolResultMessage
+                val toolResultMessage = ToolResultMessage(toolResults = toolResultEntries)
+                transcript.add(toolResultMessage)
+                messageListener?.onMessageAdded(listOf(toolResultMessage))
+                logger.info("${logPrefix}Added ToolResultMessage with {} entries for resume scenario", toolResultEntries.size)
             }
         }
     }

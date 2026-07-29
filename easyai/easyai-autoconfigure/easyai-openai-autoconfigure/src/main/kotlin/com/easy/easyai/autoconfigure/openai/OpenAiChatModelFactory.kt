@@ -76,15 +76,21 @@ class OpenAiChatModelFactory : ChatModelFactory {
 
     override fun build(
         config: ModelProviderConfig,
-        toolCallbacks: List<ToolCallback>,
-        additionalOptions: Map<String, Any?>
+        toolCallbacks: List<ToolCallback>
     ): ChatOptions {
         val builder = OpenAiChatOptions.builder()
             .model(config.modelId)
             .toolCallbacks(toolCallbacks)
         config.options?.let {
-            builder.maxTokens(it.maxTokens)
-            builder.temperature(it.temperature)
+            if (it.thinking) {
+                // OpenAI reasoning models (o-series) do not support temperature/maxTokens;
+                // they use maxCompletionTokens and reasoningEffort instead.
+                builder.reasoningEffort("high")
+                builder.maxCompletionTokens(it.maxTokens)
+            } else {
+                builder.temperature(it.temperature)
+                builder.maxTokens(it.maxTokens)
+            }
         }
         return builder.build()
     }

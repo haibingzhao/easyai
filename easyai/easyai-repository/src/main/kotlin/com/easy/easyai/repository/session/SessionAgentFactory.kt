@@ -41,11 +41,10 @@ class SessionAgentFactory(
     suspend fun createAgentWithConfig(
         sessionId: String,
         config: ModelProviderConfig,
-        options: Map<String, Any?>?,
         tools: List<ToolDefinition>,
         agentContext: AgentContext
     ): Agent {
-        return buildAgent(sessionId, config, options, tools, agentContext)
+        return buildAgent(sessionId, config, tools, agentContext)
     }
 
     /**
@@ -56,7 +55,6 @@ class SessionAgentFactory(
         agentDef: AgentDefinition,
         sessionId: String,
         config: ModelProviderConfig,
-        options: Map<String, Any?>?,
         tools: List<ToolDefinition>,
         agentContext: AgentContext
     ): Agent {
@@ -67,7 +65,7 @@ class SessionAgentFactory(
             inputSchema = agentDef.inputSchema,
             outputSchema = agentDef.outputSchema
         )
-        return buildAgent(sessionId, config, options, tools, enrichedContext)
+        return buildAgent(sessionId, config, tools, enrichedContext)
     }
 
     /**
@@ -76,7 +74,6 @@ class SessionAgentFactory(
     private fun buildAgent(
         sessionId: String,
         config: ModelProviderConfig,
-        options: Map<String, Any?>?,
         tools: List<ToolDefinition>,
         agentContext: AgentContext
     ): Agent {
@@ -97,7 +94,6 @@ class SessionAgentFactory(
             sessionId = sessionId,
             config = config,
             services = sessionService,
-            options = options,
             tools = tools
         )
     }

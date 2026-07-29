@@ -377,6 +377,15 @@ class R2dbcAsyncSessionStore(
         }
     }
 
+    override suspend fun deleteMessage(sessionId: String, messageId: String) {
+        suspendTransaction(db) {
+            Tables.Message.deleteWhere {
+                (Tables.Message.id eq messageId) and (Tables.Message.sessionId eq sessionId)
+            }
+        }
+        logger.debug("Deleted message {} from session {}", messageId, sessionId)
+    }
+
     /**
      * Get the configuration (agentId, modelId) from the last message in a session.
      * Used to restore session state when memory cache is lost.
@@ -479,27 +488,39 @@ class R2dbcAsyncSessionStore(
     override suspend fun getFirstCompactionAfter(sessionId: String, messageCreatedAt: Long): Long? {
         return suspendTransaction(db) {
             Tables.Message
-                .select(Tables.Message.createdAt, Tables.Message.role, Tables.Message.metadata)
+                .select(Tables.Message.createdAt, Tables.Message.metadata)
                 .where {
                     (Tables.Message.sessionId eq sessionId) and
-                        (Tables.Message.createdAt greaterEq messageCreatedAt)
+                        (Tables.Message.createdAt greaterEq messageCreatedAt) and
+                        (Tables.Message.role eq "CUSTOM")
                 }
                 .orderBy(Tables.Message.createdAt to SortOrder.ASC)
                 .firstOrNull { row ->
-                    val role = row[Tables.Message.role]
-                    if (role == "CUSTOM") return@firstOrNull true
-                    if (role == "USER") {
-                        val metadata = parseMetadata(row[Tables.Message.metadata])
-                        return@firstOrNull metadata["isCompactionSummary"] == "true"
-                    }
-                    false
+                    parseMetadata(row[Tables.Message.metadata])["isCompactionIndicator"] == "true"
                 }
                 ?.get(Tables.Message.createdAt)
         }
     }
 
-    override suspend fun undoCompactionAfter(sessionId: String, messageCreatedAt: Long) {
-        suspendTransaction(db) {
+    override suspend fun hasCompactionSummaryAtOrAfter(sessionId: String, messageCreatedAt: Long): Boolean {
+        return suspendTransaction(db) {
+            Tables.Message
+                .select(Tables.Message.metadata)
+                .where {
+                    (Tables.Message.sessionId eq sessionId) and
+                        (Tables.Message.role eq "USER") and
+                        (Tables.Message.createdAt greaterEq messageCreatedAt) and
+                        (Tables.Message.compactedAt.isNull())
+                }
+                .toList()
+                .any { row ->
+                    parseMetadata(row[Tables.Message.metadata])["isCompactionSummary"] == "true"
+                }
+        }
+    }
+
+    override suspend fun undoCompactionAfter(sessionId: String, messageCreatedAt: Long): Set<String> {
+        return suspendTransaction(db) {
             // Step 1: Find compaction INDICATORS at/after the edit point.
             // Indicator.createdAt = compactedAt (wall-clock time when compaction ran),
             // which is always >= the compacted messages' timestamps.
@@ -515,29 +536,64 @@ class R2dbcAsyncSessionStore(
                     parseMetadata(row[Tables.Message.metadata])["isCompactionIndicator"] == "true"
                 }
 
-            if (indicatorRows.isEmpty()) return@suspendTransaction
+            // Step 2: Extract summaryMessageId from each indicator's CustomContent block.
+            // Build indicatorId -> summaryId mapping so we can selectively undo.
+            val indicatorToSummary = indicatorRows.mapNotNull { row ->
+                val summaryId = extractSummaryMessageId(row[Tables.Message.contentBlocks])
+                summaryId?.let { row[Tables.Message.id] to it }
+            }.toMap()
 
-            val indicatorIds = indicatorRows.map { it[Tables.Message.id] }.toSet()
-
-            // Step 2: Extract summaryMessageId from each indicator's CustomContent block
-            val summaryIds = indicatorRows.mapNotNull { row ->
-                extractSummaryMessageId(row[Tables.Message.contentBlocks])
-            }.toSet()
-
-            if (summaryIds.isEmpty()) return@suspendTransaction
-
-            // Step 3: Load the corresponding summaries to get compactedMessageIds.
-            // Note: a summary's createdAt may be BEFORE the edit point — that's fine,
-            // we still need to restore its compacted messages and delete the summary.
-            val summaryRows = Tables.Message
+            // Step 2b: Also find ORPHANED summaries directly (summaries whose indicators
+            // were deleted by a previous edit's deleteMessagesFromTimestamp). These are already
+            // filtered by createdAt >= messageCreatedAt so they always need undo.
+            val orphanedSummaryRows = Tables.Message
                 .select(Tables.Message.id, Tables.Message.metadata)
                 .where {
                     (Tables.Message.sessionId eq sessionId) and
-                        (Tables.Message.id inList summaryIds)
+                        (Tables.Message.role eq "USER") and
+                        (Tables.Message.createdAt greaterEq messageCreatedAt) and
+                        (Tables.Message.compactedAt.isNull())
+                }
+                .toList()
+                .filter { row ->
+                    parseMetadata(row[Tables.Message.metadata])["isCompactionSummary"] == "true"
+                }
+            val orphanedSummaryIds = orphanedSummaryRows.map { it[Tables.Message.id] }.toSet()
+
+            // All candidate summary IDs (from indicators + orphaned)
+            val candidateSummaryIds = indicatorToSummary.values.toSet() + orphanedSummaryIds
+            if (candidateSummaryIds.isEmpty()) return@suspendTransaction emptySet<String>()
+
+            // Step 3: Load summaries and FILTER by createdAt >= messageCreatedAt.
+            // Only undo compactions whose summary is at/after the edit point —
+            // summaries BEFORE the edit point represent context that does NOT include
+            // the edited message and should remain intact.
+            val summaryRows = Tables.Message
+                .select(Tables.Message.id, Tables.Message.metadata, Tables.Message.createdAt)
+                .where {
+                    (Tables.Message.sessionId eq sessionId) and
+                        (Tables.Message.id inList candidateSummaryIds)
                 }
                 .toList()
 
-            val allCompactedIds = summaryRows.flatMap { row ->
+            val summariesToUndo = summaryRows.filter { row ->
+                row[Tables.Message.createdAt] >= messageCreatedAt
+            }
+            val summaryIdsToUndo = summariesToUndo.map { it[Tables.Message.id] }.toSet()
+
+            // Indicators whose summary is being undone → delete them
+            val indicatorIdsToDelete = indicatorToSummary
+                .filter { (_, summaryId) -> summaryId in summaryIdsToUndo }
+                .keys
+
+            // Indicators whose summary is BEFORE the edit point → preserve them
+            val preservedIndicatorIds = indicatorToSummary
+                .filter { (_, summaryId) -> summaryId !in summaryIdsToUndo }
+                .keys
+
+            if (summaryIdsToUndo.isEmpty()) return@suspendTransaction preservedIndicatorIds
+
+            val allCompactedIds = summariesToUndo.flatMap { row ->
                 val meta = parseMetadata(row[Tables.Message.metadata])
                 val idsJson = meta["compactedMessageIds"] ?: return@flatMap emptyList<String>()
                 try {
@@ -561,15 +617,17 @@ class R2dbcAsyncSessionStore(
                 )
             }
 
-            // Step 5: Delete summaries + indicators
-            val toDelete = summaryIds + indicatorIds
+            // Step 5: Delete only the summaries + indicators that were undone
+            val toDelete = summaryIdsToUndo + indicatorIdsToDelete
             Tables.Message.deleteWhere {
                 (Tables.Message.sessionId eq sessionId) and (Tables.Message.id inList toDelete)
             }
             logger.info(
-                "Deleted {} compaction artifacts ({} summaries, {} indicators) for session {}",
-                toDelete.size, summaryIds.size, indicatorIds.size, sessionId
+                "Deleted {} compaction artifacts ({} summaries, {} indicators), preserved {} indicators for session {}",
+                toDelete.size, summaryIdsToUndo.size, indicatorIdsToDelete.size, preservedIndicatorIds.size, sessionId
             )
+
+            preservedIndicatorIds
         }
     }
 
@@ -919,22 +977,20 @@ class R2dbcAsyncSessionStore(
     /**
      * Delete all messages with createdAt >= the target message's createdAt (inclusive).
      */
-    override suspend fun deleteMessagesFrom(sessionId: String, messageId: String): Int {
+    override suspend fun deleteMessagesFromTimestamp(sessionId: String, fromTimestamp: Long, excludeIds: Set<String>): Int {
         return suspendTransaction(db) {
-            // 1. Look up the target message's createdAt timestamp
-            val targetRow = Tables.Message
-                .select(Tables.Message.createdAt)
-                .where { (Tables.Message.sessionId eq sessionId) and (Tables.Message.id eq messageId) }
-                .limit(1)
-                .firstOrNull() ?: return@suspendTransaction 0
-
-            val targetCreatedAt = targetRow[Tables.Message.createdAt]
-
-            // 2. Delete all messages with createdAt >= target
-            val deleted = Tables.Message.deleteWhere {
-                (Tables.Message.sessionId eq sessionId) and (Tables.Message.createdAt greaterEq targetCreatedAt)
+            val deleted = if (excludeIds.isEmpty()) {
+                Tables.Message.deleteWhere {
+                    (Tables.Message.sessionId eq sessionId) and (Tables.Message.createdAt greaterEq fromTimestamp)
+                }
+            } else {
+                Tables.Message.deleteWhere {
+                    (Tables.Message.sessionId eq sessionId) and
+                        (Tables.Message.createdAt greaterEq fromTimestamp) and
+                        (Tables.Message.id notInList excludeIds)
+                }
             }
-            logger.info("Deleted {} messages from createdAt >= {} for session {}", deleted, targetCreatedAt, sessionId)
+            logger.info("Deleted {} messages from createdAt >= {} for session {} (excluded {})", deleted, fromTimestamp, sessionId, excludeIds.size)
             deleted
         }
     }

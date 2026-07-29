@@ -1,6 +1,7 @@
 package com.easy.easyai.apps.web.seed
 
 import com.easy.easyai.api.config.ModelProviderConfigStore
+import com.easy.easyai.api.model.ModelOptions
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
 import kotlinx.coroutines.CoroutineScope
@@ -56,7 +57,7 @@ class DefaultModelProviderSeeder(
                 modelName = "GPT-4o",
                 isCustomModel = false,
                 enabled = true,
-                options = null
+                options = ModelOptions()
             ),
             ModelProviderConfig(
                 id = "anthropic",
@@ -69,7 +70,7 @@ class DefaultModelProviderSeeder(
                 modelName = "Claude Sonnet 4",
                 isCustomModel = false,
                 enabled = true,
-                options = null
+                options = ModelOptions()
             ),
         )
     }

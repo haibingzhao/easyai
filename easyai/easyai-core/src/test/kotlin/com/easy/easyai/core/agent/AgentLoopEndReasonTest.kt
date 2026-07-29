@@ -89,7 +89,7 @@ class AgentLoopEndReasonTest {
     private fun createMockChatModelFactory(chatModel: ChatModel): ChatModelFactory {
         val factory = mockk<ChatModelFactory>(relaxed = true)
         every { factory.create(any(), any()) } returns chatModel
-        every { factory.build(any(), any(), any()) } returns ChatOptions.builder().model("test-model").build()
+        every { factory.build(any(), any()) } returns ChatOptions.builder().model("test-model").build()
         every { factory.supports(any()) } returns true
         return factory
     }

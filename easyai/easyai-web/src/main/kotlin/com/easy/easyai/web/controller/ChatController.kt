@@ -799,8 +799,24 @@ class ChatController(
 
             // 2. Undo compaction after this message if any (instead of blocking)
             val compactionTs = sessionService.getFirstCompactionAfter(sessionId, createdAt)
-            if (compactionTs != null) {
-                sessionService.undoCompactionAfter(sessionId, createdAt)
+            val preservedIndicatorIds = if (compactionTs != null) {
+                // Optimization: if no compaction SUMMARY exists at/after the message's timestamp,
+                // the message was in the "recent" portion during compaction (not compacted itself).
+                // The expensive undo (restore all compacted messages just to re-delete them) can be
+                // skipped — deleteMessagesFromTimestamp will clean up indicators naturally, and the
+                // summary (before the edit point) remains valid as context for the re-sent message.
+                val needsFullUndo = sessionService.hasCompactionSummaryAtOrAfter(sessionId, createdAt)
+                if (needsFullUndo) {
+                    sessionService.undoCompactionAfter(sessionId, createdAt)
+                } else {
+                    logger.info(
+                        "Skipping compaction undo for edit in session {}: message is after summary, no restore needed",
+                        sessionId
+                    )
+                    emptySet()
+                }
+            } else {
+                emptySet()
             }
 
             // 3. Get projectPath BEFORE deleting messages (session may not be in memory for historical sessions)
@@ -808,8 +824,8 @@ class ChatController(
             val sessionContext = sessionManager.getSessionContext(sessionId, userId)
             val projectPath = sessionContext?.projectPath
 
-            // 4. Delete messages
-            val deletedCount = sessionService.deleteMessagesFrom(sessionId, request.messageId)
+            // 4. Delete messages (exclude preserved compaction indicators)
+            val deletedCount = sessionService.deleteMessagesFromTimestamp(sessionId, createdAt, preservedIndicatorIds)
 
             // 4b. Clean up Team Agent records from the truncation point (executions/rounds + member sub-sessions)
             sessionService.deleteTeamRecordsFrom(sessionId, createdAt, userId)

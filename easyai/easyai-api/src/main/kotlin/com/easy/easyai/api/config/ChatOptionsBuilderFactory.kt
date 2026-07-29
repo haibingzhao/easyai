@@ -19,11 +19,9 @@ interface ChatOptionsBuilderFactory {
      * Build ChatOptions for the given configuration.
      * @param config The model provider configuration
      * @param toolCallbacks The tool callbacks to register
-     * @param additionalOptions Optional additional options (temperature, maxTokens, etc.)
      */
     fun build(
         config: ModelProviderConfig,
-        toolCallbacks: List<ToolCallback>,
-        additionalOptions: Map<String, Any?> = emptyMap()
+        toolCallbacks: List<ToolCallback>
     ): ChatOptions
 }

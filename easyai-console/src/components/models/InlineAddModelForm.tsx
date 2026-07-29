@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import { i18n } from '../../utils/i18n';
+import { TokenInput } from '../TokenInput';
 import { modelConfigService } from '@/services/model-config-service';
 import { ChevronRight, ChevronDown, Trash2 } from 'lucide-react';
 import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, Protocol, SaveModelProviderConfigRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
@@ -26,7 +27,7 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
   const [customModelName, setCustomModelName] = useState('');
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [options, setOptions] = useState<ModelOptions>({});
-  const [showOptions, setShowOptions] = useState(false);
+  const [showOptions, setShowOptions] = useState(true);
   const [capabilities, setCapabilities] = useState<ModelCapabilities>({});
 
   // ─── State ─────────────────────────────────────────────────────────────────
@@ -76,7 +77,7 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
     setCustomModelName('');
     setOptions({});
     setCapabilities({});
-    setShowOptions(false);
+    setShowOptions(true);
   };
 
   const handleSave = async (addAnother: boolean) => {
@@ -106,6 +107,11 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
     }
     if (!customModelName.trim()) {
       alert(i18n('Please enter Model Name'));
+      return;
+    }
+    if (options.contextToken != null && options.maxContextTokens != null
+      && options.contextToken > options.maxContextTokens) {
+      alert(i18n('Context Token must not exceed Max Context Tokens'));
       return;
     }
 
@@ -155,7 +161,8 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
         onDone();
       }
     } catch (e) {
-      console.error('Failed to save:', e);
+      const msg = e instanceof Error ? (() => { try { return JSON.parse(e.message).error; } catch { return e.message; } })() : 'Save failed';
+      alert(msg);
     } finally {
       setLoading(false);
     }
@@ -344,6 +351,22 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
             />
           </div>
 
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-medium">{i18n('Vision (Image Input)')}</label>
+            <button
+              onClick={() => setCapabilities(prev => ({ ...prev, vision: !prev.vision }))}
+              className={`relative w-9 h-5 rounded-full transition-colors ${
+                capabilities.vision ? 'bg-green-500' : 'bg-muted-foreground/30'
+              }`}
+            >
+              <div
+                className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                  capabilities.vision ? 'translate-x-4' : 'translate-x-0.5'
+                }`}
+              />
+            </button>
+          </div>
+
           <div>
             <button
               onClick={() => setShowOptions(!showOptions)}
@@ -372,15 +395,10 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
                 </div>
                 <div>
                   <label className="text-xs font-medium mb-1 block">{i18n('Max Tokens')}</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={options.maxTokens ?? ''}
-                    onChange={(e) => setOptions(prev => ({
-                      ...prev,
-                      maxTokens: e.target.value ? parseInt(e.target.value) : undefined,
-                    }))}
-                    placeholder="4096"
+                  <TokenInput
+                    value={options.maxTokens}
+                    onChange={(v) => setOptions(prev => ({ ...prev, maxTokens: v }))}
+                    placeholder="16"
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                   />
                 </div>
@@ -399,24 +417,26 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
                     />
                   </button>
                 </div>
+                <div>
+                  <label className="text-xs font-medium mb-1 block">{i18n('Max Context Tokens')}</label>
+                  <TokenInput
+                    value={options.maxContextTokens}
+                    onChange={(v) => setOptions(prev => ({ ...prev, maxContextTokens: v }))}
+                    placeholder="200"
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium mb-1 block">{i18n('Context Token')}</label>
+                  <TokenInput
+                    value={options.contextToken}
+                    onChange={(v) => setOptions(prev => ({ ...prev, contextToken: v }))}
+                    placeholder="200"
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                  />
+                </div>
               </div>
             )}
-          </div>
-
-          <div className="flex items-center justify-between">
-            <label className="text-sm font-medium">{i18n('Vision (Image Input)')}</label>
-            <button
-              onClick={() => setCapabilities(prev => ({ ...prev, vision: !prev.vision }))}
-              className={`relative w-9 h-5 rounded-full transition-colors ${
-                capabilities.vision ? 'bg-green-500' : 'bg-muted-foreground/30'
-              }`}
-            >
-              <div
-                className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                  capabilities.vision ? 'translate-x-4' : 'translate-x-0.5'
-                }`}
-              />
-            </button>
           </div>
         </fieldset>
       </div>

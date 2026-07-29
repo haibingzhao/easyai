@@ -29,7 +29,6 @@ interface AgentBuilder {
      * @param sessionId the session ID (used as fallback if agentContext.sessionId is null)
      * @param config the model provider config
      * @param services the agent service providing infrastructure dependencies
-     * @param options additional options
      * @param tools the available tools
      * @return configured Agent instance
      */
@@ -38,7 +37,6 @@ interface AgentBuilder {
         sessionId: String,
         config: ModelProviderConfig,
         services: AgentService,
-        options: Map<String, Any?>?,
         tools: List<ToolDefinition>
     ): Agent
 
@@ -73,7 +71,6 @@ interface AgentBuilder {
             sessionId: String,
             config: ModelProviderConfig,
             services: AgentService,
-            options: Map<String, Any?>?,
             tools: List<ToolDefinition>
         ): Agent {
             val resolvedSessionId = agentContext.sessionId ?: sessionId
@@ -81,7 +78,6 @@ interface AgentBuilder {
                 modelConfig = config,
                 tools = tools,
                 sessionId = resolvedSessionId,
-                options = options,
                 maxIterations = 50
             )
             return Agent(context = finalContext, services = services)

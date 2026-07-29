@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { aiConfigService } from '@/services/ai-config-service';
 import { modelConfigService } from '@/services/model-config-service';
 import { i18n } from '@/utils/i18n';
@@ -59,10 +60,14 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
 
   // Model selector state (local, does not modify global settings)
   const [models, setModels] = useState<ModelProviderConfig[]>([]);
+  const [groupNames, setGroupNames] = useState<Record<string, string>>({});
   const [selectedModelId, setSelectedModelId] = useState<string | null>(
     () => localStorage.getItem('easyai:ai-config:model-id')
   );
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const modelBtnRef = useRef<HTMLButtonElement>(null);
+  const modelDropdownRef = useRef<HTMLDivElement>(null);
 
   const abortRef = useRef<{ abort: () => void } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -89,17 +94,87 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
 
   // Load models on mount
   useEffect(() => {
-    modelConfigService.getUserConfigurations().then((configs) => {
+    Promise.all([
+      modelConfigService.getUserConfigurations(),
+      modelConfigService.getGroups(),
+    ]).then(([configs, groups]) => {
       const enabled = configs.filter(c => c.enabled !== false);
       setModels(enabled);
+      const nameMap: Record<string, string> = {};
+      for (const g of groups) { nameMap[g.id] = g.name; }
+      setGroupNames(nameMap);
       if (enabled.length > 0 && !selectedModelId) {
         setSelectedModelId(enabled[0].id);
       } else if (selectedModelId && !enabled.some(c => c.id === selectedModelId)) {
-        // Saved model no longer available, fall back to first
         setSelectedModelId(enabled.length > 0 ? enabled[0].id : null);
       }
     }).catch(() => { /* ignore */ });
   }, []);
+
+  // Group models for display
+  const groupedModels = useMemo(() => {
+    const byGroup = new Map<string, ModelProviderConfig[]>();
+    const ungrouped: ModelProviderConfig[] = [];
+    for (const config of models) {
+      if (config.groupId && groupNames[config.groupId]) {
+        const list = byGroup.get(config.groupId) || [];
+        list.push(config);
+        byGroup.set(config.groupId, list);
+      } else {
+        ungrouped.push(config);
+      }
+    }
+    return { byGroup, ungrouped };
+  }, [models, groupNames]);
+
+  // Position dropdown below button
+  const toggleModelDropdown = useCallback(() => {
+    if (!modelDropdownOpen && modelBtnRef.current) {
+      const rect = modelBtnRef.current.getBoundingClientRect();
+      setDropdownPos({ top: rect.bottom + 4, left: rect.left, width: rect.width });
+    }
+    setModelDropdownOpen(prev => !prev);
+  }, [modelDropdownOpen]);
+
+  // Clamp dropdown position within viewport
+  useLayoutEffect(() => {
+    if (!modelDropdownOpen || !dropdownPos || !modelDropdownRef.current) return;
+    const dd = modelDropdownRef.current;
+    const margin = 8;
+    const ddHeight = dd.offsetHeight;
+    let top = dropdownPos.top;
+    if (top + ddHeight > window.innerHeight - margin) {
+      top = Math.max(margin, window.innerHeight - ddHeight - margin);
+    }
+    let left = dropdownPos.left;
+    const ddWidth = dd.offsetWidth;
+    left = Math.max(margin, Math.min(left, window.innerWidth - ddWidth - margin));
+    dd.style.top = `${top}px`;
+    dd.style.left = `${left}px`;
+  }, [modelDropdownOpen, dropdownPos]);
+
+  // Close dropdown on outside click or scroll
+  useEffect(() => {
+    if (!modelDropdownOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        modelDropdownRef.current && !modelDropdownRef.current.contains(e.target as Node) &&
+        modelBtnRef.current && !modelBtnRef.current.contains(e.target as Node)
+      ) {
+        setModelDropdownOpen(false);
+      }
+    };
+    const handleScroll = (e: Event) => {
+      if (modelDropdownRef.current && modelDropdownRef.current.contains(e.target as Node)) return;
+      setModelDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('scroll', handleScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [modelDropdownOpen]);
 
   // Auto-scroll to bottom during streaming
   useEffect(() => {
@@ -294,7 +369,8 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
       <div className={inline ? 'py-2' : 'px-4 py-2 border-b border-border shrink-0'}>
         <div className="relative">
           <button
-            onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
+            ref={modelBtnRef}
+            onClick={toggleModelDropdown}
             className="flex items-center gap-2 w-full px-3 py-1.5 text-xs rounded-md border border-border hover:bg-muted transition-colors"
           >
             <span className="text-muted-foreground">{i18n('Model')}:</span>
@@ -303,21 +379,45 @@ export const AiConfigPanel: React.FC<AiConfigPanelProps> = ({
             </span>
             <ChevronDown className={`w-3 h-3 transition-transform ${modelDropdownOpen ? 'rotate-180' : ''}`} />
           </button>
-          {modelDropdownOpen && (
-            <div className="absolute top-full left-0 right-0 mt-1 bg-popover border border-border rounded-md shadow-lg z-50 max-h-48 overflow-y-auto">
-              {models.map(m => (
+          {modelDropdownOpen && dropdownPos && createPortal(
+            <div
+              ref={modelDropdownRef}
+              className="fixed max-h-[320px] overflow-y-auto bg-popover border border-border rounded-md shadow-lg z-[9999]"
+              style={{ top: dropdownPos.top, left: dropdownPos.left, width: Math.max(dropdownPos.width, 240) }}
+            >
+              {[...groupedModels.byGroup.entries()].map(([groupId, configs]) => (
+                <div key={groupId}>
+                  <div className="px-3 pt-2 pb-1 text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wide truncate">
+                    {groupNames[groupId]}
+                  </div>
+                  {configs.map(m => (
+                    <button
+                      key={m.id}
+                      onClick={() => { setSelectedModelId(m.id); setModelDropdownOpen(false); }}
+                      className={`w-full text-left px-3 py-2 hover:bg-muted transition-colors ${
+                        selectedModelId === m.id ? 'bg-muted' : ''
+                      }`}
+                    >
+                      <div className="text-sm font-medium truncate">{m.name}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5 truncate">{m.modelName || m.modelId}</div>
+                    </button>
+                  ))}
+                </div>
+              ))}
+              {groupedModels.ungrouped.map(m => (
                 <button
                   key={m.id}
                   onClick={() => { setSelectedModelId(m.id); setModelDropdownOpen(false); }}
-                  className={`w-full text-left px-3 py-2 text-xs hover:bg-muted transition-colors ${
+                  className={`w-full text-left px-3 py-2 hover:bg-muted transition-colors ${
                     selectedModelId === m.id ? 'bg-muted' : ''
                   }`}
                 >
-                  <div className="font-medium">{m.name}</div>
-                  <div className="text-muted-foreground mt-0.5">{m.modelName || m.modelId}</div>
+                  <div className="text-sm font-medium truncate">{m.name}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5 truncate">{m.modelName || m.modelId}</div>
                 </button>
               ))}
-            </div>
+            </div>,
+            document.body
           )}
         </div>
       </div>

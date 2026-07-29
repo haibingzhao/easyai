@@ -14,15 +14,8 @@ export interface ChatRequest {
   agentId: string;
   modelProviderConfigId?: string;
   model?: string;
-  options?: ChatOptions;
   inputData?: Record<string, unknown>;
   attachments?: ChatAttachment[];
-}
-
-export interface ChatOptions {
-  temperature?: number;
-  maxTokens?: number;
-  thinking?: boolean;
 }
 
 export interface SessionResponse {

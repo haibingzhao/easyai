@@ -187,7 +187,7 @@ object Tables {
 
         init {
             // Composite index for session-scoped queries: loadMessagesWithTimestamps,
-            // loadActiveMessages, deleteMessagesFrom, getFirstCompactionAfter, etc.
+            // loadActiveMessages, deleteMessagesFromTimestamp, getFirstCompactionAfter, etc.
             index(false, sessionId, createdAt)
         }
     }

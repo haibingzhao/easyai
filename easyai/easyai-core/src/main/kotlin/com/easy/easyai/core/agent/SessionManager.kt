@@ -26,7 +26,7 @@ interface SessionManager {
      *
      * Always builds a fresh ChatSession using the request-provided parameters.
      * If the session exists in DB, it restores history but uses the provided
-     * config/agentId/options (frontend parameters always override DB values).
+     * config/agentId (frontend parameters always override DB values).
      *
      * Identity fields (sessionId, agentId, projectId, projectPath, tools)
      * are read from [agentContext]. Only model connection params are passed separately.
@@ -34,13 +34,11 @@ interface SessionManager {
      * @param agentContext Agent context containing identity and behavior config.
      * @param config Model provider configuration for the LLM connection.
      * @param chatOptionsFactory Factory to create chat options from config.
-     * @param options Optional raw chat options map (temperature, maxTokens, etc.).
      */
     suspend fun getOrCreateSession(
         agentContext: AgentContext,
         config: ModelProviderConfig,
-        chatOptionsFactory: ChatModelFactory,
-        options: Map<String, Any?>? = null
+        chatOptionsFactory: ChatModelFactory
     ): ChatSession
 
     /**

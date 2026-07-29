@@ -195,8 +195,11 @@ class PermissionService(
             }
         }
 
-        // 4. Default: ASK
-        return PermissionCheckResult(PermissionAction.ASK, "$prefix.project", pattern)
+        // 4. Default: ASK — report correct permission type based on path location
+        val isUnderProject = projectPath != null && filePath != null &&
+            SafeCommandDetector.normalizePath(filePath, projectPath).startsWith(projectPath)
+        val defaultPermission = if (isUnderProject) "$prefix.project" else "$prefix.other"
+        return PermissionCheckResult(PermissionAction.ASK, defaultPermission, pattern)
     }
 
     /**

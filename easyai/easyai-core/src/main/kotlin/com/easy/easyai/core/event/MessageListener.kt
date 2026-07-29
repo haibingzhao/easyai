@@ -42,4 +42,15 @@ interface MessageListener {
     suspend fun onMessageUpdated(messageId: String, message: EasyAiMessage, fields: Set<MessageUpdateField>? = null) {
         // Default: no-op. Implementations with persistent storage should override.
     }
+
+    /**
+     * Called when a message is removed from the transcript and should be deleted from storage.
+     * Used when skipped placeholder ToolResultMessages are replaced by merged results
+     * after permission approval and tool re-execution.
+     *
+     * @param messageId The ID of the message to delete
+     */
+    suspend fun onMessageDeleted(messageId: String) {
+        // Default: no-op. Implementations with persistent storage should override.
+    }
 }
