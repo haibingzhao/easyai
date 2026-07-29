@@ -19,6 +19,9 @@
 # Environment secrets
 .env
 
+# Independent trading project (separate git repo)
+easyai-trading/
+
 # Build outputs
 target/
 dist/

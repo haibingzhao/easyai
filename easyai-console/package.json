@@ -1,6 +1,6 @@
 {
-  "name": "@easyai/web-ui",
-  "private": true,
+  "name": "@easyai/console",
+  "private": false,
   "version": "0.1.0",
   "license": "Apache-2.0",
   "repository": {
@@ -10,12 +10,30 @@
   },
   "homepage": "https://github.com/haibingzhao/easyai/tree/main/easyai-console",
   "type": "module",
+  "main": "./dist-lib/index.js",
+  "module": "./dist-lib/index.js",
+  "types": "./dist-lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist-lib/index.d.ts",
+      "import": "./dist-lib/index.js"
+    },
+    "./style.css": "./dist-lib/style.css"
+  },
+  "files": ["dist-lib"],
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:lib": "vite build -c vite.lib.config.ts && tsc -p tsconfig.lib.json",
     "preview": "vite preview",
     "lint": "eslint .",
     "test": "vitest run"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "react-router-dom": "^6.0.0",
+    "zustand": "^4.0.0"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

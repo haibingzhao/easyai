@@ -159,7 +159,7 @@ export const UserMessage: React.FC<UserMessageProps> = ({ message, isEditable, o
             <span>Auto-continue</span>
           </div>
         )}
-        <div className="whitespace-pre-wrap text-sm">{renderContent(message.content)}</div>
+        <div className="whitespace-pre-wrap text-sm text-gray-800 dark:text-blue-100">{renderContent(message.content)}</div>
         
         {message.role === 'user-with-attachments' && message.attachments && message.attachments.length > 0 && (
           <AttachmentPreview attachments={message.attachments} />
