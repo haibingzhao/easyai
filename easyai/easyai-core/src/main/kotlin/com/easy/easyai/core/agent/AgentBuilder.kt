@@ -60,7 +60,7 @@ interface AgentBuilder {
                     promptTemplate = definition.promptTemplate,
                     customInstructions = definition.customInstructions,
                     tools = filteredTools,
-                    maxIterations = 50
+                    maxIterations = definition.maxIterations
                 ),
                 services = services
             )
@@ -77,8 +77,7 @@ interface AgentBuilder {
             val finalContext = agentContext.copy(
                 modelConfig = config,
                 tools = tools,
-                sessionId = resolvedSessionId,
-                maxIterations = 50
+                sessionId = resolvedSessionId
             )
             return Agent(context = finalContext, services = services)
         }

@@ -700,6 +700,23 @@ export const AgentCreatePage: React.FC = () => {
                     </button>
                   </div>
                 </div>
+
+                {/* Max Iterations */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Max Iterations</label>
+                  <p className="text-xs text-muted-foreground">
+                    Maximum number of agent loop iterations per request. Higher values allow more complex tasks but increase cost.
+                  </p>
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={maxIterations}
+                    onChange={(e) => setMaxIterations(Math.max(1, parseInt(e.target.value) || 50))}
+                    disabled={readOnly}
+                    className="w-40 px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60 disabled:cursor-not-allowed"
+                  />
+                </div>
               </div>
             )}
 

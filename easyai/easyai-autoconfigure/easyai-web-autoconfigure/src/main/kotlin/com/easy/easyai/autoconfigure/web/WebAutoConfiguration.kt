@@ -20,6 +20,7 @@ import com.easy.easyai.core.message.DefaultMessageConverter
 import com.easy.easyai.core.message.MessageConverter
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.repository.session.AsyncSessionStore
+import com.easy.easyai.repository.session.SessionExecutionService
 import com.easy.easyai.skills.SkillRegistry
 import com.easy.easyai.core.team.TeamExecutionStore
 import com.easy.easyai.skills.team.TeamCoordinationStateRegistry
@@ -74,7 +75,7 @@ import java.nio.file.Path
  * - spring-boot-starter-web is on the classpath
  * - easyai.web.enabled=true (or not set)
  */
-@AutoConfiguration
+@AutoConfiguration(afterName = ["com.easy.easyai.autoconfigure.r2dbc.R2dbcRepositoryAutoConfiguration"])
 @ConditionalOnClass(ChatModel::class)
 @ConditionalOnProperty(prefix = "easyai.web", name = ["enabled"], havingValue = "true", matchIfMissing = true)
 @ConditionalOnProperty(prefix = "easyai.database", name = ["configured"], havingValue = "true", matchIfMissing = true)
@@ -109,12 +110,22 @@ open class WebAutoConfiguration {
         @Autowired(required = false)
         fileStorageService: FileStorageService? = null,
         @Autowired(required = false)
-        scriptEnvProvider: ScriptEnvProvider? = null
+        scriptEnvProvider: ScriptEnvProvider? = null,
+        @Autowired(required = false)
+        executionService: SessionExecutionService? = null
     ): ChatStreamService {
         return ChatStreamService(sessionManager, configStore, modelFactories,
             transformContextService, permissionService, sessionStore, projectStore, snapshotService,
             customEventConverters ?: emptyList(), commandService, goalStatusNotifier, goalStore, fileStorageService,
-            scriptEnvProvider)
+            scriptEnvProvider, executionService)
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(SessionExecutionService::class)
+    open fun sessionExecutionService(
+        @Autowired(required = false) sessionStore: AsyncSessionStore? = null
+    ): SessionExecutionService {
+        return SessionExecutionService(sessionStore)
     }
 
     @Bean

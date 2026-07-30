@@ -19,6 +19,7 @@ import com.easy.easyai.core.permission.PermissionService
 import com.easy.easyai.core.tool.ScriptEnvProvider
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.repository.session.AsyncSessionStore
+import com.easy.easyai.repository.session.SessionExecutionService
 import com.easy.easyai.skills.command.CommandService
 import com.easy.easyai.snapshot.SnapshotService
 import com.easy.easyai.web.handler.ChatEventConverter
@@ -58,16 +59,11 @@ class ChatStreamService(
     private val goalStatusNotifier: GoalStatusNotifier? = null,
     private val goalStore: GoalStore? = null,
     private val fileStorageService: FileStorageService? = null,
-    private val scriptEnvProvider: ScriptEnvProvider? = null
+    private val scriptEnvProvider: ScriptEnvProvider? = null,
+    private val executionService: SessionExecutionService? = null
 ) : DisposableBean {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper: ObjectMapper = SharedObjectMapper.instance
-
-    /**
-     * Shared scope for fire-and-forget DB status updates.
-     * Cancelled on application shutdown via [destroy].
-     */
-    private val statusUpdateScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /**
      * Resume the goal timer when the user responds to a permission request or question.
@@ -90,45 +86,8 @@ class ChatStreamService(
     }
 
     override fun destroy() {
-        // Best-effort cleanup: mark all locally-held sessions as active so that
-        // rolling restart / crash does not leave stale "streaming" rows in DB.
-        val localSessions = activeStreamSessions.entries.map { it.toPair() }
-        activeStreamSessions.clear()
-        activeSessions.clear()
         sessionTaps.clear()
-        statusUpdateScope.cancel()
-        runBlocking {
-            sessionStore?.let { store ->
-                localSessions.forEach { (sessionId, userId) ->
-                    try {
-                        store.updateStatus(sessionId, "active", userId, expectedStatus = "streaming")
-                    } catch (e: Exception) {
-                        logger.warn("Failed to reset streaming status on shutdown for {}", sessionId, e)
-                    }
-                }
-            }
-        }
     }
-
-    /**
-     * Active ChatSession instances with SSE streams ON THIS SERVER.
-     * Maps sessionId → the ChatSession currently running the agent loop.
-     *
-     * This is the "request-scoped cache": cancel/queue/resume operations
-     * MUST use the same ChatSession instance that is running the SSE stream,
-     * because runtime state (abortRequested, steeringQueue, followUpQueue, currentRunJob)
-     * is per-instance, not shared across ChatSession objects.
-     *
-     * Registered in [buildSseFlow] on entry, removed in its finally block.
-     */
-    private val activeSessions = ConcurrentHashMap<String, ChatSession>()
-
-    /**
-     * In-memory map of session IDs with active SSE connections ON THIS SERVER
-     * to their owning userId. Used for consistency checking against DB status.
-     * NOT the source of truth for streaming state — DB status is.
-     */
-    private val activeStreamSessions = ConcurrentHashMap<String, String>()
 
     /**
      * Per-session broadcast tap for secondary SSE subscribers (e.g., historical session viewer).
@@ -143,7 +102,7 @@ class ChatStreamService(
      * Returns dual-dimension status: local (in-memory) + remote (DB).
      */
     suspend fun isSessionStreaming(sessionId: String, userId: String = "system"): StreamingStatus {
-        val local = activeStreamSessions.containsKey(sessionId)
+        val local = executionService?.isLocallyExecuting(sessionId) == true
         val dbStatus = sessionStore?.findStatus(sessionId, userId)
         val remote = dbStatus == "streaming"
         return StreamingStatus(local = local, remote = remote)
@@ -159,7 +118,7 @@ class ChatStreamService(
      */
     fun watchSession(sessionId: String): Flow<ServerSentEvent<ChatStreamEvent>> = flow {
         val tap = sessionTaps[sessionId]
-        if (tap == null || !activeStreamSessions.containsKey(sessionId)) {
+        if (tap == null || executionService?.isLocallyExecuting(sessionId) != true) {
             emit(ChatStreamEvent.Done(reason = "not_streaming").toSse("done"))
             return@flow
         }
@@ -173,50 +132,7 @@ class ChatStreamService(
      * Return the number of sessions with active SSE streams ON THIS SERVER.
      * Replaces the old SessionManager.getActiveSessionCount() which was based on a global cache.
      */
-    fun getActiveSessionCount(): Int = activeSessions.size
-
-    /**
-     * Fire-and-forget DB update that marks a session as streaming.
-     * Returns the launched Job so callers can wait for it before downgrading status.
-     */
-    private fun markStreaming(sessionId: String, userId: String): Job? {
-        return sessionStore?.let { store ->
-            statusUpdateScope.launch {
-                try {
-                    store.updateStatus(sessionId, "streaming", userId)
-                    // Clear stale endReason from previous run
-                    store.saveEndReason(sessionId, "normal", userId)
-                } catch (e: Exception) {
-                    logger.warn("Failed to set streaming status for {}", sessionId, e)
-                }
-            }
-        }
-    }
-
-    /**
-     * Downgrade a session from streaming to active, but only if:
-     * - No new SSE stream for this session has been registered locally (reconnect guard)
-     * - The prior markStreaming Job has completed (ordering guard)
-     * - The DB row is still in "streaming" state (multi-instance guard)
-     */
-    private fun markActive(sessionId: String, userId: String, priorStreamingJob: Job?) {
-        sessionStore?.let { store ->
-            statusUpdateScope.launch {
-                try {
-                    priorStreamingJob?.join()
-                } catch (e: Exception) {
-                    logger.warn("Prior streaming status update failed for {}", sessionId, e)
-                }
-                if (!activeStreamSessions.containsKey(sessionId)) {
-                    try {
-                        store.updateStatus(sessionId, "active", userId, expectedStatus = "streaming")
-                    } catch (e: Exception) {
-                        logger.warn("Failed to set active status for {}", sessionId, e)
-                    }
-                }
-            }
-        }
-    }
+    fun getActiveSessionCount(): Int = executionService?.getActiveSessionCount() ?: 0
 
     // ==================== Helper functions ====================
 
@@ -264,33 +180,25 @@ class ChatStreamService(
 
     /**
      * Cancel an ongoing chat session.
-     * Uses the active session registry to abort the RUNNING ChatSession instance,
-     * since runtime state (abortRequested, currentRunJob) is per-instance.
+     * Delegates to [SessionExecutionService.cancelExecution] which handles:
+     * handle removal → session.abort() → DB status update (synchronous).
      */
     suspend fun cancelChat(sessionId: String, userId: String = "system") {
         try {
-            val session = activeSessions[sessionId]
-            if (session != null) {
-                session.abort()
+            if (executionService != null) {
+                executionService.cancelExecution(sessionId, userId)
             } else {
-                logger.info("No local active session to cancel: {}", sessionId)
-            }
-            sessionStore?.savePendingPermission(sessionId, null)
-
-            // Eagerly clean up in-memory and DB streaming state.
-            // Without this, streaming-status may still report {streaming:true, local:true}
-            // because the SSE flow's finally block hasn't executed yet (agent winding down)
-            // and markActive is fire-and-forget (async DB update).
-            activeStreamSessions.remove(sessionId)
-            activeSessions.remove(sessionId)
-            sessionStore?.let { store ->
-                try {
-                    store.updateStatus(sessionId, "active", userId, expectedStatus = "streaming")
-                    store.saveEndReason(sessionId, "cancelled", userId)
-                } catch (e: Exception) {
-                    logger.warn("Failed to update status after cancel for {}", sessionId, e)
+                // Fallback: direct DB write when no execution service
+                sessionStore?.let { store ->
+                    try {
+                        store.updateStatus(sessionId, "active", userId, expectedStatus = "streaming")
+                        store.saveEndReason(sessionId, "cancelled", userId)
+                    } catch (e: Exception) {
+                        logger.warn("Failed to update status after cancel for {}", sessionId, e)
+                    }
                 }
             }
+            sessionStore?.savePendingPermission(sessionId, null)
         } catch (e: Exception) {
             logger.warn("Failed to cancel session: {}", sessionId, e)
         }
@@ -309,7 +217,7 @@ class ChatStreamService(
         type: String,
         attachments: List<ChatAttachment>? = null
     ): QueuedMessageResponse {
-        val session = activeSessions[sessionId]
+        val session = executionService?.getActiveSession(sessionId)
             ?: throw IllegalStateException("No active session for queue operation: $sessionId")
 
         // Process command expansion for queued messages (e.g., /goal creates a fresh goal).
@@ -352,7 +260,7 @@ class ChatStreamService(
         sessionId: String,
         queueId: String
     ): Boolean {
-        val session = activeSessions[sessionId]
+        val session = executionService?.getActiveSession(sessionId)
             ?: throw IllegalStateException("No active session for queue removal: $sessionId")
         val removed = session.removeQueuedMessage(queueId)
         if (removed) {
@@ -372,7 +280,7 @@ class ChatStreamService(
         queueId: String,
         newContent: String
     ): Boolean {
-        val session = activeSessions[sessionId]
+        val session = executionService?.getActiveSession(sessionId)
             ?: throw IllegalStateException("No active session for queue update: $sessionId")
         val updated = session.updateQueuedMessage(queueId, newContent)
         if (updated) {
@@ -390,7 +298,7 @@ class ChatStreamService(
         sessionId: String,
         ids: List<String>
     ) {
-        val session = activeSessions[sessionId]
+        val session = executionService?.getActiveSession(sessionId)
             ?: throw IllegalStateException("No active session for queue reorder: $sessionId")
         session.reorderQueuedMessages(ids)
         logger.info("Reordered {} queued messages in session {}", ids.size, sessionId)
@@ -402,7 +310,7 @@ class ChatStreamService(
     suspend fun getQueuedMessages(
         sessionId: String
     ): List<QueuedMessageResponse> {
-        val session = activeSessions[sessionId]
+        val session = executionService?.getActiveSession(sessionId)
         // Return empty list if session is not actively streaming (queue is ephemeral)
             ?: return emptyList()
         return session.getQueuedMessages().map {
@@ -907,17 +815,13 @@ class ChatStreamService(
         preGoalListener: GoalStatusListener? = null
     ): Flow<ServerSentEvent<ChatStreamEvent>> = flow {
         val userId = session.agentContext.userId ?: "system"
-        // Track local SSE connection
-        activeStreamSessions[session.id] = userId
-        // Register the ChatSession instance so cancel/queue operations can find the RUNNING instance
-        activeSessions[session.id] = session
+        // Register execution (in-memory + DB streaming status)
+        val handle = executionService?.beginExecution(session.id, userId, session)
         // Create per-session broadcast tap for secondary subscribers (historical session viewer)
         val tap = MutableSharedFlow<ServerSentEvent<ChatStreamEvent>>(
             replay = 0, extraBufferCapacity = 256, onBufferOverflow = BufferOverflow.DROP_OLDEST
         )
         sessionTaps[session.id] = tap
-        // Persist streaming status to DB (fire-and-forget)
-        val streamingJob = markStreaming(session.id, userId)
 
         // Capture endReason from AgentEndEvent flowing through the stream
         var endReason = "normal"
@@ -958,7 +862,7 @@ class ChatStreamService(
                         session.id, event.toolName, event.toolCallId)
                 }
 
-                // Capture endReason from AgentEndEvent for the Done event and persist to DB
+                // Capture endReason from AgentEndEvent for the Done event
                 if (event is AgentEndEvent) {
                     endReason = event.endReason
                     session.lastEndReason = event.endReason
@@ -966,20 +870,6 @@ class ChatStreamService(
                     // Without this, merge waits forever for goalFlow while the outer finally
                     // (which also closes goalChannel) can't run until collect returns — deadlock.
                     goalChannel.close()
-                    // Persist endReason to DB so historical sessions can display it.
-                    // Join streamingJob to avoid race: markStreaming's saveEndReason("normal")
-                    // could execute AFTER this save on the multi-threaded Dispatchers.Default,
-                    // overwriting the actual endReason with "normal".
-                    sessionStore?.let { store ->
-                        statusUpdateScope.launch {
-                            streamingJob?.join()
-                            try {
-                                store.saveEndReason(session.id, event.endReason, userId)
-                            } catch (e: Exception) {
-                                logger.warn("Failed to save end reason for {}", session.id, e)
-                            }
-                        }
-                    }
                 }
 
                 val chatEvents = ChatEventConverter.convert(event, customEventConverters)
@@ -1011,13 +901,11 @@ class ChatStreamService(
             emit(errSse)
             tap.tryEmit(errSse)
         } finally {
-            activeStreamSessions.remove(session.id)
-            activeSessions.remove(session.id)
             sessionTaps.remove(session.id)
             goalListener?.let { goalStatusNotifier?.removeListener(it) }
             goalChannel.close()
-            // Restore active status in DB (fire-and-forget)
-            markActive(session.id, userId, streamingJob)
+            // End execution: conditional remove + DB status transition (fire-and-forget)
+            handle?.let { executionService?.endExecution(it, endReason) }
             logger.debug("SSE stream terminated during {} for session {}", context, session.id)
         }
     }
@@ -1094,18 +982,9 @@ class ChatStreamService(
             }
         }
 
-        // Track local SSE connection + persist streaming status
+        // Register execution + persist streaming status
         // NOTE: Do NOT reset endReason for compaction — it's not a new Agent execution
-        activeStreamSessions[sessionId] = userId
-        val streamingJob = sessionStore?.let { store ->
-            statusUpdateScope.launch {
-                try {
-                    store.updateStatus(sessionId, "streaming", userId)
-                } catch (e: Exception) {
-                    logger.warn("Failed to set streaming status for compaction {}", sessionId, e)
-                }
-            }
-        }
+        val handle = executionService?.beginExecution(sessionId, userId, session = null, resetEndReason = false)
 
         try {
             channel.consumeAsFlow().collect { event ->
@@ -1120,8 +999,7 @@ class ChatStreamService(
         } catch (e: Exception) {
             emit(errorSse(e.message?.removePrefix("Session not found: ") ?: e.message))
         } finally {
-            activeStreamSessions.remove(sessionId)
-            markActive(sessionId, userId, streamingJob)
+            handle?.let { executionService?.endExecution(it, endReason = null) }
         }
     }
 }

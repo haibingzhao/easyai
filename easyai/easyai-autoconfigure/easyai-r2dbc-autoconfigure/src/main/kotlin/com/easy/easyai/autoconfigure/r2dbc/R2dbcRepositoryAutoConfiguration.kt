@@ -110,6 +110,13 @@ class R2dbcRepositoryAutoConfiguration(
             db = initializer.getDatabase()
         )
     }
+
+    @Bean
+    @ConditionalOnMissingBean(SessionExecutionService::class)
+    fun sessionExecutionService(sessionStore: AsyncSessionStore): SessionExecutionService {
+        return SessionExecutionService(sessionStore)
+    }
+
     @Bean
     @ConditionalOnMissingBean(CompactionListener::class)
     fun compactionListener(sessionStore: R2dbcAsyncSessionStore): CompactionListener {
