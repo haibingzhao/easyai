@@ -107,14 +107,18 @@ class PromptTemplateService(
             },
             instructionsSegment = InstructionsLoader.formatForPrompt(context.instructions),
             memorySegment = context.memory,
-            outputSchemaSegment = context.outputSchema?.let { schema ->
+            outputSchemaSegment = if (context.outputSchema != null && !context.outputSchemaMultiTurn) {
+                // Single-turn mode: include schema guidance in system prompt (existing behavior)
                 buildString {
                     appendLine("## Output Format")
                     appendLine("Your final response MUST be a valid JSON object matching this schema:")
                     appendLine("```json")
-                    appendLine(schema)
+                    appendLine(context.outputSchema)
                     appendLine("```")
                 }
+            } else {
+                // Multi-turn mode: no schema in system prompt (deferred to completion check phase)
+                null
             }
         )
     }

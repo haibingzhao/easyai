@@ -51,6 +51,7 @@ class R2dbcAgentStore(private val db: R2dbcDatabase) : AsyncAgentStore {
                     it[Tables.AgentTable.instructionsEnabled] = agent.instructionsEnabled
                     it[Tables.AgentTable.inputSchema] = agent.inputSchema
                     it[Tables.AgentTable.outputSchema] = agent.outputSchema
+                    it[Tables.AgentTable.outputSchemaMultiTurn] = agent.outputSchemaMultiTurn
                     it[updatedAt] = now
                 }
                 logger.info("Updated agent: {}", agent.id)
@@ -70,6 +71,7 @@ class R2dbcAgentStore(private val db: R2dbcDatabase) : AsyncAgentStore {
                     it[Tables.AgentTable.instructionsEnabled] = agent.instructionsEnabled
                     it[Tables.AgentTable.inputSchema] = agent.inputSchema
                     it[Tables.AgentTable.outputSchema] = agent.outputSchema
+                    it[Tables.AgentTable.outputSchemaMultiTurn] = agent.outputSchemaMultiTurn
                     it[Tables.AgentTable.userId] = userId
                     it[createdAt] = now
                     it[updatedAt] = now
@@ -327,6 +329,7 @@ class R2dbcAgentStore(private val db: R2dbcDatabase) : AsyncAgentStore {
         instructionsEnabled = row[Tables.AgentTable.instructionsEnabled],
         inputSchema = row[Tables.AgentTable.inputSchema],
         outputSchema = row[Tables.AgentTable.outputSchema],
+        outputSchemaMultiTurn = row[Tables.AgentTable.outputSchemaMultiTurn],
         userId = row[Tables.AgentTable.userId],
         createdAt = row[Tables.AgentTable.createdAt],
         updatedAt = row[Tables.AgentTable.updatedAt]

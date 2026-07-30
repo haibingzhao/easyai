@@ -73,6 +73,13 @@ internal class AgentLoopRunner(
     /** References collected during the last preparePrompt() call, available for the next assistant message. */
     private var lastReferences: ContextReferences? = null
 
+    /** When true, next preparePrompt() applies API-level structured output regardless of multiTurn mode. */
+    @Volatile
+    var forceStructuredOutput = false
+        private set
+
+    fun enableForcedStructuredOutput() { forceStructuredOutput = true }
+
     /**
      * Get the context references collected during the last [preparePrompt] call.
      * Returns null if no references were collected (e.g., no memory or instructions loaded).
@@ -472,8 +479,14 @@ internal class AgentLoopRunner(
         // Inject outputSchema for model-level structured output enforcement.
         // Protocol-specific options (OpenAI, Anthropic) implement StructuredOutputChatOptions,
         // which maps outputSchema to ResponseFormat(type=JSON_SCHEMA) / OutputConfig+JsonOutputFormat.
+        // In multi-turn mode, skip API-level enforcement until forceStructuredOutput is set by completion check.
         val chatOptions = if (context.outputSchema != null && baseChatOptions is StructuredOutputChatOptions) {
-            baseChatOptions.mutate().outputSchema(context.outputSchema).build()
+            val applyStructuredOutput = !context.outputSchemaMultiTurn || forceStructuredOutput
+            if (applyStructuredOutput) {
+                baseChatOptions.mutate().outputSchema(context.outputSchema).build()
+            } else {
+                baseChatOptions
+            }
         } else {
             baseChatOptions
         }
@@ -512,6 +525,7 @@ internal class AgentLoopRunner(
             memory = memoryContent,
             tools = toolsData,
             outputSchema = context.outputSchema,
+            outputSchemaMultiTurn = context.outputSchemaMultiTurn,
             inputVariables = context.inputVariables,
             scriptLlmAvailable = context.scriptEnv.isNotEmpty(),
             sessionVariables = context.sessionVariables.getAll()

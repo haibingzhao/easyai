@@ -34,7 +34,6 @@ Error handling:
 - NEVER redirect stderr to /dev/null (2>/dev/null). stderr contains critical diagnostic info (e.g. "command not found"). Suppressing it makes failures invisible.
 - In pipelines, the exit code is from the LAST command by default. A failing command early in the pipe will be masked. Use "set -o pipefail;" prefix if you need true error propagation.
 - If a command produces no output, do NOT assume success. Check exit code and retry without stderr suppression.
-- Prefer python3 over python (macOS removed /usr/bin/python since 12.3).
 Parameters:
 - timeout (optional): Idle timeout in seconds (10-600, default 300). Timer resets on output; process is killed only when idle for this duration.""",
         permissionCategory = "shell",

@@ -76,6 +76,7 @@ export interface AgentDto {
   instructionsEnabled: boolean;
   inputSchema: string | null;
   outputSchema: string | null;
+  outputSchemaMultiTurn: boolean;
   builtin: boolean;
   createdAt: number | null;
   updatedAt: number | null;
@@ -110,6 +111,7 @@ export interface AgentCreateRequest {
   instructionsEnabled?: boolean;
   inputSchema?: string;
   outputSchema?: string;
+  outputSchemaMultiTurn?: boolean;
 }
 
 /**

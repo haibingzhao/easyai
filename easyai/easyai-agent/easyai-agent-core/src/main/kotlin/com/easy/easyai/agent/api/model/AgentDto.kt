@@ -49,6 +49,7 @@ data class AgentDto(
     val instructionsEnabled: Boolean = true,
     val inputSchema: String? = null,
     val outputSchema: String? = null,
+    val outputSchemaMultiTurn: Boolean = false,
     val builtin: Boolean = false,
     val createdAt: Long? = null,
     val updatedAt: Long? = null
@@ -83,7 +84,8 @@ data class AgentCreateRequest(
     val enabled: Boolean = true,
     val instructionsEnabled: Boolean? = null,
     val inputSchema: String? = null,
-    val outputSchema: String? = null
+    val outputSchema: String? = null,
+    val outputSchemaMultiTurn: Boolean? = null
 )
 
 /**

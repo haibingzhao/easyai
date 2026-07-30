@@ -24,6 +24,8 @@ data class PromptContext(
     val tools: List<Map<String, Any?>> = emptyList(),
     /** JSON Schema for structured output enforcement. Non-null triggers output format instructions. */
     val outputSchema: String? = null,
+    /** When true, suppress output schema from system prompt (deferred to completion check phase). */
+    val outputSchemaMultiTurn: Boolean = false,
     /** Structured input variables for template rendering. */
     val inputVariables: Map<String, Any?> = emptyMap(),
     /** Whether script LLM access is available (env vars injected into bash processes). */

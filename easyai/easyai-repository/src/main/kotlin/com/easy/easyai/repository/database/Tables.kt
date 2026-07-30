@@ -71,6 +71,7 @@ object Tables {
         val instructionsEnabled = bool("instructions_enabled").default(true)
         val inputSchema = text("input_schema").nullable()
         val outputSchema = text("output_schema").nullable()
+        val outputSchemaMultiTurn = bool("output_schema_multi_turn").default(false)
         val userId = varchar("user_id", 255).default("system")
         val createdAt = long("created_at")
         val updatedAt = long("updated_at")
