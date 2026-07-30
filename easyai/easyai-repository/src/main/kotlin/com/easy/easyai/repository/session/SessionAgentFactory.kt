@@ -63,7 +63,8 @@ class SessionAgentFactory(
             promptTemplate = agentDef.promptTemplate,
             customInstructions = agentDef.customInstructions,
             inputSchema = agentDef.inputSchema,
-            outputSchema = agentDef.outputSchema
+            outputSchema = agentDef.outputSchema,
+            outputSchemaMultiTurn = agentDef.outputSchemaMultiTurn
         )
         return buildAgent(sessionId, config, tools, enrichedContext)
     }

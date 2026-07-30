@@ -135,6 +135,7 @@ class SwarmAgentResolver(
             maxIterations = spec.maxIterations,
             maxRetries = spec.maxRetries,
             outputSchema = outputSchemaOverride ?: agentDef.outputSchema,
+            outputSchemaMultiTurn = agentDef.outputSchemaMultiTurn,
             swarmRunId = run.id,
             swarmTaskId = task.id,
             agentRunId="swarm-${run.id}-${task.id}",

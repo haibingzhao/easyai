@@ -1,17 +1,19 @@
 package com.easy.easyai.core.agent
 
+import com.easy.easyai.common.util.SharedObjectMapper
+import com.easy.easyai.core.agent.AgentLoop.Companion.MAX_COMPLETION_CHECK_BONUS
 import com.easy.easyai.core.event.*
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.tool.ToolCallResult
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.validation.InputSchemaValidator
+import com.easy.easyai.core.validation.OutputSchemaCompletionCheck
 import com.easy.easyai.core.validation.ValidationResult
 import kotlinx.coroutines.CancellationException
 import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.model.ChatModel
 import org.springframework.ai.chat.prompt.Prompt
-import com.easy.easyai.common.util.SharedObjectMapper
 import tools.jackson.core.type.TypeReference
 
 private val objectMapper = SharedObjectMapper.instance
@@ -123,6 +125,12 @@ internal class AgentLoop(
 
             // Detect and execute pending toolCalls (resume scenario)
             pendingToolCallExecutor.executePendingToolCallsIfNeeded(transcript, this)
+
+            // Clear stale completion-check state from a previous abnormal termination
+            context.sessionId?.let { sid ->
+                services.completionChecks.filterIsInstance<OutputSchemaCompletionCheck>()
+                    .forEach { it.resetSession(sid) }
+            }
 
             var turnId = 0
             var continueLoop = true
@@ -379,6 +387,10 @@ internal class AgentLoop(
                 }
                 if (result is CompletionCheckResult.Continue) {
                     logger.info("${logPrefix}[Turn {}] Completion check {} requested continuation", turnId, check::class.simpleName)
+                    // Multi-turn: only enable API-level structured output when OutputSchemaCompletionCheck triggers
+                    if (check is OutputSchemaCompletionCheck && context.outputSchemaMultiTurn && context.outputSchema != null) {
+                        loopRunner.enableForcedStructuredOutput()
+                    }
                     // Grant bonus only if the next iteration will hit maxIterations
                     if (turnId + 1 >= context.maxIterations) {
                         if (completionCheckBonusBudget > 0) {

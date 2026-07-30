@@ -3,13 +3,15 @@ import { Braces, AlertCircle, Plus, Trash2, LayoutGrid, Code } from 'lucide-reac
 
 type EditorMode = 'visual' | 'schema';
 
-type FieldType = 'string' | 'number' | 'integer' | 'boolean';
+type FieldType = 'string' | 'number' | 'integer' | 'boolean' | 'string[]';
 
 interface KVEntry {
   key: string;
   type: FieldType;
   required: boolean;
   description: string;
+  /** Comma-separated enum values (only for string type) */
+  enumValues?: string;
 }
 
 interface SchemaEditorProps {
@@ -22,7 +24,7 @@ interface SchemaEditorProps {
   description?: string;
 }
 
-const FIELD_TYPES: FieldType[] = ['string', 'number', 'integer', 'boolean'];
+const FIELD_TYPES: FieldType[] = ['string', 'number', 'integer', 'boolean', 'string[]'];
 
 const PRESET_TEMPLATES: { label: string; schema: string }[] = [
   {
@@ -42,9 +44,12 @@ const PRESET_TEMPLATES: { label: string; schema: string }[] = [
   },
 ];
 
+/** Primitive types allowed in flat schema properties */
+const PRIMITIVE_TYPES = ['string', 'number', 'integer', 'boolean'];
+
 /**
- * Check if a parsed JSON Schema is a flat one-level object
- * (all properties are primitive types, no nested objects/arrays with items).
+ * Check if a parsed JSON Schema is a "flat" one-level object suitable for Visual mode.
+ * Supports: primitive types, string arrays (array with primitive items), and enums.
  */
 function isFlatSchema(parsed: Record<string, unknown>): boolean {
   if (parsed.type !== 'object' || typeof parsed.properties !== 'object' || parsed.properties === null) {
@@ -54,9 +59,19 @@ function isFlatSchema(parsed: Record<string, unknown>): boolean {
   for (const prop of Object.values(props)) {
     if (typeof prop !== 'object' || prop === null) return false;
     const t = prop.type;
-    if (t === 'object' || t === 'array') return false;
-    // Has nested properties or items → multi-level
-    if ('properties' in prop || 'items' in prop) return false;
+    if (t === 'object') return false;
+    if (t === 'array') {
+      // Only support array with primitive items (e.g. {"type": "array", "items": {"type": "string"}})
+      const items = prop.items as Record<string, unknown> | undefined;
+      if (!items || typeof items !== 'object') return false;
+      if (!PRIMITIVE_TYPES.includes(items.type as string)) return false;
+      // Nested object items → multi-level
+      if ('properties' in items) return false;
+    } else if (!PRIMITIVE_TYPES.includes(t as string)) {
+      return false;
+    }
+    // Nested properties → multi-level
+    if ('properties' in prop) return false;
   }
   return true;
 }
@@ -71,13 +86,26 @@ function schemaToEntries(parsed: Record<string, unknown>): KVEntry[] | null {
   const required = Array.isArray(parsed.required) ? (parsed.required as string[]) : [];
   const entries: KVEntry[] = [];
   for (const [key, prop] of Object.entries(props)) {
-    const type = (prop.type as string) as FieldType;
-    if (!FIELD_TYPES.includes(type)) return null;
+    const rawType = prop.type as string;
+    let type: FieldType;
+    if (rawType === 'array') {
+      // Map array with string items → 'string[]'
+      type = 'string[]';
+    } else {
+      type = rawType as FieldType;
+      if (!FIELD_TYPES.includes(type)) return null;
+    }
+    // Parse enum values
+    let enumValues: string | undefined;
+    if (Array.isArray(prop.enum) && prop.enum.length > 0) {
+      enumValues = (prop.enum as string[]).join(', ');
+    }
     entries.push({
       key,
       type,
       required: required.includes(key),
       description: typeof prop.description === 'string' ? prop.description : '',
+      enumValues,
     });
   }
   return entries;
@@ -87,12 +115,22 @@ function schemaToEntries(parsed: Record<string, unknown>): KVEntry[] | null {
  * Build a JSON Schema string from KVEntry[].
  */
 function entriesToSchema(entries: KVEntry[]): string {
-  const properties: Record<string, Record<string, string>> = {};
+  const properties: Record<string, Record<string, unknown>> = {};
   const required: string[] = [];
   for (const entry of entries) {
     if (!entry.key.trim()) continue;
-    const prop: Record<string, string> = { type: entry.type };
+    let prop: Record<string, unknown>;
+    if (entry.type === 'string[]') {
+      prop = { type: 'array', items: { type: 'string' } };
+    } else {
+      prop = { type: entry.type };
+    }
     if (entry.description.trim()) prop.description = entry.description.trim();
+    // Add enum values for string fields
+    if (entry.enumValues && entry.enumValues.trim() && entry.type === 'string') {
+      const vals = entry.enumValues.split(',').map(v => v.trim()).filter(Boolean);
+      if (vals.length > 0) prop.enum = vals;
+    }
     properties[entry.key.trim()] = prop;
     if (entry.required) required.push(entry.key.trim());
   }
@@ -306,7 +344,7 @@ export const SchemaEditor: React.FC<SchemaEditorProps> = ({
                         />
                         <select
                           value={entry.type}
-                          onChange={(e) => handleEntryChange(i, { type: e.target.value as FieldType })}
+                          onChange={(e) => handleEntryChange(i, { type: e.target.value as FieldType, enumValues: e.target.value !== 'string' ? undefined : entry.enumValues })}
                           disabled={disabled}
                           className="w-24 px-2 py-1.5 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60 disabled:cursor-not-allowed"
                         >
@@ -335,6 +373,16 @@ export const SchemaEditor: React.FC<SchemaEditorProps> = ({
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
+                      {entry.type === 'string' && (
+                        <input
+                          type="text"
+                          value={entry.enumValues ?? ''}
+                          onChange={(e) => handleEntryChange(i, { enumValues: e.target.value || undefined })}
+                          placeholder="Enum values, comma-separated (optional, e.g. LOW, MEDIUM, HIGH)"
+                          disabled={disabled}
+                          className="w-full px-2.5 py-1.5 rounded-md border border-input bg-background text-xs text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60 disabled:cursor-not-allowed"
+                        />
+                      )}
                       <input
                         type="text"
                         value={entry.description}

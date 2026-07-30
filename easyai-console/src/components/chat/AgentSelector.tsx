@@ -31,8 +31,7 @@ export const AgentSelector: React.FC<AgentSelectorProps> = ({ onSelect }) => {
     return agents.filter(a =>
       a.agentType !== 'SUBAGENT' &&
       (a.agentContext === 'CHAT' || a.agentContext === 'BOTH') &&
-      !a.outputSchema &&
-      !a.inputSchema
+      a.enabled
     );
   }, [agents]);
 

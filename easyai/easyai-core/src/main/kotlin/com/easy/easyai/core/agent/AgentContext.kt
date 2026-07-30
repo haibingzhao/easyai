@@ -74,6 +74,8 @@ data class AgentContext(
     val modelContextLength: Int = 204_800,  // Default context window size (200K)
     /** JSON Schema for structured output enforcement. Injected into ChatOptions and system prompt. */
     val outputSchema: String? = null,
+    /** When true, defer structured output to final iteration after multi-turn tool calling. */
+    val outputSchemaMultiTurn: Boolean = false,
     /** JSON Schema for structured input validation. Validated against inputVariables before agent loop. */
     val inputSchema: String? = null,
     /** Structured input data validated against inputSchema. Empty for follow-up messages. */

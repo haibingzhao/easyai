@@ -32,6 +32,8 @@ data class AgentDefinition(
     val instructionsEnabled: Boolean = true,
     val inputSchema: String? = null,
     val outputSchema: String? = null,
+    /** When true, defer structured output to a final enforced iteration after multi-turn tool calling. */
+    val outputSchemaMultiTurn: Boolean = false,
     val userId: String = "system",
     val createdAt: Long,
     val updatedAt: Long
@@ -52,14 +54,15 @@ data class AgentDefinition(
             enabled: Boolean = true,
             instructionsEnabled: Boolean = true,
             inputSchema: String? = null,
-            outputSchema: String? = null
+            outputSchema: String? = null,
+            outputSchemaMultiTurn: Boolean = false
         ): AgentDefinition {
             val now = Instant.now().epochSecond
             return AgentDefinition(
                 id, name, agentType, agentContext, description, promptTemplate,
                 customInstructions, toolNames, maxIterations, maxSubAgentDepth,
                 color, enabled, instructionsEnabled, inputSchema, outputSchema,
-                "system", now, now
+                outputSchemaMultiTurn, "system", now, now
             )
         }
     }

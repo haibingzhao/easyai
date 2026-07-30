@@ -81,6 +81,7 @@ export const AgentCreatePage: React.FC = () => {
   const [inputSchemaEnabled, setInputSchemaEnabled] = useState(false);
   const [inputSchema, setInputSchema] = useState('');
   const [outputSchemaEnabled, setOutputSchemaEnabled] = useState(false);
+  const [outputSchemaMultiTurn, setOutputSchemaMultiTurn] = useState(false);
   const [outputSchema, setOutputSchema] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -170,6 +171,7 @@ export const AgentCreatePage: React.FC = () => {
         setInputSchemaEnabled(!!agent.inputSchema);
         setInputSchema(agent.inputSchema || '');
         setOutputSchemaEnabled(!!agent.outputSchema);
+        setOutputSchemaMultiTurn(!!agent.outputSchemaMultiTurn);
         setOutputSchema(agent.outputSchema || '');
         setReadOnly(agent.builtin);
       }).finally(() => setLoadingDetail(false));
@@ -252,7 +254,7 @@ export const AgentCreatePage: React.FC = () => {
     { id: 'members', label: i18n('Members'), icon: <Network className="w-4 h-4" />, hidden: agentType !== 'TEAM' || isSwarmContext },
     { id: 'mcp', label: i18n('MCP'), icon: <Server className="w-4 h-4" /> },
     { id: 'commands', label: i18n('Commands'), icon: <Zap className="w-4 h-4" />, hidden: isSwarmContext },
-    { id: 'schema', label: i18n('Schema'), icon: <Braces className="w-4 h-4" />, hidden: isChatContext },
+    { id: 'schema', label: i18n('Schema'), icon: <Braces className="w-4 h-4" /> },
   ];
 
   // Reset active section when it becomes hidden due to context/type change
@@ -363,6 +365,7 @@ export const AgentCreatePage: React.FC = () => {
       instructionsEnabled,
       inputSchema: inputSchemaEnabled && inputSchema.trim() ? inputSchema.trim() : undefined,
       outputSchema: outputSchemaEnabled && outputSchema.trim() ? outputSchema.trim() : undefined,
+      outputSchemaMultiTurn: outputSchemaEnabled && outputSchemaMultiTurn,
     };
 
     setSaving(true);
@@ -781,15 +784,17 @@ export const AgentCreatePage: React.FC = () => {
             {/* === Schema Section === */}
             {activeSection === 'schema' && (
               <div className="space-y-8">
-                <SchemaEditor
-                  enabled={inputSchemaEnabled}
-                  onEnabledChange={setInputSchemaEnabled}
-                  schema={inputSchema}
-                  onSchemaChange={setInputSchema}
-                  disabled={readOnly}
-                  title="Input Schema"
-                  description="Define a JSON Schema to validate and structure user input for this agent."
-                />
+                {!isChatContext && (
+                  <SchemaEditor
+                    enabled={inputSchemaEnabled}
+                    onEnabledChange={setInputSchemaEnabled}
+                    schema={inputSchema}
+                    onSchemaChange={setInputSchema}
+                    disabled={readOnly}
+                    title="Input Schema"
+                    description="Define a JSON Schema to validate and structure user input for this agent."
+                  />
+                )}
                 <SchemaEditor
                   enabled={outputSchemaEnabled}
                   onEnabledChange={setOutputSchemaEnabled}
@@ -799,6 +804,24 @@ export const AgentCreatePage: React.FC = () => {
                   title="Output Schema"
                   description="Define a JSON Schema to enforce structured output from the agent."
                 />
+                {outputSchemaEnabled && (
+                  <div className="flex items-start gap-3 p-4 rounded-lg border border-border bg-muted/30">
+                    <input
+                      type="checkbox"
+                      id="outputSchemaMultiTurn"
+                      checked={outputSchemaMultiTurn}
+                      onChange={(e) => setOutputSchemaMultiTurn(e.target.checked)}
+                      disabled={readOnly}
+                      className="mt-0.5 w-4 h-4 rounded border-input accent-primary disabled:opacity-60"
+                    />
+                    <label htmlFor="outputSchemaMultiTurn" className="space-y-1 cursor-pointer">
+                      <span className="block text-sm font-medium">{i18n('Multi-turn iteration')}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {i18n('Agent freely calls tools/skills first, then produces structured JSON output in a final enforced iteration.')}
+                      </span>
+                    </label>
+                  </div>
+                )}
               </div>
             )}
 

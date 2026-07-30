@@ -39,6 +39,7 @@ class FlywayMigrationRunner(private val properties: R2dbcProperties) {
             .locations("classpath:db/migration")
             .baselineOnMigrate(true)
             .baselineVersion("0")
+            .outOfOrder(true)
             .load()
 
         val result = flyway.migrate()

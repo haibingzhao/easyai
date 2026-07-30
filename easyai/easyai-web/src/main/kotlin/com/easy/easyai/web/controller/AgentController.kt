@@ -185,7 +185,8 @@ class AgentController(
             enabled = request.enabled,
             instructionsEnabled = request.instructionsEnabled ?: true,
             inputSchema = request.inputSchema,
-            outputSchema = request.outputSchema
+            outputSchema = request.outputSchema,
+            outputSchemaMultiTurn = request.outputSchemaMultiTurn ?: false
         )
         agentStore.save(agent, userId)
         // Persist tool whitelist and sub-agent associations (always, even if empty)
@@ -242,6 +243,7 @@ class AgentController(
             instructionsEnabled = request.instructionsEnabled ?: existing.instructionsEnabled,
             inputSchema = request.inputSchema,
             outputSchema = request.outputSchema,
+            outputSchemaMultiTurn = request.outputSchemaMultiTurn ?: existing.outputSchemaMultiTurn,
             updatedAt = java.time.Instant.now().epochSecond
         )
         agentStore.update(updated, userId)
@@ -449,6 +451,7 @@ class AgentController(
         instructionsEnabled = this.instructionsEnabled,
         inputSchema = this.inputSchema,
         outputSchema = this.outputSchema,
+        outputSchemaMultiTurn = this.outputSchemaMultiTurn,
         builtin = this.userId == AuthConstants.SYSTEM_USER_ID,
         createdAt = this.createdAt,
         updatedAt = this.updatedAt

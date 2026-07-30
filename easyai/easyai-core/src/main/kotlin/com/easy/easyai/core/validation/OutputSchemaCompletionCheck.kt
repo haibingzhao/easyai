@@ -22,6 +22,16 @@ class OutputSchemaCompletionCheck(
     private val logger = LoggerFactory.getLogger(javaClass)
     private val retryCounters = ConcurrentHashMap<String, Int>()
 
+    /**
+     * Clears stale state for the given session.
+     * Called at the start of each agent loop run to prevent leaked state
+     * from a previous abnormal termination (abort, cancellation, etc.).
+     */
+    fun resetSession(sessionId: String) {
+        retryCounters.remove(sessionId)
+        retryCounters.remove("$sessionId-forced")
+    }
+
     override suspend fun check(input: CompletionCheckInput): CompletionCheckResult {
         val schema = input.agentContext.outputSchema
         val sessionKey = input.agentContext.sessionId
@@ -30,6 +40,17 @@ class OutputSchemaCompletionCheck(
             // Clean up any stale counters
             if (sessionKey != null) retryCounters.remove(sessionKey)
             return CompletionCheckResult.Done
+        }
+
+        // Multi-turn mode: first trigger → force a structured output iteration
+        if (input.agentContext.outputSchemaMultiTurn) {
+            val forcedKey = "$sessionKey-forced"
+            if (retryCounters[forcedKey] == null) {
+                retryCounters[forcedKey] = 1
+                logger.info("Multi-turn output schema: triggering structured output phase for session {}", sessionKey)
+                return CompletionCheckResult.Continue(prompt = buildFinalOutputPrompt(schema))
+            }
+            // Already in structured phase: fall through to normal validation (keep marker for cleanup)
         }
 
         // Find the last AssistantMessage in transcript
@@ -45,6 +66,7 @@ class OutputSchemaCompletionCheck(
             result is ValidationResult.Valid -> {
                 logger.debug("Output schema validation passed for session {}", sessionKey)
                 retryCounters.remove(sessionKey)
+                retryCounters.remove("$sessionKey-forced")
                 CompletionCheckResult.Done
             }
             (retryCounters[sessionKey] ?: 0) >= maxRetries -> {
@@ -53,6 +75,7 @@ class OutputSchemaCompletionCheck(
                     maxRetries, sessionKey
                 )
                 retryCounters.remove(sessionKey)
+                retryCounters.remove("$sessionKey-forced")
                 CompletionCheckResult.Done  // Exceeded retries, return original
             }
             else -> {
@@ -66,6 +89,16 @@ class OutputSchemaCompletionCheck(
                 CompletionCheckResult.Continue(prompt = buildRetryPrompt(errors, schema, attempt, maxRetries))
             }
         }
+    }
+
+    private fun buildFinalOutputPrompt(schema: String): String = buildString {
+        appendLine("You have completed all necessary tool calls and gathered sufficient information.")
+        appendLine("Now produce your final result as a valid JSON object matching this schema:")
+        appendLine("```json")
+        appendLine(schema)
+        appendLine("```")
+        appendLine()
+        appendLine("Output ONLY the JSON object, no additional text.")
     }
 
     private fun buildRetryPrompt(
