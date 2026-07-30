@@ -229,9 +229,9 @@ internal class AgentLoop(
         services.messageListener?.onMessageAdded(listOf(assistantMessage))
 
         val toolCalls = assistantMessage.toolCalls()
-        logger.debug("${logPrefix}[Turn {}] Assistant message built: stopReason={}, contentBlocks={}, toolCalls={}, usage=({}/{})",
+        logger.debug("${logPrefix}[Turn {}] Assistant message built: stopReason={}, contentBlocks={}, toolCalls={}, usage=({}/{}/{}/{})",
             turnId, assistantMessage.stopReason, assistantMessage.content.size, toolCalls.size,
-            assistantMessage.usage.inputTokens, assistantMessage.usage.outputTokens)
+            assistantMessage.usage.inputTokens, assistantMessage.usage.outputTokens, assistantMessage.usage.cacheReadTokens, assistantMessage.usage.cacheWriteTokens)
 
         var waitForUserReason: String? = null
 

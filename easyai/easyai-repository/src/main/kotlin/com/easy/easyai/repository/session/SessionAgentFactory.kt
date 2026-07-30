@@ -58,10 +58,11 @@ class SessionAgentFactory(
         tools: List<ToolDefinition>,
         agentContext: AgentContext
     ): Agent {
-        // Enrich agentContext with prompt data from agent definition
+        // Enrich agentContext with prompt data and behavior config from agent definition
         val enrichedContext = agentContext.copy(
             promptTemplate = agentDef.promptTemplate,
             customInstructions = agentDef.customInstructions,
+            maxIterations = agentDef.maxIterations,
             inputSchema = agentDef.inputSchema,
             outputSchema = agentDef.outputSchema,
             outputSchemaMultiTurn = agentDef.outputSchemaMultiTurn
