@@ -66,9 +66,12 @@ export { useAuthStore } from './services/stores/auth-store';
 export { useSettingsStore } from './services/stores/settings-store';
 export { useSessionStore } from './services/stores/session-store';
 export { useAgentStore } from './services/stores/agent-store';
+export { convertSnapshot } from './services/stores/chat/message-converter';
+export { mergeToolResults } from './services/stores/chat/session-loader';
 
 // === Components ===
 export { ChatPanel } from './components/chat/ChatPanel';
+export { MessageList } from './components/chat/MessageList';
 export { AppLayout, SIDEBAR_COLLAPSED_WIDTH } from './components/layout/AppLayout';
 export { Sidebar } from './components/layout/Sidebar';
 
