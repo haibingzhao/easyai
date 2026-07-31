@@ -1,7 +1,6 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { MessageSquare, GitBranch, Settings, Bot, Database, Blocks, Brain, Terminal, Cpu, PanelLeftClose, PanelLeft } from 'lucide-react';
-import { useChatStore } from '@/services/stores/chat-store';
 import { NAV_ITEMS, EXTRA_NAV_ITEMS, APP_CONFIG, ICON_REGISTRY } from '@/constants/navigation';
 import { useNavStore } from '@/services/stores/nav-store';
 import { SIDEBAR_COLLAPSED_WIDTH } from './AppLayout';
@@ -35,10 +34,6 @@ export const Sidebar: React.FC = () => {
   };
 
   const handleNavClick = (path: string) => {
-    const { isStreaming } = useChatStore.getState();
-    if (isStreaming && path !== '/') {
-      if (!window.confirm(i18n('Streaming in progress, switch page?'))) return;
-    }
     navigate(path);
     setMobileSidebarOpen(false);
   };

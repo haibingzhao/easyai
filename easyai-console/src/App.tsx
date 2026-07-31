@@ -7,7 +7,6 @@ import { ProjectSelectPage } from './components/project/ProjectSelectPage';
 import { useSettingsStore } from '@/services/stores/settings-store';
 import { useProjectStore } from '@/services/stores/project-store';
 import { useAuthStore } from '@/services/stores/auth-store';
-import { useChatStore } from '@/services/stores/chat-store';
 import { setupService } from '@/services/setup-service';
 import { storageService } from '@/services/storage-service';
 import { setTheme } from '@/utils/theme';
@@ -64,18 +63,6 @@ function App() {
     // Apply theme immediately from localStorage so login page also respects it
     const settings = storageService.getSettings();
     setTheme(settings.theme);
-  }, []);
-
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      const { isStreaming } = useChatStore.getState();
-      if (isStreaming) {
-        e.preventDefault();
-        e.returnValue = '正在流式响应中，确定要离开吗？';
-      }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, []);
 
   // Check setup mode before auth
