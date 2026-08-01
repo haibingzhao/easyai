@@ -22,4 +22,22 @@ object PermissionEvaluator {
         }
         return match ?: PermissionRule(permission, "*", PermissionAction.ASK)
     }
+
+    /**
+     * Evaluate rules for a file path with directory prefix semantics.
+     * A rule pattern like "/tmp" matches "/tmp" itself and any path under "/tmp/".
+     * Uses findLast semantics — later rules override earlier ones.
+     *
+     * @param permission The permission type (e.g., "file.write.other")
+     * @param filePath The absolute file path being accessed
+     * @param rules The list of rules to evaluate
+     * @return The matching rule, or a default ASK rule
+     */
+    fun evaluateFilePath(permission: String, filePath: String, rules: List<PermissionRule>): PermissionRule {
+        val match = rules.findLast { rule ->
+            WildcardMatcher.matches(rule.permission, permission) &&
+            WildcardMatcher.matchesFilePath(rule.pattern, filePath)
+        }
+        return match ?: PermissionRule(permission, "*", PermissionAction.ASK)
+    }
 }

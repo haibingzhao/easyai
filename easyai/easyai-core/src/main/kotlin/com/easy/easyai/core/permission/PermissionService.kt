@@ -187,9 +187,9 @@ class PermissionService(
             }
         }
 
-        // 3. Check {prefix}.other (exact path match)
+        // 3. Check {prefix}.other (wildcard + directory prefix match)
         if (filePath != null) {
-            val otherResult = PermissionEvaluator.evaluate("$prefix.other", filePath, rules)
+            val otherResult = PermissionEvaluator.evaluateFilePath("$prefix.other", filePath, rules)
             if (otherResult.action != PermissionAction.ASK) {
                 return PermissionCheckResult(otherResult.action, "$prefix.other", filePath)
             }
@@ -299,8 +299,8 @@ class PermissionService(
             if (projectResult.action != PermissionAction.ASK) return PermissionCheckResult(projectResult.action, "$prefix.project", filePath.toString())
         }
 
-        // Check file.{read/write}.other
-        val otherResult = PermissionEvaluator.evaluate("$prefix.other", filePath.toString(), rules)
+        // Check file.{read/write}.other (wildcard + directory prefix match)
+        val otherResult = PermissionEvaluator.evaluateFilePath("$prefix.other", filePath.toString(), rules)
         if (otherResult.action != PermissionAction.ASK) return PermissionCheckResult(otherResult.action, "$prefix.other", filePath.toString())
 
         // Default: report the most specific permission type
