@@ -12,7 +12,29 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.DisposableBean
+import org.springframework.context.ApplicationEvent
+import org.springframework.context.ApplicationEventPublisher
+import org.springframework.context.ApplicationEventPublisherAware
 import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * Published when a session execution completes (Agent Loop finishes).
+ *
+ * Covers both SSE chat and programmatic invocation (e.g., TradingAiService) paths;
+ * compaction (endReason == null) does NOT publish this event.
+ *
+ * Listeners should not block the publishing thread — launch async processing if needed.
+ *
+ * @param sessionId the completed session ID
+ * @param userId the owning user
+ * @param endReason the reason for ending ("normal" / "max_iterations" / "cancelled" / "error" etc.)
+ */
+class SessionCompletedEvent(
+    source: Any,
+    val sessionId: String,
+    val userId: String,
+    val endReason: String?,
+) : ApplicationEvent(source)
 
 /**
  * Handle representing an active session execution.
@@ -43,11 +65,16 @@ class ExecutionHandle internal constructor(
 class SessionExecutionService(
     private val sessionStore: AsyncSessionStore?,
     dispatcher: CoroutineDispatcher = Dispatchers.Default
-) : DisposableBean {
+) : DisposableBean, ApplicationEventPublisherAware {
 
     private val logger = LoggerFactory.getLogger(javaClass)
     private val executions = ConcurrentHashMap<String, ExecutionHandle>()
     private val statusScope = CoroutineScope(SupervisorJob() + dispatcher)
+    private var eventPublisher: ApplicationEventPublisher? = null
+
+    override fun setApplicationEventPublisher(publisher: ApplicationEventPublisher) {
+        this.eventPublisher = publisher
+    }
 
     /**
      * Register a new execution and fire-and-forget mark the session as streaming in DB.
@@ -110,8 +137,8 @@ class SessionExecutionService(
             return
         }
 
-        sessionStore?.let { store ->
-            statusScope.launch {
+        statusScope.launch {
+            sessionStore?.let { store ->
                 // Wait for beginJob to complete to avoid race:
                 // markStreaming's saveEndReason("normal") could overwrite the actual endReason
                 try {
@@ -130,6 +157,23 @@ class SessionExecutionService(
                     store.updateStatus(handle.sessionId, "active", handle.userId, expectedStatus = "streaming")
                 } catch (e: Exception) {
                     logger.warn("Failed to set active status for session {}: {}", handle.sessionId, e.message)
+                }
+            }
+
+            // Publish completion event after DB state is settled; compaction (endReason == null) skips
+            if (endReason != null) {
+                try {
+                    eventPublisher?.publishEvent(
+                        SessionCompletedEvent(
+                            this@SessionExecutionService,
+                            handle.sessionId,
+                            handle.userId,
+                            endReason,
+                        )
+                    )
+                } catch (e: Exception) {
+                    logger.warn("Failed to publish SessionCompletedEvent for session {}: {}",
+                        handle.sessionId, e.message)
                 }
             }
         }

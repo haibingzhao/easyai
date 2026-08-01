@@ -4,6 +4,7 @@ import com.easy.easyai.core.agent.ChatSession
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import io.mockk.slot
 import io.mockk.verify
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -11,6 +12,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.springframework.context.ApplicationEventPublisher
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -277,6 +279,113 @@ class SessionExecutionServiceTest {
 
             noDbService.endExecution(handle, "normal")
             assertFalse(noDbService.isLocallyExecuting("s1"))
+        }
+    }
+
+    @Nested
+    inner class `SessionCompletedEvent publishing` {
+
+        private lateinit var publisher: ApplicationEventPublisher
+
+        @BeforeEach
+        fun setupPublisher() {
+            publisher = mockk(relaxed = true)
+        }
+
+        @Test
+        fun `endExecution with endReason publishes event with correct fields`() = runTest {
+            service = createService(testScheduler)
+            service.setApplicationEventPublisher(publisher)
+            val handle = service.beginExecution("s1", "user1")
+            testScheduler.advanceUntilIdle()
+
+            service.endExecution(handle, "normal")
+            testScheduler.advanceUntilIdle()
+
+            val eventSlot = slot<SessionCompletedEvent>()
+            verify(exactly = 1) { publisher.publishEvent(capture(eventSlot)) }
+            assertEquals("s1", eventSlot.captured.sessionId)
+            assertEquals("user1", eventSlot.captured.userId)
+            assertEquals("normal", eventSlot.captured.endReason)
+        }
+
+        @Test
+        fun `endExecution with null endReason does not publish event`() = runTest {
+            service = createService(testScheduler)
+            service.setApplicationEventPublisher(publisher)
+            val handle = service.beginExecution("s1", "user1", resetEndReason = false)
+            testScheduler.advanceUntilIdle()
+
+            service.endExecution(handle, endReason = null)
+            testScheduler.advanceUntilIdle()
+
+            verify(exactly = 0) { publisher.publishEvent(any()) }
+        }
+
+        @Test
+        fun `no-op endExecution after cancel does not publish event`() = runTest {
+            service = createService(testScheduler)
+            service.setApplicationEventPublisher(publisher)
+            val handle = service.beginExecution("s1", "user1")
+            testScheduler.advanceUntilIdle()
+
+            service.cancelExecution("s1", "user1")
+            testScheduler.advanceUntilIdle()
+
+            service.endExecution(handle, "normal")
+            testScheduler.advanceUntilIdle()
+
+            verify(exactly = 0) { publisher.publishEvent(any()) }
+        }
+
+        @Test
+        fun `null publisher does not throw`() = runTest {
+            service = createService(testScheduler)
+            // publisher not injected — remains null
+            val handle = service.beginExecution("s1", "user1")
+            testScheduler.advanceUntilIdle()
+
+            service.endExecution(handle, "normal")
+            testScheduler.advanceUntilIdle()
+
+            // No exception, DB writes still happen
+            coVerify { sessionStore.saveEndReason("s1", "normal", "user1") }
+            coVerify { sessionStore.updateStatus("s1", "active", "user1", expectedStatus = "streaming") }
+        }
+
+        @Test
+        fun `event published after DB writes`() = runTest {
+            service = createService(testScheduler)
+            service.setApplicationEventPublisher(publisher)
+            val handle = service.beginExecution("s1", "user1")
+            testScheduler.advanceUntilIdle()
+
+            service.endExecution(handle, "max_iterations")
+            testScheduler.advanceUntilIdle()
+
+            coVerify(ordering = io.mockk.Ordering.ORDERED) {
+                sessionStore.saveEndReason("s1", "max_iterations", "user1")
+                sessionStore.updateStatus("s1", "active", "user1", expectedStatus = "streaming")
+            }
+            verify(exactly = 1) { publisher.publishEvent(any()) }
+        }
+
+        @Test
+        fun `publishes event even without sessionStore`() = runTest {
+            val noDbService = SessionExecutionService(null, StandardTestDispatcher(testScheduler))
+            noDbService.setApplicationEventPublisher(publisher)
+
+            val handle = noDbService.beginExecution("s1", "user1")
+            testScheduler.advanceUntilIdle()
+
+            noDbService.endExecution(handle, "normal")
+            testScheduler.advanceUntilIdle()
+
+            val eventSlot = slot<SessionCompletedEvent>()
+            verify(exactly = 1) { publisher.publishEvent(capture(eventSlot)) }
+            assertEquals("s1", eventSlot.captured.sessionId)
+            assertEquals("user1", eventSlot.captured.userId)
+            assertEquals("normal", eventSlot.captured.endReason)
         }
     }
 }

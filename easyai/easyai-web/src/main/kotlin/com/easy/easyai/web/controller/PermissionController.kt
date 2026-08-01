@@ -247,7 +247,7 @@ class PermissionController(
             // Resolve relative paths against the project directory; absolute paths used as-is
             val rawPath = Path.of(path)
             val filePath = (if (rawPath.isAbsolute) rawPath else projectDir.resolve(rawPath)).normalize()
-            if (!filePath.startsWith(projectDir)) {
+            if (!filePath.startsWith(projectDir) && !isPathAllowedByRules(projectId, filePath, projectDir)) {
                 logger.warn("Access denied: path outside project directory: {} (project: {})", filePath, projectDir)
                 throw ResponseStatusException(HttpStatus.FORBIDDEN, "Access denied: path is outside project directory")
             }
@@ -274,6 +274,19 @@ class PermissionController(
         val userId = getCurrentUserId()
         val project = projectStore.findById(projectId, userId) ?: return null
         return project.path
+    }
+
+    /**
+     * Check if a path outside the project directory is allowed by the project's permission rules.
+     * Reuses the same evaluation logic as the agent loop (file.read/file.write rules).
+     */
+    private suspend fun isPathAllowedByRules(projectId: String, filePath: Path, projectDir: Path): Boolean {
+        val rules = ruleStore.loadRules(projectId)
+        val args = mapOf("path" to filePath.toString())
+        val readAllowed = permissionService.evaluateFilePermission(rules, projectDir, args, read = true)
+        if (readAllowed.action == PermissionAction.ALLOW) return true
+        val writeAllowed = permissionService.evaluateFilePermission(rules, projectDir, args, read = false)
+        return writeAllowed.action == PermissionAction.ALLOW
     }
 
     private fun scanDirectory(root: Path, current: Path, depth: Int, maxDepth: Int): List<FileNodeDto> {
