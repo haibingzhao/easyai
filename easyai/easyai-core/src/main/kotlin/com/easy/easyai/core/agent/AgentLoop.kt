@@ -472,10 +472,27 @@ internal class AgentLoop(
         val results = mutableListOf<ToolCallResult>()
 
         for (toolCall in toolCalls) {
+            // Parse arguments with graceful error handling: LLM may produce malformed JSON.
+            // If parsing fails, skip the beforeToolCall hook and record as failed.
+            val parsedArgs: Map<String, Any?>
+            try {
+                parsedArgs = parseToolArgs(toolCall.arguments)
+            } catch (e: Exception) {
+                logger.warn("${logPrefix}Tool call {} ({}) has invalid JSON arguments, skipping hook evaluation: {}",
+                    toolCall.name, toolCall.id, e.message)
+                results.add(ToolCallResult(
+                    toolCallId = toolCall.id,
+                    resultText = "Invalid JSON arguments for tool '${toolCall.name}': ${e.message}",
+                    isError = true,
+                    durationMs = 0
+                ))
+                continue
+            }
+
             val beforeResult = services.beforeToolCall(BeforeToolCallContext(
                 toolCallId = toolCall.id,
                 toolName = toolCall.name,
-                arguments = parseToolArgs(toolCall.arguments),
+                arguments = parsedArgs,
                 projectId = context.projectId,
                 projectPath = context.projectPath,
                 parentAgentId = context.parentAgentId
