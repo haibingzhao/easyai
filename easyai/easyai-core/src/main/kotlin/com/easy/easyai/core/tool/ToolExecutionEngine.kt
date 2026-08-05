@@ -114,22 +114,22 @@ class DefaultToolExecutionEngine: ToolExecutionEngine {
         if (tool == null) {
             val availableTools = tools.joinToString(", ") { it.name }
             val errorMsg = "Unknown tool: '${tc.name}'. Available tools: $availableTools"
-            val errorResult = ToolResult(
-                content = listOf(ToolResultContent(toolCallId = tc.id, toolName = tc.name, output = errorMsg, isError = true)),
-                isError = true
-            )
-            eventStream.push(ToolCallStatusUpdateEvent(tc.id, tc.name, ToolCallStatus.FAILED, turnId, sessionId))
-            eventStream.push(ToolExecutionEndEvent(tc.id, tc.name, errorResult, turnId = turnId, sessionId = sessionId, messageId = messageId, isError = true))
-            return ToolCallResult(
-                toolCallId = tc.id,
-                resultText = extractTextContent(errorResult),
-                isError = true,
-                durationMs = 0
-            )
+            return buildFailureResult(tc, errorMsg, eventStream, turnId, sessionId, messageId, durationMs = 0)
         }
         val argsPreview = if (tc.arguments.length > 100) tc.arguments.take(200) + "..." else tc.arguments
         logger.trace("[Turn ${turnId}] Executing tool call ${tc.name}(${tc.id}) with arguments: $argsPreview")
-        val args = parseArgs(tc.arguments)
+
+        // Parse arguments inside error-handling scope: LLM may produce malformed JSON
+        // (truncated stream, syntax error). Treat as tool failure instead of crashing.
+        val args: Map<String, Any?>
+        try {
+            args = parseArgs(tc.arguments)
+        } catch (e: Exception) {
+            val errorMsg = "Invalid JSON arguments for tool '${tc.name}': ${e.message}\nRaw arguments: ${tc.arguments.take(500)}"
+            logger.warn("[Turn ${turnId}] Tool call ${tc.name}(${tc.id}) has invalid JSON arguments: {}", e.message)
+            return buildFailureResult(tc, errorMsg, eventStream, turnId, sessionId, messageId, durationMs = 0)
+        }
+
         val startTime = System.currentTimeMillis()
 
         // Notify status change: PENDING → RUNNING
@@ -153,21 +153,9 @@ class DefaultToolExecutionEngine: ToolExecutionEngine {
             // Swallowing it would prevent the agent loop from stopping on abort/cancel.
             throw e
         } catch (e: Exception) {
-            val errorResult = ToolResult(
-                content = listOf(ToolResultContent(toolCallId = tc.id, toolName = tc.name, output = "Error: ${e.message}", isError = true)),
-                isError = true
-            )
-            // Notify status change: RUNNING → FAILED
-            eventStream.push(ToolCallStatusUpdateEvent(tc.id, tc.name, ToolCallStatus.FAILED, turnId, sessionId))
-            eventStream.push(ToolExecutionEndEvent(tc.id, tc.name, errorResult, turnId = turnId, sessionId = sessionId, messageId = messageId, isError = true, tracksFileChanges = tool.tracksFileChanges))
             val durationMs = System.currentTimeMillis() - startTime
             logger.debug("[Turn ${turnId}] Tool call ${tc.name}(${tc.id}) failed in ${durationMs}ms with error: ${e.message}")
-            return ToolCallResult(
-                toolCallId = tc.id,
-                resultText = extractTextContent(errorResult),
-                isError = true,
-                durationMs = durationMs
-            )
+            return buildFailureResult(tc, "Error: ${e.message}", eventStream, turnId, sessionId, messageId, durationMs, tracksFileChanges = tool.tracksFileChanges)
         }
 
         // If needPause result, skip status and end events - AgentLoop will handle the pause
@@ -193,6 +181,35 @@ class DefaultToolExecutionEngine: ToolExecutionEngine {
             mimeType = result.content.filterIsInstance<ToolResultContent>().firstOrNull()?.mimeType ?: "text/plain",
             isError = result.isError,
             usage = toolUsage
+        )
+    }
+
+    /**
+     * Builds a failed [ToolCallResult] and emits the corresponding FAILED status and
+     * execution-end events. Shared by all error paths in [executeSingle].
+     */
+    private suspend fun buildFailureResult(
+        tc: ToolCallContent,
+        errorMsg: String,
+        eventStream: ProducerScope<AgentEvent, List<AssistantMessage>>,
+        turnId: Int,
+        sessionId: String,
+        messageId: String?,
+        durationMs: Long,
+        tracksFileChanges: Boolean = false
+    ): ToolCallResult {
+        val errorResult = ToolResult(
+            content = listOf(ToolResultContent(toolCallId = tc.id, toolName = tc.name, output = errorMsg, isError = true)),
+            isError = true
+        )
+        // Notify status change: → FAILED
+        eventStream.push(ToolCallStatusUpdateEvent(tc.id, tc.name, ToolCallStatus.FAILED, turnId, sessionId))
+        eventStream.push(ToolExecutionEndEvent(tc.id, tc.name, errorResult, turnId = turnId, sessionId = sessionId, messageId = messageId, isError = true, tracksFileChanges = tracksFileChanges))
+        return ToolCallResult(
+            toolCallId = tc.id,
+            resultText = extractTextContent(errorResult),
+            isError = true,
+            durationMs = durationMs
         )
     }
 
