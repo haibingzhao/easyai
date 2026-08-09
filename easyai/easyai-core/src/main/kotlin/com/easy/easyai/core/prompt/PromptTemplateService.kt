@@ -147,11 +147,11 @@ class PromptTemplateService(
         }
         // Unconditionally append session variables (regardless of default or custom template)
         val varsSegment = buildSessionVariablesSegment(context.sessionVariables)
-        return when {
-            varsSegment != null && base.isNotBlank() -> "$base\n\n$varsSegment"
-            varsSegment != null -> varsSegment
-            else -> base
-        }
+        // Append time-access guidance when the calc tool is available.
+        // The segment is static text, keeping the system prompt prefix stable for LLM caching.
+        val timeAccessSegment = if (context.tools.any { it["name"] == "calc" }) TIME_ACCESS_SEGMENT else null
+        return listOfNotNull(base.takeIf { it.isNotBlank() }, varsSegment, timeAccessSegment)
+            .joinToString("\n\n")
     }
 
     private fun buildSessionVariablesSegment(vars: Map<String, String>): String? {
@@ -195,6 +195,17 @@ curl -s -X POST "$EASYAI_BACKEND_URL/api/internal/llm/batch-process" \
 ```
 
 Use this when you need to process many files with LLM (transcription, summarization, translation, etc.) via generated scripts. The script does NOT need any API key — authentication is handled by the injected token.
+        """.trimIndent()
+
+        /** Static guidance for on-demand time access via the calc tool (cache-stable). */
+        private val TIME_ACCESS_SEGMENT = """
+## Current Time
+
+The current date and time is NOT included in this prompt to keep it stable for caching.
+When you need the current date, time, or timezone (e.g. to report today's date, reason about deadlines, or compute time differences), use the `calc` tool with a script such as:
+ZonedDateTime.now().toString()
+
+This returns the current timestamp with the system's local timezone, e.g. 2026-08-09T10:30:45+08:00[Asia/Shanghai].
         """.trimIndent()
     }
 }

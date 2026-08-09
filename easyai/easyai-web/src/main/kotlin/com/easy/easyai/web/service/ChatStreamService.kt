@@ -86,8 +86,15 @@ class ChatStreamService(
     }
 
     override fun destroy() {
+        backgroundScope.cancel()
         sessionTaps.clear()
     }
+
+    /**
+     * Scope for detached agent execution pumps (see [buildSseFlow]). Independent of any HTTP
+     * connection so a client disconnect (page refresh / navigation) cannot cancel the agent.
+     */
+    private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /**
      * Per-session broadcast tap for secondary SSE subscribers (e.g., historical session viewer).
@@ -796,7 +803,14 @@ class ChatStreamService(
 
     /**
      * Shared SSE flow builder for stream conversion.
-     * Uses Kotlin Flow with try/catch/finally for lifecycle management.
+     *
+     * The agent execution is decoupled from the SSE connection lifecycle: a background pump
+     * collects the agent stream and broadcasts each event to both the HTTP consumer (via an
+     * unlimited bridge channel) and the per-session tap (watch endpoint). If the primary SSE
+     * connection drops (page refresh / navigation), the pump keeps the agent running — the
+     * client can reattach via streaming-status + watch endpoint, results are still persisted on
+     * completion and SessionCompletedEvent is published as usual. Only an explicit [cancelChat]
+     * aborts the agent.
      *
      * @param session The chat session
      * @param stream The event stream to convert
@@ -804,7 +818,7 @@ class ChatStreamService(
      * @param isRetryable Whether errors should be retried by the client
      * @param preGoalChannel Pre-created goal channel (listener registered before command expansion
      *                       in chatFlow to avoid missing the initial goal_status event)
-     * @param preGoalListener The listener associated with preGoalChannel, for cleanup in finally
+     * @param preGoalListener The listener associated with preGoalChannel, for cleanup on completion
      */
     private fun buildSseFlow(
         session: ChatSession,
@@ -823,90 +837,108 @@ class ChatStreamService(
         )
         sessionTaps[session.id] = tap
 
-        // Capture endReason from AgentEndEvent flowing through the stream
-        var endReason = "normal"
+        // Bridge channel: background pump -> this HTTP consumer. UNLIMITED so the pump never
+        // blocks while the client is disconnected (events are bounded by the execution itself).
+        val bridge = Channel<ServerSentEvent<ChatStreamEvent>>(Channel.UNLIMITED)
 
         // Set up goal status channel for real-time SSE notifications.
         // Reuse the pre-registered channel/listener if provided (chatFlow path);
         // otherwise create fresh ones (resume/retry/answer paths).
         val goalChannel = preGoalChannel ?: Channel(Channel.UNLIMITED)
-        var goalListener: GoalStatusListener? = preGoalListener
-        if (preGoalChannel == null) {
-            goalListener = createGoalListener(session.id, goalChannel)
-            goalListener?.let { goalStatusNotifier?.addListener(it) }
+        val goalListener: GoalStatusListener? = if (preGoalChannel == null) {
+            createGoalListener(session.id, goalChannel)?.also { goalStatusNotifier?.addListener(it) }
+        } else {
+            preGoalListener
         }
 
-        try {
-            val mainFlow: Flow<AgentEvent> = stream.asFlow()
-            val goalFlow: Flow<AgentEvent> = goalChannel.consumeAsFlow()
-            val mergedFlow: Flow<AgentEvent> = merge(mainFlow, goalFlow)
+        // Detached execution pump: owns the agent lifecycle (execution handle, tap, goal
+        // listener). Runs independently of the HTTP connection below.
+        backgroundScope.launch {
+            // Capture endReason from AgentEndEvent flowing through the stream
+            var endReason = "normal"
+            try {
+                val mainFlow: Flow<AgentEvent> = stream.asFlow()
+                val goalFlow: Flow<AgentEvent> = goalChannel.consumeAsFlow()
+                val mergedFlow: Flow<AgentEvent> = merge(mainFlow, goalFlow)
 
-            // Break merge deadlock: merge() waits for ALL flows to complete,
-            // but goalChannel only closes in the outer finally — which can't run
-            // until collect returns. Close goalChannel from INSIDE collect when
-            // AgentEndEvent arrives (signaling mainFlow is about to complete).
-            mergedFlow.collect { event ->
-                // Persist pending permission for PermissionRequestEvent
-                if (event is PermissionRequestEvent && sessionStore != null) {
-                    val json = objectMapper.writeValueAsString(mapOf(
-                        "toolCallId" to event.toolCallId,
-                        "toolName" to event.toolName,
-                        "permission" to event.permission,
-                        "pattern" to event.pattern,
-                        "arguments" to event.arguments,
-                        "subAgentToolCallId" to event.subAgentToolCallId,
-                        "subAgentName" to event.subAgentName
-                    ))
-                    sessionStore.savePendingPermission(session.id, json)
-                    logger.info("Saved pending permission for session {}: tool={}, id={}",
-                        session.id, event.toolName, event.toolCallId)
+                // Break merge deadlock: merge() waits for ALL flows to complete,
+                // but goalChannel only closes in the outer finally — which can't run
+                // until collect returns. Close goalChannel from INSIDE collect when
+                // AgentEndEvent arrives (signaling mainFlow is about to complete).
+                mergedFlow.collect { event ->
+                    // Persist pending permission for PermissionRequestEvent
+                    if (event is PermissionRequestEvent && sessionStore != null) {
+                        val json = objectMapper.writeValueAsString(mapOf(
+                            "toolCallId" to event.toolCallId,
+                            "toolName" to event.toolName,
+                            "permission" to event.permission,
+                            "pattern" to event.pattern,
+                            "arguments" to event.arguments,
+                            "subAgentToolCallId" to event.subAgentToolCallId,
+                            "subAgentName" to event.subAgentName
+                        ))
+                        sessionStore.savePendingPermission(session.id, json)
+                        logger.info("Saved pending permission for session {}: tool={}, id={}",
+                            session.id, event.toolName, event.toolCallId)
+                    }
+
+                    // Capture endReason from AgentEndEvent for the Done event
+                    if (event is AgentEndEvent) {
+                        endReason = event.endReason
+                        session.lastEndReason = event.endReason
+                        // Close goalChannel now so goalFlow completes and merge can return.
+                        goalChannel.close()
+                    }
+
+                    val chatEvents = ChatEventConverter.convert(event, customEventConverters)
+                    chatEvents.forEach { chatEvent ->
+                        val sse = chatEvent.toSse()
+                        bridge.trySend(sse)
+                        tap.tryEmit(sse)
+                    }
                 }
 
-                // Capture endReason from AgentEndEvent for the Done event
-                if (event is AgentEndEvent) {
-                    endReason = event.endReason
-                    session.lastEndReason = event.endReason
-                    // Close goalChannel now so goalFlow completes and merge can return.
-                    // Without this, merge waits forever for goalFlow while the outer finally
-                    // (which also closes goalChannel) can't run until collect returns — deadlock.
-                    goalChannel.close()
-                }
-
-                val chatEvents = ChatEventConverter.convert(event, customEventConverters)
-                chatEvents.forEach { chatEvent ->
-                    val sse = chatEvent.toSse()
-                    emit(sse)
-                    tap.tryEmit(sse)
-                }
+                // Emit done event after stream completes
+                val resultMessages = stream.result()
+                val doneEvent = ChatEventConverter.createDoneEvent(resultMessages, endReason = endReason)
+                val doneSse = doneEvent.toSse("done")
+                bridge.trySend(doneSse)
+                tap.tryEmit(doneSse)
+            } catch (e: CancellationException) {
+                // Explicit cancel (cancelChat -> session.abort()) or service shutdown.
+                // cancelChat already removed the handle and persisted "cancelled", so the
+                // endExecution below is a no-op; just notify any remaining subscribers.
+                logger.info("Agent execution cancelled during {} for session {}", context, session.id)
+                val cancelSse = errorSse("Session cancelled", isRetryable = false)
+                bridge.trySend(cancelSse)
+                tap.tryEmit(cancelSse)
+            } catch (e: Exception) {
+                logger.error("Error in {} chat stream for session {}", context, session.id, e)
+                val errSse = errorSse(e.message, isRetryable)
+                bridge.trySend(errSse)
+                tap.tryEmit(errSse)
+            } finally {
+                sessionTaps.remove(session.id)
+                goalListener?.let { goalStatusNotifier?.removeListener(it) }
+                goalChannel.close()
+                bridge.close()
+                // End execution: conditional remove + DB status transition (fire-and-forget)
+                handle?.let { executionService?.endExecution(it, endReason) }
+                logger.debug("Agent execution terminated during {} for session {}", context, session.id)
             }
+        }
 
-            // Emit done event after stream completes
-            val resultMessages = stream.result()
-            val doneEvent = ChatEventConverter.createDoneEvent(resultMessages, endReason = endReason)
-            val doneSse = doneEvent.toSse("done")
-            emit(doneSse)
-            tap.tryEmit(doneSse)
+        // HTTP consumer: forwards pumped events to the client. On disconnect (cancellation)
+        // it detaches WITHOUT aborting the agent — the pump keeps running, so a page refresh
+        // no longer cancels the session and the client can reattach via the watch endpoint.
+        try {
+            for (sse in bridge) {
+                emit(sse)
+            }
         } catch (e: CancellationException) {
-            logger.info("SSE connection cancelled during {} for session {}, aborting agent", context, session.id)
-            session.abort()
-            // Notify secondary subscribers (watch endpoint) so they terminate immediately
-            // instead of hanging until the 30-minute controller timeout.
-            tap.tryEmit(errorSse("Primary SSE connection cancelled", isRetryable = false))
-            // Don't clear pendingPermission here — the permission may still need user response.
-            // cancelChat() handles explicit user cancellation separately.
+            logger.info("SSE connection detached during {} for session {}, agent continues in background",
+                context, session.id)
             throw e
-        } catch (e: Exception) {
-            logger.error("Error in {} chat stream for session {}", context, session.id, e)
-            val errSse = errorSse(e.message, isRetryable)
-            emit(errSse)
-            tap.tryEmit(errSse)
-        } finally {
-            sessionTaps.remove(session.id)
-            goalListener?.let { goalStatusNotifier?.removeListener(it) }
-            goalChannel.close()
-            // End execution: conditional remove + DB status transition (fire-and-forget)
-            handle?.let { executionService?.endExecution(it, endReason) }
-            logger.debug("SSE stream terminated during {} for session {}", context, session.id)
         }
     }
 

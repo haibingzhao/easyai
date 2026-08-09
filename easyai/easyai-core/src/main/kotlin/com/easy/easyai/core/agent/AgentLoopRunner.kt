@@ -6,6 +6,7 @@ import com.easy.easyai.core.memory.MemoryLoader
 import com.easy.easyai.core.memory.MemoryRef
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.prompt.PromptContext
+import com.easy.easyai.core.resilience.LlmCircuitBreakerRegistry
 import com.easy.easyai.core.tool.EasyAiToolCallback
 import com.easy.easyai.core.tool.ToolDefinition
 import kotlinx.coroutines.*
@@ -109,8 +110,13 @@ internal class AgentLoopRunner(
         var chunkCount = 0
         var retryCount = 0
         var streamDuration: Long
+        // Endpoint circuit breaker (null when disabled or no model config).
+        // When OPEN, acquirePermission() fails fast with CircuitBreakerOpenException,
+        // which is not a timeout and therefore never enters the retry branch below.
+        val breaker = LlmCircuitBreakerRegistry.forContext(context)
 
         while (true) {
+            breaker?.acquirePermission()
             var streamStartTime = 0L
             try {
                 logger.debug("${logPrefix}[Turn {}] Starting LLM stream call (model={}, attempt={}/{}, tools={}, subAgents={}, skills={})",
@@ -235,6 +241,7 @@ internal class AgentLoopRunner(
                 streamDuration = System.currentTimeMillis() - streamStartTime
                 logger.debug("${logPrefix}[Turn {}] LLM stream completed in {}ms, chunks={}, textLen={}, thinkingLen={}",
                     turnId, streamDuration, chunkCount, fullText.length, fullThinking.length)
+                breaker?.recordSuccess()
                 break // Success, exit retry loop
             } catch (e: Exception) {
                 if (e is CancellationException) {
@@ -273,6 +280,12 @@ internal class AgentLoopRunner(
                     throw CancellationException("LLM call interrupted by cancellation").also {
                         it.initCause(e)
                     }
+                }
+                // Report outage-class failures (connection errors, stalls, 5xx) to the
+                // endpoint circuit breaker. Rate limits and client errors are filtered
+                // out by isEndpointOutage and never count.
+                if (LlmErrorClassifier.isEndpointOutage(e)) {
+                    breaker?.recordFailure()
                 }
                 if (retryCount < context.maxRetries && isTimeoutException(e)) {
                     retryCount++
@@ -363,46 +376,8 @@ internal class AgentLoopRunner(
                 "tool_calls" -> StopReason.TOOL_USE
                 else -> StopReason.STOP
             },
-            usage = correctAnomalousUsage(rawUsage, transcript)
+            usage = rawUsage
         )
-    }
-
-    /**
-     * Correct an anomalously undercounted usage report from the LLM gateway.
-     *
-     * Some Anthropic-protocol proxy gateways (with prompt caching enabled) occasionally
-     * under-report the input/cache token counts on the first request after a prompt-cache
-     * invalidation. The harness verifiably sends the full transcript every turn, so the
-     * undercount is purely in the gateway's usage accounting.
-     *
-     * Detection: the transcript only grows within a run, so the prompt total
-     * (input + cacheRead + cacheWrite) must be non-decreasing between consecutive
-     * assistant turns. If the current report is lower than the previous assistant's
-     * prompt total, it is an undercount.
-     *
-     * Correction: restore cacheReadTokens so the prompt total matches the previous
-     * assistant's prompt total (a conservative baseline). inputTokens /
-     * cacheWriteTokens / outputTokens are kept as-is.
-     */
-    private fun correctAnomalousUsage(rawUsage: Usage, transcript: List<EasyAiMessage>): Usage {
-        val reportedPromptTotal = rawUsage.inputTokens + rawUsage.cacheReadTokens + rawUsage.cacheWriteTokens
-
-        val previous = transcript.filterIsInstance<AssistantMessage>()
-            .lastOrNull { it.usage.inputTokens + it.usage.cacheReadTokens + it.usage.cacheWriteTokens > 0 }
-
-        // First call with usage — trust directly
-        if (previous == null) return rawUsage
-
-        val previousPromptTotal = previous.usage.inputTokens + previous.usage.cacheReadTokens + previous.usage.cacheWriteTokens
-
-        if (reportedPromptTotal >= previousPromptTotal) {
-            return rawUsage // monotonic, plausible
-        }
-
-        val correctedCacheRead = (previousPromptTotal - rawUsage.inputTokens - rawUsage.cacheWriteTokens).coerceAtLeast(0)
-        logger.warn("${logPrefix}Anomalous gateway usage corrected: cacheRead {} -> {} (prompt total {} -> {})",
-            rawUsage.cacheReadTokens, correctedCacheRead, reportedPromptTotal, previousPromptTotal)
-        return rawUsage.copy(cacheReadTokens = correctedCacheRead)
     }
 
     /**

@@ -8,6 +8,7 @@ import org.springframework.ai.chat.model.ChatModel
 import org.springframework.ai.chat.prompt.ChatOptions
 import org.springframework.ai.openai.OpenAiChatModel
 import org.springframework.ai.openai.OpenAiChatOptions
+import org.springframework.ai.openai.StreamClosingOpenAiChatModel
 import org.springframework.ai.openai.setup.OpenAiSetup
 import org.springframework.ai.tool.ToolCallback
 import java.time.Duration
@@ -15,6 +16,10 @@ import java.time.Duration
 /**
  * OpenAI implementation of ChatModelFactory.
  * Creates OpenAiChatModel instances and builds OpenAiChatOptions based on the provided configuration.
+ *
+ * The returned model is wrapped in [StreamClosingOpenAiChatModel] to close the SDK stream on
+ * downstream cancellation (workaround for spring-projects/spring-ai#6654, which otherwise leaks
+ * the underlying OkHttp connection when a stream is abandoned, e.g. by the stall timeout).
  */
 class OpenAiChatModelFactory : ChatModelFactory {
     override fun supports(protocol: Protocol): Boolean = protocol == Protocol.OPENAI
@@ -66,12 +71,14 @@ class OpenAiChatModelFactory : ChatModelFactory {
 
         val defaultOptions = OpenAiChatOptions.builder().model(config.modelId).build()
 
-        return OpenAiChatModel.builder()
+        val chatModel = OpenAiChatModel.builder()
             .openAiClient(syncClient)
             .openAiClientAsync(asyncClient)
             .options(defaultOptions)
             .observationRegistry(observationRegistry)
             .build()
+
+        return StreamClosingOpenAiChatModel(chatModel, asyncClient, observationRegistry)
     }
 
     override fun build(

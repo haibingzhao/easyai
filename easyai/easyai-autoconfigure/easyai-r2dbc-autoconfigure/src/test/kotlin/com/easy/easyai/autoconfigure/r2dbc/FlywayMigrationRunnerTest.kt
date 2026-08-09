@@ -78,8 +78,8 @@ class FlywayMigrationRunnerTest {
                 .load()
 
             val result = flyway.migrate()
-            assertTrue(result.migrationsExecuted >= 1, "V1 should be executed")
-            assertEquals("1", result.targetSchemaVersion)
+            assertTrue(result.migrationsExecuted >= 2, "V1 and V2 should be executed")
+            assertEquals("2", result.targetSchemaVersion)
         }
 
         @Test
@@ -94,7 +94,7 @@ class FlywayMigrationRunnerTest {
                 .baselineVersion("0")
                 .load()
             val result = flyway.migrate()
-            assertEquals("1", result.targetSchemaVersion)
+            assertEquals("2", result.targetSchemaVersion)
 
             DriverManager.getConnection(jdbcUrl, "sa", "").use { conn ->
                 // Core tables
