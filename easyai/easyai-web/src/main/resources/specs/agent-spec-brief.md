@@ -54,7 +54,6 @@
 | `input` | Structured input (requires `inputSchema`) |
 | `memory` | Agent memory content |
 | `os` / `cwd` | Operating system / working directory |
-| `current_date_time` | Current timestamp |
 
 ## InlineAgentSpec Schema
 

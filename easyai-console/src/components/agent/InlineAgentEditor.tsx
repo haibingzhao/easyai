@@ -27,7 +27,6 @@ const INLINE_AGENT_PROMPT_VARIABLES: { name: string; description: string }[] = [
   { name: 'os', description: 'Operating system name (e.g. Mac OS X, Linux).' },
   { name: 'cwd', description: 'Current working directory absolute path.' },
   { name: 'input', description: 'Structured input data passed from the parent agent.' },
-  { name: 'current_date_time', description: 'Current date/time (yyyy-MM-dd HH:mm:ss z).' },
 ];
 
 const inlineAgentVariableGroups: VariableGroup[] = [

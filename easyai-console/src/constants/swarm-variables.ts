@@ -13,7 +13,6 @@ export const SWARM_PROMPT_VARIABLES: { name: string; description: string }[] = [
   { name: 'custom_instructions', description: 'Agent custom instructions text' },
   { name: 'model_id', description: 'Active model identifier' },
   { name: 'os', description: 'Operating system name' },
-  { name: 'current_date_time', description: 'Current date/time (yyyy-MM-dd HH:mm:ss z)' },
 ];
 
 /**

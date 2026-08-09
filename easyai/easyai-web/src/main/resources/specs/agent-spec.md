@@ -70,7 +70,6 @@ When writing a `promptTemplate`, these variables are available via the Jinja2 re
 | `cwd` | string | Session project path | Current working directory absolute path. Empty string when no project is set. |
 | `memory` | string | Memory store (loaded once per session) | Formatted memory content including agent memory index and references. Empty string when no memory. |
 | `input` | object | API request `inputData` (validated by `inputSchema`) | Structured input variables. Access fields via `{{ input.field_name }}`. Empty object when no input provided. |
-| `current_date_time` | string | Runtime (`ZonedDateTime.now()`) | Current date/time formatted as `yyyy-MM-dd HH:mm:ss z`, e.g. `2026-07-12 14:30:00 UTC`. |
 
 ### Variable Details
 
@@ -142,7 +141,6 @@ You are {{ agent.name }}, a specialized assistant.
 ```jinja2
 You are a helpful assistant. {{ custom_instructions }}
 
-Current time: {{ current_date_time }}
 OS: {{ os }}
 Working directory: {{ cwd }}
 ```

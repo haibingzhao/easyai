@@ -50,12 +50,14 @@ class AnthropicChatModelFactory : ChatModelFactory {
 
         val defaultOptions = AnthropicChatOptions.builder().model(config.modelId).build()
 
-        return AnthropicChatModel.builder()
+        val chatModel = AnthropicChatModel.builder()
             .anthropicClient(syncClient)
             .anthropicClientAsync(asyncClient)
             .options(defaultOptions)
             .observationRegistry(observationRegistry)
             .build()
+
+        return UsageCorrectingAnthropicChatModel(chatModel)
     }
 
     override fun build(

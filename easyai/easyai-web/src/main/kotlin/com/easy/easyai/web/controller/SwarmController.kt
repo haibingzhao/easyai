@@ -810,7 +810,6 @@ class SwarmController(
                         PromptVariableInfo("custom_instructions", "Agent custom instructions text"),
                         PromptVariableInfo("model_id", "Active model identifier"),
                         PromptVariableInfo("os", "Operating system name"),
-                        PromptVariableInfo("current_date_time", "Current date/time (yyyy-MM-dd HH:mm:ss z)"),
                     )
                 ),
             )

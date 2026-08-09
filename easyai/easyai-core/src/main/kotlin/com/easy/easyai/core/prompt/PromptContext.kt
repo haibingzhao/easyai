@@ -32,9 +32,6 @@ data class PromptContext(
     val scriptLlmAvailable: Boolean = false,
     /** Session-scoped variables that persist across compaction. Appended unconditionally to system prompt. */
     val sessionVariables: Map<String, String> = emptyMap(),
-    /** Current date and time for injection into prompts. */
-    val currentDateTime: String = java.time.ZonedDateTime.now()
-        .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z"))
 ) {
     /**
      * Convert to a flat map suitable for Jinja2 template rendering.
@@ -55,7 +52,6 @@ data class PromptContext(
         "cwd" to (cwd ?: ""),
         "memory" to (memory ?: ""),
         "tools" to tools,
-        "input" to inputVariables,
-        "current_date_time" to currentDateTime
+        "input" to inputVariables
     )
 }

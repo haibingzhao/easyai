@@ -3,7 +3,9 @@ package com.easy.easyai.core.agent
 import org.springframework.ai.retry.NonTransientAiException
 import org.springframework.ai.retry.TransientAiException
 import org.springframework.web.client.ResourceAccessException
+import java.net.ConnectException
 import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeoutException
 
 /**
@@ -21,6 +23,12 @@ import java.util.concurrent.TimeoutException
  * - Accuracy
  */
 internal object LlmErrorClassifier {
+
+    /** Upper bound for cause-chain traversal (protects against circular chains). */
+    private const val MAX_CAUSE_DEPTH = 16
+
+    /** Whole-word "429" so incidental digits are not mistaken for the status code. */
+    private val RATE_LIMIT_STATUS_REGEX = Regex("\\b429\\b")
 
     /**
      * Check if the error indicates context length exceeded.
@@ -131,6 +139,59 @@ internal object LlmErrorClassifier {
             current = current.cause
         }
         return false
+    }
+
+    /**
+     * Check if the error indicates the LLM endpoint itself is down or
+     * unreachable (outage), as opposed to a transient per-request problem.
+     *
+     * Used as the counting signal for the endpoint circuit breaker
+     * (see com.easy.easyai.core.resilience.LlmCircuitBreaker). Stricter than
+     * [isRetryable]: rate limiting (429) and context overflow are explicitly
+     * excluded because they do not indicate endpoint unavailability and
+     * counting them would trip the breaker by mistake.
+     */
+    fun isEndpointOutage(e: Throwable): Boolean {
+        if (isContextOverflow(e)) {
+            return false
+        }
+        var current: Throwable? = e
+        var depth = 0
+        // Depth guard: a pathological (circular) cause chain would otherwise
+        // loop forever, and the breaker hot path must never hang.
+        while (current != null && depth++ < MAX_CAUSE_DEPTH) {
+            val message = current.message?.lowercase() ?: ""
+            // Rate limiting is a per-request condition, not endpoint outage.
+            if (isRateLimitMessage(message)) {
+                return false
+            }
+            if (current is ResourceAccessException ||
+                current is SocketTimeoutException ||
+                current is TimeoutException ||
+                current is ConnectException ||
+                current is UnknownHostException
+            ) {
+                return true
+            }
+            // 5xx wrapped by Spring AI (unless the message reveals rate limiting,
+            // already excluded above).
+            if (current is TransientAiException) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
+    }
+
+    /**
+     * Check if the message carries rate-limit indicators.
+     * "429" is matched as a whole word so that incidental occurrences
+     * (token counts, request ids, URLs) are not mistaken for the status code.
+     */
+    private fun isRateLimitMessage(message: String): Boolean {
+        return RATE_LIMIT_STATUS_REGEX.containsMatchIn(message) ||
+            message.contains("rate limit") ||
+            message.contains("too many requests")
     }
 
     /**

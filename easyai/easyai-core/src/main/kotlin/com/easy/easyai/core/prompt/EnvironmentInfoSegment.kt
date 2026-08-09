@@ -1,16 +1,13 @@
 package com.easy.easyai.core.prompt
 
-import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
-
 /**
  * Generates environment info segment for system prompt.
- * Includes OS, current working directory, and current date/time
- * so the LLM knows where and when it is operating.
+ * Includes OS and current working directory only — intentionally static
+ * so the system prompt prefix stays stable for LLM caching.
+ * Current date/time is NOT injected here; agents with the calc tool get
+ * on-demand access guidance appended by [PromptTemplateService].
  */
 object EnvironmentInfoSegment {
-
-    private val DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z")
 
     /**
      * Generate environment info segment.
@@ -27,7 +24,6 @@ object EnvironmentInfoSegment {
         if (!cwd.isNullOrBlank()) {
             lines.add("- Current working directory: `$cwd`")
         }
-        lines.add("- Current date and time: ${ZonedDateTime.now().format(DATE_TIME_FORMATTER)}")
 
         return buildString {
             appendLine("## Environment")

@@ -6,6 +6,7 @@ import org.springframework.ai.retry.NonTransientAiException
 import org.springframework.ai.retry.TransientAiException
 import org.springframework.web.client.ResourceAccessException
 import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeoutException
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -262,6 +263,52 @@ class LlmErrorClassifierTest {
             assertTrue(LlmErrorClassifier.isContextOverflow(exception1))
             assertTrue(LlmErrorClassifier.isContextOverflow(exception2))
             assertTrue(LlmErrorClassifier.isContextOverflow(exception3))
+        }
+    }
+
+    @Nested
+    inner class `isEndpointOutage` {
+
+        @Test
+        fun `connection errors are outages`() {
+            assertTrue(LlmErrorClassifier.isEndpointOutage(ResourceAccessException("I/O error on POST request: Connection refused")))
+            assertTrue(LlmErrorClassifier.isEndpointOutage(UnknownHostException("api.example.com")))
+        }
+
+        @Test
+        fun `socket and stream stall timeouts are outages`() {
+            assertTrue(LlmErrorClassifier.isEndpointOutage(SocketTimeoutException("Read timed out")))
+            assertTrue(LlmErrorClassifier.isEndpointOutage(TimeoutException("LLM stream stalled: no first token (TTFT) received within 240s")))
+        }
+
+        @Test
+        fun `5xx transient errors are outages`() {
+            assertTrue(LlmErrorClassifier.isEndpointOutage(TransientAiException("503 Service Unavailable")))
+            assertTrue(LlmErrorClassifier.isEndpointOutage(TransientAiException("502 Bad Gateway")))
+        }
+
+        @Test
+        fun `outage wrapped in generic exception is detected via cause chain`() {
+            val wrapped = RuntimeException("LLM call failed", ResourceAccessException("Connection refused"))
+            assertTrue(LlmErrorClassifier.isEndpointOutage(wrapped))
+        }
+
+        @Test
+        fun `rate limit is not an outage`() {
+            assertFalse(LlmErrorClassifier.isEndpointOutage(TransientAiException("429 Too Many Requests")))
+            assertFalse(LlmErrorClassifier.isEndpointOutage(TransientAiException("Rate limit reached for model")))
+            assertFalse(LlmErrorClassifier.isEndpointOutage(ResourceAccessException("too many requests")))
+        }
+
+        @Test
+        fun `context overflow is not an outage`() {
+            assertFalse(LlmErrorClassifier.isEndpointOutage(NonTransientAiException("400 - context_length_exceeded")))
+        }
+
+        @Test
+        fun `client errors are not outages`() {
+            assertFalse(LlmErrorClassifier.isEndpointOutage(NonTransientAiException("401 Unauthorized")))
+            assertFalse(LlmErrorClassifier.isEndpointOutage(RuntimeException("boom")))
         }
     }
 }
