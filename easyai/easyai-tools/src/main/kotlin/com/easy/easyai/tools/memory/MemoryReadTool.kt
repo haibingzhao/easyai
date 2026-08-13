@@ -1,6 +1,7 @@
 package com.easy.easyai.tools.memory
 
 import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.memory.MemoryOwnerContext
 import com.easy.easyai.core.memory.MemoryRef
 import com.easy.easyai.core.memory.MemoryScope
 import com.easy.easyai.core.memory.MemoryStore
@@ -36,14 +37,15 @@ internal class MemoryReadTool(
         if (path.isNullOrBlank()) {
             return errorResult("Error: 'path' parameter is required.")
         }
+        val owner = MemoryOwnerContext(agentContext.userId, agentContext.projectPath)
 
         // Try project scope first, then global
         for (scope in listOf(MemoryScope.PROJECT, MemoryScope.GLOBAL)) {
-            val content = store.read(agentContext, path, scope)
+            val content = store.read(path, scope, owner)
             if (content != null) {
                 // Record access: find the matching entry to get metadata
                 try {
-                    val entry = store.list(agentContext, scope).find { it.path == path }
+                    val entry = store.list(scope, owner).find { it.path == path }
                     if (entry != null) {
                         agentContext.memoryAccessTracker.recordAccess(MemoryRef(entry.name, entry.description, entry.type, scope))
                     } else {

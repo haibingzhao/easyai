@@ -170,6 +170,38 @@ class MessageConverterTest {
     }
 
     @Nested
+    inner class `tool result pass-through` {
+
+        @Test
+        fun `passes oversized tool results through unchanged at send time`() {
+            // Tool results are guarded at generation time (AgentLoop / PendingToolCallExecutor),
+            // so the converter must not re-process them here.
+            val big = "k".repeat(250_000)
+            val messages = listOf(
+                ToolResultMessage(toolResults = listOf(ToolResultEntry("call1", "search", big)))
+            )
+            val result = converter.toSpringAiMessages(messages)
+
+            val toolResponse = result.single() as org.springframework.ai.chat.messages.ToolResponseMessage
+            val response = toolResponse.responses.single()
+            assertEquals("call1", response.id)
+            assertEquals(big, response.responseData, "send time must not truncate or alter the result")
+            assertFalse(response.responseData.contains("[output truncated:"))
+        }
+
+        @Test
+        fun `leaves tool results within the limit unchanged`() {
+            val messages = listOf(
+                ToolResultMessage(toolResults = listOf(ToolResultEntry("call1", "read", "file content")))
+            )
+            val result = converter.toSpringAiMessages(messages)
+
+            val toolResponse = result.single() as org.springframework.ai.chat.messages.ToolResponseMessage
+            assertEquals("file content", toolResponse.responses.single().responseData)
+        }
+    }
+
+    @Nested
     inner class `fromSpringAiResponse` {
 
         private fun createMockResponse(

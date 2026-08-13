@@ -246,14 +246,14 @@ Rules:
     }
 
     /**
-     * Disable thinking mode on the model config for compaction.
-     * Thinking adds significant latency with minimal quality benefit for structured summarization.
+     * Disable thinking and effort on the model config for compaction.
+     * Thinking/effort adds significant latency with minimal quality benefit for structured summarization.
      */
     private fun disableThinking(config: ModelProviderConfig?): ModelProviderConfig? {
         if (config == null) return null
         val opts = config.options ?: ModelOptions()
-        if (!opts.thinking) return config  // Already disabled
-        return config.copy(options = opts.copy(thinking = false))
+        if (!opts.thinking && opts.effort == null) return config  // Already disabled
+        return config.copy(options = opts.copy(thinking = false, effort = null))
     }
 
     /**

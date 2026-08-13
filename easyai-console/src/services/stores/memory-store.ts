@@ -1,44 +1,57 @@
 import { create } from 'zustand';
 import { memoryService } from '@/services/memory-service';
-import type { MemoryEntry, MemoryConfig, CreateMemoryRequest } from '@/types/memory';
+import { useProjectStore } from '@/services/stores/project-store';
+import type { MemoryEntry, MemoryConfig, CreateMemoryRequest, UpdateMemoryRequest } from '@/types/memory';
 
 interface MemoryStore {
   // State
-  memories: MemoryEntry[];
+  entries: MemoryEntry[];
   config: MemoryConfig | null;
   loading: boolean;
   error: string | null;
 
   // Actions
-  loadMemories: (scope?: 'global' | 'project') => Promise<void>;
+  /** Load GLOBAL memories plus each project's memories (parallel, non-blocking per project). */
+  loadAll: () => Promise<void>;
   loadConfig: () => Promise<void>;
   createOrUpdate: (request: CreateMemoryRequest) => Promise<MemoryEntry>;
-  deleteMemory: (name: string, scope: 'global' | 'project') => Promise<void>;
-  deleteAll: (scope: 'global' | 'project') => Promise<number>;
+  updateMemory: (
+    name: string,
+    scope: 'global' | 'project',
+    projectPath: string | null,
+    request: UpdateMemoryRequest
+  ) => Promise<MemoryEntry>;
+  deleteMemory: (name: string, scope: 'global' | 'project', projectPath: string | null) => Promise<void>;
+  deleteAll: (scope: 'global' | 'project', projectPath: string | null) => Promise<number>;
   updateConfig: (config: { enabled?: boolean }) => Promise<void>;
   clearError: () => void;
 }
 
 export const useMemoryStore = create<MemoryStore>((set, get) => ({
-  memories: [],
+  entries: [],
   config: null,
   loading: false,
   error: null,
 
-  loadMemories: async (scope) => {
+  loadAll: async () => {
     set({ loading: true, error: null });
-    try {
-      // Load both global and project memories, then merge
-      if (scope) {
-        const memories = await memoryService.listMemories(scope);
-        set({ memories, loading: false });
-      } else {
-        const [globalMems, projectMems] = await Promise.all([
-          memoryService.listMemories('global'),
-          memoryService.listMemories('project'),
-        ]);
-        set({ memories: [...globalMems, ...projectMems], loading: false });
+    const projects = useProjectStore.getState().projects;
+    const globalRequest = memoryService.listMemories('global', null).then((list) =>
+      list.map((m) => ({ ...m, projectPath: null }))
+    );
+    const projectRequests = projects.map(async (project) => {
+      try {
+        const list = await memoryService.listMemories('project', project.path);
+        return list.map((m) => ({ ...m, projectPath: project.path }));
+      } catch (e) {
+        // One project failing must not block the whole view
+        set({ error: (e as Error).message });
+        return [] as MemoryEntry[];
       }
+    });
+    try {
+      const [globalMems, ...projectLists] = await Promise.all([globalRequest, ...projectRequests]);
+      set({ entries: [...globalMems, ...projectLists.flat()], loading: false });
     } catch (e) {
       set({ error: (e as Error).message, loading: false });
     }
@@ -54,30 +67,42 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
   },
 
   createOrUpdate: async (request) => {
-    const entry = await memoryService.createOrUpdateMemory(request);
-    // Reload to get fresh list
-    await get().loadMemories();
-    return entry;
-  },
-
-  deleteMemory: async (name, scope) => {
     try {
-      await memoryService.deleteMemory(name, scope);
-      set((state) => ({
-        memories: state.memories.filter(
-          (m) => !(m.name === name && m.scope === scope)
-        ),
-      }));
+      const entry = await memoryService.createOrUpdateMemory(request);
+      // Reload to get fresh list
+      await get().loadAll();
+      return entry;
     } catch (e) {
       set({ error: (e as Error).message });
       throw e;
     }
   },
 
-  deleteAll: async (scope) => {
+  updateMemory: async (name, scope, projectPath, request) => {
     try {
-      const result = await memoryService.deleteAllMemories(scope);
-      await get().loadMemories();
+      const entry = await memoryService.updateMemory(name, scope, projectPath, request);
+      await get().loadAll();
+      return entry;
+    } catch (e) {
+      set({ error: (e as Error).message });
+      throw e;
+    }
+  },
+
+  deleteMemory: async (name, scope, projectPath) => {
+    try {
+      await memoryService.deleteMemory(name, scope, projectPath);
+      await get().loadAll();
+    } catch (e) {
+      set({ error: (e as Error).message });
+      throw e;
+    }
+  },
+
+  deleteAll: async (scope, projectPath) => {
+    try {
+      const result = await memoryService.deleteAllMemories(scope, projectPath);
+      await get().loadAll();
       return result.deleted;
     } catch (e) {
       set({ error: (e as Error).message });

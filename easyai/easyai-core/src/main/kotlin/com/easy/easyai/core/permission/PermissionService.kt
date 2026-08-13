@@ -193,6 +193,13 @@ class PermissionService(
             if (otherResult.action != PermissionAction.ASK) {
                 return PermissionCheckResult(otherResult.action, "$prefix.other", filePath)
             }
+            // 3.1 Fallback: normalized path under the system temp dir → ALLOW.
+            // Covers Windows backslash / case / separator mismatches that string-prefix matching
+            // cannot handle (ToolResultGuard spills oversized results under java.io.tmpdir).
+            // Explicit user rules were evaluated above and stay honored.
+            if (isUnderSystemTmpDir(filePath)) {
+                return PermissionCheckResult(PermissionAction.ALLOW, "$prefix.other", filePath)
+            }
         }
 
         // 4. Default: ASK — report correct permission type based on path location
@@ -200,6 +207,18 @@ class PermissionService(
             SafeCommandDetector.normalizePath(filePath, projectPath).startsWith(projectPath)
         val defaultPermission = if (isUnderProject) "$prefix.project" else "$prefix.other"
         return PermissionCheckResult(PermissionAction.ASK, defaultPermission, pattern)
+    }
+
+    /** True when [filePath] resolves (after normalization) to a location under the system temp dir. */
+    private fun isUnderSystemTmpDir(filePath: String): Boolean {
+        val tmpDir = System.getProperty("java.io.tmpdir") ?: return false
+        return try {
+            val normalizedPath = Path.of(filePath).toAbsolutePath().normalize()
+            val normalizedTmp = Path.of(tmpDir).toAbsolutePath().normalize()
+            normalizedPath.startsWith(normalizedTmp)
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /**

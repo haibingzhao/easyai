@@ -1,7 +1,6 @@
 package com.easy.easyai.compaction
 
 import com.easy.easyai.compaction.estimator.TokenEstimator
-import com.easy.easyai.compaction.estimator.UsageAwareTokenEstimator
 import com.easy.easyai.compaction.model.CompactedRange
 import com.easy.easyai.compaction.model.CompactionContext
 import com.easy.easyai.compaction.strategy.CompactionStrategy
@@ -73,11 +72,6 @@ class ContextCompactionOrchestrator(
         if (!config.enabled) {
             logger.debug("Compaction disabled by config")
             return messages
-        }
-
-        // Update token estimator ratio using full message list for accurate calibration
-        if (tokenEstimator is UsageAwareTokenEstimator) {
-            tokenEstimator.updateRatio(messages)
         }
 
         // Send compaction start event
@@ -161,7 +155,7 @@ class ContextCompactionOrchestrator(
 
         if (compactedMessages.isEmpty()) {
             logger.warn("No messages to compact, returning original")
-            val contextTokens = contextTokensFromUsage(messages)
+            val contextTokens = tokenEstimator.estimateContextTokens(messages)
             val durationMs = System.currentTimeMillis() - executionStartTime
             return CompactionResult(
                 messages = messages,
@@ -189,7 +183,7 @@ class ContextCompactionOrchestrator(
         // Step 5: Build compaction context
         val compactedRange = CompactedRange(
             messageIds = compactedMessages.map { it.id },
-            estimatedTokensBefore = contextTokensFromUsage(messages),
+            estimatedTokensBefore = tokenEstimator.estimateContextTokens(messages),
             userRoleCount = compactedMessages.count { it.role == Role.USER },
             assistantRoleCount = compactedMessages.count { it.role == Role.ASSISTANT }
         )
@@ -234,18 +228,21 @@ class ContextCompactionOrchestrator(
         val resultMessages = prefixMessages + summaryMessage + recentMessages
 
         // Calculate token metrics for result and listener.
-        // Use char-based estimate() for tokensSaved: it measures the actual reduction
-        // (compacted messages → summary), unlike estimateContextTokens() which returns
-        // the last AssistantMessage's usage and is identical before/after compaction
+        // Use estimate() for tokensSaved: it measures the actual reduction
+        // (compacted messages → summary), unlike estimateContextTokens() which anchors
+        // on the last AssistantMessage's usage and is identical before/after compaction
         // because the tail (containing the last AssistantMessage) is preserved.
         val compactedTokens = tokenEstimator.estimate(compactedMessages)
         val summaryTokens = tokenEstimator.estimate(listOf(summaryMessage))
         val tokensSaved = (compactedTokens - summaryTokens).coerceAtLeast(0)
 
-        // Derive currentTokens from estimatedTokensBefore - tokensSaved.
-        // Cannot use estimateContextTokens(resultMessages) here because it reads the last
-        // AssistantMessage's usage, which is preserved in the tail and thus unchanged.
-        val currentTokens = (compactedRange.estimatedTokensBefore - tokensSaved).coerceAtLeast(0)
+        // Derive currentTokens from estimatedTokensBefore - tokensSaved (same estimator
+        // baseline on both sides). The floor guards against cross-baseline negatives so
+        // the frontend `currentTokens > 0` guard can update the UI; the cap keeps the
+        // UI percentage at or below 100%.
+        val currentTokens = (compactedRange.estimatedTokensBefore - tokensSaved)
+            .coerceAtLeast(tokenEstimator.estimate(resultMessages))
+            .coerceAtMost(modelContextLength)
         val durationMs = System.currentTimeMillis() - executionStartTime
 
         // Step 8: Notify listener for persistence cleanup
@@ -342,32 +339,33 @@ class ContextCompactionOrchestrator(
         }
 
         // recentIndex is now at the last message before the tail turns
-        val splitIndex = recentIndex + 1
+        var splitIndex = recentIndex + 1
         var recentMessages = messages.drop(splitIndex)
 
         // Check if recent messages exceed token limit, trim if necessary.
+        // Incremental accounting: subtract the dropped head message instead of
+        // re-estimating the whole tail each iteration (was O(n^2)).
         // Dropped messages must be included in compactedMessages so nothing is lost.
         var recentTokens = tokenEstimator.estimate(recentMessages)
         while (recentTokens > maxRecentTokens && recentMessages.size > 1) {
+            recentTokens -= tokenEstimator.estimate(listOf(recentMessages.first()))
+            splitIndex++
             recentMessages = recentMessages.drop(1)
-            recentTokens = tokenEstimator.estimate(recentMessages)
+        }
+
+        // Structural guard: never leave a ToolResultMessage orphaned at the head of the
+        // tail. Pull preceding messages in until the head is no longer a tool result, so
+        // the assistant that issued the tool calls is preserved together with its results
+        // even when that exceeds the token budget. Without this pairing the model tends
+        // to re-run the tools whose results were compacted away.
+        while (splitIndex > 0 && recentMessages.firstOrNull() is ToolResultMessage) {
+            splitIndex--
+            recentMessages = listOf(messages[splitIndex]) + recentMessages
         }
 
         // All messages not in recentMessages are compacted (includes token-trimmed ones)
-        val compactedMessages = messages.take(messages.size - recentMessages.size)
+        val compactedMessages = messages.take(splitIndex)
 
         return Pair(recentMessages, compactedMessages)
-    }
-
-    /**
-     * Extract context token count directly from the last AssistantMessage's usage data.
-     * Avoids redundant estimation when usage is already available.
-     */
-    private fun contextTokensFromUsage(messages: List<EasyAiMessage>): Int {
-        val last = messages.filterIsInstance<AssistantMessage>()
-            .lastOrNull { it.usage.inputTokens + it.usage.cacheReadTokens + it.usage.cacheWriteTokens > 0 }
-            ?: return tokenEstimator.estimate(messages)
-        val u = last.usage
-        return u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens + u.outputTokens
     }
 }

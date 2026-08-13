@@ -193,6 +193,11 @@
             </dependency>
             <dependency>
                 <groupId>com.easy</groupId>
+                <artifactId>easyai-rag-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
                 <artifactId>easyai-anthropic-autoconfigure</artifactId>
                 <version>${revision}</version>
             </dependency>

@@ -1,5 +1,6 @@
 package com.easy.easyai.autoconfigure.anthropic
 
+import com.anthropic.models.messages.OutputConfig
 import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
@@ -17,6 +18,7 @@ import java.time.Duration
  * Creates AnthropicChatModel instances and builds AnthropicChatOptions based on the provided configuration.
  */
 class AnthropicChatModelFactory : ChatModelFactory {
+
     override fun supports(protocol: Protocol): Boolean = protocol == Protocol.ANTHROPIC
 
     override fun create(config: ModelProviderConfig, observationRegistry: ObservationRegistry): ChatModel {
@@ -69,12 +71,21 @@ class AnthropicChatModelFactory : ChatModelFactory {
             .toolCallbacks(toolCallbacks)
 
         config.options?.let {
+            // 1. Thinking: pass thinking.budget_tokens when enabled
             if (it.thinking) {
-                // Anthropic requires temperature=1 when thinking is enabled
                 builder.thinkingEnabled(DEFAULT_THINKING_BUDGET_TOKENS)
                 // max_tokens must be > budget_tokens; enforce a safe floor
                 builder.maxTokens(maxOf(it.maxTokens, DEFAULT_THINKING_BUDGET_TOKENS.toInt() + 1))
-            } else {
+            }
+
+            // 2. Effort: independent of thinking, always applied when set
+            val effortValue = it.effort
+            if (effortValue != null) {
+                builder.effort(mapToOutputConfigEffort(effortValue))
+            }
+
+            // 3. Temperature/maxTokens: only when thinking is not active
+            if (!it.thinking) {
                 builder.temperature(it.temperature)
                 builder.maxTokens(it.maxTokens)
             }
@@ -85,5 +96,15 @@ class AnthropicChatModelFactory : ChatModelFactory {
     companion object {
         /** Default token budget for extended thinking when enabled. */
         private const val DEFAULT_THINKING_BUDGET_TOKENS = 10_000L
+
+        /** Maps effort string to Anthropic OutputConfig.Effort enum. */
+        private fun mapToOutputConfigEffort(effort: String): OutputConfig.Effort = when (effort.lowercase()) {
+            "low" -> OutputConfig.Effort.LOW
+            "medium" -> OutputConfig.Effort.MEDIUM
+            "high" -> OutputConfig.Effort.HIGH
+            "xhigh" -> OutputConfig.Effort.XHIGH
+            "max" -> OutputConfig.Effort.MAX
+            else -> OutputConfig.Effort.HIGH
+        }
     }
 }

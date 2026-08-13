@@ -50,10 +50,12 @@ class CompactionTriggerChecker(
 
     /**
      * Calculate the number of tokens to preserve for recent turns.
-     * Dynamically computes 25% of usable tokens, clamped to [2000, 16000].
+     * Dynamically computes 25% of usable tokens, clamped to [2000, 64000].
+     * The higher cap gives oversized assistant+tool-result tail pairs a realistic
+     * chance to fit within the preserved budget.
      */
     fun calculatePreserveRecentTokens(modelContextLength: Int): Int {
         val usable = usableTokens(modelContextLength)
-        return (usable * config.preserveRecentTokensRatio).toInt().coerceIn(2_000..16_000)
+        return (usable * config.preserveRecentTokensRatio).toInt().coerceIn(2_000..64_000)
     }
 }

@@ -3,6 +3,7 @@ package com.easy.easyai.core.agent
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.AgentLoop.Companion.MAX_COMPLETION_CHECK_BONUS
 import com.easy.easyai.core.event.*
+import com.easy.easyai.core.message.ToolResultGuard
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.tool.ToolCallResult
 import com.easy.easyai.core.tool.ToolDefinition
@@ -281,18 +282,21 @@ internal class AgentLoop(
             // Build ToolResultMessage from tool results for next LLM iteration
             // Filter out WaitForUserContent results - they represent pending user questions, not tool results
             val toolCallMap = toolCalls.associateBy { it.id }
-            val toolResultEntries = toolResults.mapNotNull { r ->
+            val toolResultEntries = mutableListOf<ToolResultEntry>()
+            for (r in toolResults) {
                 val tc = toolCallMap[r.toolCallId]
                 if (tc == null) {
                     logger.warn("${logPrefix}ToolCallResult for {} has no matching ToolCallContent, skipping", r.toolCallId)
-                    null
+                    continue
                 } else if (r.needPause) {
                     // Skip WaitForUserContent results - don't add to transcript or ToolResultMessage
                     logger.debug("${logPrefix}Skipping needPause tool result for {} ({})", r.toolCallId, tc.name)
                     waitForUserReason = r.pauseReason ?: "ask_question"
-                    null
+                    continue
                 } else {
-                    ToolResultEntry(
+                    // Guard at the generation point (the only place with toolCallId): oversized
+                    // results are spilled to the temp dir with a pointer notice by ToolResultGuard.
+                    val entry = ToolResultEntry(
                         toolCallId = r.toolCallId,
                         toolName = tc.name,
                         result = r.resultText,
@@ -303,6 +307,7 @@ internal class AgentLoop(
                         isSkipped = r.isSkipped,
                         usage = r.usage
                     )
+                    toolResultEntries.add(ToolResultGuard.guardEntry(entry))
                 }
             }
             val toolResultMessage = ToolResultMessage(toolResults = toolResultEntries)

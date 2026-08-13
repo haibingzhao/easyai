@@ -18,6 +18,9 @@ abstract class AbstractFileReadToolBuilder : ToolBuilder {
         ctx.sharedEvaluator.evaluateFilePermission(ctx.rules, ctx.projectPath, ctx.arguments, read = true)
     }
     override val defaultPermissionRules = listOf(
+        // ToolResultGuard spills oversized results under java.io.tmpdir; default-ALLOW it
+        // (prepended to user rules, so an explicit user DENY still wins via findLast).
+        PermissionRule("file.read.other", System.getProperty("java.io.tmpdir") ?: "/tmp", PermissionAction.ALLOW),
         PermissionRule("file.read.project", "*", PermissionAction.ALLOW)
     )
     override val rulePermissionType = "file.read.other"
@@ -39,6 +42,9 @@ abstract class AbstractFileWriteToolBuilder : ToolBuilder {
         ctx.sharedEvaluator.evaluateFilePermission(ctx.rules, ctx.projectPath, ctx.arguments, read = false)
     }
     override val defaultPermissionRules = listOf(
+        // ToolResultGuard spills oversized results under java.io.tmpdir; default-ALLOW it
+        // (prepended to user rules, so an explicit user DENY still wins via findLast).
+        PermissionRule("file.write.other", System.getProperty("java.io.tmpdir") ?: "/tmp", PermissionAction.ALLOW),
         PermissionRule("file.write.project", "*", PermissionAction.ALLOW)
     )
     override val rulePermissionType = "file.write.other"

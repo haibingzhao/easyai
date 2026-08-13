@@ -1,6 +1,7 @@
 package com.easy.easyai.tools.memory
 
 import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.memory.MemoryOwnerContext
 import com.easy.easyai.core.memory.MemoryScope
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.memory.MemoryType
@@ -31,11 +32,12 @@ internal class MemoryListTool(
         onUpdate: suspend (ToolUpdate) -> Unit
     ): ToolResult {
         val typeFilter = (args["type"] as? String)?.let { MemoryType.fromDirName(it) }
+        val owner = MemoryOwnerContext(agentContext.userId, agentContext.projectPath)
 
         val sb = StringBuilder()
 
         for (scope in listOf(MemoryScope.PROJECT, MemoryScope.GLOBAL)) {
-            val entries = store.list(agentContext, scope, typeFilter)
+            val entries = store.list(scope, owner, typeFilter)
             if (entries.isEmpty()) continue
 
             sb.appendLine("## ${scope.name} scope (${entries.size} entries)")

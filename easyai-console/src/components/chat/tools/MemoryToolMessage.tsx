@@ -20,6 +20,25 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import type { ToolMessageProps } from './types';
+import { i18n } from '@/utils/i18n';
+
+// ---------------------------------------------------------------------------
+// Memory type display mapping (apiName -> display name)
+// ---------------------------------------------------------------------------
+
+const TYPE_DISPLAY: Record<string, string> = {
+  user_preferences: 'User Preferences',
+  project_information: 'Project Information',
+  development_standards: 'Development Standards',
+  task_summary: 'Task Summary',
+  experience_lessons: 'Experience & Lessons',
+  other: 'Other',
+};
+
+function typeDisplay(type?: string): string {
+  if (!type) return '';
+  return i18n(TYPE_DISPLAY[type] ?? type);
+}
 
 // ---------------------------------------------------------------------------
 // Argument types
@@ -364,7 +383,7 @@ function MemoryWriteView({ toolCall, result, status, streamingOutput }: ToolMess
                         <span className="font-medium text-foreground">{op.name}</span>
                         {op.type && (
                           <span className="text-xs text-muted-foreground bg-muted px-1 rounded">
-                            {op.type}
+                            {typeDisplay(op.type)}
                           </span>
                         )}
                       </div>
@@ -385,7 +404,7 @@ function MemoryWriteView({ toolCall, result, status, streamingOutput }: ToolMess
               {parsed?.type && (
                 <div className="text-xs text-muted-foreground">
                   <span className="font-medium">Type: </span>
-                  <span className="bg-muted px-1 rounded">{parsed.type}</span>
+                  <span className="bg-muted px-1 rounded">{typeDisplay(parsed.type)}</span>
                   {parsed.scope && (
                     <>
                       <span className="mx-2">·</span>

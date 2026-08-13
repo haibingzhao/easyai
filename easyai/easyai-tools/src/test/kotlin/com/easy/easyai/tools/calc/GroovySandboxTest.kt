@@ -1,0 +1,169 @@
+package com.easy.easyai.tools.calc
+
+import groovy.lang.GroovyShell
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Nested
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.io.PrintWriter
+import java.io.StringWriter
+import java.nio.file.Path
+
+/**
+ * Regression tests for [GroovySandbox] escape prevention.
+ *
+ * Historical bug: the sandbox relied solely on SecureASTCustomizer.disallowedImports,
+ * which in Groovy 5 matches by exact class name and only inspects EXPLICIT import
+ * statements. Groovy default-imports java.io.* / java.net.*, so `new File(...).text`,
+ * `new URL(...)`, `'cmd'.execute()` and file writes all bypassed the sandbox while
+ * the KDoc claimed "no file I/O, no network, no process spawning". These tests pin
+ * down the hardened two-layer sandbox (import checks + resolved-type visitor).
+ */
+class GroovySandboxTest {
+
+    @TempDir
+    lateinit var tempDir: Path
+
+    private fun freshShell(): GroovyShell = GroovySandbox.createSecureShell()
+
+    private fun assertBlocked(script: String) {
+        val exception = assertThrows(Exception::class.java) { freshShell().evaluate(script) }
+        val message = exception.message ?: ""
+        assertTrue(
+            message.contains("Security violation") || message.contains("not allowed"),
+            "expected a security rejection for [$script] but got: ${message.lines().firstOrNull()}"
+        )
+    }
+
+    @Nested
+    inner class `File system escapes` {
+
+        @Test
+        fun `blocks file read via default import`() {
+            val target = tempDir.resolve("secret.txt")
+            java.nio.file.Files.writeString(target, "secret")
+            assertBlocked("new File('$target').text")
+        }
+
+        @Test
+        fun `blocks file write`() {
+            val target = tempDir.resolve("victim.txt")
+            assertBlocked("new File('$target').text = 'pwned'")
+            assertTrue(java.nio.file.Files.notExists(target), "the write must not reach the file system")
+        }
+
+        @Test
+        fun `blocks directory listing`() {
+            assertBlocked("new File('$tempDir').list().length")
+        }
+
+        @Test
+        fun `blocks explicit java io import`() {
+            assertBlocked("import java.io.File\nnew File('$tempDir').list()")
+        }
+
+        @Test
+        fun `blocks fully qualified nio access`() {
+            assertBlocked("java.nio.file.Files.readString(java.nio.file.Path.of('$tempDir/x'))")
+        }
+    }
+
+    @Nested
+    inner class `Network escapes` {
+
+        @Test
+        fun `blocks URL construction`() {
+            assertBlocked("new URL('http://example.invalid').toString()")
+        }
+
+        @Test
+        fun `blocks URL class reference`() {
+            assertBlocked("def c = URL; c.toString()")
+        }
+    }
+
+    @Nested
+    inner class `Process escapes` {
+
+        @Test
+        fun `blocks String execute extension method`() {
+            assertBlocked("'ls'.execute().text")
+        }
+
+        @Test
+        fun `blocks Runtime exec`() {
+            assertBlocked("Runtime.getRuntime().exec('ls').waitFor()")
+        }
+
+        @Test
+        fun `blocks ProcessBuilder construction`() {
+            assertBlocked("new ProcessBuilder('ls').start()")
+        }
+
+        @Test
+        fun `blocks thread creation`() {
+            assertBlocked("new Thread({}).start()")
+        }
+    }
+
+    @Nested
+    inner class `Reflection escapes` {
+
+        @Test
+        fun `blocks Class forName`() {
+            assertBlocked("Class.forName('java.io.File').toString()")
+        }
+    }
+
+    @Nested
+    inner class `Legitimate calculations still work` {
+
+        @Test
+        fun `evaluates arithmetic`() {
+            assertEquals("14", freshShell().evaluate("2 + 3 * 4").toString())
+        }
+
+        @Test
+        fun `evaluates list closures`() {
+            assertEquals("12", freshShell().evaluate("def l = [1,2,3]; l.collect { it * 2 }.sum()").toString())
+        }
+
+        @Test
+        fun `evaluates string operations`() {
+            assertEquals("ABCxxx", freshShell().evaluate("'abc'.toUpperCase() + 'x'.repeat(3)").toString())
+        }
+
+        @Test
+        fun `captures output written to the bound out variable`() {
+            val shell = freshShell()
+            val capture = StringWriter()
+            shell.context.setVariable("out", PrintWriter(capture))
+            val result = shell.evaluate("out.println('hello'); 42")
+            assertEquals("42", result.toString())
+            assertEquals("hello", capture.toString().trim())
+        }
+
+        @Test
+        fun `evaluates math functions`() {
+            assertEquals("4.0", freshShell().evaluate("Math.sqrt(16)").toString())
+        }
+
+        @Test
+        fun `evaluates java time calculations`() {
+            val result = freshShell().evaluate("java.time.LocalDate.of(2026, 8, 12).plusDays(5).toString()")
+            assertEquals("2026-08-17", result.toString())
+        }
+
+        @Test
+        fun `evaluates BigDecimal arithmetic`() {
+            assertEquals("3.3", freshShell().evaluate("new BigDecimal('1.1') + new BigDecimal('2.2')").toString())
+        }
+
+        @Test
+        fun `evaluates regex matching`() {
+            assertEquals("true", freshShell().evaluate("'2026-08-12'.matches('\\\\d{4}-\\\\d{2}-\\\\d{2}')").toString())
+        }
+    }
+}

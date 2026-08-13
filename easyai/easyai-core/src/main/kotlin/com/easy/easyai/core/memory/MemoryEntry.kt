@@ -12,6 +12,8 @@ import java.time.LocalDate
  * @property path Relative path from memory root, e.g. "feedback/user_testing_preference.md".
  * @property created Creation date.
  * @property updated Last modification date.
+ * @property maturity Maturity level (low/medium/high), null when not set.
+ * @property scenarios Usage scenarios that this memory applies to.
  */
 data class MemoryEntry(
     val name: String,
@@ -21,5 +23,7 @@ data class MemoryEntry(
     val path: String,
     val keywords: List<String> = emptyList(),
     val created: LocalDate? = null,
-    val updated: LocalDate? = null
+    val updated: LocalDate? = null,
+    val maturity: MemoryMaturity? = null,
+    val scenarios: List<String> = emptyList()
 )

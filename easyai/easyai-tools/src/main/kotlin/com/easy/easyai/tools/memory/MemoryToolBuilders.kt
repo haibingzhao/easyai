@@ -24,7 +24,11 @@ For batch operations, pass an 'operations' array instead of single params."""
 class MemorySearchToolBuilder : AbstractMemoryToolBuilder() {
     override val metadata = ToolMetadata(
         name = "memory_search",
-        description = "Search memory entries by keyword. Searches across name, description, and content.",
+        description = "PRIMARY memory retrieval tool: call this at the start of a task with keywords " +
+            "extracted from the user's question to recall relevant memories (user preferences, past " +
+            "decisions, project conventions, prior findings). Searches across name, description, and content. " +
+            "Optionally restrict results by business time via 'timeRangeStart'/'timeRangeEnd' " +
+            "(epoch seconds or ISO date like 2026-01-01).",
         permissionCategory = "memory"
     )
 

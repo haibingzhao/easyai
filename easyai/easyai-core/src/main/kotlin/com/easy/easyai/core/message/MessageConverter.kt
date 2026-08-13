@@ -172,7 +172,9 @@ class DefaultMessageConverter(
                     // Tool results are handled separately via ToolResultMessage
                 }
                 is ToolResultMessage -> {
-                    // Build ToolResponseMessage from ToolResultMessage
+                    // Tool results are guarded at generation time (AgentLoop / PendingToolCallExecutor):
+                    // oversized results are spilled to the temp dir and replaced with a pointer notice,
+                    // so no send-time re-processing is needed here.
                     val responses = msg.toolResults.map { entry ->
                         ToolResponseMessage.ToolResponse(entry.toolCallId, entry.toolName, entry.result)
                     }
