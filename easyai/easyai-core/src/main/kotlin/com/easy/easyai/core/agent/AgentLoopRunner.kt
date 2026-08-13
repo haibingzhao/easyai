@@ -1,8 +1,6 @@
 package com.easy.easyai.core.agent
 
 import com.easy.easyai.core.event.*
-import com.easy.easyai.core.memory.MemoryLoadResult
-import com.easy.easyai.core.memory.MemoryLoader
 import com.easy.easyai.core.memory.MemoryRef
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.prompt.PromptContext
@@ -55,10 +53,6 @@ internal class AgentLoopRunner(
         private const val STREAM_STALL_TIMEOUT_SECONDS = 120L
 
     }
-
-    /** Cached memory content loaded once per session to avoid repeated file I/O on every turn. */
-    private var cachedMemoryResult: MemoryLoadResult? = null
-    private var memoryLoaded = false
 
     /** Whether the rendered system prompt has been persisted to the session (only on first turn). */
     private var systemMessagePersisted = false
@@ -417,22 +411,9 @@ internal class AgentLoopRunner(
             baseChatOptions
         }
 
-        // Load memory index once per session (cached after first load)
-        val memoryContent = if (!memoryLoaded) {
-            try {
-                services.memoryStore?.let { store ->
-                    MemoryLoader(store).loadSystemMemoryWithRefs(context).also {
-                        cachedMemoryResult = it
-                        memoryLoaded = true  // Only cache on success
-                    }
-                }?.formattedContent
-            } catch (e: Exception) {
-                logger.warn("Memory load failed, will retry next turn: {}", e.message)
-                null
-            }
-        } else {
-            cachedMemoryResult?.formattedContent
-        }
+        // Memory is NOT injected into the system prompt (keeps the prompt stable for LLM caching).
+        // The LLM retrieves relevant memories on demand via memory_search / memory_read tools,
+        // guided by the static memory segment appended by PromptTemplateService.
 
         // Build system prompt at usage time via PromptTemplateService
         val toolsData = context.tools.map { tool ->
@@ -448,7 +429,7 @@ internal class AgentLoopRunner(
             teamStatusSummary = context.teamStatusSummary,
             instructions = context.instructions,
             cwd = context.projectPath?.toString(),
-            memory = memoryContent,
+            memoryAvailable = services.memoryStore != null,
             tools = toolsData,
             outputSchema = context.outputSchema,
             outputSchemaMultiTurn = context.outputSchemaMultiTurn,

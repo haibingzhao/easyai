@@ -19,7 +19,8 @@ data class PromptContext(
     val project: Map<String, Any?>? = null,
     val os: String = System.getProperty("os.name") ?: "unknown",
     val cwd: String? = null,
-    val memory: String? = null,
+    /** Whether the persistent memory system is enabled (memory_* tools registered). Drives the static memory guidance segment. */
+    val memoryAvailable: Boolean = false,
     /** Tools available to the agent. Each map contains "name" and "description". */
     val tools: List<Map<String, Any?>> = emptyList(),
     /** JSON Schema for structured output enforcement. Non-null triggers output format instructions. */
@@ -50,7 +51,6 @@ data class PromptContext(
         "project" to (project ?: emptyMap<String, Any>()),
         "os" to os,
         "cwd" to (cwd ?: ""),
-        "memory" to (memory ?: ""),
         "tools" to tools,
         "input" to inputVariables
     )

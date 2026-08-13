@@ -106,7 +106,6 @@ class PromptTemplateService(
                 }
             },
             instructionsSegment = InstructionsLoader.formatForPrompt(context.instructions),
-            memorySegment = context.memory,
             outputSchemaSegment = if (context.outputSchema != null && !context.outputSchemaMultiTurn) {
                 // Single-turn mode: include schema guidance in system prompt (existing behavior)
                 buildString {
@@ -150,7 +149,10 @@ class PromptTemplateService(
         // Append time-access guidance when the calc tool is available.
         // The segment is static text, keeping the system prompt prefix stable for LLM caching.
         val timeAccessSegment = if (context.tools.any { it["name"] == "calc" }) TIME_ACCESS_SEGMENT else null
-        return listOfNotNull(base.takeIf { it.isNotBlank() }, varsSegment, timeAccessSegment)
+        // Append memory guidance when the memory system is enabled. Static text for cache stability;
+        // actual memory retrieval happens on demand via memory_search / memory_read tool calls.
+        val memoryGuidanceSegment = if (context.memoryAvailable) MEMORY_GUIDANCE_SEGMENT else null
+        return listOfNotNull(base.takeIf { it.isNotBlank() }, varsSegment, timeAccessSegment, memoryGuidanceSegment)
             .joinToString("\n\n")
     }
 
@@ -206,6 +208,19 @@ When you need the current date, time, or timezone (e.g. to report today's date, 
 ZonedDateTime.now().toString()
 
 This returns the current timestamp with the system's local timezone, e.g. 2026-08-09T10:30:45+08:00[Asia/Shanghai].
+        """.trimIndent()
+
+        /** Static guidance for on-demand memory retrieval via memory_* tools (cache-stable). */
+        private val MEMORY_GUIDANCE_SEGMENT = """
+## Memory
+
+You have access to a persistent memory system via the memory_* tools. Memory content is NOT
+included in this prompt to keep it stable for caching — retrieve it on demand instead.
+
+At the START of each new task, proactively call `memory_search` with keywords extracted from
+the user's request to recall relevant context: user preferences, past decisions, project
+conventions, and prior conclusions. Use `memory_read` to load the full content of a specific
+entry, and `memory_write` to persist durable facts worth remembering across sessions.
         """.trimIndent()
     }
 }

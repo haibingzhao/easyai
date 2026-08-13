@@ -44,6 +44,10 @@
         </dependency>
         <dependency>
             <groupId>com.easy</groupId>
+            <artifactId>easyai-rag</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
             <artifactId>easyai-swarm-autoconfigure</artifactId>
         </dependency>
         <dependency>

@@ -5,6 +5,7 @@ import { useAuthStore } from '@/services/stores/auth-store';
 import { setupService } from '@/services/setup-service';
 import type { DatabaseInfo, DatabaseSetupRequest } from '@/services/setup-service';
 import { IntegrationsTab } from '@/components/settings/IntegrationsTab';
+import { RagTab } from '@/components/settings/RagTab';
 import { i18n } from '@/utils/i18n';
 import {
   User,
@@ -17,7 +18,8 @@ import {
   RefreshCw,
   LogOut,
   Sparkles,
-  Globe
+  Globe,
+  Layers
 } from 'lucide-react';
 
 interface MenuItem {
@@ -30,6 +32,7 @@ const menuItems: MenuItem[] = [
   { id: 'account', label: 'Account', icon: <User className="w-4 h-4" /> },
   { id: 'general', label: 'General', icon: <Settings className="w-4 h-4" /> },
   { id: 'integrations', label: 'Integrations', icon: <Globe className="w-4 h-4" /> },
+  { id: 'rag', label: 'RAG', icon: <Layers className="w-4 h-4" /> },
   { id: 'database', label: 'Database', icon: <Database className="w-4 h-4" /> },
   { id: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
 ];
@@ -80,6 +83,7 @@ export const SettingsPage: React.FC = () => {
         {activeTab === 'account' && <AccountTab />}
         {activeTab === 'general' && <GeneralTab />}
         {activeTab === 'integrations' && <IntegrationsTab />}
+        {activeTab === 'rag' && <RagTab />}
         {activeTab === 'database' && <DatabaseTab />}
         {activeTab === 'about' && <AboutTab />}
       </main>

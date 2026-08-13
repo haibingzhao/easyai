@@ -9,13 +9,18 @@ import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import org.springframework.stereotype.Component
 
-private const val CALC_TOOL_DESCRIPTION = """Execute Groovy scripts in-memory for numerical and date/time calculations.
+private const val CALC_TOOL_DESCRIPTION = """Execute Groovy scripts in-memory for SMALL, SELF-CONTAINED numerical and date/time calculations.
 
-IMPORTANT: ALWAYS use this tool — instead of mental arithmetic or bash — for ANY of the following:
-- Mathematical / arithmetic calculations (e.g., complex formulas, percentages, statistics)
+Use this tool for one-off computations where the data fits directly inside the script
+(a few dozen values at most), instead of mental arithmetic:
+- Mathematical / arithmetic formulas (e.g., percentages, weighted scores, ratios)
 - Date and time calculations (e.g., date differences, adding/subtracting days, timezone conversions)
 - Unit conversions
-- Any computation where accuracy matters
+
+Do NOT use calc for:
+- Computations that need to read files or other external data: use bash with a Python script instead
+- Batch / statistical processing over large datasets (e.g., computing indicators for many symbols): use bash with pandas instead
+- Anything requiring third-party libraries
 
 Available inside the script:
 - Standard operators: +, -, *, /, %, ** (power)
@@ -30,7 +35,8 @@ Examples:
 - script: "def total = (1..100).sum(); total * 0.15"
 - script: "BigDecimal.valueOf(1234.56) * BigDecimal.valueOf(0.0825)"
 
-The script executes purely in memory with no file I/O or network access. 
+The script executes purely in memory; the sandbox rejects file, network, and process
+operations at compile time.
 Output is the value of the last expression evaluated."""
 
 /**

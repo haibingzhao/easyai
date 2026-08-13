@@ -3,6 +3,7 @@ package com.easy.easyai.core.agent
 import com.easy.easyai.core.event.AgentEvent
 import com.easy.easyai.core.event.MessageListener
 import com.easy.easyai.core.event.ProducerScope
+import com.easy.easyai.core.message.ToolResultGuard
 import com.easy.easyai.core.model.AssistantMessage
 import com.easy.easyai.core.model.EasyAiMessage
 import com.easy.easyai.core.model.ToolResultEntry
@@ -138,13 +139,16 @@ internal class PendingToolCallExecutor(
 
         // Build ToolResultEntries from execution results
         val toolCallMap = executableToolCalls.associateBy { it.id }
-        val toolResultEntries = results.mapNotNull { r ->
+        val toolResultEntries = mutableListOf<ToolResultEntry>()
+        for (r in results) {
             val tc = toolCallMap[r.toolCallId]
             if (r.needPause) {
-                null // Skip needPause results (permission pause again)
+                continue // Skip needPause results (permission pause again)
             } else {
                 tc?.let {
-                    ToolResultEntry(
+                    // Guard at the generation point (the only place with toolCallId): oversized
+                    // results are spilled to the temp dir with a pointer notice by ToolResultGuard.
+                    val entry = ToolResultEntry(
                         toolCallId = r.toolCallId,
                         toolName = it.name,
                         result = r.resultText,
@@ -155,6 +159,7 @@ internal class PendingToolCallExecutor(
                         isSkipped = r.isSkipped,
                         usage = r.usage
                     )
+                    toolResultEntries.add(ToolResultGuard.guardEntry(entry))
                 }
             }
         }

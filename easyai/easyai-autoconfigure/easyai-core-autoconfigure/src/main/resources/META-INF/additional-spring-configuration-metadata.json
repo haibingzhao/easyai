@@ -3,23 +3,9 @@
     {
       "name": "easyai.memory.enabled",
       "type": "java.lang.Boolean",
-      "description": "Whether the memory system (MemoryStore, memory tools, MemoryFlushAgent) is enabled.",
+      "description": "Whether the memory system is enabled (requires EasyRAG to be configured).",
       "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
       "defaultValue": false
-    },
-    {
-      "name": "easyai.memory.global-dir",
-      "type": "java.lang.String",
-      "description": "Root directory for global memories. Supports ~ for home directory.",
-      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
-      "defaultValue": "~/.easyai/memory"
-    },
-    {
-      "name": "easyai.memory.project-dir",
-      "type": "java.lang.String",
-      "description": "Root directory for project-scoped memories (relative to workDir).",
-      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
-      "defaultValue": ".easyai/memory"
     },
     {
       "name": "easyai.skills.enabled",

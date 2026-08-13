@@ -56,23 +56,6 @@ open class EasyAiCoreAutoConfiguration {
     @ConditionalOnMissingBean
     open fun toolFactory(builders: List<ToolBuilder>): ToolFactory = SpringToolFactory(builders)
 
-    // ========== Memory Beans ==========
-
-    @Bean
-    @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "easyai.memory", name = ["enabled"], havingValue = "true", matchIfMissing = false)
-    open fun memoryStore(properties: EasyAiProperties): MemoryStore {
-        val homeDir = System.getProperty("user.home")
-            ?: throw IllegalStateException("user.home system property is not available")
-        val globalDir = properties.memory.globalDir.replaceFirst("~", homeDir)
-        val projectDir = properties.memory.projectDir
-        val store = MemoryStore.fileBased(
-            globalRoot = Path.of(globalDir),
-            projectDir = projectDir
-        )
-        return store
-    }
-
     // ========== Agent System Prompt Beans ==========
 
     @Bean

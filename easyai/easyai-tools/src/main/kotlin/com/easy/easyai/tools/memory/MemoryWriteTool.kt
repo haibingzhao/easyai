@@ -2,6 +2,8 @@ package com.easy.easyai.tools.memory
 
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.memory.MemoryEntry
+import com.easy.easyai.core.memory.MemoryMaturity
+import com.easy.easyai.core.memory.MemoryOwnerContext
 import com.easy.easyai.core.memory.MemoryScope
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.memory.MemoryType
@@ -30,6 +32,8 @@ internal class MemoryWriteTool(
         val content: String? = null,
         val oldText: String? = null,
         val scope: String? = null,
+        val maturity: String? = null,
+        val scenarios: List<String>? = null,
         val operations: List<Operation>? = null
     )
 
@@ -39,7 +43,9 @@ internal class MemoryWriteTool(
         val type: String? = null,
         val description: String? = null,
         val content: String? = null,
-        val oldText: String? = null
+        val oldText: String? = null,
+        val maturity: String? = null,
+        val scenarios: List<String>? = null
     )
 
     override fun parameterType(): Class<*> = Parameters::class.java
@@ -59,50 +65,56 @@ internal class MemoryWriteTool(
         }
 
         val scope = resolveScope(params.scope)
+        val owner = MemoryOwnerContext(agentContext.userId, agentContext.projectPath)
 
         // Batch mode: operations array
         if (params.operations != null) {
-            return executeBatch(agentContext, params.operations, scope)
+            return executeBatch(params.operations, scope, owner)
         }
 
         // Single operation mode
         val action = params.action ?: return errorResult("Error: 'action' is required (add/update/remove).")
         val name = params.name ?: return errorResult("Error: 'name' is required.")
 
-        return executeSingle(agentContext, action, name, params.type, params.description, params.content, params.oldText, scope)
+        return executeSingle(
+            action, name, params.type, params.description, params.content, params.oldText,
+            params.maturity, params.scenarios, scope, owner
+        )
     }
 
     private suspend fun executeSingle(
-        agentContext: AgentContext,
         action: String,
         name: String,
         type: String?,
         description: String?,
         content: String?,
         oldText: String?,
-        scope: MemoryScope
+        maturity: String?,
+        scenarios: List<String>?,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext
     ): ToolResult {
         return when (action.lowercase()) {
-            "add" -> handleAdd(agentContext, name, type, description, content, scope)
-            "update" -> handleUpdate(agentContext, name, content, oldText, scope)
-            "remove" -> handleRemove(agentContext, name, scope)
+            "add" -> handleAdd(name, type, description, content, maturity, scenarios, scope, owner)
+            "update" -> handleUpdate(name, content, oldText, scope, owner)
+            "remove" -> handleRemove(name, scope, owner)
             else -> errorResult("Error: Unknown action '$action'. Use 'add', 'update', or 'remove'.")
         }
     }
 
     private suspend fun handleAdd(
-        agentContext: AgentContext,
-        name: String, type: String?, description: String?, content: String?, scope: MemoryScope
+        name: String, type: String?, description: String?, content: String?,
+        maturity: String?, scenarios: List<String>?, scope: MemoryScope, owner: MemoryOwnerContext
     ): ToolResult {
-        if (type.isNullOrBlank()) return errorResult("Error: 'type' is required for add (user/feedback/project/reference).")
+        if (type.isNullOrBlank()) return errorResult("Error: 'type' is required for add (user_preferences/project_information/development_standards/task_summary/experience_lessons/other).")
         if (description.isNullOrBlank()) return errorResult("Error: 'description' is required for add.")
         if (content.isNullOrBlank()) return errorResult("Error: 'content' is required for add.")
 
         val memoryType = MemoryType.fromDirName(type)
-            ?: return errorResult("Error: Unknown type '$type'. Use: user, feedback, project, reference.")
+            ?: return errorResult("Error: Unknown type '$type'. Use: user_preferences, project_information, development_standards, task_summary, experience_lessons, other.")
 
         // Name dedup check
-        if (store.exists(agentContext, name, scope)) {
+        if (store.exists(name, scope, owner)) {
             return errorResult("Entry '$name' already exists in ${scope.name.lowercase()} scope. Use action='update' to modify it.")
         }
 
@@ -112,20 +124,22 @@ internal class MemoryWriteTool(
             type = memoryType,
             content = content,
             path = "${memoryType.dirName}/$name.md",
+            keywords = emptyList(),
             created = LocalDate.now(),
-            updated = LocalDate.now()
+            updated = LocalDate.now(),
+            maturity = maturity?.let { MemoryMaturity.fromApiName(it) },
+            scenarios = scenarios?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
         )
-        val path = store.write(agentContext, entry, scope)
+        val path = store.write(entry, scope, owner)
         return ToolResult(content = listOf(TextContent("Memory entry created: $path")))
     }
 
     private suspend fun handleUpdate(
-        agentContext: AgentContext,
-        name: String, content: String?, oldText: String?, scope: MemoryScope
+        name: String, content: String?, oldText: String?, scope: MemoryScope, owner: MemoryOwnerContext
     ): ToolResult {
         if (content.isNullOrBlank()) return errorResult("Error: 'content' is required for update.")
 
-        val existing = store.findByName(agentContext, name, scope)
+        val existing = store.findByName(name, scope, owner)
             ?: return errorResult("Entry '$name' not found in ${scope.name.lowercase()} scope. Use action='add' to create it.")
 
         val updatedContent = if (oldText != null) {
@@ -144,15 +158,15 @@ internal class MemoryWriteTool(
             content = updatedContent,
             updated = LocalDate.now()
         )
-        val path = store.write(agentContext, entry, scope)
+        val path = store.write(entry, scope, owner)
         return ToolResult(content = listOf(TextContent("Memory entry updated: $path")))
     }
 
-    private suspend fun handleRemove(agentContext: AgentContext, name: String, scope: MemoryScope): ToolResult {
-        val existing = store.findByName(agentContext, name, scope)
+    private suspend fun handleRemove(name: String, scope: MemoryScope, owner: MemoryOwnerContext): ToolResult {
+        val existing = store.findByName(name, scope, owner)
             ?: return errorResult("Entry '$name' not found in ${scope.name.lowercase()} scope.")
 
-        val deleted = store.delete(agentContext, existing.path, scope)
+        val deleted = store.delete(existing.path, scope, owner)
         return if (deleted) {
             ToolResult(content = listOf(TextContent("Memory entry removed: ${existing.path}")))
         } else {
@@ -160,7 +174,7 @@ internal class MemoryWriteTool(
         }
     }
 
-    private suspend fun executeBatch(agentContext: AgentContext, operations: List<Operation>, scope: MemoryScope): ToolResult {
+    private suspend fun executeBatch(operations: List<Operation>, scope: MemoryScope, owner: MemoryOwnerContext): ToolResult {
         if (operations.isEmpty()) return errorResult("Error: 'operations' array must not be empty.")
 
         val results = mutableListOf<String>()
@@ -172,14 +186,14 @@ internal class MemoryWriteTool(
             for ((i, op) in operations.withIndex()) {
                 // Capture snapshot BEFORE executing for rollback of update/remove
                 val preExisting = when (op.action.lowercase()) {
-                    "update" -> store.findByName(agentContext, op.name, scope)
-                    "remove" -> store.findByName(agentContext, op.name, scope)
+                    "update" -> store.findByName(op.name, scope, owner)
+                    "remove" -> store.findByName(op.name, scope, owner)
                     else -> null
                 }
 
-                val result = executeSingle(agentContext, op.action, op.name, op.type, op.description, op.content, op.oldText, scope)
+                val result = executeSingle(op.action, op.name, op.type, op.description, op.content, op.oldText, op.maturity, op.scenarios, scope, owner)
                 if (result.isError) {
-                    safeRollback(agentContext, createdPaths, rollbackActions, scope)
+                    safeRollback(createdPaths, rollbackActions, scope, owner)
                     return errorResult(
                         "Batch operation failed at index $i (${op.action} '${op.name}'): " +
                             "${(result.content.firstOrNull() as? TextContent)?.text}. " +
@@ -194,18 +208,18 @@ internal class MemoryWriteTool(
                     }
                     "remove" -> {
                         if (preExisting != null) {
-                            rollbackActions.add { store.write(agentContext, preExisting, scope) }
+                            rollbackActions.add { store.write(preExisting, scope, owner) }
                         }
                     }
                     "update" -> {
                         if (preExisting != null) {
-                            rollbackActions.add { store.write(agentContext, preExisting, scope) }
+                            rollbackActions.add { store.write(preExisting, scope, owner) }
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            safeRollback(agentContext, createdPaths, rollbackActions, scope)
+            safeRollback(createdPaths, rollbackActions, scope, owner)
             return errorResult("Batch operation aborted due to exception: ${e.message}. Partial rollback performed.")
         }
 
@@ -213,14 +227,14 @@ internal class MemoryWriteTool(
     }
 
     private suspend fun safeRollback(
-        agentContext: AgentContext,
         createdPaths: List<String>,
         rollbackActions: List<suspend () -> Unit>,
-        scope: MemoryScope
+        scope: MemoryScope,
+        owner: MemoryOwnerContext
     ) {
         // Delete created entries (best effort)
         for (path in createdPaths) {
-            try { store.delete(agentContext, path, scope) } catch (_: Exception) { /* best effort */ }
+            try { store.delete(path, scope, owner) } catch (_: Exception) { /* best effort */ }
         }
         // Restore deleted/updated entries (best effort)
         for (action in rollbackActions.reversed()) {

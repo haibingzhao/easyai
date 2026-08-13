@@ -37,6 +37,7 @@ export interface ModelOptions {
   temperature?: number;
   maxTokens?: number;
   thinking?: boolean;
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   maxContextTokens?: number;
   contextToken?: number;
 }

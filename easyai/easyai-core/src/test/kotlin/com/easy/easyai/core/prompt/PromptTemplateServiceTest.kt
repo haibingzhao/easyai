@@ -62,4 +62,36 @@ class PromptTemplateServiceTest {
             assertTrue(rendered.isEmpty())
         }
     }
+
+    @Nested
+    inner class `memory guidance` {
+
+        @Test
+        fun `appends static guidance when memory available on default prompt`() {
+            val rendered = service.build(null, contextWithTools("memory_search").copy(memoryAvailable = true))
+            assertTrue(rendered.contains("## Memory"))
+            assertTrue(rendered.contains("memory_search"))
+        }
+
+        @Test
+        fun `omits guidance when memory not available`() {
+            val rendered = service.build(null, contextWithTools("memory_search"))
+            assertFalse(rendered.contains("## Memory"))
+        }
+
+        @Test
+        fun `appends guidance on custom template when memory available`() {
+            val rendered = service.build("You are a coding agent.", contextWithTools().copy(memoryAvailable = true))
+            assertTrue(rendered.contains("You are a coding agent."))
+            assertTrue(rendered.contains("## Memory"))
+        }
+
+        @Test
+        fun `guidance output is stable across builds for cache friendliness`() {
+            val context = contextWithTools("memory_search").copy(memoryAvailable = true)
+            val first = service.build(null, context)
+            val second = service.build(null, context)
+            assertTrue(first == second)
+        }
+    }
 }

@@ -89,10 +89,16 @@ class OpenAiChatModelFactory : ChatModelFactory {
             .model(config.modelId)
             .toolCallbacks(toolCallbacks)
         config.options?.let {
-            if (it.thinking) {
-                // OpenAI reasoning models (o-series) do not support temperature/maxTokens;
-                // they use maxCompletionTokens and reasoningEffort instead.
-                builder.reasoningEffort("high")
+            // Use effort if set, otherwise fall back to thinking -> "high"
+            val effortValue = it.effort ?: if (it.thinking) "high" else null
+            if (effortValue != null) {
+                // OpenAI reasoning models (o-series) only support low/medium/high
+                val mapped = when (effortValue.lowercase()) {
+                    "low" -> "low"
+                    "medium" -> "medium"
+                    else -> "high"  // high/xhigh/max all map to "high"
+                }
+                builder.reasoningEffort(mapped)
                 builder.maxCompletionTokens(it.maxTokens)
             } else {
                 builder.temperature(it.temperature)

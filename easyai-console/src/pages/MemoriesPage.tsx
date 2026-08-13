@@ -1,98 +1,123 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useMemoryStore } from '@/services/stores/memory-store';
 import { useProjectStore } from '@/services/stores/project-store';
+import { memoryService } from '@/services/memory-service';
+import { MemorySidebar, type SelectedMemory } from '@/components/memories/MemorySidebar';
+import { MemoryDocumentViewer } from '@/components/memories/MemoryDocumentViewer';
 import { EditMemoryDialog } from '@/components/memories/EditMemoryDialog';
-import { ChevronDown, ChevronRight, Trash2, Copy, Pencil, Plus, Brain, X } from 'lucide-react';
-import type { MemoryEntry, CreateMemoryRequest } from '@/types/memory';
+import { Plus, Brain, X, AlertCircle } from 'lucide-react';
+import type { MemoryEntry, CreateMemoryRequest, UpdateMemoryRequest } from '@/types/memory';
+import { useResizable } from '@/hooks/useResizable';
 import { i18n } from '@/utils/i18n';
 
-type ScopeFilter = 'all' | 'global' | 'project';
-
-const MEMORY_TYPE_ORDER = ['user', 'feedback', 'project', 'reference'] as const;
-
-const TYPE_LABEL_KEYS: Record<string, string> = {
-  user: 'User',
-  feedback: 'Feedback',
-  project: 'Project',
-  reference: 'Reference',
-};
+const SIDEBAR_MIN = 240;
+const SIDEBAR_MAX = 480;
 
 export const MemoriesPage: React.FC = () => {
-  const { memories, loading, error, clearError, loadMemories, createOrUpdate, deleteMemory, deleteAll } = useMemoryStore();
-  const { currentProject, updateProject } = useProjectStore();
-  const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('all');
+  const { entries, loading, error, clearError, loadAll, loadConfig, config, createOrUpdate, updateMemory, deleteMemory, deleteAll } = useMemoryStore();
+  const { currentProject, projects, updateProject } = useProjectStore();
+  const [selected, setSelected] = useState<SelectedMemory | null>(null);
+  const [fetchedEntry, setFetchedEntry] = useState<MemoryEntry | null>(null);
   const [editingMemory, setEditingMemory] = useState<MemoryEntry | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
-    user: true,
-    feedback: true,
-    project: true,
-    reference: true,
+  const [sidebarWidth, setSidebarWidth] = useState(288);
+
+  const resizable = useResizable({
+    minWidth: SIDEBAR_MIN,
+    maxWidth: SIDEBAR_MAX,
+    direction: 'right',
+    onResize: setSidebarWidth,
   });
 
   useEffect(() => {
-    loadMemories();
-  }, [loadMemories]);
+    loadAll();
+    loadConfig();
+  }, [loadAll, loadConfig]);
 
-  // Filter memories by scope
-  const filteredMemories = useMemo(() => {
-    if (scopeFilter === 'all') return memories;
-    return memories.filter((m) => m.scope === scopeFilter);
-  }, [memories, scopeFilter]);
+  // Prefer locally loaded entry; fall back to a fetched one when missing (e.g. filters hide it)
+  const localEntry = useMemo(() => {
+    if (!selected) return null;
+    return (
+      entries.find(
+        (e) =>
+          e.name === selected.name &&
+          e.scope === selected.scope &&
+          (e.projectPath ?? null) === selected.projectPath
+      ) ?? null
+    );
+  }, [entries, selected]);
 
-  // Group by type
-  const groupedByType = useMemo(() => {
-    const groups: Record<string, MemoryEntry[]> = {};
-    for (const type of MEMORY_TYPE_ORDER) {
-      groups[type] = [];
-    }
-    for (const mem of filteredMemories) {
-      const type = mem.type.toLowerCase();
-      if (!groups[type]) groups[type] = [];
-      groups[type].push(mem);
-    }
-    return groups;
-  }, [filteredMemories]);
+  const displayEntry = localEntry ?? fetchedEntry;
 
-  const toggleGroup = useCallback((type: string) => {
-    setExpandedGroups((prev) => ({ ...prev, [type]: !prev[type] }));
-  }, []);
+  const handleSelect = useCallback(
+    async (sel: SelectedMemory) => {
+      setSelected(sel);
+      setFetchedEntry(null);
+      const found = entries.find(
+        (e) =>
+          e.name === sel.name &&
+          e.scope === sel.scope &&
+          (e.projectPath ?? null) === sel.projectPath
+      );
+      if (!found) {
+        try {
+          const entry = await memoryService.getMemory(sel.name, sel.scope as 'global' | 'project', sel.projectPath);
+          setFetchedEntry(entry);
+        } catch {
+          setFetchedEntry(null);
+        }
+      }
+    },
+    [entries]
+  );
 
-  const handleClearAll = async (scope: 'global' | 'project') => {
-    if (!window.confirm(i18n('Are you sure to clear all memories?'))) return;
-    try {
-      await deleteAll(scope);
-    } catch {
-      // error already set in store
-    }
-  };
-
-  const handleDelete = async (mem: MemoryEntry) => {
-    if (!window.confirm(i18n('Are you sure to delete this memory?'))) return;
-    try {
-      await deleteMemory(mem.name, mem.scope as 'global' | 'project');
-    } catch {
-      // error already set in store
-    }
-  };
-
-  const handleCopy = async (mem: MemoryEntry) => {
-    await navigator.clipboard.writeText(mem.content);
-    // Brief visual feedback could be added here
-  };
-
-  const handleEdit = (mem: MemoryEntry) => {
-    setEditingMemory(mem);
-    setDialogOpen(true);
-  };
+  const scopeLabel = useMemo(() => {
+    if (!selected) return i18n('Global');
+    if (selected.projectPath == null) return i18n('Global');
+    return projects.find((p) => p.path === selected.projectPath)?.name ?? selected.projectPath;
+  }, [selected, projects]);
 
   const handleCreate = () => {
     setEditingMemory(null);
     setDialogOpen(true);
   };
 
-  const handleSave = async (request: CreateMemoryRequest) => {
+  const handleEdit = (entry: MemoryEntry) => {
+    setEditingMemory(entry);
+    setDialogOpen(true);
+  };
+
+  const handleSaveCreate = async (request: CreateMemoryRequest) => {
     await createOrUpdate(request);
+  };
+
+  const handleSaveUpdate = async (
+    name: string,
+    scope: 'global' | 'project',
+    projectPath: string | null,
+    request: UpdateMemoryRequest
+  ) => {
+    await updateMemory(name, scope, projectPath, request);
+  };
+
+  const handleDelete = async (entry: MemoryEntry) => {
+    try {
+      await deleteMemory(entry.name, entry.scope as 'global' | 'project', entry.projectPath ?? null);
+      setSelected(null);
+      setFetchedEntry(null);
+    } catch {
+      // error already set in store
+    }
+  };
+
+  const handleClearScope = async (entry: MemoryEntry) => {
+    try {
+      await deleteAll(entry.scope as 'global' | 'project', entry.projectPath ?? null);
+      setSelected(null);
+      setFetchedEntry(null);
+    } catch {
+      // error already set in store
+    }
   };
 
   const handleToggleAutoGen = async (enabled: boolean) => {
@@ -105,265 +130,91 @@ export const MemoriesPage: React.FC = () => {
   };
 
   return (
-    <div className="h-full overflow-y-auto bg-background">
-      <div className="max-w-4xl mx-auto p-6 space-y-6">
+    <div className="h-full flex bg-background min-h-0">
+      {/* Left sidebar */}
+      <div style={{ width: sidebarWidth }} className="flex flex-col min-h-0 border-r border-border shrink-0">
+        <MemorySidebar
+          entries={entries}
+          projects={projects}
+          currentProject={currentProject}
+          selected={selected}
+          autoGeneration={currentProject?.memoryAutoGeneration ?? false}
+          onToggleAutoGeneration={handleToggleAutoGen}
+          onSelect={handleSelect}
+        />
+      </div>
+
+      {/* Resize handle */}
+      <div
+        onMouseDown={(e) => {
+          resizable.setCurrentWidth(sidebarWidth);
+          resizable.onMouseDown(e);
+        }}
+        onTouchStart={(e) => {
+          resizable.setCurrentWidth(sidebarWidth);
+          resizable.onTouchStart(e);
+        }}
+        className="w-1 cursor-col-resize bg-border hover:bg-primary/60 transition-colors shrink-0"
+        title={i18n('Collapse')}
+      />
+
+      {/* Right: viewer */}
+      <div className="flex-1 min-w-0 flex flex-col min-h-0">
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Brain className="w-6 h-6 text-primary" />
-            <h1 className="text-xl font-semibold">{i18n('Memories')}</h1>
+        <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
+          <div className="flex items-center gap-2">
+            <Brain className="w-4 h-4 text-primary" />
+            <h1 className="text-sm font-semibold">{i18n('Memories')}</h1>
           </div>
           <button
             onClick={handleCreate}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-3.5 h-3.5" />
             {i18n('Create Memory')}
           </button>
         </div>
 
         {/* Error banner */}
         {error && (
-          <div className="flex items-center justify-between p-3 rounded-lg border border-destructive/50 bg-destructive/5 text-sm text-destructive">
-            <span>{error}</span>
-            <button onClick={clearError} className="text-destructive hover:opacity-70">
-              <X className="w-4 h-4" />
+          <div className="flex items-center justify-between px-4 py-2 border-b border-destructive/50 bg-destructive/5 text-xs text-destructive shrink-0">
+            <span className="truncate">{error}</span>
+            <button onClick={clearError} className="text-destructive hover:opacity-70 shrink-0">
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
-        {/* Auto-generation toggle */}
-        {currentProject && (
-          <div className="flex items-center justify-between p-4 rounded-lg border border-border bg-muted/30">
-            <div>
-              <div className="font-medium text-sm">{i18n('Enable Automatic Generation')}</div>
-              <div className="text-xs text-muted-foreground mt-0.5">
-                {i18n('Automatically build memories from conversations')}
-              </div>
-            </div>
-            <button
-              onClick={() => handleToggleAutoGen(!currentProject.memoryAutoGeneration)}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                currentProject.memoryAutoGeneration ? 'bg-green-500' : 'bg-muted-foreground/30'
-              }`}
-            >
-              <span
-                className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
-                  currentProject.memoryAutoGeneration ? 'translate-x-6' : 'translate-x-1'
-                }`}
-              />
-            </button>
+        {/* Memory disabled banner */}
+        {config && !config.enabled && (
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-amber-500/50 bg-amber-500/5 text-xs text-amber-600 shrink-0">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+            <span>{i18n('Memory is disabled. Configure RAG in Settings to enable it.')}</span>
           </div>
         )}
 
-        {/* Scope filter tabs */}
-        <div className="flex items-center justify-between">
-          <div className="flex gap-1">
-            {(['all', 'global', 'project'] as const).map((scope) => (
-              <button
-                key={scope}
-                onClick={() => setScopeFilter(scope)}
-                className={`px-3 py-1.5 rounded-md text-sm transition-colors ${
-                  scopeFilter === scope
-                    ? 'bg-primary text-primary-foreground'
-                    : 'hover:bg-muted text-muted-foreground'
-                }`}
-              >
-                {scope === 'all'
-                  ? i18n('All')
-                  : scope === 'global'
-                    ? i18n('Global')
-                    : i18n('Current Project')}
-              </button>
-            ))}
-          </div>
-
-          {/* Clear All buttons */}
-          <div className="flex gap-2">
-            {(scopeFilter === 'all' || scopeFilter === 'global') && (
-              <button
-                onClick={() => handleClearAll('global')}
-                className="flex items-center gap-1 px-2 py-1 rounded text-xs text-destructive hover:bg-destructive/10 transition-colors"
-              >
-                <Trash2 className="w-3 h-3" />
-                {i18n('Clear All')} ({i18n('Global')})
-              </button>
-            )}
-            {(scopeFilter === 'all' || scopeFilter === 'project') && (
-              <button
-                onClick={() => handleClearAll('project')}
-                className="flex items-center gap-1 px-2 py-1 rounded text-xs text-destructive hover:bg-destructive/10 transition-colors"
-              >
-                <Trash2 className="w-3 h-3" />
-                {i18n('Clear All')} ({i18n('Current Project')})
-              </button>
-            )}
-          </div>
+        {/* Document viewer */}
+        <div className="flex-1 min-h-0">
+          <MemoryDocumentViewer
+            entry={displayEntry}
+            scopeLabel={scopeLabel}
+            loading={loading}
+            onEdit={() => displayEntry && handleEdit(displayEntry)}
+            onDelete={() => displayEntry && handleDelete(displayEntry)}
+            onClearScope={() => displayEntry && handleClearScope(displayEntry)}
+          />
         </div>
-
-        {/* Loading state */}
-        {loading && (
-          <div className="text-center text-sm text-muted-foreground py-8">
-            {i18n('Loading...')}
-          </div>
-        )}
-
-        {/* Memory groups by type */}
-        {!loading && (
-          <div className="space-y-4">
-            {MEMORY_TYPE_ORDER.map((type) => {
-              const items = groupedByType[type] || [];
-              const isExpanded = expandedGroups[type] ?? true;
-
-              return (
-                <div key={type} className="rounded-lg border border-border overflow-hidden">
-                  {/* Group header */}
-                  <button
-                    onClick={() => toggleGroup(type)}
-                    className="w-full flex items-center justify-between px-4 py-3 bg-muted/50 hover:bg-muted transition-colors"
-                  >
-                    <div className="flex items-center gap-2">
-                      {isExpanded ? (
-                        <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                      ) : (
-                        <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                      )}
-                      <span className="font-medium text-sm">
-                        {i18n(TYPE_LABEL_KEYS[type])}
-                      </span>
-                      <span className="text-xs text-muted-foreground bg-muted rounded-full px-2 py-0.5">
-                        {items.length}
-                      </span>
-                    </div>
-                  </button>
-
-                  {/* Group items */}
-                  {isExpanded && (
-                    <div className="divide-y divide-border">
-                      {items.length === 0 ? (
-                        <div className="px-4 py-3 text-sm text-muted-foreground">
-                          {i18n('No memories yet')}
-                        </div>
-                      ) : (
-                        items.map((mem) => (
-                          <MemoryItem
-                            key={`${mem.scope}-${mem.name}`}
-                            memory={mem}
-                            onEdit={() => handleEdit(mem)}
-                            onDelete={() => handleDelete(mem)}
-                            onCopy={() => handleCopy(mem)}
-                          />
-                        ))
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Empty state */}
-        {!loading && filteredMemories.length === 0 && (
-          <div className="text-center py-12 text-muted-foreground">
-            <Brain className="w-12 h-12 mx-auto mb-3 opacity-30" />
-            <p className="text-sm">{i18n('No memories yet')}</p>
-          </div>
-        )}
       </div>
 
       {/* Edit dialog */}
       <EditMemoryDialog
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
-        onSave={handleSave}
+        onSave={handleSaveCreate}
+        onUpdate={handleSaveUpdate}
         memory={editingMemory}
+        currentProjectPath={currentProject?.path ?? null}
       />
-    </div>
-  );
-};
-
-/** Individual memory item with expand/collapse */
-const MemoryItem: React.FC<{
-  memory: MemoryEntry;
-  onEdit: () => void;
-  onDelete: () => void;
-  onCopy: () => void;
-}> = ({ memory, onEdit, onDelete, onCopy }) => {
-  const [expanded, setExpanded] = useState(false);
-  const isGlobal = memory.scope === 'global';
-
-  return (
-    <div className="px-4 py-2.5">
-      <div className="flex items-center justify-between">
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-2 flex-1 min-w-0 text-left"
-        >
-          {expanded ? (
-            <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-          ) : (
-            <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-          )}
-          <span className="text-sm font-medium truncate">{memory.name}</span>
-          <span
-            className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] leading-none font-medium ${
-              isGlobal
-                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-            }`}
-          >
-            {isGlobal ? i18n('Global') : i18n('Current Project')}
-          </span>
-        </button>
-        <div className="flex items-center gap-1 shrink-0 ml-2">
-          <button
-            onClick={onEdit}
-            className="p-1 rounded hover:bg-muted transition-colors"
-            title={i18n('Edit')}
-          >
-            <Pencil className="w-3.5 h-3.5 text-muted-foreground" />
-          </button>
-          <button
-            onClick={onCopy}
-            className="p-1 rounded hover:bg-muted transition-colors"
-            title={i18n('Copy')}
-          >
-            <Copy className="w-3.5 h-3.5 text-muted-foreground" />
-          </button>
-          <button
-            onClick={onDelete}
-            className="p-1 rounded hover:bg-destructive/10 transition-colors"
-            title={i18n('Delete')}
-          >
-            <Trash2 className="w-3.5 h-3.5 text-destructive" />
-          </button>
-        </div>
-      </div>
-
-      {/* Expanded details */}
-      {expanded && (
-        <div className="mt-2 ml-5.5 space-y-1.5 text-sm">
-          {memory.description && (
-            <div className="text-muted-foreground text-xs">{memory.description}</div>
-          )}
-          {memory.keywords.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {memory.keywords.map((kw) => (
-                <span
-                  key={kw}
-                  className="px-1.5 py-0.5 rounded text-[10px] bg-muted border border-border"
-                >
-                  {kw}
-                </span>
-              ))}
-            </div>
-          )}
-          <pre className="whitespace-pre-wrap text-xs bg-muted/50 rounded p-2 border border-border overflow-x-auto">
-            {memory.content}
-          </pre>
-        </div>
-      )}
     </div>
   );
 };

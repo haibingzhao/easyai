@@ -720,6 +720,24 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
                   </button>
                 </div>
                 <div>
+                  <label className="text-xs font-medium mb-1 block">{i18n('Effort')}</label>
+                  <select
+                    value={options.effort || ''}
+                    onChange={(e) => setOptions(prev => ({
+                      ...prev,
+                      effort: (e.target.value || undefined) as ModelOptions['effort'],
+                    }))}
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                  >
+                    <option value="">{i18n('Default')}</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                    <option value="xhigh">XHigh</option>
+                    <option value="max">Max</option>
+                  </select>
+                </div>
+                <div>
                   <label className="text-xs font-medium mb-1 block">{i18n('Max Context Tokens')}</label>
                   <TokenInput
                     value={options.maxContextTokens}

@@ -1,27 +1,24 @@
 package com.easy.easyai.core.memory
 
+import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.AgentContext
-import com.easy.easyai.core.model.EasyAiMessage
-import com.easy.easyai.core.model.TextContent
-import com.easy.easyai.core.model.ThinkingContent
-import com.easy.easyai.core.model.ToolCallContent
-import com.easy.easyai.core.model.ToolResultContent
+import com.easy.easyai.core.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.model.ChatModel
 import org.springframework.ai.chat.prompt.Prompt
-import org.springframework.ai.chat.messages.UserMessage as SpringAiUserMessage
 import java.security.MessageDigest
 import java.time.LocalDate
-import java.util.Collections
+import java.util.*
+import org.springframework.ai.chat.messages.UserMessage as SpringAiUserMessage
 
 /**
  * Extracts durable facts from conversation history before context compaction.
  *
  * Triggered by [CompactionTransformContextService] when context window usage ≥ threshold.
- * Runs a silent LLM turn to extract important facts, decisions, and context into a
- * daily memory file (memory/YYYY-MM-DD.md).
+ * Runs a silent LLM turn that returns structured JSON; each extracted fact becomes one
+ * independent memory entry with full metadata (category, keywords, scenarios, maturity).
  *
  * Dedup: SHA-256 hash of recent messages prevents duplicate flushes.
  *
@@ -33,6 +30,7 @@ class MemoryFlushAgent(
     private val threshold: Float = 0.75f
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
+    private val objectMapper = SharedObjectMapper.instance
 
     /** Tracks already-flushed context hashes to prevent duplicate flushes. Thread-safe LinkedHashSet for FIFO eviction. */
     private val flushedHashes: MutableSet<String> = Collections.synchronizedSet(LinkedHashSet())
@@ -47,7 +45,7 @@ class MemoryFlushAgent(
      * @param estimatedTokenCount Current estimated token usage.
      * @param chatModel ChatModel to use for extraction.
      * @param scope Memory scope to write to (default: PROJECT).
-     * @return FlushResult if flush was executed, null if not needed.
+     * @return FlushResult if flush was executed, null if not needed or nothing was written.
      */
     suspend fun maybeFlush(
         agentContext: AgentContext,
@@ -72,7 +70,7 @@ class MemoryFlushAgent(
 
         logger.info("Memory flush triggered (usage: {}%, messages: {})", String.format("%.1f", usageRatio * 100), messages.size)
 
-        val dailyFileName = "project/daily-${LocalDate.now()}.md"
+        val owner = MemoryOwnerContext(agentContext.userId, agentContext.projectPath)
 
         val flushPrompt = buildFlushPrompt(recentMessages)
         val response = try {
@@ -87,33 +85,28 @@ class MemoryFlushAgent(
         val content = response.result?.output?.text ?: return null
         if (content.isBlank()) return null
 
-        // Append to daily file (or create if not exists)
-        val existing = store.read(agentContext, dailyFileName, scope)
-        val newContent = if (existing != null) {
-            "$existing\n\n$content"
-        } else {
-            "# Daily Memory — ${LocalDate.now()}\n\n$content"
+        val entries = parseEntries(content)
+        if (entries.isEmpty()) {
+            logger.warn("Memory flush produced no parseable entries; skipping")
+            // Mark the hash so the same context is not retried on every subsequent turn.
+            flushedHashes.add(contextHash)
+            return null
         }
 
-        val entry = MemoryEntry(
-            name = "daily-${LocalDate.now()}",
-            description = "Daily memory for ${LocalDate.now()}",
-            type = MemoryType.PROJECT,
-            content = newContent,
-            path = dailyFileName,
-            created = LocalDate.now(),
-            updated = LocalDate.now()
-        )
-
-        store.write(agentContext, entry, scope)
+        var written = 0
+        for (item in entries) {
+            val entry = buildEntry(item)
+            store.write(entry, scope, owner)
+            written++
+        }
         flushedHashes.add(contextHash)
         // Evict oldest entries when capacity exceeded (LinkedHashSet guarantees insertion order)
         while (flushedHashes.size > maxHashes) {
             flushedHashes.remove(flushedHashes.first())
         }
 
-        logger.info("Memory flush completed: wrote {} chars to {}", content.length, dailyFileName)
-        return FlushResult(content = content, path = dailyFileName)
+        logger.info("Memory flush completed: wrote {} memory entries", written)
+        return FlushResult(written = written)
     }
 
     private fun computeHash(messages: List<EasyAiMessage>): String {
@@ -132,7 +125,11 @@ class MemoryFlushAgent(
         appendLine()
         appendLine("Do NOT include: task progress, PR/issue numbers, commit SHAs, or ephemeral details.")
         appendLine()
-        appendLine("Format each fact as a bullet point: '- [category] fact or decision'")
+        appendLine("Return ONLY a single JSON object (no markdown fences, no commentary) with this exact shape:")
+        appendLine(
+            """{"memories": [{"title": "short unique title", "description": "one-line summary", "category": "user_preferences|project_information|development_standards|task_summary|experience_lessons|other", "keywords": ["keyword"], "scenarios": ["when this applies"], "maturity": "low|medium|high", "content": "markdown body with the full fact"}]}"""
+        )
+        appendLine("Each entry in \"memories\" must be self-contained. \"category\" must be one of the six values listed. \"maturity\" must be one of low/medium/high. If no durable facts exist, return {\"memories\": []}.")
         appendLine()
         appendLine("<conversation>")
         messages.forEach { msg ->
@@ -155,5 +152,74 @@ class MemoryFlushAgent(
         appendLine("</conversation>")
     }
 
-    data class FlushResult(val content: String, val path: String)
+    /** Extract the JSON payload from the LLM response and deserialize the memory list. */
+    private fun parseEntries(text: String): List<FlushEntry> {
+        val json = extractJsonObject(text) ?: return emptyList()
+        return try {
+            val payload = objectMapper.readValue(json, FlushPayload::class.java)
+            payload.memories ?: emptyList()
+        } catch (e: Exception) {
+            logger.warn("Memory flush JSON parse failed: {}", e.message)
+            emptyList()
+        }
+    }
+
+    /** Locate the outermost JSON object; tolerates stray prose around the payload. */
+    private fun extractJsonObject(text: String): String? {
+        val start = text.indexOf('{')
+        val end = text.lastIndexOf('}')
+        if (start !in 0..<end) return null
+        return text.substring(start, end + 1)
+    }
+
+    /** Build a [MemoryEntry] from a parsed flush item, applying safe defaults. */
+    private fun buildEntry(item: FlushEntry): MemoryEntry {
+        val type = item.category?.let { MemoryType.fromDirName(it) } ?: MemoryType.OTHER
+        val name = slugify(item.title.orEmpty())
+        return MemoryEntry(
+            name = name,
+            description = item.description?.trim() ?: "",
+            type = type,
+            content = item.content?.trim().orEmpty(),
+            path = "${type.dirName}/$name.md",
+            keywords = cleanList(item.keywords),
+            created = LocalDate.now(),
+            updated = LocalDate.now(),
+            maturity = item.maturity?.let { MemoryMaturity.fromApiName(it) },
+            scenarios = cleanList(item.scenarios)
+        )
+    }
+
+    private fun cleanList(values: List<String>?): List<String> =
+        values?.map { it.trim() }?.filter { it.isNotEmpty() }?.distinct() ?: emptyList()
+
+    /** Lowercase, non-alphanumeric chars become `-`, collapse duplicates, cap length. */
+    private fun slugify(title: String): String {
+        val slug = title.lowercase()
+            .map { c -> if (c.isLetterOrDigit() || c == '-' || c == '_' || c == '.') c else '-' }
+            .joinToString("")
+            .trim('-')
+            .replace(Regex("-{2,}"), "-")
+        return slug.take(MAX_NAME_LENGTH).ifEmpty { "memory-${System.currentTimeMillis()}" }
+    }
+
+    data class FlushResult(val written: Int)
+
+    /** JSON payload shape returned by the LLM. */
+    private data class FlushPayload(val memories: List<FlushEntry>? = null)
+
+    /** A single memory entry as returned by the LLM. */
+    private data class FlushEntry(
+        val title: String? = null,
+        val description: String? = null,
+        val category: String? = null,
+        val keywords: List<String>? = null,
+        val scenarios: List<String>? = null,
+        val maturity: String? = null,
+        val content: String? = null
+    )
+
+    private companion object {
+        const val MAX_NAME_LENGTH = 64
+    }
 }

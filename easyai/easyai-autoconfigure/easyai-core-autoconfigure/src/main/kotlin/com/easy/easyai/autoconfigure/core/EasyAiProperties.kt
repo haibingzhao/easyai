@@ -15,12 +15,8 @@ data class EasyAiProperties(
 )
 
 data class MemoryProperties(
-    /** Whether the memory system is enabled. */
+    /** Whether the memory system is enabled (requires EasyRAG to be configured). */
     var enabled: Boolean = false,
-    /** Root directory for global memories. */
-    var globalDir: String = "~/.easyai/memory",
-    /** Root directory for project-scoped memories (relative to workDir). */
-    var projectDir: String = ".easyai/memory",
 )
 
 data class SkillProperties(
