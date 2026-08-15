@@ -115,7 +115,7 @@ internal class AgentLoop(
                         services.messageListener?.onMessageAdded(listOf(errorMessage))
                         push(TurnStartEvent(0, context.sessionId ?: "default"))
                         push(MessageStartEvent(errorMessage.id, 0, context.sessionId ?: "default"))
-                        push(MessageEndEvent(errorMessage.id, 0, context.sessionId ?: "default", errorMessage, usage = errorMessage.usage))
+                        push(MessageEndEvent(errorMessage.id, 0, context.sessionId ?: "default", errorMessage, usage = errorMessage.usage, modelName = context.modelId))
                         push(TurnEndEvent(0, context.sessionId ?: "default"))
                         endReason = "input_schema_validation_failed"
                         end(listOf(errorMessage))
@@ -244,7 +244,7 @@ internal class AgentLoop(
                 assistantMessage = assistantMessage.copy(stopReason = StopReason.ABORTED)
                 transcript[assistantTranscriptIndex] = assistantMessage
                 services.messageListener?.onMessageUpdated(assistantMessage.id, assistantMessage, setOf(MessageUpdateField.STOP_REASON))
-                push(MessageEndEvent(messageId, turnId, context.sessionId ?: "default", assistantMessage, usage = assistantMessage.usage))
+                push(MessageEndEvent(messageId, turnId, context.sessionId ?: "default", assistantMessage, usage = assistantMessage.usage, modelName = context.modelId))
                 push(TurnEndEvent(turnId, context.sessionId ?: "default"))
                 return false
             }
@@ -277,7 +277,7 @@ internal class AgentLoop(
             }
 
             // Finalize: push event (message already persisted at transcript-add time)
-            push(MessageEndEvent(messageId, turnId, context.sessionId ?: "default", assistantMessage, usage = assistantMessage.usage))
+            push(MessageEndEvent(messageId, turnId, context.sessionId ?: "default", assistantMessage, usage = assistantMessage.usage, modelName = context.modelId))
 
             // Build ToolResultMessage from tool results for next LLM iteration
             // Filter out WaitForUserContent results - they represent pending user questions, not tool results
@@ -326,7 +326,7 @@ internal class AgentLoop(
             }
         } else {
             // No tool calls — finalize assistant message (already persisted above)
-            push(MessageEndEvent(messageId, turnId, context.sessionId ?: "default", assistantMessage, usage = assistantMessage.usage))
+            push(MessageEndEvent(messageId, turnId, context.sessionId ?: "default", assistantMessage, usage = assistantMessage.usage, modelName = context.modelId))
         }
 
         // If WaitForUserContent was detected, break the loop and end SSE stream

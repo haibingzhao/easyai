@@ -4,6 +4,7 @@ import type { MemoryEntry } from '@/types/memory';
 import { MEMORY_CATEGORIES, maturityLabelKey } from '@/types/memory';
 import { i18n } from '@/utils/i18n';
 import type { Project } from '@/services/project-service';
+import { ToolTooltip } from '@/components/agent/ToolItem';
 
 export interface SelectedMemory {
   scope: 'global' | 'project';
@@ -90,14 +91,16 @@ export const MemorySidebar: React.FC<MemorySidebarProps> = ({
       {currentProject && (
         <div className="px-3 pt-3 pb-2 border-b border-border">
           <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <div className="text-xs font-medium text-foreground truncate">
-                {i18n('Enable Automatic Generation')}
+            <ToolTooltip name={i18n('Enable Automatic Generation')} description={i18n('Automatically build memories from conversations')} className="min-w-0 flex-1">
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-foreground truncate">
+                  {i18n('Enable Automatic Generation')}
+                </div>
+                <div className="text-[11px] text-muted-foreground truncate">
+                  {i18n('Automatically build memories from conversations')}
+                </div>
               </div>
-              <div className="text-[11px] text-muted-foreground truncate">
-                {i18n('Automatically build memories from conversations')}
-              </div>
-            </div>
+            </ToolTooltip>
             <button
               onClick={() => onToggleAutoGeneration(!autoGeneration)}
               className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${

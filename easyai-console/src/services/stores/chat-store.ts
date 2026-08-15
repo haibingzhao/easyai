@@ -73,7 +73,7 @@ interface ChatState {
   /** Messages queued for delivery to the agent (steering / followUp) */
   queuedMessages: QueuedMessage[];
   /** Pending message data keyed by messageId (usage stored on message_end, used in commitStreamingMessage) */
-  pendingMessageData: Record<string, { usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number; durationMs?: number }; references?: ContextReferences }>;
+  pendingMessageData: Record<string, { usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number; durationMs?: number; modelName?: string }; references?: ContextReferences }>;
   /** ID of a session detected as still running on the backend */
   runningSessionId: string | null;
   /** Internal: raw MessageSnapshot[] from last full/incremental load, used for incremental merge. */

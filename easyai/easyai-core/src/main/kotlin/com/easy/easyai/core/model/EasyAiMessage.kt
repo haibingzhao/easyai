@@ -153,7 +153,8 @@ data class Usage(
     val cacheReadTokens: Int = 0,
     val cacheWriteTokens: Int = 0,
     val cost: Double = 0.0,
-    val durationMs: Long = 0
+    val durationMs: Long = 0,
+    val modelName: String? = null
 ) {
     @get:JsonProperty("totalTokens")
     val totalTokens: Int get() = inputTokens + outputTokens

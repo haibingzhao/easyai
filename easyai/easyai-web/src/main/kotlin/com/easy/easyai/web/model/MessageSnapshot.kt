@@ -25,5 +25,6 @@ data class UsageSnapshot(
     val totalTokens: Int,
     val cacheReadTokens: Int = 0,
     val cacheWriteTokens: Int = 0,
-    val durationMs: Long = 0
+    val durationMs: Long = 0,
+    val modelName: String? = null
 )

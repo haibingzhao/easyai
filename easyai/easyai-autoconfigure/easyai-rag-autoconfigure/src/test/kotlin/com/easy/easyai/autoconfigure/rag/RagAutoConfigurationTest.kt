@@ -37,16 +37,16 @@ class RagAutoConfigurationTest {
     }
 
     @Test
-    fun `no rag beans when property missing`() {
+    fun `rag beans registered by default when property missing`() {
         contextRunner.run { context ->
-            assertEquals(0, context.getBeanNamesForType(RagClient::class.java).size)
+            assertEquals(1, context.getBeanNamesForType(RagClient::class.java).size)
         }
     }
 
     @Test
     fun `ragClient registered but no memoryStore when memory disabled`() {
         contextRunner
-            .withPropertyValues("easyai.rag.enabled=true")
+            .withPropertyValues("easyai.rag.enabled=true", "easyai.memory.enabled=false")
             .run { context ->
                 assertEquals(1, context.getBeanNamesForType(RagClient::class.java).size)
                 assertEquals(0, context.getBeanNamesForType(MemoryStore::class.java).size)

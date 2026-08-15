@@ -23,11 +23,11 @@ import java.nio.file.Path
  * @param indexTimeoutMs timeout for write + synchronous indexing (embedding cost)
  */
 data class RagConfig(
-    val enabled: Boolean = false,
+    val enabled: Boolean = true,
     val baseUrl: String = "http://localhost:8020",
     val username: String? = null,
     val password: String? = null,
-    val workspace: String? = null,
+    val workspace: String? = "easyai",
     val topK: Int = 5,
     val readTimeoutMs: Long = 5000,
     val indexTimeoutMs: Long = 30000
@@ -41,7 +41,7 @@ data class RagConfig(
 
         /**
          * Load RAG config from the given path.
-         * Returns default (disabled) config when the file is missing or unparsable.
+         * Returns default (enabled) config when the file is missing or unparsable.
          */
         @JvmStatic
         suspend fun load(path: Path = defaultConfigPath()): RagConfig = withContext(Dispatchers.IO) {

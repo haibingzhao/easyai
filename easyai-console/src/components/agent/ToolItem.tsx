@@ -4,9 +4,10 @@ interface ToolTooltipProps {
   name: string;
   description?: string;
   children: React.ReactNode;
+  className?: string;
 }
 
-export const ToolTooltip: React.FC<ToolTooltipProps> = ({ name, description, children }) => {
+export const ToolTooltip: React.FC<ToolTooltipProps> = ({ name, description, children, className }) => {
   const [hovered, setHovered] = useState(false);
   const [position, setPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -51,6 +52,7 @@ export const ToolTooltip: React.FC<ToolTooltipProps> = ({ name, description, chi
   return (
     <>
       <div
+        className={className}
         onMouseMove={handleMouseMove}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}

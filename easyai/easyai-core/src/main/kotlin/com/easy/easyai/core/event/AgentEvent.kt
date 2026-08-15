@@ -77,7 +77,8 @@ data class MessageEndEvent(
     val message: AssistantMessage,
     val usage: Usage? = null,
     val subAgentToolCallId: String? = null,
-    val subAgentName: String? = null
+    val subAgentName: String? = null,
+    val modelName: String? = null
 ) : AgentEvent {
     override val type: String get() = "message_end"
 }

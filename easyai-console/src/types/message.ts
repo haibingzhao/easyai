@@ -141,6 +141,7 @@ export interface AssistantMessage {
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
     durationMs?: number;
+    modelName?: string;
   };
   /** Thinking block duration in ms (from backend) */
   thinkingDurationMs?: number;

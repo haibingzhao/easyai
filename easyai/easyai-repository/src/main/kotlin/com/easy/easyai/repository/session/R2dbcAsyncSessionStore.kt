@@ -910,12 +910,14 @@ class R2dbcAsyncSessionStore(
         val timestamp = row[Tables.Message.createdAt]
 
         // Read usage from DB columns (present for AssistantMessage and compaction summary UserMessages)
+        val modelId = row[Tables.Message.modelId]
         val usage = Usage(
             inputTokens = row[Tables.Message.inputTokenCount] ?: 0,
             outputTokens = row[Tables.Message.outputTokenCount] ?: 0,
             cacheReadTokens = row[Tables.Message.cacheReadTokenCount] ?: 0,
             cacheWriteTokens = row[Tables.Message.cacheWriteTokenCount] ?: 0,
-            durationMs = row[Tables.Message.durationMs] ?: 0
+            durationMs = row[Tables.Message.durationMs] ?: 0,
+            modelName = modelId
         )
         val hasUsage = usage.inputTokens > 0 || usage.outputTokens > 0
 

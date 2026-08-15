@@ -3,7 +3,7 @@
  * MCP tool names follow the pattern "serverName__toolName".
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ChevronDown, ChevronRight, Plug, AlertTriangle } from 'lucide-react';
 import { CodeBlock } from '../CodeBlock';
 import type { ToolMessageProps } from './types';
@@ -11,6 +11,8 @@ import { tryFormatJson } from './parsers';
 
 export function McpToolCard({ toolCall, result, status, streamingOutput }: ToolMessageProps) {
   const [expanded, setExpanded] = useState(false);
+  // Collapse args after streaming ends for compact display
+  const [argsExpanded, setArgsExpanded] = useState(true);
 
   // Parse server + tool name from "serverName__toolName"
   const parts = toolCall.toolName.split('__');
@@ -29,6 +31,10 @@ export function McpToolCard({ toolCall, result, status, streamingOutput }: ToolM
 
   const isRunning = status === 'RUNNING' || status === 'PENDING';
   const isFailed = status === 'FAILED' || result?.isError;
+
+  useEffect(() => {
+    if (!isRunning) setArgsExpanded(false);
+  }, [isRunning]);
 
   const statusDotColor = isRunning
     ? 'bg-blue-500 animate-pulse'
@@ -56,10 +62,19 @@ export function McpToolCard({ toolCall, result, status, streamingOutput }: ToolM
         </div>
       </div>
 
-      {/* Args (collapsed by default) */}
+      {/* Args (collapsed by default after streaming ends) */}
       {toolCall.args && toolCall.args !== '{}' && (
         <div className="px-3 py-2">
-          {(() => {
+          <button
+            onClick={() => setArgsExpanded(e => !e)}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mb-1"
+          >
+            {argsExpanded
+              ? <ChevronDown className="w-3 h-3" />
+              : <ChevronRight className="w-3 h-3" />}
+            <span>{argsExpanded ? '收起参数' : '查看参数'}</span>
+          </button>
+          {argsExpanded && (() => {
             const formatted = tryFormatJson(toolCall.args);
             if (formatted) {
               return (
