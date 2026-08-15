@@ -9,6 +9,7 @@ import kotlinx.coroutines.reactor.awaitSingle
 import org.slf4j.LoggerFactory
 import org.springframework.http.MediaType
 import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.reactive.function.client.bodyToMono
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -48,6 +49,9 @@ class ExaSearchProvider(
     override val providerName = "exa"
     override val label = "Exa Web Search"
 
+    // Security note: Exa MCP API requires the API key as a URL query parameter.
+    // This means the key may appear in HTTP access logs and proxy logs.
+    // Prefer ParallelSearchProvider (Bearer header) when possible.
     private val mcpUrl: String
         get() = if (apiKey != null) "$EXA_MCP_URL?exaApiKey=$apiKey" else EXA_MCP_URL
 
@@ -73,7 +77,7 @@ class ExaSearchProvider(
             .contentType(MediaType.APPLICATION_JSON)
             .bodyValue(body)
             .retrieve()
-            .bodyToMono(String::class.java)
+            .bodyToMono<String>()
             .awaitSingle()
 
         return parseMcpResponse(response)
@@ -121,7 +125,7 @@ class ParallelSearchProvider(
         val response = spec
             .bodyValue(body)
             .retrieve()
-            .bodyToMono(String::class.java)
+            .bodyToMono<String>()
             .awaitSingle()
 
         return parseMcpResponse(response)

@@ -109,6 +109,7 @@ internal class MemoryWriteTool(
         if (type.isNullOrBlank()) return errorResult("Error: 'type' is required for add (user_preferences/project_information/development_standards/task_summary/experience_lessons/other).")
         if (description.isNullOrBlank()) return errorResult("Error: 'description' is required for add.")
         if (content.isNullOrBlank()) return errorResult("Error: 'content' is required for add.")
+        if (!isValidMemoryName(name)) return errorResult("Error: 'name' must not contain '/', '\\', or '..'.")
 
         val memoryType = MemoryType.fromDirName(type)
             ?: return errorResult("Error: Unknown type '$type'. Use: user_preferences, project_information, development_standards, task_summary, experience_lessons, other.")
@@ -246,4 +247,8 @@ internal class MemoryWriteTool(
         "global" -> MemoryScope.GLOBAL
         else -> MemoryScope.PROJECT
     }
+
+    /** Validate memory name to prevent path traversal in file storage. */
+    private fun isValidMemoryName(name: String): Boolean =
+        name.isNotBlank() && !name.contains("/") && !name.contains("\\") && !name.contains("..")
 }

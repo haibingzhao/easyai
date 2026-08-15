@@ -44,7 +44,7 @@ export interface ChatStateShape {
   streamingToolOutputs: Record<string, string>;
   messages: Message[];
   pendingPermission: PermissionRequestEvent | null;
-  pendingMessageData: Record<string, { usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number; durationMs?: number }; references?: ContextReferences }>;
+  pendingMessageData: Record<string, { usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number; durationMs?: number; modelName?: string }; references?: ContextReferences }>;
   cumulativeUsage: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number } | null;
   contextTokens: number;
   todos: TodoInfo[];
@@ -757,6 +757,7 @@ function handleMessageEnd(
               cacheReadTokens: u.cacheReadTokens ?? 0,
               cacheWriteTokens: u.cacheWriteTokens ?? 0,
               durationMs: u.durationMs,
+              modelName: event.modelName,
             },
           } : {}),
           ...(refs ? { references: refs } : {}),

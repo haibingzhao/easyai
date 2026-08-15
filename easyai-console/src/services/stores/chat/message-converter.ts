@@ -172,6 +172,7 @@ export function convertSnapshot(msg: MessageSnapshot): Message {
         inputTokens: msg.usage.inputTokens, outputTokens: msg.usage.outputTokens,
         totalTokens: msg.usage.totalTokens, durationMs: msg.usage.durationMs,
         cacheReadTokens: msg.usage.cacheReadTokens, cacheWriteTokens: msg.usage.cacheWriteTokens,
+        modelName: msg.usage.modelName,
       } : undefined,
       thinkingDurationMs: thinkingBlock?.durationMs ?? undefined,
       textDurationMs: textBlock?.durationMs ?? undefined,

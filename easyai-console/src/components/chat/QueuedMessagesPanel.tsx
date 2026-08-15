@@ -18,7 +18,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, Pencil, Trash2, ArrowRightLeft, Check, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { useChatStore } from '@/services/stores/chat-store';
-import { removeQueueMessage, updateQueueMessage } from '@/services/chat-service';
+import { removeQueueMessage, updateQueueMessage, reorderQueueMessages, addQueueMessage } from '@/services/chat-service';
 import type { QueuedMessage } from '@/types/message';
 import { isImageAttachment, toChatAttachment } from '@/utils/attachment-utils';
 
@@ -241,9 +241,7 @@ export const QueuedMessagesPanel: React.FC = () => {
       .filter((id): id is string => !!id);
 
     if (sessionId && backendIds.length > 0) {
-      import('@/services/chat-service').then(({ reorderQueueMessages }) => {
-        reorderQueueMessages(sessionId, backendIds).catch(console.error);
-      });
+      reorderQueueMessages(sessionId, backendIds).catch(console.error);
     }
   }, [queuedMessages, reorderQueuedMessages, sessionId]);
 
@@ -286,13 +284,11 @@ export const QueuedMessagesPanel: React.FC = () => {
       // Backend: remove old, add new (with attachments)
       const chatAttachments = msg.attachments?.filter((a) => !!a.filePath).map(toChatAttachment);
       removeQueueMessage(sessionId, msg.backendQueueId)
-        .then(() => import('@/services/chat-service').then(({ addQueueMessage }) =>
-          addQueueMessage(
-            sessionId,
-            msg.content,
-            newType as 'steer' | 'followUp',
-            chatAttachments && chatAttachments.length > 0 ? chatAttachments : undefined
-          )
+        .then(() => addQueueMessage(
+          sessionId,
+          msg.content,
+          newType as 'steer' | 'followUp',
+          chatAttachments && chatAttachments.length > 0 ? chatAttachments : undefined
         ))
         .then((resp) => {
           // Update the new message's backend ID

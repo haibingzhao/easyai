@@ -271,9 +271,16 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({ message, too
           }
         }
 
+
+        // Format call time from message timestamp
+        const callTime = new Date(message.timestamp).toLocaleTimeString();
+
         return (
           <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-150 pt-1">
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground/60 tabular-nums">
+              {usage.modelName && (
+                <span className="font-mono">{usage.modelName}</span>
+              )}
               <span>↑ {formatTokenCount(usage.inputTokens)}</span>
               <span>↓ {formatTokenCount(usage.outputTokens)}</span>
               {totalCache > 0 && (
@@ -282,6 +289,7 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({ message, too
               {durationText && (
                 <span>· {durationText}</span>
               )}
+              <span>· {callTime}</span>
             </div>
           </div>
         );

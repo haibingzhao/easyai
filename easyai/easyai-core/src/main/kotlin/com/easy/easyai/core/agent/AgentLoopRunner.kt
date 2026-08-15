@@ -113,8 +113,8 @@ internal class AgentLoopRunner(
             breaker?.acquirePermission()
             var streamStartTime = 0L
             try {
-                logger.debug("${logPrefix}[Turn {}] Starting LLM stream call (model={}, attempt={}/{}, tools={}, subAgents={}, skills={})",
-                    turnId, context.modelId, retryCount + 1, context.maxRetries + 1,
+                logger.debug("${logPrefix}[Turn {}] Starting LLM stream call (agent={}, model={}, attempt={}/{}, tools={}, subAgents={}, skills={})",
+                    turnId,context.agentId, context.modelId, retryCount + 1, context.maxRetries + 1,
                     context.tools.size, context.subAgents.size, context.skills.size)
                 streamStartTime = System.currentTimeMillis()
                 chunkCount = 0

@@ -18,6 +18,7 @@ import java.nio.file.Path
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -47,6 +48,8 @@ internal class EasyRagClient(
 
     private val cachedToken = AtomicReference<String?>(null)
     private val authInitialized = AtomicBoolean(false)
+    /** Epoch-ms of the last auth failure; used to throttle re-login after 429 / network errors. */
+    private val lastAuthFailureMs = AtomicLong(0L)
 
     override suspend fun isEnabled(): Boolean = RagConfig.load(configPath).enabled
 
@@ -359,18 +362,36 @@ internal class EasyRagClient(
         return URI.create(if (query.isEmpty()) "$base$path" else "$base$path?$query")
     }
 
-    /** Lazily probe auth-status and login when the server requires authentication. */
+    /**
+     * Lazily probe auth-status and login when the server requires authentication.
+     *
+     * Only marks [authInitialized] as `true` on **successful** completion. On failure
+     * the flag is reset so the next request can retry, but a [AUTH_FAILURE_COOLDOWN_MS]
+     * cooldown prevents hammering the server (e.g. repeated 429 responses).
+     */
     private suspend fun ensureAuthInitialized(config: RagConfig) {
+        if (authInitialized.get()) return
+        // Throttle retries after a recent failure to avoid amplifying 429 storms.
+        val now = System.currentTimeMillis()
+        val lastFailure = lastAuthFailureMs.get()
+        if (lastFailure > 0 && now - lastFailure < AUTH_FAILURE_COOLDOWN_MS) return
         if (!authInitialized.compareAndSet(false, true)) return
         try {
             val status = executeOnce(config, HttpMethod.GET, "/api/auth-status", emptyMap(), null, config.readTimeoutMs, retryOn401 = false)
             val authRequired = status["auth_required"] as? Boolean ?: false
             if (authRequired) {
-                login(config)
+                val token = login(config)
+                if (token != null) return // success — authInitialized stays true
+            } else {
+                return // no auth required — authInitialized stays true
             }
         } catch (e: Exception) {
             logger.warn("RAG auth probe failed for {}: {}", config.baseUrl, e.message)
         }
+        // Auth failed (login returned null or auth-status threw). Reset so next
+        // request can retry after the cooldown window.
+        authInitialized.set(false)
+        lastAuthFailureMs.set(System.currentTimeMillis())
     }
 
     /** Logs in against /api/auth/login and caches the bearer token; returns the token or null. */
@@ -423,5 +444,7 @@ internal class EasyRagClient(
         const val NOT_FOUND = 404
         const val UNAUTHORIZED = 401
         const val CONFLICT = 409
+        /** Cooldown (ms) after an auth failure before retrying — avoids 429 amplification. */
+        const val AUTH_FAILURE_COOLDOWN_MS = 30_000L
     }
 }

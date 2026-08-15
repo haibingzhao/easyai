@@ -1,6 +1,17 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import { AppLayout } from './components/layout/AppLayout';
+import { ChatPanel } from './components/chat/ChatPanel';
+import { WorkflowPage } from './pages/WorkflowPage';
+import { SettingsPage } from './pages/SettingsPage';
+import { AgentCreatePage } from './pages/AgentCreatePage';
+import { AgentsPage } from './pages/AgentsPage';
+import { ModelsPage } from './pages/ModelsPage';
+import { McpPage } from './pages/McpPage';
+import { MemoriesPage } from './pages/MemoriesPage';
+import { CommandsPage } from './pages/CommandsPage';
+import { SwarmPresetEditorPage } from './pages/SwarmPresetEditorPage';
+import { WorkflowRunPage } from './pages/WorkflowRunPage';
 import { LoginPage } from './pages/LoginPage';
 import { DatabaseSetupPage } from './pages/DatabaseSetupPage';
 import { ProjectSelectPage } from './components/project/ProjectSelectPage';
@@ -12,46 +23,6 @@ import { storageService } from '@/services/storage-service';
 import { setTheme } from '@/utils/theme';
 import { Loader2 } from 'lucide-react';
 import './index.css';
-
-const ChatPanel = lazy(() =>
-  import('./components/chat/ChatPanel').then(m => ({ default: m.ChatPanel }))
-);
-const WorkflowPage = lazy(() =>
-  import('./pages/WorkflowPage').then(m => ({ default: m.WorkflowPage }))
-);
-const SettingsPage = lazy(() =>
-  import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage }))
-);
-const AgentCreatePage = lazy(() =>
-  import('./pages/AgentCreatePage').then(m => ({ default: m.AgentCreatePage }))
-);
-const AgentsPage = lazy(() =>
-  import('./pages/AgentsPage').then(m => ({ default: m.AgentsPage }))
-);
-const ModelsPage = lazy(() =>
-  import('./pages/ModelsPage').then(m => ({ default: m.ModelsPage }))
-);
-const McpPage = lazy(() =>
-  import('./pages/McpPage').then(m => ({ default: m.McpPage }))
-);
-const MemoriesPage = lazy(() =>
-  import('./pages/MemoriesPage').then(m => ({ default: m.MemoriesPage }))
-);
-const CommandsPage = lazy(() =>
-  import('./pages/CommandsPage').then(m => ({ default: m.CommandsPage }))
-);
-const SwarmPresetEditorPage = lazy(() =>
-  import('./pages/SwarmPresetEditorPage').then(m => ({ default: m.SwarmPresetEditorPage }))
-);
-const WorkflowRunPage = lazy(() =>
-  import('./pages/WorkflowRunPage').then(m => ({ default: m.WorkflowRunPage }))
-);
-
-const LoadingFallback: React.FC = () => (
-  <div className="w-full h-full flex items-center justify-center">
-    <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-  </div>
-);
 
 function App() {
   const loadSettings = useSettingsStore((state) => state.loadSettings);
@@ -122,107 +93,55 @@ function App() {
         <Route element={<AppLayout />}>
           <Route
             path="/"
-            element={
-              <Suspense fallback={<LoadingFallback />}>
-                <ChatPanel />
-              </Suspense>
-            }
+            element={<ChatPanel />}
           />
           <Route
             path="/workflow"
-            element={
-              <Suspense fallback={<LoadingFallback />}>
-                <WorkflowPage />
-              </Suspense>
-            }
+            element={<WorkflowPage />}
           />
           <Route
             path="/workflow/create"
-            element={
-              <Suspense fallback={<LoadingFallback />}>
-                <SwarmPresetEditorPage />
-              </Suspense>
-            }
+            element={<SwarmPresetEditorPage />}
           />
           <Route
             path="/workflow/edit/:name"
-            element={
-              <Suspense fallback={<LoadingFallback />}>
-                <SwarmPresetEditorPage />
-              </Suspense>
-            }
+            element={<SwarmPresetEditorPage />}
           />
           <Route
             path="/workflow/:name/run"
-            element={
-              <Suspense fallback={<LoadingFallback />}>
-                <WorkflowRunPage />
-              </Suspense>
-            }
+            element={<WorkflowRunPage />}
           />
           <Route
             path="/settings"
-            element={
-              <Suspense fallback={<LoadingFallback />}>
-                <SettingsPage />
-              </Suspense>
-            }
+            element={<SettingsPage />}
           />
           <Route
             path="/agents"
-            element={
-              <Suspense fallback={<LoadingFallback />}>
-                <AgentsPage />
-              </Suspense>
-            }
+            element={<AgentsPage />}
           />
           <Route
             path="/agents/create"
-            element={
-              <Suspense fallback={<LoadingFallback />}>
-                <AgentCreatePage />
-              </Suspense>
-            }
+            element={<AgentCreatePage />}
           />
           <Route
             path="/agents/edit/:id"
-            element={
-              <Suspense fallback={<LoadingFallback />}>
-                <AgentCreatePage />
-              </Suspense>
-            }
+            element={<AgentCreatePage />}
           />
           <Route
             path="/models"
-            element={
-              <Suspense fallback={<LoadingFallback />}>
-                <ModelsPage />
-              </Suspense>
-            }
+            element={<ModelsPage />}
           />
           <Route
             path="/mcp"
-            element={
-              <Suspense fallback={<LoadingFallback />}>
-                <McpPage />
-              </Suspense>
-            }
+            element={<McpPage />}
           />
           <Route
             path="/memories"
-            element={
-              <Suspense fallback={<LoadingFallback />}>
-                <MemoriesPage />
-              </Suspense>
-            }
+            element={<MemoriesPage />}
           />
           <Route
             path="/commands"
-            element={
-              <Suspense fallback={<LoadingFallback />}>
-                <CommandsPage />
-              </Suspense>
-            }
+            element={<CommandsPage />}
           />
         </Route>
       </Routes>

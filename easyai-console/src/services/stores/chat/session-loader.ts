@@ -22,7 +22,7 @@ interface CommitStateShape {
   streamingBlocks: StreamingBlock[];
   streamingToolOutputs: Record<string, string>;
   messages: Message[];
-  pendingMessageData: Record<string, { usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number; durationMs?: number }; references?: ContextReferences }>;
+  pendingMessageData: Record<string, { usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number; durationMs?: number; modelName?: string }; references?: ContextReferences }>;
 }
 
 /**
@@ -66,6 +66,7 @@ export function commitStreamingMessageImpl(state: CommitStateShape): Partial<Com
           cacheReadTokens: pendingUsage.cacheReadTokens,
           cacheWriteTokens: pendingUsage.cacheWriteTokens,
           durationMs: pendingUsage.durationMs,
+          modelName: pendingUsage.modelName,
         } : undefined,
         thinkingDurationMs: thinkingDurationMs > 0 ? thinkingDurationMs : undefined,
         textDurationMs: textDurationMs > 0 ? textDurationMs : undefined,

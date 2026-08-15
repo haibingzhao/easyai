@@ -583,7 +583,8 @@ class SessionService(
                     totalTokens = it.inputTokens + it.outputTokens,
                     cacheReadTokens = it.cacheReadTokens,
                     cacheWriteTokens = it.cacheWriteTokens,
-                    durationMs = it.durationMs
+                    durationMs = it.durationMs,
+                    modelName = it.modelName
                 )
             },
             compactedAt = msgWithTs.compactedAt,

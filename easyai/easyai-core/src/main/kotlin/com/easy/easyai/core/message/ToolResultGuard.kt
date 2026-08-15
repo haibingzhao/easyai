@@ -34,10 +34,11 @@ object ToolResultGuard {
 
     /**
      * Default maximum characters kept for one tool result in the transcript.
-     * Roughly 29K tokens under O200K-style tokenizers, leaving room for the rest of
-     * the context inside a 200K-token window.
+     * ~19K tokens for market-data style payloads (measured ~2.65 chars/token on
+     * FRED/quote JSON), about 9-10% of a 200K-token window. Oversized results are
+     * spilled to the temp dir; the model fetches details on demand via read/grep.
      */
-    const val DEFAULT_MAX_TOOL_RESULT_CHARS = 100_000
+    const val DEFAULT_MAX_TOOL_RESULT_CHARS = 50_000
 
     /** Fraction of the budget given to the head of the result; the remainder goes to the tail. */
     private const val HEAD_RATIO = 0.6

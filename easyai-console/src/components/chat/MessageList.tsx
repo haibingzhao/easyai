@@ -64,12 +64,13 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
               message.metadata?.source === 'steering';
             const isEditable = !disableEdit && !isStreaming && !!msgId && !isSystemMsg;
             return (
-              <UserMessage
-                key={index}
-                message={message as Message & { role: 'user' | 'user-with-attachments' }}
-                isEditable={isEditable}
-                onEditClick={() => handleEditClick(index)}
-              />
+              <div key={index} className="group relative">
+                <UserMessage
+                  message={message as Message & { role: 'user' | 'user-with-attachments' }}
+                  isEditable={isEditable}
+                  onEditClick={() => handleEditClick(index)}
+                />
+              </div>
             );
           }
           case 'assistant':

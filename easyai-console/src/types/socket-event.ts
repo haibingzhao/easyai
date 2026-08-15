@@ -167,6 +167,7 @@ export interface UsageInfo {
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
   durationMs?: number;
+  modelName?: string;
 }
 
 export interface DoneEvent extends BaseEvent {
@@ -237,6 +238,7 @@ export interface MessageEndEvent extends BaseEvent {
   subAgentToolCallId?: string;
   subAgentName?: string;
   references?: ContextReferences;
+  modelName?: string;
 }
 
 export interface UserMessageAddedEvent extends BaseEvent {

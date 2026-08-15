@@ -298,7 +298,8 @@ sealed interface ChatStreamEvent {
         val usage: UsageInfo? = null,
         val subAgentToolCallId: String? = null,
         val subAgentName: String? = null,
-        val references: ReferencesSnapshot? = null
+        val references: ReferencesSnapshot? = null,
+        val modelName: String? = null
     ) : ChatStreamEvent {
         override val type: String get() = "message_end"
     }

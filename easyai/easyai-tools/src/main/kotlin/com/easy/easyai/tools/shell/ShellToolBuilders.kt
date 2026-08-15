@@ -29,8 +29,12 @@ Do NOT use this tool for:
 - File name matching (find): use glob instead
 - Directory listing (ls): use ls instead
 - Reading files (cat/head/tail): use read instead
-- One-off numeric/date/time formulas with no data files involved: use calc instead
-Note: batch or file-based computations ARE appropriate here — write a Python script and run it with this tool.
+- One-off numeric/date/time formulas (no data files involved): use calc instead
+- Single file ≤ 512KB calculations: use calc with filePath parameter instead
+DO use this tool for:
+- Multiple files: write a Python or JavaScript script to process them
+- Single file > 512KB: write a Python or JavaScript script and run it
+- Calculations requiring third-party libraries (pandas, numpy, etc.)
 Error handling:
 - NEVER redirect stderr to /dev/null (2>/dev/null). stderr contains critical diagnostic info (e.g. "command not found"). Suppressing it makes failures invisible.
 - In pipelines, the exit code is from the LAST command by default. A failing command early in the pipe will be masked. Use "set -o pipefail;" prefix if you need true error propagation.

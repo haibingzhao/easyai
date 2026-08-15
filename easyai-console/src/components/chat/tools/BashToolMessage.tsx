@@ -3,7 +3,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Terminal, ChevronsDown, ChevronsUp } from 'lucide-react';
+import { Terminal, ChevronsDown, ChevronsUp, ChevronRight, ChevronDown } from 'lucide-react';
 import type { ToolMessageProps } from './types';
 import { extractOutput, tryFormatJson } from './parsers';
 import { getToolDisplayName } from './icons';
@@ -68,6 +68,8 @@ export function BashToolMessage({
   const [isExpanded, setIsExpanded] = useState(false);
   const [isCommandExpanded, setIsCommandExpanded] = useState(false);
   const [isOutputOverflowing, setIsOutputOverflowing] = useState(false);
+  // Collapse entire content area after streaming ends for compact display
+  const [contentCollapsed, setContentCollapsed] = useState(true);
 
   // Execution timer (ref: ThinkingBlock): update elapsed seconds every second during streaming
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -76,6 +78,10 @@ export function BashToolMessage({
   useEffect(() => {
     if (isStreaming && startTimeRef.current === null) {
       startTimeRef.current = Date.now();
+    }
+    // Auto-expand content while streaming, auto-collapse when streaming ends
+    if (isStreaming) {
+      setContentCollapsed(false);
     }
   }, [isStreaming]);
 
@@ -214,9 +220,15 @@ export function BashToolMessage({
 
   return (
     <div className="border border-border rounded-lg bg-card overflow-hidden">
-      {/* Title bar */}
-      <div className="p-3 flex items-center justify-between gap-2 border-b border-border">
+      {/* Title bar — click to collapse/expand content */}
+      <div
+        className="p-3 flex items-center justify-between gap-2 border-b border-border cursor-pointer hover:bg-muted/30 transition-colors"
+        onClick={() => setContentCollapsed(prev => !prev)}
+      >
         <div className="flex items-center gap-2">
+          {contentCollapsed
+            ? <ChevronRight className="w-3.5 h-3.5 text-muted-foreground transition-transform" />
+            : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground transition-transform" />}
           <Terminal className="w-4 h-4 text-muted-foreground" />
           <span className="text-sm font-medium">{displayName}</span>
         </div>
@@ -228,6 +240,8 @@ export function BashToolMessage({
         </div>
       </div>
 
+      {/* Content area — hidden when collapsed */}
+      {!contentCollapsed && (<>
       {/* Command area */}
       <div className="p-3 flex items-center">
         {(() => {
@@ -322,6 +336,8 @@ export function BashToolMessage({
             )}
           </div>
         </>
+      )}
+      </>
       )}
     </div>
   );

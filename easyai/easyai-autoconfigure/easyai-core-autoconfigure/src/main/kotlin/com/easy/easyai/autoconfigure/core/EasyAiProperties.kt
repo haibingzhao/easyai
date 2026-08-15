@@ -16,7 +16,7 @@ data class EasyAiProperties(
 
 data class MemoryProperties(
     /** Whether the memory system is enabled (requires EasyRAG to be configured). */
-    var enabled: Boolean = false,
+    var enabled: Boolean = true,
 )
 
 data class SkillProperties(

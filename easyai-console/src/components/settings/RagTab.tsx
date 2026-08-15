@@ -122,9 +122,6 @@ export const RagTab: React.FC = () => {
         <p className="text-sm text-muted-foreground mb-4">
           {i18n('Connect an EasyRAG server for semantic memory storage and retrieval. When enabled, memories are stored entirely in EasyRAG.')}
         </p>
-        <p className="text-xs text-amber-500 mb-4">
-          {i18n('Without RAG configured, the memory feature stays off.')}
-        </p>
 
         <div className="space-y-4">
           {/* Enabled toggle */}

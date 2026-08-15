@@ -164,6 +164,13 @@ export const UserMessage: React.FC<UserMessageProps> = ({ message, isEditable, o
         {message.role === 'user-with-attachments' && message.attachments && message.attachments.length > 0 && (
           <AttachmentPreview attachments={message.attachments} />
         )}
+
+        {/* Inline time bar: shown on hover */}
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-150 pt-1">
+          <div className="text-right text-[11px] text-muted-foreground/60 tabular-nums">
+            {new Date(message.timestamp).toLocaleTimeString()}
+          </div>
+        </div>
       </div>
     </div>
   );

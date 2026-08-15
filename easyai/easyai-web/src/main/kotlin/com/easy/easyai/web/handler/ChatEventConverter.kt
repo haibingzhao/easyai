@@ -232,7 +232,8 @@ object ChatEventConverter {
             usage = usageInfo,
             subAgentToolCallId = event.subAgentToolCallId,
             subAgentName = event.subAgentName,
-            references = refsSnapshot
+            references = refsSnapshot,
+            modelName = event.modelName
         ))
 
         return result
