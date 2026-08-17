@@ -40,13 +40,14 @@ class RagControllerTest {
 
     @Test
     fun `status masks stored password`() {
-        saveConfig(RagConfig(enabled = true, password = "supersecretpw"))
+        saveConfig(RagConfig(enabled = false, password = "supersecretpw"))
 
         val status = controller.getStatus().block()!!
 
         assertEquals("supe****etpw", status["password"])
-        assertEquals(true, status["enabled"])
-        // Disabled config skips the health probe
+        assertEquals(false, status["enabled"])
+        // Disabled config skips the health probe, so connected is deterministically false
+        // (an enabled config would probe the real EasyRAG at the default localhost:8020)
         assertEquals(false, status["connected"])
     }
 

@@ -70,6 +70,8 @@ export function BashToolMessage({
   const [isOutputOverflowing, setIsOutputOverflowing] = useState(false);
   // Collapse entire content area after streaming ends for compact display
   const [contentCollapsed, setContentCollapsed] = useState(true);
+  // Track whether user manually toggled collapse (to avoid overriding their choice)
+  const userTouchedContentRef = useRef(false);
 
   // Execution timer (ref: ThinkingBlock): update elapsed seconds every second during streaming
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -82,6 +84,9 @@ export function BashToolMessage({
     // Auto-expand content while streaming, auto-collapse when streaming ends
     if (isStreaming) {
       setContentCollapsed(false);
+    } else if (!userTouchedContentRef.current) {
+      // Streaming ended and user didn't manually toggle — auto-collapse
+      setContentCollapsed(true);
     }
   }, [isStreaming]);
 
@@ -223,7 +228,7 @@ export function BashToolMessage({
       {/* Title bar — click to collapse/expand content */}
       <div
         className="p-3 flex items-center justify-between gap-2 border-b border-border cursor-pointer hover:bg-muted/30 transition-colors"
-        onClick={() => setContentCollapsed(prev => !prev)}
+        onClick={() => { userTouchedContentRef.current = true; setContentCollapsed(prev => !prev); }}
       >
         <div className="flex items-center gap-2">
           {contentCollapsed

@@ -1,6 +1,8 @@
 package com.easy.easyai.core.message
 
+import com.easy.easyai.core.model.ToolResultContent
 import com.easy.easyai.core.model.ToolResultEntry
+import com.easy.easyai.core.tool.ToolResult
 import org.junit.jupiter.api.AfterEach
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Nested
@@ -109,7 +111,7 @@ class ToolResultGuardTest {
             assertTrue(guarded.result.contains("(3 lines)"))
             assertTrue(guarded.result.contains("RE-RUN the tool"))
             assertTrue(guarded.result.contains("Access patterns"))
-            assertTrue(guarded.result.contains("Sample of the data"))
+            assertTrue(guarded.result.contains("[TRUNCATED]"))
         }
 
         @Test
@@ -188,6 +190,69 @@ class ToolResultGuardTest {
             assertTrue(headSample.lineSequence().first().startsWith("row-1-"), "head sample starts at the first row")
             assertFalse(headSample.contains("row-500-"), "head sample must not leak into the tail")
             assertTrue(headSample.length <= 1_000, "head sample respects the char budget")
+        }
+    }
+
+    @Nested
+    inner class `guardResult` {
+
+        @Test
+        fun `returns the same ToolResult when no spill is needed`() {
+            val result = ToolResult(content = listOf(ToolResultContent(toolCallId = "c1", toolName = "read", output = "short")))
+            val guarded = runBlocking { ToolResultGuard.guardResult(result, "c1", "read") }
+            assertSame(result, guarded)
+        }
+
+        @Test
+        fun `spills oversized output and replaces ToolResultContent with notice`(@TempDir tempDir: Path) {
+            ToolResultGuard.spillDirOverride = tempDir
+            val content = "line1\n" + "x".repeat(2_000) + "\nlast"
+            val result = ToolResult(
+                content = listOf(ToolResultContent(toolCallId = "c2", toolName = "search", output = content, exitCode = 0))
+            )
+
+            val guarded = runBlocking { ToolResultGuard.guardResult(result, "c2", "search", maxChars = 1_000) }
+
+            // Result is a new instance (not same)
+            assertTrue(guarded !== result)
+            // Content list has same size
+            assertEquals(1, guarded.content.size)
+            // ToolResultContent.output is now the notice
+            val guardedContent = guarded.content.filterIsInstance<ToolResultContent>().single()
+            assertTrue(guardedContent.truncated, "truncated flag must be set")
+            assertTrue(guardedContent.output.contains("saved to"), "output must be a pointer notice")
+            assertTrue(guardedContent.output.contains("RE-RUN the tool"))
+            // Original metadata preserved
+            assertEquals(0, guardedContent.exitCode)
+            assertEquals("search", guardedContent.toolName)
+            // Full content persisted to file
+            val files = Files.list(tempDir).use { it.toList() }
+            assertEquals(1, files.size, "exactly one spill file expected")
+            assertEquals(content, Files.readString(files.single()))
+        }
+
+        @Test
+        fun `falls back to truncation when spilling fails`(@TempDir tempDir: Path) {
+            val blocker = tempDir.resolve("not-a-dir")
+            Files.writeString(blocker, "occupied")
+            ToolResultGuard.spillDirOverride = blocker
+            val content = "k".repeat(5_000)
+            val result = ToolResult(
+                content = listOf(ToolResultContent(toolCallId = "c3", toolName = "bash", output = content))
+            )
+
+            val guarded = runBlocking { ToolResultGuard.guardResult(result, "c3", "bash", maxChars = 1_000) }
+
+            val guardedContent = guarded.content.filterIsInstance<ToolResultContent>().single()
+            assertTrue(guardedContent.truncated)
+            assertTrue(guardedContent.output.contains("[output truncated:"), "must fall back to truncation")
+        }
+
+        @Test
+        fun `returns the same ToolResult when content has no ToolResultContent blocks`() {
+            val result = ToolResult(content = listOf(com.easy.easyai.core.model.TextContent("just text")))
+            val guarded = runBlocking { ToolResultGuard.guardResult(result, "c4", "calc") }
+            assertSame(result, guarded)
         }
     }
 }

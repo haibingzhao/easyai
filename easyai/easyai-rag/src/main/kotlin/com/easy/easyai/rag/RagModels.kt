@@ -15,14 +15,15 @@ enum class RagCategory(val code: String) {
 /**
  * Per-document processing options passed to EasyRAG ingestion.
  *
- * @param skipKg skip knowledge-graph extraction (memories use `true`)
+ * @param skipKg skip knowledge-graph extraction; defaults to `false` so the
+ *   server builds the graph (passing `true` leaves the graph tables empty)
  * @param buildStructure build hierarchical structure for agentic retrieval (wiki, phase 2)
  * @param chunkMethod optional chunk method override
  * @param chunkTokenSize optional chunk token size override
  * @param chunkOverlap optional chunk overlap override
  */
 data class RagProcessingOptions(
-    val skipKg: Boolean = true,
+    val skipKg: Boolean = false,
     val buildStructure: Boolean = false,
     val chunkMethod: String? = null,
     val chunkTokenSize: Int? = null,

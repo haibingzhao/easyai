@@ -3,7 +3,6 @@ package com.easy.easyai.core.agent
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.AgentLoop.Companion.MAX_COMPLETION_CHECK_BONUS
 import com.easy.easyai.core.event.*
-import com.easy.easyai.core.message.ToolResultGuard
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.tool.ToolCallResult
 import com.easy.easyai.core.tool.ToolDefinition
@@ -294,8 +293,7 @@ internal class AgentLoop(
                     waitForUserReason = r.pauseReason ?: "ask_question"
                     continue
                 } else {
-                    // Guard at the generation point (the only place with toolCallId): oversized
-                    // results are spilled to the temp dir with a pointer notice by ToolResultGuard.
+                    // Engine already applied ToolResultGuard via guardResult(); resultText is within limits.
                     val entry = ToolResultEntry(
                         toolCallId = r.toolCallId,
                         toolName = tc.name,
@@ -307,7 +305,7 @@ internal class AgentLoop(
                         isSkipped = r.isSkipped,
                         usage = r.usage
                     )
-                    toolResultEntries.add(ToolResultGuard.guardEntry(entry))
+                    toolResultEntries.add(entry)
                 }
             }
             val toolResultMessage = ToolResultMessage(toolResults = toolResultEntries)

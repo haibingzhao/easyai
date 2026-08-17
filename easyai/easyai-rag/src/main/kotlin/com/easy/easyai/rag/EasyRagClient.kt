@@ -1,8 +1,11 @@
 package com.easy.easyai.rag
 
 import com.easy.easyai.common.util.SharedObjectMapper
+import com.easy.easyai.rag.EasyRagClient.Companion.AUTH_FAILURE_COOLDOWN_MS
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.reactor.awaitSingleOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpMethod
 import org.springframework.http.client.reactive.ReactorClientHttpConnector
@@ -50,6 +53,8 @@ internal class EasyRagClient(
     private val authInitialized = AtomicBoolean(false)
     /** Epoch-ms of the last auth failure; used to throttle re-login after 429 / network errors. */
     private val lastAuthFailureMs = AtomicLong(0L)
+    /** Serializes forced re-logins so concurrent 401s trigger a single login request. */
+    private val loginMutex = Mutex()
 
     override suspend fun isEnabled(): Boolean = RagConfig.load(configPath).enabled
 
@@ -324,7 +329,10 @@ internal class EasyRagClient(
     ): Map<String, Any?> {
         val uri = buildUri(config, path, params)
         val uriSpec = client.method(method).uri(uri)
-        cachedToken.get()?.let { token -> uriSpec.headers { headers -> headers.setBearerAuth(token) } }
+        // Capture the token used for this request so the 401 handler can detect
+        // whether another coroutine has already refreshed it.
+        val usedToken = cachedToken.get()
+        usedToken?.let { token -> uriSpec.headers { headers -> headers.setBearerAuth(token) } }
         val finalSpec: WebClient.RequestHeadersSpec<*> = if (body != null) uriSpec.bodyValue(body) else uriSpec
         val raw = try {
             finalSpec.retrieve()
@@ -332,9 +340,23 @@ internal class EasyRagClient(
                 .timeout(Duration.ofMillis(timeoutMs))
                 .awaitSingleOrNull()
         } catch (e: WebClientResponseException) {
-            if (e.statusCode.value() == UNAUTHORIZED && retryOn401 && login(config) != null) {
-                logger.debug("RAG 401 on {} {}, re-logged in and retrying", method, path)
-                return executeOnce(config, method, path, params, body, timeoutMs, retryOn401 = false)
+            if (e.statusCode.value() == UNAUTHORIZED && retryOn401) {
+                val token = loginMutex.withLock {
+                    val cached = cachedToken.get()
+                    // If the cached token differs from the one that just failed,
+                    // another coroutine already re-logged in — reuse it. Otherwise
+                    // the cached value is the same stale token (or null), so force
+                    // a fresh login.
+                    if (cached != null && cached != usedToken) cached
+                    else login(config, force = true)
+                }
+                if (token != null) {
+                    logger.debug("RAG 401 on {} {}, re-logged in and retrying", method, path)
+                    // Give the server time to recover from rate limiting before retrying;
+                    // an immediate retry typically lands inside the same 429 window.
+                    delay(RETRY_AFTER_401_DELAY_MS.milliseconds)
+                    return executeOnce(config, method, path, params, body, timeoutMs, retryOn401 = false)
+                }
             }
             throw RagException(
                 "EasyRAG ${method.name()} $path failed: HTTP ${e.statusCode.value()} ${e.statusText}",
@@ -365,37 +387,67 @@ internal class EasyRagClient(
     /**
      * Lazily probe auth-status and login when the server requires authentication.
      *
-     * Only marks [authInitialized] as `true` on **successful** completion. On failure
-     * the flag is reset so the next request can retry, but a [AUTH_FAILURE_COOLDOWN_MS]
-     * cooldown prevents hammering the server (e.g. repeated 429 responses).
+     * Serializes the full probe + login under [loginMutex] so that [authInitialized]
+     * is only set to `true` **after** login succeeds and the token is cached.
+     * This prevents a race where concurrent callers see `authInitialized = true`
+     * but `cachedToken` is still null, causing requests to go out without an
+     * Authorization header.
+     *
+     * On failure the flag stays `false` so the next request can retry, but a
+     * [AUTH_FAILURE_COOLDOWN_MS] cooldown prevents hammering the server.
      */
     private suspend fun ensureAuthInitialized(config: RagConfig) {
         if (authInitialized.get()) return
         // Throttle retries after a recent failure to avoid amplifying 429 storms.
         val now = System.currentTimeMillis()
         val lastFailure = lastAuthFailureMs.get()
-        if (lastFailure > 0 && now - lastFailure < AUTH_FAILURE_COOLDOWN_MS) return
-        if (!authInitialized.compareAndSet(false, true)) return
-        try {
-            val status = executeOnce(config, HttpMethod.GET, "/api/auth-status", emptyMap(), null, config.readTimeoutMs, retryOn401 = false)
-            val authRequired = status["auth_required"] as? Boolean ?: false
-            if (authRequired) {
-                val token = login(config)
-                if (token != null) return // success — authInitialized stays true
-            } else {
-                return // no auth required — authInitialized stays true
+        if (lastFailure > 0 && now - lastFailure < AUTH_FAILURE_COOLDOWN_MS) {
+            // Cooldown: skip the full probe, but still attempt a direct (mutex-guarded)
+            // login when no token is cached — otherwise every concurrent request
+            // proceeds unauthenticated and cascades into 401s. A failure here is
+            // non-fatal: the 401 retry path in executeOnce remains as fallback.
+            if (cachedToken.get() == null) {
+                loginMutex.withLock {
+                    cachedToken.get() ?: login(config, force = true)
+                }
             }
-        } catch (e: Exception) {
-            logger.warn("RAG auth probe failed for {}: {}", config.baseUrl, e.message)
+            return
         }
-        // Auth failed (login returned null or auth-status threw). Reset so next
-        // request can retry after the cooldown window.
-        authInitialized.set(false)
-        lastAuthFailureMs.set(System.currentTimeMillis())
+        // Serialize the full probe under loginMutex so concurrent callers either:
+        // (a) wait on the mutex, then see authInitialized=true and return, or
+        // (b) enter as the designated initializer and complete the setup.
+        //
+        // CRITICAL: authInitialized is set to true ONLY after login succeeds and
+        // the token is cached — never before. Otherwise concurrent callers see
+        // authInitialized=true but cachedToken=null and send requests without auth.
+        loginMutex.withLock {
+            if (authInitialized.get()) return
+            try {
+                val status = executeOnce(config, HttpMethod.GET, "/api/auth-status", emptyMap(), null, config.readTimeoutMs, retryOn401 = false)
+                val authRequired = status["auth_required"] as? Boolean ?: false
+                if (authRequired) {
+                    val token = login(config)  // loginMutex already held
+                    if (token != null) {
+                        authInitialized.set(true)  // ← set AFTER login + token cached
+                        return
+                    }
+                } else {
+                    authInitialized.set(true)  // no auth needed
+                    return
+                }
+            } catch (e: Exception) {
+                logger.warn("RAG auth probe failed for {}: {}", config.baseUrl, e.message)
+            }
+            // Auth failed — leave authInitialized=false so next request retries
+            lastAuthFailureMs.set(System.currentTimeMillis())
+        }
     }
 
     /** Logs in against /api/auth/login and caches the bearer token; returns the token or null. */
-    private suspend fun login(config: RagConfig): String? {
+    private suspend fun login(config: RagConfig, force: Boolean = false): String? {
+        // Reuse a cached token unless the caller needs a fresh one (401 retry must
+        // refresh an expired token instead of returning the stale cached value).
+        if (!force) cachedToken.get()?.let { return it }
         val username = config.username
         val password = config.password
         if (username.isNullOrBlank() || password.isNullOrBlank()) {
@@ -444,7 +496,9 @@ internal class EasyRagClient(
         const val NOT_FOUND = 404
         const val UNAUTHORIZED = 401
         const val CONFLICT = 409
+        /** Delay (ms) before retrying a request after a 401-triggered re-login. */
+        const val RETRY_AFTER_401_DELAY_MS = 500L
         /** Cooldown (ms) after an auth failure before retrying — avoids 429 amplification. */
-        const val AUTH_FAILURE_COOLDOWN_MS = 30_000L
+        const val AUTH_FAILURE_COOLDOWN_MS = 5_000L
     }
 }

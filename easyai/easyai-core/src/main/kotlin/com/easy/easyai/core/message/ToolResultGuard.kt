@@ -3,7 +3,10 @@ package com.easy.easyai.core.message
 import com.easy.easyai.core.message.ToolResultGuard.DEFAULT_MAX_TOOL_RESULT_CHARS
 import com.easy.easyai.core.message.ToolResultGuard.guard
 import com.easy.easyai.core.message.ToolResultGuard.guardEntry
+import com.easy.easyai.core.message.ToolResultGuard.guardResult
+import com.easy.easyai.core.model.ToolResultContent
 import com.easy.easyai.core.model.ToolResultEntry
+import com.easy.easyai.core.tool.ToolResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -102,7 +105,7 @@ object ToolResultGuard {
         if (entry.result.length <= maxChars) return entry
         if (maxChars <= 0) return entry.copy(result = "", truncated = true)
         return try {
-            entry.copy(result = spill(entry), truncated = true)
+            entry.copy(result = spillText(entry.result, entry.toolCallId), truncated = true)
         } catch (e: Exception) {
             logger.warn("Tool result spill failed for {} ({} chars), falling back to truncation: {}",
                 entry.toolCallId, entry.result.length, e.message)
@@ -111,19 +114,56 @@ object ToolResultGuard {
         }
     }
 
-    private suspend fun spill(entry: ToolResultEntry): String = withContext(Dispatchers.IO) {
+    /**
+     * Apply the guard to a [ToolResult]: spill oversized output to the temp dir and
+     * replace [ToolResultContent] output with a pointer notice.
+     * Returns the result unchanged when no spill is needed.
+     *
+     * Called by [com.easy.easyai.core.tool.ToolExecutionEngine] BEFORE emitting
+     * [com.easy.easyai.core.event.ToolExecutionEndEvent], so that both the SSE stream
+     * and the persisted transcript carry the same guarded content.
+     */
+    @JvmStatic
+    suspend fun guardResult(result: ToolResult, toolCallId: String, toolName: String, maxChars: Int = maxToolResultChars): ToolResult {
+        val textContent = result.content.filterIsInstance<ToolResultContent>()
+        if (textContent.isEmpty()) return result
+        val totalText = textContent.joinToString("\n") { it.output }
+        if (totalText.length <= maxChars) return result
+        return try {
+            val notice = spillText(totalText, toolCallId)
+            val guardedContent = result.content.map { block ->
+                if (block is ToolResultContent) block.copy(output = notice, truncated = true)
+                else block
+            }
+            result.copy(content = guardedContent)
+        } catch (e: Exception) {
+            logger.warn("Tool result spill failed for {} ({} chars), falling back to truncation: {}",
+                toolCallId, totalText.length, e.message)
+            val guarded = guard(totalText, maxChars)
+            val guardedContent = result.content.map { block ->
+                if (block is ToolResultContent) block.copy(output = guarded.text, truncated = true)
+                else block
+            }
+            result.copy(content = guardedContent)
+        }
+    }
+
+    /**
+     * Write [text] to a spill file and return a pointer notice.
+     * Shared by [guardEntry] and [guardResult].
+     */
+    private suspend fun spillText(text: String, toolCallId: String): String = withContext(Dispatchers.IO) {
         val dir = spillDir
         Files.createDirectories(dir)
-        val result = entry.result
-        val bytes = result.toByteArray(Charsets.UTF_8)
-        val file = dir.resolve(fileName(entry.toolCallId, sha256(result)))
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        val file = dir.resolve(fileName(toolCallId, sha256(text)))
         // Idempotent: same toolCallId + same content -> same file; skip when already present
         // with matching size (history replay / repeated requests must not rewrite).
         if (!Files.exists(file) || Files.size(file) != bytes.size.toLong()) {
             Files.write(file, bytes)
         }
-        logger.info("Spilled oversized tool result {} ({} chars) to {}", entry.toolCallId, result.length, file)
-        buildNotice(entry, file)
+        logger.info("Spilled oversized tool result {} ({} chars) to {}", toolCallId, text.length, file)
+        buildNotice(text, file)
     }
 
     private fun fileName(toolCallId: String, hash: String): String =
@@ -137,18 +177,19 @@ object ToolResultGuard {
         return digest.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
     }
 
-    private fun buildNotice(entry: ToolResultEntry, file: Path): String {
-        val result = entry.result
-        val lines = result.lines().size
+    private fun buildNotice(originalText: String, file: Path): String {
+        val lines = originalText.lines().size
         // Char-budget sample (not fixed line count): a single-line oversized payload
         // (compact JSON/CSV/base64) would make a line-based sample equal the full content.
         // The template is left unindented so trimIndent does not shift the multi-line samples.
-        val headRaw = result.take(SAMPLE_CHARS)
+        val headRaw = originalText.take(SAMPLE_CHARS)
         val headSample = headRaw.substringBeforeLast('\n').ifEmpty { headRaw }
-        val tailRaw = result.takeLast(SAMPLE_CHARS)
+        val tailRaw = originalText.takeLast(SAMPLE_CHARS)
         val tailSample = tailRaw.substringAfter('\n', missingDelimiterValue = tailRaw)
         return """
-[Output too large: ${result.length} chars → saved to $file ($lines lines)]
+[TRUNCATED] Original output was ${originalText.length} chars ($lines lines). It has been saved to: $file
+What you see below is ONLY a small sample — NOT the complete output.
+Do NOT draw conclusions based solely on this sample. Use the access patterns below to read the full data.
 
 The file may be removed by the system later. If it no longer exists or reading fails,
 RE-RUN the tool to regenerate the data.
@@ -160,7 +201,7 @@ Access patterns:
 - grep '<pattern>' $file for targeted lookup
 - bash + python for full computation (calc cannot read files)
 
-Sample of the data (first ~$SAMPLE_CHARS chars / last ~$SAMPLE_CHARS chars):
+Sample (first ~$SAMPLE_CHARS chars / last ~$SAMPLE_CHARS chars of ${originalText.length} total):
 --- head ---
 $headSample
 --- tail ---

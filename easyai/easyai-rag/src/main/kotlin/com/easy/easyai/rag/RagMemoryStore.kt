@@ -139,7 +139,13 @@ internal class RagMemoryStore(
                     entry.maturity?.let { put("maturity", it.apiName) }
                 },
                 createTime = createTimeOf(entry),
-                options = RagProcessingOptions(skipKg = true)
+                // Memory entries are Markdown: chunk by heading structure, build the
+                // knowledge graph (skipKg=false) and the structure index (TOC + summaries).
+                options = RagProcessingOptions(
+                    chunkMethod = CHUNK_METHOD_STRUCTURE_AWARE,
+                    skipKg = false,
+                    buildStructure = true
+                )
             )
             client.upsert(doc, bizId)
             logger.debug("Memory entry written to RAG: {} (bizId={})", doc.externalId, bizId)
@@ -378,6 +384,8 @@ internal class RagMemoryStore(
 
     private companion object {
         const val FRONTMATTER_DELIMITER = "---"
+        /** Markdown heading-based chunking, required for Markdown memories. */
+        const val CHUNK_METHOD_STRUCTURE_AWARE = "structure_aware"
         val DATE_FMT: DateTimeFormatter = DateTimeFormatter.ISO_LOCAL_DATE
     }
 }
