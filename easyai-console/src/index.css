@@ -133,6 +133,14 @@ body {
   color: var(--color-foreground);
 }
 
+/* Dark mode: soften prose text to reduce glare for CJK text */
+.dark .prose {
+  color: oklch(0.85 0 0);
+}
+.dark .prose strong {
+  color: oklch(0.92 0 0);
+}
+
 .prose h1 { font-size: 1.875rem; }
 .prose h2 { font-size: 1.5rem; }
 .prose h3 { font-size: 1.25rem; }

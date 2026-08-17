@@ -12,7 +12,7 @@
 .qwen/
 .playwright-mcp/
 .claude/
-
+Output
 # Internal docs (not for open-source)
 .doc/
 
