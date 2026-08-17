@@ -1,7 +1,19 @@
 package com.easy.easyai.tools.calc
 
 import groovy.lang.GroovyShell
+import org.codehaus.groovy.ast.ClassCodeVisitorSupport
+import org.codehaus.groovy.ast.ClassNode
+import org.codehaus.groovy.ast.expr.ClassExpression
+import org.codehaus.groovy.ast.expr.ConstantExpression
+import org.codehaus.groovy.ast.expr.Expression
+import org.codehaus.groovy.ast.expr.MethodCallExpression
+import org.codehaus.groovy.ast.expr.StaticMethodCallExpression
+import org.codehaus.groovy.classgen.GeneratorContext
+import org.codehaus.groovy.control.CompilePhase
 import org.codehaus.groovy.control.CompilerConfiguration
+import org.codehaus.groovy.control.SourceUnit
+import org.codehaus.groovy.control.customizers.CompilationCustomizer
+import org.codehaus.groovy.syntax.SyntaxException
 
 /**
  * Groovy script security sandbox.
@@ -23,6 +35,7 @@ internal object GroovySandbox {
      */
     private val BLOCKED_PACKAGES = setOf(
         "java.io",
+        "java.nio.file",
         "java.net",
         "java.lang.reflect",
         "javax.script",
@@ -45,6 +58,7 @@ internal object GroovySandbox {
 
     fun createSecureShell(): GroovyShell {
         val config = CompilerConfiguration()
+        config.addCompilationCustomizers(ForbiddenCallsCustomizer())
         val sandboxLoader = SandboxedClassLoader(GroovySandbox::class.java.classLoader)
         return GroovyShell(sandboxLoader, config)
     }
@@ -75,6 +89,45 @@ internal object GroovySandbox {
 
         private fun isBlocked(name: String): Boolean {
             return name in BLOCKED_CLASSES || BLOCKED_PACKAGES.any { name.startsWith("$it.") }
+        }
+    }
+
+    /**
+     * Compile-time rejections for calls that bypass the classloader sandbox at runtime:
+     * - `Class.forName(...)`: loads classes through the caller's class loader, which is
+     *   the Groovy runtime loader, not [SandboxedClassLoader].
+     * - `'...'.execute()`: the `ProcessGroovyMethods` DGM extension is resolved at
+     *   runtime via the meta-class and never passes through the sandbox loader.
+     */
+    private class ForbiddenCallsCustomizer : CompilationCustomizer(CompilePhase.CONVERSION) {
+
+        override fun call(sourceUnit: SourceUnit, context: GeneratorContext, classNode: ClassNode) {
+            val visitor = object : ClassCodeVisitorSupport() {
+                override fun visitMethodCallExpression(call: MethodCallExpression) {
+                    rejectIfForbidden(call.objectExpression, call.methodAsString)
+                    super.visitMethodCallExpression(call)
+                }
+
+                override fun visitStaticMethodCallExpression(call: StaticMethodCallExpression) {
+                    rejectIfForbidden(ClassExpression(call.ownerType), call.method)
+                    super.visitStaticMethodCallExpression(call)
+                }
+
+                override fun getSourceUnit(): SourceUnit = sourceUnit
+            }
+            visitor.visitClass(classNode)
+        }
+
+        private fun rejectIfForbidden(receiver: Expression, method: String) {
+            val isClassForName = method == "forName" &&
+                (receiver is ClassExpression && receiver.type.name == "java.lang.Class")
+            val isStringExecute = method == "execute" &&
+                receiver is ConstantExpression && receiver.value is String
+            if (isClassForName || isStringExecute) {
+                throw SyntaxException(
+                    "Security violation: '$method' is blocked by the calc sandbox", -1, -1
+                )
+            }
         }
     }
 }

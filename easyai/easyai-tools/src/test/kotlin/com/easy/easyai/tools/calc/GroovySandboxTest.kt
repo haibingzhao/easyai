@@ -29,10 +29,15 @@ class GroovySandboxTest {
     private fun freshShell(): GroovyShell = GroovySandbox.createSecureShell()
 
     private fun assertBlocked(script: String) {
-        val exception = assertThrows(Exception::class.java) { freshShell().evaluate(script) }
+        // The sandbox rejects via ClassNotFoundException, which the JVM may re-wrap as
+        // NoClassDefFoundError while linking a blocked java.* class — accept any Throwable.
+        val exception = assertThrows(Throwable::class.java) { freshShell().evaluate(script) }
         val message = exception.message ?: ""
+        val rejected = exception is NoClassDefFoundError || exception is ClassNotFoundException ||
+            message.contains("Security violation") || message.contains("Access denied") ||
+            message.contains("not allowed")
         assertTrue(
-            message.contains("Security violation") || message.contains("not allowed"),
+            rejected,
             "expected a security rejection for [$script] but got: ${message.lines().firstOrNull()}"
         )
     }
