@@ -2,6 +2,7 @@ package com.easy.easyai.core.tool
 
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.event.*
+import com.easy.easyai.core.message.ToolResultGuard
 import com.easy.easyai.core.model.*
 import com.fasterxml.jackson.annotation.JsonIgnore
 import kotlinx.coroutines.CancellationException
@@ -158,28 +159,34 @@ class DefaultToolExecutionEngine: ToolExecutionEngine {
             return buildFailureResult(tc, "Error: ${e.message}", eventStream, turnId, sessionId, messageId, durationMs, tracksFileChanges = tool.tracksFileChanges)
         }
 
+        // Guard oversized results BEFORE emitting event and building ToolCallResult.
+        // This ensures both the SSE stream (ToolExecutionEndEvent) and the persisted
+        // transcript (ToolResultEntry via ToolCallResult.resultText) carry the same
+        // guarded content — pointer notice instead of raw large payload.
+        val guardedResult = ToolResultGuard.guardResult(result, tc.id, tc.name)
+
         // If needPause result, skip status and end events - AgentLoop will handle the pause
-        if (!result.needPause) {
+        if (!guardedResult.needPause) {
             // Notify status change: RUNNING → COMPLETED or FAILED
-            val status = if (result.isError) ToolCallStatus.FAILED else ToolCallStatus.COMPLETED
+            val status = if (guardedResult.isError) ToolCallStatus.FAILED else ToolCallStatus.COMPLETED
             eventStream.push(ToolCallStatusUpdateEvent(tc.id, tc.name, status, turnId, sessionId))
             // Extract tool usage from ToolResult and pass to event
-            val toolUsage = result.usage
-            eventStream.push(ToolExecutionEndEvent(tc.id, tc.name, result, turnId = turnId, sessionId = sessionId, messageId = messageId, isError = result.isError, tracksFileChanges = tool.tracksFileChanges, usage = toolUsage))
+            val toolUsage = guardedResult.usage
+            eventStream.push(ToolExecutionEndEvent(tc.id, tc.name, guardedResult, turnId = turnId, sessionId = sessionId, messageId = messageId, isError = guardedResult.isError, tracksFileChanges = tool.tracksFileChanges, usage = toolUsage))
         }
         val durationMs = System.currentTimeMillis() - startTime
         logger.trace("[Turn ${turnId}] Tool call ${tc.name}(${tc.id}) completed in ${durationMs}ms")
         // Propagate tool usage to ToolCallResult
-        val toolUsage = result.usage
+        val toolUsage = guardedResult.usage
         return ToolCallResult(
             toolCallId = tc.id,
-            resultText = extractTextContent(result),
+            resultText = extractTextContent(guardedResult),
             durationMs = durationMs,
-            needPause = result.needPause,
-            pauseReason = result.pauseReason,
-            exitCode = result.content.filterIsInstance<ToolResultContent>().firstOrNull()?.exitCode,
-            mimeType = result.content.filterIsInstance<ToolResultContent>().firstOrNull()?.mimeType ?: "text/plain",
-            isError = result.isError,
+            needPause = guardedResult.needPause,
+            pauseReason = guardedResult.pauseReason,
+            exitCode = guardedResult.content.filterIsInstance<ToolResultContent>().firstOrNull()?.exitCode,
+            mimeType = guardedResult.content.filterIsInstance<ToolResultContent>().firstOrNull()?.mimeType ?: "text/plain",
+            isError = guardedResult.isError,
             usage = toolUsage
         )
     }

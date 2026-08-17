@@ -3,7 +3,6 @@ package com.easy.easyai.core.agent
 import com.easy.easyai.core.event.AgentEvent
 import com.easy.easyai.core.event.MessageListener
 import com.easy.easyai.core.event.ProducerScope
-import com.easy.easyai.core.message.ToolResultGuard
 import com.easy.easyai.core.model.AssistantMessage
 import com.easy.easyai.core.model.EasyAiMessage
 import com.easy.easyai.core.model.ToolResultEntry
@@ -146,8 +145,7 @@ internal class PendingToolCallExecutor(
                 continue // Skip needPause results (permission pause again)
             } else {
                 tc?.let {
-                    // Guard at the generation point (the only place with toolCallId): oversized
-                    // results are spilled to the temp dir with a pointer notice by ToolResultGuard.
+                    // Engine already applied ToolResultGuard via guardResult(); resultText is within limits.
                     val entry = ToolResultEntry(
                         toolCallId = r.toolCallId,
                         toolName = it.name,
@@ -159,7 +157,7 @@ internal class PendingToolCallExecutor(
                         isSkipped = r.isSkipped,
                         usage = r.usage
                     )
-                    toolResultEntries.add(ToolResultGuard.guardEntry(entry))
+                    toolResultEntries.add(entry)
                 }
             }
         }
