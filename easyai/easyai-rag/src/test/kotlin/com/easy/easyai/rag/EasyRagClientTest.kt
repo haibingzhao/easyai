@@ -1,16 +1,21 @@
 package com.easy.easyai.rag
 
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -46,13 +51,31 @@ class EasyRagClientTest {
         server.enqueue(MockResponse().setBody("""{"auth_required": false}"""))
     }
 
+    /** Creates a client whose config carries credentials, required for forced re-login paths. */
+    private fun clientWithCredentials(): EasyRagClient {
+        val authConfigPath = Files.createTempFile("easyai-rag-auth-test", ".json")
+        runBlocking {
+            RagConfig.save(
+                RagConfig(
+                    enabled = true,
+                    baseUrl = server.url("/").toString().trimEnd('/'),
+                    workspace = "ws-1",
+                    username = "admin",
+                    password = "secret"
+                ),
+                authConfigPath
+            )
+        }
+        return EasyRagClient(authConfigPath)
+    }
+
     private fun sampleDocument(): RagDocument = RagDocument(
         category = RagCategory.MEMORY,
         key = "global/feedback/no-println.md",
         content = "Use a logger instead of println.",
         metadata = mapOf("scope" to "global", "type" to "feedback"),
         createTime = 1_768_435_200L,
-        options = RagProcessingOptions(skipKg = true)
+        options = RagProcessingOptions(chunkMethod = "structure_aware", skipKg = false, buildStructure = true)
     )
 
     @Test
@@ -74,7 +97,9 @@ class EasyRagClientTest {
         assertTrue(body.contains(""""externalId":"easyai:memory:global/feedback/no-println.md""""), body)
         assertTrue(body.contains(""""filePath":"easyai/memory/global/feedback/no-println.md""""), body)
         assertTrue(body.contains(""""createTime":1768435200"""), body)
-        assertTrue(body.contains(""""skipKg":true"""), body)
+        assertTrue(body.contains(""""chunkMethod":"structure_aware""""), body)
+        assertTrue(body.contains(""""skipKg":false"""), body)
+        assertTrue(body.contains(""""buildStructure":true"""), body)
         assertTrue(body.contains(""""workspace":"ws-1""""), body)
         assertTrue(body.contains(""""scope":"global""""), body)
 
@@ -292,5 +317,177 @@ class EasyRagClientTest {
         assertTrue(lookup.path!!.contains("bizId=u_alice"), lookup.path)
         val deleteRequest = server.takeRequest()
         assertTrue(deleteRequest.path!!.contains("bizId=u_alice"), deleteRequest.path)
+    }
+
+    // ── auth failure / 401 retry behavior ─────────────────────────────
+
+    @Test
+    fun `login 429 then 401 retry re-logs in and carries fresh token`() = runTest {
+        val authClient = clientWithCredentials()
+        // 1. auth-status probe: auth required
+        server.enqueue(MockResponse().setBody("""{"auth_required": true}"""))
+        // 2. initial login attempt: rate-limited
+        server.enqueue(MockResponse().setResponseCode(429).setBody("""{"error":"too many requests"}"""))
+        // 3. first list attempt goes out without a token: rejected
+        server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
+        // 4. forced re-login triggered by the 401 handler succeeds
+        server.enqueue(MockResponse().setBody("""{"token":"fresh-token"}"""))
+        // 5. retried list attempt succeeds
+        server.enqueue(MockResponse().setBody("""{"documents":[],"total":0,"page":1,"pageSize":100}"""))
+
+        val docs = authClient.list(RagCategory.MEMORY, "easyai/memory/")
+
+        assertEquals(emptyList(), docs)
+
+        server.takeRequest() // auth-status
+        server.takeRequest() // login (429)
+        val unauthorizedList = server.takeRequest()
+        assertNull(unauthorizedList.getHeader("Authorization"), "first list attempt must not carry a token")
+        server.takeRequest() // login (forced re-login)
+        val retriedList = server.takeRequest()
+        assertEquals("Bearer fresh-token", retriedList.getHeader("Authorization"))
+    }
+
+    @Test
+    fun `concurrent 401 retries trigger only a single re-login`() = runTest {
+        val authClient = clientWithCredentials()
+        val loginCount = AtomicInteger(0)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when {
+                request.path!!.startsWith("/api/auth-status") ->
+                    MockResponse().setBody("""{"auth_required": false}""")
+                request.path!!.startsWith("/api/auth/login") -> {
+                    loginCount.incrementAndGet()
+                    MockResponse().setBody("""{"token":"shared-token"}""")
+                }
+                request.path!!.startsWith("/api/documents/list") ->
+                    if (request.getHeader("Authorization") == "Bearer shared-token") {
+                        MockResponse().setBody("""{"documents":[],"total":0,"page":1,"pageSize":100}""")
+                    } else {
+                        MockResponse().setResponseCode(401)
+                    }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+
+        val job1 = launch { authClient.list(RagCategory.MEMORY, "easyai/memory/") }
+        val job2 = launch { authClient.list(RagCategory.MEMORY, "easyai/memory/") }
+        job1.join()
+        job2.join()
+
+        assertEquals(1, loginCount.get(), "concurrent 401 retries must deduplicate re-login")
+    }
+
+    @Test
+    fun `cooldown period still attempts direct login when no token cached`() = runTest {
+        val authClient = clientWithCredentials()
+        val loginCount = AtomicInteger(0)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when {
+                request.path!!.startsWith("/api/auth-status") ->
+                    MockResponse().setBody("""{"auth_required": true}""")
+                request.path!!.startsWith("/api/auth/login") ->
+                    // Attempts 1 and 2 are rate-limited; attempt 3 succeeds.
+                    if (loginCount.incrementAndGet() <= 2) {
+                        MockResponse().setResponseCode(429).setBody("""{"error":"too many requests"}""")
+                    } else {
+                        MockResponse().setBody("""{"token":"late-token"}""")
+                    }
+                request.path!!.startsWith("/api/documents/list") ->
+                    if (request.getHeader("Authorization") == "Bearer late-token") {
+                        MockResponse().setBody("""{"documents":[],"total":0,"page":1,"pageSize":100}""")
+                    } else {
+                        MockResponse().setResponseCode(401)
+                    }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+
+        // First request: probe login 429 -> list 401 -> forced re-login 429 -> fails.
+        assertFailsWith<RagException> {
+            authClient.list(RagCategory.MEMORY, "easyai/memory/")
+        }
+        assertEquals(2, loginCount.get())
+
+        // Second request inside the cooldown window: the fallback direct login
+        // succeeds and the list call proceeds with the fresh token.
+        val docs = authClient.list(RagCategory.MEMORY, "easyai/memory/")
+
+        assertEquals(emptyList(), docs)
+        assertEquals(3, loginCount.get(), "cooldown fallback must perform exactly one more login")
+    }
+
+    @Test
+    fun `freshly issued token rejected by server triggers exactly one forced re-login`() = runTest {
+        val authClient = clientWithCredentials()
+        // Reproduces the production timeline: the probe-path login succeeds and
+        // caches token-1, yet the very next request carrying token-1 is rejected
+        // with 401 (server-side token activation window / invalidation). The 401
+        // handler must detect cachedToken == usedToken and force a fresh login
+        // instead of reusing the rejected token.
+        // 1. auth-status probe: auth required
+        server.enqueue(MockResponse().setBody("""{"auth_required": true}"""))
+        // 2. probe-path login #1 succeeds -> token-1 cached
+        server.enqueue(MockResponse().setBody("""{"token":"token-1"}"""))
+        // 3. list attempt carries token-1 but the server rejects it
+        server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
+        // 4. 401 handler forces login #2 -> token-2
+        server.enqueue(MockResponse().setBody("""{"token":"token-2"}"""))
+        // 5. retried list carries token-2 and succeeds
+        server.enqueue(MockResponse().setBody("""{"documents":[],"total":0,"page":1,"pageSize":100}"""))
+
+        val docs = authClient.list(RagCategory.MEMORY, "easyai/memory/")
+
+        assertEquals(emptyList(), docs)
+
+        server.takeRequest() // auth-status
+        server.takeRequest() // login #1 (probe path)
+        val rejectedList = server.takeRequest()
+        assertEquals(
+            "Bearer token-1",
+            rejectedList.getHeader("Authorization"),
+            "first list attempt must carry the freshly issued token-1"
+        )
+        server.takeRequest() // login #2 (forced re-login)
+        val retriedList = server.takeRequest()
+        assertEquals(
+            "Bearer token-2",
+            retriedList.getHeader("Authorization"),
+            "retry must carry the re-login token-2, not the rejected token-1"
+        )
+        assertEquals(0, server.requestCount - 5, "no unexpected requests")
+    }
+
+    @Test
+    fun `concurrent requests during probe share the single login result`() = runTest {
+        val authClient = clientWithCredentials()
+        val loginCount = AtomicInteger(0)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when {
+                request.path!!.startsWith("/api/auth-status") ->
+                    MockResponse().setBody("""{"auth_required": true}""")
+                request.path!!.startsWith("/api/auth/login") -> {
+                    loginCount.incrementAndGet()
+                    MockResponse().setBody("""{"token":"shared-token"}""")
+                }
+                request.path!!.startsWith("/api/documents/list") ->
+                    if (request.getHeader("Authorization") == "Bearer shared-token") {
+                        MockResponse().setBody("""{"documents":[],"total":0,"page":1,"pageSize":100}""")
+                    } else {
+                        MockResponse().setResponseCode(401)
+                    }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+
+        val job1 = launch { authClient.list(RagCategory.MEMORY, "easyai/memory/") }
+        val job2 = launch { authClient.list(RagCategory.MEMORY, "easyai/memory/") }
+        job1.join()
+        job2.join()
+
+        // The first coroutine enters loginMutex, probes auth-status, and logs in.
+        // The second coroutine waits on the mutex, then sees authInitialized=true
+        // and returns — it must NOT trigger a second login.
+        assertEquals(1, loginCount.get(), "concurrent initialization must perform only one login")
     }
 }

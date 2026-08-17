@@ -72,8 +72,10 @@ class RagMemoryStoreTest {
         assertEquals("experience_lessons", doc.metadata["type"])
         assertEquals("frp-remote-access", doc.metadata["name"])
         assertEquals("medium", doc.metadata["maturity"])
-        assertTrue(doc.options.skipKg)
-        assertFalse(doc.options.buildStructure)
+        // Markdown memories: heading-based chunking, graph extraction enabled, structure index built
+        assertEquals("structure_aware", doc.options.chunkMethod)
+        assertFalse(doc.options.skipKg)
+        assertTrue(doc.options.buildStructure)
         assertEquals(globalBizId, bizSlot.captured)
         // createTime is the updated date as epoch seconds (business time)
         val expected = LocalDate.of(2026, 1, 15).atStartOfDay(ZoneId.systemDefault()).toEpochSecond()
