@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ragService } from '@/services/rag-service';
 import type { RagStatus, RagTestResult } from '@/services/rag-service';
+import { WorkspaceConfigSection } from '@/components/settings/WorkspaceConfigSection';
 import { i18n } from '@/utils/i18n';
 import { Loader2, CheckCircle2, AlertCircle, Eye, EyeOff, Layers } from 'lucide-react';
 
@@ -249,6 +250,16 @@ export const RagTab: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Workspace Configuration — visible only when connected with a workspace */}
+      {enabled && status?.connected && workspace && (
+        <div className="pt-6 border-t border-border">
+          <WorkspaceConfigSection
+            workspace={workspace}
+            connected={status.connected}
+          />
+        </div>
+      )}
     </div>
   );
 };

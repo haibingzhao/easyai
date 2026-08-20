@@ -1,23 +1,11 @@
 package com.easy.easyai.rag
 
 /**
- * Content category stored in EasyRAG. Keeps the abstraction content-type agnostic:
- * phase 1 uses [MEMORY]; phase 2 adds wiki pages via [WIKI].
- */
-enum class RagCategory(val code: String) {
-    /** Agent memories (user / feedback / project / reference). */
-    MEMORY("memory"),
-
-    /** Project wiki pages (phase 2). */
-    WIKI("wiki")
-}
-
-/**
  * Per-document processing options passed to EasyRAG ingestion.
  *
  * @param skipKg skip knowledge-graph extraction; defaults to `false` so the
  *   server builds the graph (passing `true` leaves the graph tables empty)
- * @param buildStructure build hierarchical structure for agentic retrieval (wiki, phase 2)
+ * @param buildStructure build hierarchical structure for agentic retrieval (knowledge base, phase 2)
  * @param chunkMethod optional chunk method override
  * @param chunkTokenSize optional chunk token size override
  * @param chunkOverlap optional chunk overlap override
@@ -31,36 +19,36 @@ data class RagProcessingOptions(
 )
 
 /**
- * A content unit to be stored in EasyRAG. Content-type agnostic: the [key] layout
- * and [metadata] are decided by the caller (memory store, wiki store, ...).
+ * A content unit to be stored in EasyRAG. Content-type isolation is achieved at
+ * the storage level via `biz_id` (see [RagBizIdResolver]); no category field is
+ * needed in the document itself.
  *
- * @param category content category, used for externalId / filePath / metadata
- * @param key logical key within the category, e.g. `global/feedback/no-println.md` for memory
+ * @param key logical key within the content type, e.g. `global/feedback/no-println.md` for memory
  * @param content full Markdown content
  * @param metadata string metadata passed through to chunks, filterable at query time
  * @param createTime business time in epoch seconds (typically the "updated" moment)
  * @param options document processing options
  */
 data class RagDocument(
-    val category: RagCategory,
     val key: String,
     val content: String,
     val metadata: Map<String, String> = emptyMap(),
     val createTime: Long,
     val options: RagProcessingOptions = RagProcessingOptions()
 ) {
-    /** Deterministic external id: `easyai:{category}:{key}`. */
-    val externalId: String get() = RagConstants.externalIdOf(category, key)
+    /** Deterministic external id: `easyai:{key}`. */
+    val externalId: String get() = RagConstants.externalIdOf(key)
 
-    /** Logical file path in EasyRAG: `easyai/{category}/{key}`. */
-    val filePath: String get() = RagConstants.filePathOf(category, key)
+    /** Logical file path in EasyRAG: `easyai/{key}`. */
+    val filePath: String get() = RagConstants.filePathOf(key)
 }
 
 /**
  * Result of an upsert operation.
  *
  * @param docId EasyRAG document id (deterministically derived from externalId)
- * @param indexed whether the synchronous indexing step completed (or was already done)
+ * @param indexed whether indexing reached the terminal `processed` state (either
+ *   synchronously from the index endpoint or via status polling); false when the poll times out
  * @param chunksCount chunk count reported by indexing, if available
  * @param unchanged true when the server skipped the write because content was identical
  */
@@ -116,6 +104,57 @@ data class RagChunk(
     val metadata: Map<String, Any?>
 )
 
+/**
+ * Workspace-granular tenant configuration from EasyRAG (GET response).
+ *
+ * Mirrors the `tenant_config` table in EasyRAG. All fields except [workspace]
+ * are nullable — `null` means "use global server default".
+ * API keys are masked by the server (first 4 chars + `****`).
+ */
+data class RagWorkspaceConfig(
+    val workspace: String,
+    val llmModel: String? = null,
+    val llmApiKey: String? = null,
+    val llmBaseUrl: String? = null,
+    val llmTemperature: Float? = null,
+    val llmMaxTokens: Int? = null,
+    val embeddingModel: String? = null,
+    val embeddingApiKey: String? = null,
+    val embeddingBaseUrl: String? = null,
+    val embeddingDim: Int? = null,
+    val chunkSize: Int? = null,
+    val chunkOverlapSize: Int? = null,
+    val language: String? = null,
+    val defaultTopK: Int? = null,
+    val rerankEnabled: Boolean? = null,
+    val createdAt: String? = null,
+    val updatedAt: String? = null
+)
+
+/**
+ * Request body for upserting workspace tenant configuration.
+ *
+ * All fields except [workspace] are optional; `null` means "do not modify".
+ * API keys sent as `"****"` or empty string preserve the existing value.
+ */
+data class RagWorkspaceConfigUpdate(
+    val workspace: String,
+    val llmModel: String? = null,
+    val llmApiKey: String? = null,
+    val llmBaseUrl: String? = null,
+    val llmTemperature: Float? = null,
+    val llmMaxTokens: Int? = null,
+    val embeddingModel: String? = null,
+    val embeddingApiKey: String? = null,
+    val embeddingBaseUrl: String? = null,
+    val embeddingDim: Int? = null,
+    val chunkSize: Int? = null,
+    val chunkOverlapSize: Int? = null,
+    val language: String? = null,
+    val defaultTopK: Int? = null,
+    val rerankEnabled: Boolean? = null
+)
+
 /** Shared naming conventions for EasyRAG integration. */
 object RagConstants {
     /** Prefix of deterministic external ids. */
@@ -125,8 +164,8 @@ object RagConstants {
     const val FILE_PATH_ROOT = "easyai"
 
     @JvmStatic
-    fun externalIdOf(category: RagCategory, key: String): String = "$EXTERNAL_ID_PREFIX:${category.code}:$key"
+    fun externalIdOf(key: String): String = "$EXTERNAL_ID_PREFIX:$key"
 
     @JvmStatic
-    fun filePathOf(category: RagCategory, key: String): String = "$FILE_PATH_ROOT/${category.code}/$key"
+    fun filePathOf(key: String): String = "$FILE_PATH_ROOT/$key"
 }

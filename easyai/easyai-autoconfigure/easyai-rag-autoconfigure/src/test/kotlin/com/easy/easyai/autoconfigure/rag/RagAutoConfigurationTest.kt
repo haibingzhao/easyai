@@ -1,13 +1,14 @@
 package com.easy.easyai.autoconfigure.rag
 
 import com.easy.easyai.core.memory.MemoryStore
-import com.easy.easyai.rag.RagCategory
 import com.easy.easyai.rag.RagChunk
 import com.easy.easyai.rag.RagClient
 import com.easy.easyai.rag.RagDocInfo
 import com.easy.easyai.rag.RagDocument
 import com.easy.easyai.rag.RagDocumentDetail
 import com.easy.easyai.rag.RagUpsertResult
+import com.easy.easyai.rag.RagWorkspaceConfig
+import com.easy.easyai.rag.RagWorkspaceConfigUpdate
 import org.junit.jupiter.api.Test
 import org.springframework.boot.autoconfigure.AutoConfigurations
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
@@ -87,14 +88,18 @@ private class FakeRagClient : RagClient {
     override suspend fun delete(externalId: String, bizId: String?) {}
     override suspend fun batchDelete(docIds: List<String>, bizId: String?): Int = 0
     override suspend fun readByExternalId(externalId: String, bizId: String?): RagDocumentDetail? = null
-    override suspend fun list(category: RagCategory, pathPrefix: String, bizId: String?): List<RagDocInfo> = emptyList()
+    override suspend fun list(pathPrefix: String, bizId: String?): List<RagDocInfo> = emptyList()
     override suspend fun search(
         query: String,
-        category: RagCategory,
         filters: Map<String, String>,
         topK: Int,
         timeRangeStart: Long?,
         timeRangeEnd: Long?,
         bizId: String?
     ): List<RagChunk> = emptyList()
+
+    override suspend fun getWorkspaceConfig(workspace: String): RagWorkspaceConfig? = null
+    override suspend fun upsertWorkspaceConfig(config: RagWorkspaceConfigUpdate): RagWorkspaceConfig =
+        RagWorkspaceConfig(workspace = config.workspace)
+    override suspend fun deleteWorkspaceConfig(workspace: String) {}
 }

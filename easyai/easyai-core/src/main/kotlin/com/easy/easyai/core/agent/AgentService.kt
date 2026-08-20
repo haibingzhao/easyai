@@ -4,6 +4,7 @@ import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
 import com.easy.easyai.core.event.MessageListener
+import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.message.MessageConverter
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.prompt.PromptTemplateService
@@ -138,6 +139,12 @@ interface AgentService {
      * Default: null (memory system not configured).
      */
     val memoryStore: MemoryStore? get() = null
+
+    /**
+     * Knowledge base store for RAG-backed retrieval.
+     * Default: null (knowledge system not configured).
+     */
+    val knowledgeStore: KnowledgeStore? get() = null
 
     /**
      * Callback invoked when the agent loop pauses waiting for user input

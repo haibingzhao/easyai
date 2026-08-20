@@ -44,8 +44,7 @@ easyai-core/src/main/kotlin/com/easy/easyai/core/
 - Tests: `@Nested` classes, backtick naming, MockK + kotlin-test
 
 ## ANTI-PATTERNS
-- Never `ToolCallingChatModel` — conflicts with custom ReAct loop
-- Never `stream()` for tool calls — use `call()`
+- Never `ToolCallingAdvisor` / `ChatClient` tool loop — conflicts with custom ReAct loop; use raw `ChatModel.stream()` and parse tool calls manually
 - Never block — all LLM/network must be suspend
 - Never extension functions — `@JvmStatic` companion methods
 - No builder pattern — use `copy()` / withers

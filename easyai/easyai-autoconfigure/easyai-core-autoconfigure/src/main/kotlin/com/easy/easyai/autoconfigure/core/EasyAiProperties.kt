@@ -10,6 +10,7 @@ data class EasyAiProperties(
     var maxIterations: Int = 50,
     var maxRetries: Int = 3,
     var workDir: String = ".",
+    var domain: String = "coding",
     var skills: SkillProperties = SkillProperties(),
     var memory: MemoryProperties = MemoryProperties(),
 )

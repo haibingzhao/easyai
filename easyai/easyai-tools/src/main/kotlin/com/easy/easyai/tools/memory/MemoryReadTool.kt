@@ -7,7 +7,6 @@ import com.easy.easyai.core.memory.MemoryScope
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.tool.BaseToolDefinition
-import com.easy.easyai.core.tool.ToolExecutionMode
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.tool.ToolUpdate
@@ -20,7 +19,6 @@ internal class MemoryReadTool(
 ) : BaseToolDefinition(metadata) {
 
     private val logger = LoggerFactory.getLogger(javaClass)
-    override val executionMode = ToolExecutionMode.SEQUENTIAL
 
     data class Parameters(val path: String)
     override fun parameterType(): Class<*> = Parameters::class.java

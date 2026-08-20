@@ -5,6 +5,8 @@ import com.easy.easyai.common.textio.template.JinjavaTemplateRenderer
 import com.easy.easyai.common.textio.template.TemplateRenderer
 import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.command.AsyncUserCommandStore
+import com.easy.easyai.core.domain.DomainCatalog
+import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.message.DefaultMessageConverter
 import com.easy.easyai.core.message.MessageConverter
@@ -26,6 +28,7 @@ import com.easy.easyai.skills.a2a.DefaultAgentSkillFactory
 import com.easy.easyai.skills.command.*
 import com.easy.easyai.tools.SpringToolFactory
 import io.micrometer.observation.ObservationRegistry
+import jakarta.annotation.PostConstruct
 import org.springframework.ai.chat.model.ChatModel
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
@@ -41,7 +44,19 @@ import java.nio.file.Path
 @AutoConfiguration
 @ComponentScan(basePackages = ["com.easy.easyai.core", "com.easy.easyai.agent", "com.easy.easyai.tools", "com.easy.easyai.skills", "com.easy.easyai.repository"])
 @EnableConfigurationProperties(EasyAiProperties::class)
-open class EasyAiCoreAutoConfiguration {
+open class EasyAiCoreAutoConfiguration(
+    private val properties: EasyAiProperties
+) {
+
+    /**
+     * Propagate the configured domain to [DomainCatalog] so all components
+     * (memory, knowledge, controllers) see a consistent category set.
+     * Uses @PostConstruct for reliable initialization order in Spring Boot 4.x.
+     */
+    @PostConstruct
+    open fun configureDomain() {
+        DomainCatalog.activeDomain = properties.domain
+    }
 
     @Bean
     @ConditionalOnMissingBean
@@ -158,6 +173,8 @@ open class EasyAiCoreAutoConfiguration {
         @Autowired(required = false)
         memoryStore: MemoryStore? = null,
         @Autowired(required = false)
+        knowledgeStore: KnowledgeStore? = null,
+        @Autowired(required = false)
         permissionService: PermissionService? = null,
         @Autowired(required = false)
         eventListeners: List<AgentEventListener>? = emptyList(),
@@ -186,6 +203,7 @@ open class EasyAiCoreAutoConfiguration {
             completionChecks = completionChecks ?: emptyList(),
             observationRegistry = registry,
             memoryStore = memoryStore,
+            knowledgeStore = knowledgeStore,
             waitForUserListener = waitForUserListener,
             outputSchemaValidator = outputSchemaValidator
         )

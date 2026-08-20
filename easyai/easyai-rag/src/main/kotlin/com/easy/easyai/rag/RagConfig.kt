@@ -20,7 +20,10 @@ import java.nio.file.Path
  * @param workspace optional EasyRAG workspace (null = server default)
  * @param topK default retrieval top-k
  * @param readTimeoutMs timeout for read operations (search / read / list)
- * @param indexTimeoutMs timeout for write + synchronous indexing (embedding cost)
+ * @param indexTimeoutMs timeout for document insert / delete operations
+ * @param indexSubmitTimeoutMs timeout for the index submission call (async mode)
+ * @param indexPollIntervalMs initial interval between status polls during indexing
+ * @param indexPollMaxMs maximum total time to poll for indexing completion
  */
 data class RagConfig(
     val enabled: Boolean = true,
@@ -30,7 +33,10 @@ data class RagConfig(
     val workspace: String? = "easyai",
     val topK: Int = 5,
     val readTimeoutMs: Long = 5000,
-    val indexTimeoutMs: Long = 30000
+    val indexTimeoutMs: Long = 30000,
+    val indexSubmitTimeoutMs: Long = 10_000,
+    val indexPollIntervalMs: Long = 2_000,
+    val indexPollMaxMs: Long = 300_000
 ) {
     companion object {
         private val logger = LoggerFactory.getLogger(RagConfig::class.java)

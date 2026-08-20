@@ -7,7 +7,6 @@ import com.easy.easyai.core.memory.MemoryScope
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.tool.BaseToolDefinition
-import com.easy.easyai.core.tool.ToolExecutionMode
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.tool.ToolUpdate
@@ -20,8 +19,6 @@ internal class MemorySearchTool(
     metadata: ToolMetadata,
     private val store: MemoryStore
 ) : BaseToolDefinition(metadata) {
-
-    override val executionMode = ToolExecutionMode.SEQUENTIAL
 
     data class Parameters(
         val query: String,

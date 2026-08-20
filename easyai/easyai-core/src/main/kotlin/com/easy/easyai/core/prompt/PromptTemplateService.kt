@@ -152,7 +152,10 @@ class PromptTemplateService(
         // Append memory guidance when the memory system is enabled. Static text for cache stability;
         // actual memory retrieval happens on demand via memory_search / memory_read tool calls.
         val memoryGuidanceSegment = if (context.memoryAvailable) MEMORY_GUIDANCE_SEGMENT else null
-        return listOfNotNull(base.takeIf { it.isNotBlank() }, varsSegment, timeAccessSegment, memoryGuidanceSegment)
+        // Append knowledge guidance when the knowledge base is enabled. Static text for cache stability;
+        // actual retrieval happens on demand via knowledge_search / knowledge_read tool calls.
+        val knowledgeGuidanceSegment = if (context.knowledgeAvailable) KNOWLEDGE_GUIDANCE_SEGMENT else null
+        return listOfNotNull(base.takeIf { it.isNotBlank() }, varsSegment, timeAccessSegment, memoryGuidanceSegment, knowledgeGuidanceSegment)
             .joinToString("\n\n")
     }
 
@@ -219,8 +222,23 @@ included in this prompt to keep it stable for caching — retrieve it on demand 
 
 At the START of each new task, proactively call `memory_search` with keywords extracted from
 the user's request to recall relevant context: user preferences, past decisions, project
-conventions, and prior conclusions. Use `memory_read` to load the full content of a specific
-entry, and `memory_write` to persist durable facts worth remembering across sessions.
+conventions, and prior conclusions. When `knowledge_search` is also available, issue it in the
+SAME response as `memory_search` so both run in parallel. Use `memory_read` to load the full
+content of a specific entry, and `memory_write` to persist durable facts worth remembering
+across sessions.
+        """.trimIndent()
+
+        /** Static guidance for on-demand knowledge retrieval via knowledge_* tools (cache-stable). */
+        private val KNOWLEDGE_GUIDANCE_SEGMENT = """
+## Knowledge Base
+
+You have access to a knowledge base via the knowledge_* tools. Knowledge content is NOT
+included in this prompt to keep it stable for caching — retrieve it on demand instead.
+
+At the START of each new task, proactively call `knowledge_search` with keywords extracted
+from the user's request to retrieve relevant documents. When `memory_search` is also
+available, you MUST issue both calls in the SAME response so they run in parallel.
+Use `knowledge_read` to load the full content of a specific entry by its key.
         """.trimIndent()
     }
 }

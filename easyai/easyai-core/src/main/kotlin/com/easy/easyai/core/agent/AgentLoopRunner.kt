@@ -430,6 +430,7 @@ internal class AgentLoopRunner(
             instructions = context.instructions,
             cwd = context.projectPath?.toString(),
             memoryAvailable = services.memoryStore != null,
+            knowledgeAvailable = services.knowledgeStore != null,
             tools = toolsData,
             outputSchema = context.outputSchema,
             outputSchemaMultiTurn = context.outputSchemaMultiTurn,

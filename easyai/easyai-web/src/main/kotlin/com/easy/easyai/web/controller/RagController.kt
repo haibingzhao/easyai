@@ -2,23 +2,31 @@ package com.easy.easyai.web.controller
 
 import com.easy.easyai.rag.RagClient
 import com.easy.easyai.rag.RagConfig
+import com.easy.easyai.rag.RagWorkspaceConfigUpdate
 import kotlinx.coroutines.reactor.mono
 import org.slf4j.LoggerFactory
+import org.springframework.http.HttpStatus
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
+import org.springframework.web.server.ResponseStatusException
 import reactor.core.publisher.Mono
 
 /**
  * REST controller for managing the EasyRAG integration settings.
  *
  * Endpoints:
- * - GET  /api/system/rag/status — returns configuration (password masked) plus live connectivity
- * - PUT  /api/system/rag        — saves configuration (partial update semantics)
- * - POST /api/system/rag/test   — connectivity test with latency
+ * - GET    /api/system/rag/status           — returns configuration (password masked) plus live connectivity
+ * - PUT    /api/system/rag                  — saves configuration (partial update semantics)
+ * - POST   /api/system/rag/test             — connectivity test with latency
+ * - GET    /api/system/rag/workspace-config — get workspace tenant config from EasyRAG
+ * - POST   /api/system/rag/workspace-config — upsert workspace tenant config in EasyRAG
+ * - DELETE /api/system/rag/workspace-config — delete workspace tenant config in EasyRAG
  */
 @RestController
 @RequestMapping("/api/system/rag")
@@ -92,6 +100,49 @@ class RagController {
             "latencyMs" to latencyMs,
             "message" to if (connected) "Connected to ${config.baseUrl}" else "Failed to reach ${config.baseUrl}"
         )
+    }
+
+    // ------------------------------------------------------------------
+    // Workspace tenant configuration (proxied to EasyRAG)
+    // ------------------------------------------------------------------
+
+    @GetMapping("/workspace-config")
+    fun getWorkspaceConfig(
+        @RequestParam workspace: String
+    ): Mono<Any> = mono {
+        val config = RagConfig.load()
+        if (!config.enabled) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "RAG integration is not enabled")
+        }
+        val ws = workspace.ifBlank { config.workspace ?: "default" }
+        client.getWorkspaceConfig(ws)
+            ?: mapOf("workspace" to ws, "message" to "No workspace-specific config; using global defaults")
+    }
+
+    @PostMapping("/workspace-config")
+    fun updateWorkspaceConfig(
+        @RequestBody request: RagWorkspaceConfigUpdate
+    ): Mono<Any> = mono {
+        val config = RagConfig.load()
+        if (!config.enabled) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "RAG integration is not enabled")
+        }
+        val result = client.upsertWorkspaceConfig(request)
+        logger.info("Workspace config updated for workspace={}", request.workspace)
+        result
+    }
+
+    @DeleteMapping("/workspace-config")
+    fun deleteWorkspaceConfig(
+        @RequestParam workspace: String
+    ): Mono<Any> = mono {
+        val config = RagConfig.load()
+        if (!config.enabled) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "RAG integration is not enabled")
+        }
+        client.deleteWorkspaceConfig(workspace)
+        logger.info("Workspace config deleted for workspace={}", workspace)
+        mapOf("status" to "success", "message" to "Workspace config for '$workspace' deleted")
     }
 
     private companion object {

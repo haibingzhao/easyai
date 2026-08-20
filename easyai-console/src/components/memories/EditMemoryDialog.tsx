@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Dialog } from '@/components/ui/Dialog';
 import { X } from 'lucide-react';
 import type { MemoryEntry, CreateMemoryRequest, UpdateMemoryRequest } from '@/types/memory';
-import { MEMORY_CATEGORIES, maturityLabelKey } from '@/types/memory';
+import { maturityLabelKey } from '@/types/memory';
+import { useCategoryStore } from '@/services/stores/category-store';
 import { i18n } from '@/utils/i18n';
 
 const SCOPES = ['global', 'project'] as const;
@@ -32,11 +33,12 @@ export const EditMemoryDialog: React.FC<EditMemoryDialogProps> = ({
   memory,
   currentProjectPath,
 }) => {
+  const memoryCategories = useCategoryStore((s) => s.memoryCategories);
   const isEdit = !!memory;
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [type, setType] = useState<string>(MEMORY_CATEGORIES[0].apiName);
+  const [type, setType] = useState<string>(memoryCategories[0]?.code ?? '');
   const [scope, setScope] = useState<string>('global');
   const [content, setContent] = useState('');
   const [keywords, setKeywords] = useState<string[]>([]);
@@ -59,7 +61,7 @@ export const EditMemoryDialog: React.FC<EditMemoryDialogProps> = ({
     } else {
       setName('');
       setDescription('');
-      setType(MEMORY_CATEGORIES[0].apiName);
+      setType(memoryCategories[0]?.code ?? '');
       setScope('global');
       setContent('');
       setKeywords([]);
@@ -180,8 +182,8 @@ export const EditMemoryDialog: React.FC<EditMemoryDialogProps> = ({
               disabled={isEdit}
               className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
             >
-              {MEMORY_CATEGORIES.map((c) => (
-                <option key={c.apiName} value={c.apiName}>
+              {memoryCategories.map((c) => (
+                <option key={c.code} value={c.code}>
                   {i18n(c.labelKey)}
                 </option>
               ))}

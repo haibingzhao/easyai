@@ -1,5 +1,6 @@
 package com.easy.easyai.web.controller
 
+import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.memory.MemoryEntry
 import com.easy.easyai.core.memory.MemoryMaturity
 import com.easy.easyai.core.memory.MemoryOwnerContext
@@ -194,9 +195,15 @@ class MemoryController(
         else -> throw IllegalArgumentException("Invalid scope: $scope (expected 'global' or 'project')")
     }
 
-    private fun parseType(type: String): MemoryType =
-        MemoryType.fromDirName(type)
-            ?: throw IllegalArgumentException("Invalid memory type: $type (expected one of: ${MemoryType.entries.joinToString { it.dirName }})")
+    private fun parseType(type: String): MemoryType {
+        val memoryType = MemoryType.fromDirName(type)
+            ?: throw IllegalArgumentException("Invalid memory type: $type (expected one of: ${MemoryType.entriesFor(DomainCatalog.activeDomain).joinToString { it.dirName }})")
+        val validTypes = MemoryType.entriesFor(DomainCatalog.activeDomain)
+        if (memoryType !in validTypes) {
+            throw IllegalArgumentException("Memory type '$type' is not available in the current domain (expected one of: ${validTypes.joinToString { it.dirName }})")
+        }
+        return memoryType
+    }
 
     private fun MemoryEntry.toDto(scope: MemoryScope): MemoryEntryDto = MemoryEntryDto(
         name = name,

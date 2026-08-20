@@ -2,12 +2,22 @@ package com.easy.easyai.tools.calc
 
 import groovy.lang.GroovyShell
 import org.codehaus.groovy.ast.ClassCodeVisitorSupport
+import org.codehaus.groovy.ast.ClassHelper
 import org.codehaus.groovy.ast.ClassNode
+import org.codehaus.groovy.ast.VariableScope
+import org.codehaus.groovy.ast.expr.ArgumentListExpression
 import org.codehaus.groovy.ast.expr.ClassExpression
+import org.codehaus.groovy.ast.expr.ClosureExpression
 import org.codehaus.groovy.ast.expr.ConstantExpression
 import org.codehaus.groovy.ast.expr.Expression
 import org.codehaus.groovy.ast.expr.MethodCallExpression
 import org.codehaus.groovy.ast.expr.StaticMethodCallExpression
+import org.codehaus.groovy.ast.stmt.BlockStatement
+import org.codehaus.groovy.ast.stmt.DoWhileStatement
+import org.codehaus.groovy.ast.stmt.ExpressionStatement
+import org.codehaus.groovy.ast.stmt.ForStatement
+import org.codehaus.groovy.ast.stmt.Statement
+import org.codehaus.groovy.ast.stmt.WhileStatement
 import org.codehaus.groovy.classgen.GeneratorContext
 import org.codehaus.groovy.control.CompilePhase
 import org.codehaus.groovy.control.CompilerConfiguration
@@ -25,6 +35,10 @@ import org.codehaus.groovy.syntax.SyntaxException
  * This approach is more robust than [org.codehaus.groovy.control.customizers.SecureASTCustomizer]
  * because it blocks classes regardless of how they are referenced — explicit import,
  * Groovy default import, or fully qualified name.
+ *
+ * Resource protection: [LoopInstrumentationCustomizer] injects a [ScriptLoopGuard] tick
+ * at the head of every loop and closure body, so pure-CPU runaway scripts are aborted
+ * deterministically at a step limit — `Thread.interrupt()` cannot stop tight loops.
  */
 internal object GroovySandbox {
 
@@ -58,7 +72,9 @@ internal object GroovySandbox {
 
     fun createSecureShell(): GroovyShell {
         val config = CompilerConfiguration()
-        config.addCompilationCustomizers(ForbiddenCallsCustomizer())
+        // Order matters: ForbiddenCallsCustomizer must run first, so it never sees the
+        // ScriptLoopGuard.tick() calls injected afterwards by LoopInstrumentationCustomizer.
+        config.addCompilationCustomizers(ForbiddenCallsCustomizer(), LoopInstrumentationCustomizer())
         val sandboxLoader = SandboxedClassLoader(GroovySandbox::class.java.classLoader)
         return GroovyShell(sandboxLoader, config)
     }
@@ -123,11 +139,109 @@ internal object GroovySandbox {
                 (receiver is ClassExpression && receiver.type.name == "java.lang.Class")
             val isStringExecute = method == "execute" &&
                 receiver is ConstantExpression && receiver.value is String
-            if (isClassForName || isStringExecute) {
+            // Scripts must not tamper with the step guard (e.g. disarm() it or arm() a
+            // huge limit). Covers bare names and fully qualified references alike.
+            val isGuardAccess = receiver.text.let { it == "ScriptLoopGuard" || it.endsWith(".ScriptLoopGuard") }
+            if (isClassForName || isStringExecute || isGuardAccess) {
                 throw SyntaxException(
                     "Security violation: '$method' is blocked by the calc sandbox", -1, -1
                 )
             }
         }
     }
+
+    /**
+     * Injects a [ScriptLoopGuard] tick at the head of every loop body
+     * (while / do-while / for) and every closure body, so iteration-style abuse
+     * (`list.each { while (true) {} }`) is bounded as well.
+     *
+     * Runs after [ForbiddenCallsCustomizer] (registration order) so injected ticks
+     * are not mistaken for script-written guard access.
+     */
+    private class LoopInstrumentationCustomizer : CompilationCustomizer(CompilePhase.CONVERSION) {
+
+        override fun call(sourceUnit: SourceUnit, context: GeneratorContext, classNode: ClassNode) {
+            val visitor = object : ClassCodeVisitorSupport() {
+                override fun visitWhileLoop(loop: WhileStatement) {
+                    loop.loopBlock = instrumented(loop.loopBlock)
+                    super.visitWhileLoop(loop)
+                }
+
+                override fun visitForLoop(loop: ForStatement) {
+                    loop.loopBlock = instrumented(loop.loopBlock)
+                    super.visitForLoop(loop)
+                }
+
+                override fun visitDoWhileLoop(loop: DoWhileStatement) {
+                    loop.loopBlock = instrumented(loop.loopBlock)
+                    super.visitDoWhileLoop(loop)
+                }
+
+                override fun visitClosureExpression(expression: ClosureExpression) {
+                    expression.code?.let { expression.code = instrumented(it) }
+                    super.visitClosureExpression(expression)
+                }
+
+                override fun getSourceUnit(): SourceUnit = sourceUnit
+            }
+            visitor.visitClass(classNode)
+        }
+
+        private fun instrumented(body: Statement): Statement {
+            val tick = ExpressionStatement(
+                StaticMethodCallExpression(
+                    ClassHelper.make(ScriptLoopGuard::class.java),
+                    "tick",
+                    ArgumentListExpression.EMPTY_ARGUMENTS
+                )
+            )
+            if (body is BlockStatement) {
+                body.statements.add(0, tick)
+                return body
+            }
+            return BlockStatement(mutableListOf(tick, body), VariableScope())
+        }
+    }
 }
+
+/**
+ * Per-thread step counter that deterministically aborts runaway scripts.
+ *
+ * The caller [arm]s the guard on the thread that will evaluate the script and
+ * [disarm]s in a `finally` block; [tick] is injected by [LoopInstrumentationCustomizer]
+ * at the head of every loop/closure body. When the budget is exhausted, [tick] throws
+ * [ScriptStepLimitException], unwinding the script like any runtime exception —
+ * unlike `Thread.interrupt()`, which a pure-CPU loop never observes.
+ */
+internal object ScriptLoopGuard {
+
+    /** Unarmed sentinel: a tick without a prior [arm] is a no-op (fail-open for bare shells). */
+    private const val UNARMED = -1L
+
+    private val remaining = ThreadLocal.withInitial { longArrayOf(UNARMED) }
+
+    /** Sets the step budget for the current thread. Must be paired with [disarm]. */
+    fun arm(maxSteps: Long) {
+        remaining.get()[0] = maxSteps
+    }
+
+    /** Clears the step budget for the current thread. */
+    fun disarm() {
+        remaining.remove()
+    }
+
+    /** Consumed one step; throws [ScriptStepLimitException] when the budget is spent. */
+    @JvmStatic
+    fun tick() {
+        val counter = remaining.get()
+        val left = counter[0]
+        if (left == UNARMED) return
+        if (left <= 0L) throw ScriptStepLimitException()
+        counter[0] = left - 1
+    }
+}
+
+/** Thrown by [ScriptLoopGuard.tick] when a script exceeds its step budget. */
+internal class ScriptStepLimitException : RuntimeException(
+    "Script exceeded the step limit: likely an infinite loop"
+)

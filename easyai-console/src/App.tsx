@@ -9,6 +9,7 @@ import { AgentsPage } from './pages/AgentsPage';
 import { ModelsPage } from './pages/ModelsPage';
 import { McpPage } from './pages/McpPage';
 import { MemoriesPage } from './pages/MemoriesPage';
+import { KnowledgePage } from './pages/KnowledgePage';
 import { CommandsPage } from './pages/CommandsPage';
 import { SwarmPresetEditorPage } from './pages/SwarmPresetEditorPage';
 import { WorkflowRunPage } from './pages/WorkflowRunPage';
@@ -18,6 +19,7 @@ import { ProjectSelectPage } from './components/project/ProjectSelectPage';
 import { useSettingsStore } from '@/services/stores/settings-store';
 import { useProjectStore } from '@/services/stores/project-store';
 import { useAuthStore } from '@/services/stores/auth-store';
+import { useCategoryStore } from '@/services/stores/category-store';
 import { setupService } from '@/services/setup-service';
 import { storageService } from '@/services/storage-service';
 import { setTheme } from '@/utils/theme';
@@ -28,6 +30,7 @@ function App() {
   const loadSettings = useSettingsStore((state) => state.loadSettings);
   const { currentProject, loadProjects } = useProjectStore();
   const { isAuthenticated, authLoading, checkAuth } = useAuthStore();
+  const loadCategories = useCategoryStore((state) => state.loadCategories);
   const [setupMode, setSetupMode] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -49,6 +52,7 @@ function App() {
             if (ok) {
               loadSettings();
               loadProjects();
+              loadCategories();
             }
           });
         }
@@ -60,10 +64,11 @@ function App() {
           if (ok) {
             loadSettings();
             loadProjects();
+            loadCategories();
           }
         });
       });
-  }, [checkAuth, loadSettings, loadProjects]);
+  }, [checkAuth, loadSettings, loadProjects, loadCategories]);
 
   // Loading state (checking setup mode or auth)
   if (setupMode === null || (setupMode === false && authLoading)) {
@@ -138,6 +143,10 @@ function App() {
           <Route
             path="/memories"
             element={<MemoriesPage />}
+          />
+          <Route
+            path="/knowledge"
+            element={<KnowledgePage />}
           />
           <Route
             path="/commands"

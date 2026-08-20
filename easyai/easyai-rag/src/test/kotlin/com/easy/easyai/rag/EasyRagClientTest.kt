@@ -70,7 +70,6 @@ class EasyRagClientTest {
     }
 
     private fun sampleDocument(): RagDocument = RagDocument(
-        category = RagCategory.MEMORY,
         key = "global/feedback/no-println.md",
         content = "Use a logger instead of println.",
         metadata = mapOf("scope" to "global", "type" to "feedback"),
@@ -79,43 +78,56 @@ class EasyRagClientTest {
     )
 
     @Test
-    fun `upsert posts text then triggers synchronous indexing`() = runTest {
+    fun `upsert posts text then polls status until processed`() = runTest {
         enqueueAuthStatus()
         server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-123","message":"inserted"}"""))
-        server.enqueue(MockResponse().setBody("""{"status":"ok","doc_id":"doc-123","final_status":"completed","chunks_count":2}"""))
-
+        server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"processed","doc_id":"doc-123","chunks_count":2}"""))
+    
         val result = client.upsert(sampleDocument())
-
+    
         assertEquals("doc-123", result.docId)
         assertTrue(result.indexed)
         assertEquals(2, result.chunksCount)
-
+    
         server.takeRequest() // auth-status
         val insertRequest = server.takeRequest()
         assertEquals("/api/documents/text", insertRequest.path)
         val body = insertRequest.body.readUtf8()
-        assertTrue(body.contains(""""externalId":"easyai:memory:global/feedback/no-println.md""""), body)
-        assertTrue(body.contains(""""filePath":"easyai/memory/global/feedback/no-println.md""""), body)
+        assertTrue(body.contains(""""externalId":"easyai:global/feedback/no-println.md""""), body)
+        assertTrue(body.contains(""""filePath":"easyai/global/feedback/no-println.md""""), body)
         assertTrue(body.contains(""""createTime":1768435200"""), body)
         assertTrue(body.contains(""""chunkMethod":"structure_aware""""), body)
         assertTrue(body.contains(""""skipKg":false"""), body)
         assertTrue(body.contains(""""buildStructure":true"""), body)
         assertTrue(body.contains(""""workspace":"ws-1""""), body)
         assertTrue(body.contains(""""scope":"global""""), body)
-
+    
         val indexRequest = server.takeRequest()
         assertTrue(indexRequest.path!!.startsWith("/api/documents/doc-123/index"), indexRequest.path)
+    
+        val statusRequest = server.takeRequest()
+        assertTrue(statusRequest.path!!.startsWith("/api/documents/status"), statusRequest.path)
+        assertTrue(statusRequest.path!!.contains("docId=doc-123"), statusRequest.path)
     }
 
     @Test
-    fun `upsert treats index 409 as already indexed`() = runTest {
+    fun `upsert falls through to polling when index returns 409`() = runTest {
         enqueueAuthStatus()
         server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-1","message":"inserted"}"""))
         server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"already processed"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"processed","doc_id":"doc-1","chunks_count":1}"""))
 
         val result = client.upsert(sampleDocument())
 
         assertTrue(result.indexed)
+
+        server.takeRequest() // auth-status
+        server.takeRequest() // insert
+        server.takeRequest() // index (409)
+        val statusRequest = server.takeRequest()
+        assertTrue(statusRequest.path!!.startsWith("/api/documents/status"), statusRequest.path)
     }
 
     @Test
@@ -132,15 +144,25 @@ class EasyRagClientTest {
     }
 
     @Test
-    fun `upsert retries once on 409 from pipeline busy`() = runTest {
+    fun `upsert polls until terminal after initial pending status`() = runTest {
         enqueueAuthStatus()
-        server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"pipeline busy"}"""))
         server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-1","message":"inserted"}"""))
-        server.enqueue(MockResponse().setBody("""{"status":"ok","doc_id":"doc-1","final_status":"completed","chunks_count":1}"""))
+        server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"pipeline busy"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"pending","doc_id":"doc-1"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"processed","doc_id":"doc-1","chunks_count":1}"""))
 
         val result = client.upsert(sampleDocument())
 
         assertTrue(result.indexed)
+        assertEquals(1, result.chunksCount)
+
+        server.takeRequest() // auth-status
+        server.takeRequest() // insert
+        server.takeRequest() // index (409)
+        server.takeRequest() // status (pending)
+        val finalStatus = server.takeRequest()
+        assertTrue(finalStatus.path!!.startsWith("/api/documents/status"), finalStatus.path)
     }
 
     @Test
@@ -148,7 +170,7 @@ class EasyRagClientTest {
         enqueueAuthStatus()
         server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"not found"}"""))
 
-        client.delete("easyai:memory:global/feedback/no-println.md")
+        client.delete("easyai:global/feedback/no-println.md")
 
         server.takeRequest() // auth-status
         val lookup = server.takeRequest()
@@ -163,7 +185,7 @@ class EasyRagClientTest {
         server.enqueue(MockResponse().setBody("""{"doc_id":"doc-9","external_id":"x","status":"completed","file_path":"p","content":"c","create_time":1,"chunks_count":1}"""))
         server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
 
-        client.delete("easyai:memory:global/user/a.md")
+        client.delete("easyai:global/user/a.md")
 
         server.takeRequest() // auth-status
         server.takeRequest() // by-external-id
@@ -177,13 +199,12 @@ class EasyRagClientTest {
         enqueueAuthStatus()
         server.enqueue(
             MockResponse().setBody(
-                """{"chunks":[{"reference_id":"r","content":"hello","file_path":"easyai/memory/global/user/a.md","score":0.9,"create_time":1768435200,"metadata":{"scope":"global"}}]}"""
+                """{"chunks":[{"reference_id":"r","content":"hello","file_path":"easyai/global/user/a.md","score":0.9,"create_time":1768435200,"metadata":{"scope":"global"}}]}"""
             )
         )
 
         val chunks = client.search(
             query = "logging rules",
-            category = RagCategory.MEMORY,
             filters = mapOf("scope" to "global"),
             topK = 7,
             timeRangeStart = 100L,
@@ -204,7 +225,6 @@ class EasyRagClientTest {
         assertTrue(body.contains(""""timeRangeStart":100"""), body)
         assertTrue(body.contains(""""timeRangeEnd":200"""), body)
         assertTrue(body.contains(""""scope":"global""""), body)
-        assertTrue(body.contains(""""category":"memory""""), body)
     }
 
     @Test
@@ -224,8 +244,8 @@ class EasyRagClientTest {
         RagConfig.save(RagConfig(enabled = false), disabledPath)
         val disabledClient = EasyRagClient(disabledPath)
 
-        assertEquals(null, disabledClient.readByExternalId("easyai:memory:x"))
-        assertEquals(emptyList(), disabledClient.search("q", RagCategory.MEMORY))
+        assertEquals(null, disabledClient.readByExternalId("easyai:x"))
+        assertEquals(emptyList(), disabledClient.search("q"))
         assertEquals(false, disabledClient.healthCheck())
     }
 
@@ -234,24 +254,25 @@ class EasyRagClientTest {
         enqueueAuthStatus()
         server.enqueue(
             MockResponse().setBody(
-                """{"documents":[{"id":"doc-1","filePath":"easyai/memory/global/user/a.md","status":"completed","contentSummary":"s","contentLength":10,"createdAt":"2026-01-15T00:00:00Z","updatedAt":"2026-01-15T00:00:00Z","chunksCount":1,"externalId":"easyai:memory:global/user/a.md","hasStructure":false}],"total":1,"page":1,"pageSize":100}"""
+                """{"documents":[{"id":"doc-1","filePath":"easyai/global/user/a.md","status":"completed","contentSummary":"s","contentLength":10,"createdAt":"2026-01-15T00:00:00Z","updatedAt":"2026-01-15T00:00:00Z","chunksCount":1,"externalId":"easyai:global/user/a.md","hasStructure":false}],"total":1,"page":1,"pageSize":100}"""
             )
         )
 
-        val docs = client.list(RagCategory.MEMORY, "easyai/memory/global/")
+        val docs = client.list("easyai/global/")
 
         assertEquals(1, docs.size)
         assertEquals("doc-1", docs[0].docId)
-        assertEquals("easyai:memory:global/user/a.md", docs[0].externalId)
+        assertEquals("easyai:global/user/a.md", docs[0].externalId)
     }
 
     // ── bizId passthrough ──────────────────────────────────────────────
 
     @Test
-    fun `upsert passes bizId in insert body and index query`() = runTest {
+    fun `upsert passes bizId in insert body and status poll query`() = runTest {
         enqueueAuthStatus()
         server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-1","message":"inserted"}"""))
-        server.enqueue(MockResponse().setBody("""{"status":"ok","doc_id":"doc-1","final_status":"completed","chunks_count":1}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"processed","doc_id":"doc-1","chunks_count":1}"""))
 
         client.upsert(sampleDocument(), bizId = "u_alice")
 
@@ -260,15 +281,17 @@ class EasyRagClientTest {
         val insertBody = insert.body.readUtf8()
         assertTrue(insertBody.contains(""""bizId":"u_alice""""), insertBody)
 
-        val index = server.takeRequest()
-        assertTrue(index.path!!.contains("bizId=u_alice"), index.path)
+        server.takeRequest() // index
+        val status = server.takeRequest()
+        assertTrue(status.path!!.contains("bizId=u_alice"), status.path)
     }
 
     @Test
-    fun `upsert omits bizId when absent`() = runTest {
+    fun `upsert omits bizId from status poll when absent`() = runTest {
         enqueueAuthStatus()
         server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-1","message":"inserted"}"""))
-        server.enqueue(MockResponse().setBody("""{"status":"ok","doc_id":"doc-1","final_status":"completed","chunks_count":1}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"processed","doc_id":"doc-1","chunks_count":1}"""))
 
         client.upsert(sampleDocument())
 
@@ -276,8 +299,9 @@ class EasyRagClientTest {
         val insert = server.takeRequest()
         assertFalse(insert.body.readUtf8().contains("bizId"))
 
-        val index = server.takeRequest()
-        assertFalse(index.path!!.contains("bizId"), index.path)
+        server.takeRequest() // index
+        val status = server.takeRequest()
+        assertFalse(status.path!!.contains("bizId"), status.path)
     }
 
     @Test
@@ -285,11 +309,11 @@ class EasyRagClientTest {
         enqueueAuthStatus()
         server.enqueue(MockResponse().setBody("""{"chunks":[]}"""))
 
-        client.search(query = "q", category = RagCategory.MEMORY, bizId = "u_alice-demo-12345678")
+        client.search(query = "q", bizId = "u_alice-demo-12345678_m")
 
         server.takeRequest() // auth-status
         val body = server.takeRequest().body.readUtf8()
-        assertTrue(body.contains(""""bizId":"u_alice-demo-12345678""""), body)
+        assertTrue(body.contains(""""bizId":"u_alice-demo-12345678_m""""), body)
     }
 
     @Test
@@ -297,7 +321,7 @@ class EasyRagClientTest {
         enqueueAuthStatus()
         server.enqueue(MockResponse().setBody("""{"documents":[],"total":0,"page":1,"pageSize":100}"""))
 
-        client.list(RagCategory.MEMORY, "easyai/memory/", bizId = "u_alice")
+        client.list("easyai/", bizId = "u_alice")
 
         server.takeRequest() // auth-status
         val listRequest = server.takeRequest()
@@ -310,7 +334,7 @@ class EasyRagClientTest {
         server.enqueue(MockResponse().setBody("""{"doc_id":"doc-9","external_id":"x","status":"completed","file_path":"p","content":"c","create_time":1,"chunks_count":1}"""))
         server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
 
-        client.delete("easyai:memory:feedback/no-println.md", bizId = "u_alice")
+        client.delete("easyai:feedback/no-println.md", bizId = "u_alice")
 
         server.takeRequest() // auth-status
         val lookup = server.takeRequest()
@@ -335,7 +359,7 @@ class EasyRagClientTest {
         // 5. retried list attempt succeeds
         server.enqueue(MockResponse().setBody("""{"documents":[],"total":0,"page":1,"pageSize":100}"""))
 
-        val docs = authClient.list(RagCategory.MEMORY, "easyai/memory/")
+        val docs = authClient.list("easyai/")
 
         assertEquals(emptyList(), docs)
 
@@ -370,8 +394,8 @@ class EasyRagClientTest {
             }
         }
 
-        val job1 = launch { authClient.list(RagCategory.MEMORY, "easyai/memory/") }
-        val job2 = launch { authClient.list(RagCategory.MEMORY, "easyai/memory/") }
+        val job1 = launch { authClient.list("easyai/") }
+        val job2 = launch { authClient.list("easyai/") }
         job1.join()
         job2.join()
 
@@ -405,13 +429,13 @@ class EasyRagClientTest {
 
         // First request: probe login 429 -> list 401 -> forced re-login 429 -> fails.
         assertFailsWith<RagException> {
-            authClient.list(RagCategory.MEMORY, "easyai/memory/")
+            authClient.list("easyai/")
         }
         assertEquals(2, loginCount.get())
 
         // Second request inside the cooldown window: the fallback direct login
         // succeeds and the list call proceeds with the fresh token.
-        val docs = authClient.list(RagCategory.MEMORY, "easyai/memory/")
+        val docs = authClient.list("easyai/")
 
         assertEquals(emptyList(), docs)
         assertEquals(3, loginCount.get(), "cooldown fallback must perform exactly one more login")
@@ -436,7 +460,7 @@ class EasyRagClientTest {
         // 5. retried list carries token-2 and succeeds
         server.enqueue(MockResponse().setBody("""{"documents":[],"total":0,"page":1,"pageSize":100}"""))
 
-        val docs = authClient.list(RagCategory.MEMORY, "easyai/memory/")
+        val docs = authClient.list("easyai/")
 
         assertEquals(emptyList(), docs)
 
@@ -480,8 +504,8 @@ class EasyRagClientTest {
             }
         }
 
-        val job1 = launch { authClient.list(RagCategory.MEMORY, "easyai/memory/") }
-        val job2 = launch { authClient.list(RagCategory.MEMORY, "easyai/memory/") }
+        val job1 = launch { authClient.list("easyai/") }
+        val job2 = launch { authClient.list("easyai/") }
         job1.join()
         job2.join()
 
@@ -489,5 +513,414 @@ class EasyRagClientTest {
         // The second coroutine waits on the mutex, then sees authInitialized=true
         // and returns — it must NOT trigger a second login.
         assertEquals(1, loginCount.get(), "concurrent initialization must perform only one login")
+    }
+
+    // ── Async index polling ──────────────────────────────────────────
+
+    @Test
+    fun `pollUntilTerminal returns response on processed status`() = runTest {
+        val pollConfigPath = Files.createTempFile("easyai-rag-poll-test", ".json")
+        runBlocking {
+            RagConfig.save(
+                RagConfig(
+                    enabled = true,
+                    baseUrl = server.url("/").toString().trimEnd('/'),
+                    workspace = "ws-1",
+                    indexPollIntervalMs = 10,
+                    indexPollMaxMs = 5_000
+                ),
+                pollConfigPath
+            )
+        }
+        val pollClient = EasyRagClient(pollConfigPath)
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-p1","message":"inserted"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"pending","doc_id":"doc-p1"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"processed","doc_id":"doc-p1","chunks_count":3}"""))
+
+        val result = pollClient.upsert(sampleDocument())
+
+        assertTrue(result.indexed)
+        assertEquals(3, result.chunksCount)
+    }
+
+    @Test
+    fun `upsert returns indexed=false when polling times out`() = runBlocking {
+        val timeoutConfigPath = Files.createTempFile("easyai-rag-timeout-test", ".json")
+        runBlocking {
+            RagConfig.save(
+                RagConfig(
+                    enabled = true,
+                    baseUrl = server.url("/").toString().trimEnd('/'),
+                    workspace = "ws-1",
+                    indexPollIntervalMs = 10,
+                    indexPollMaxMs = 50
+                ),
+                timeoutConfigPath
+            )
+        }
+        val timeoutClient = EasyRagClient(timeoutConfigPath)
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-t1","message":"inserted"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+        // All status polls return pending — should timeout
+        server.enqueue(MockResponse().setBody("""{"status":"pending","doc_id":"doc-t1"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"pending","doc_id":"doc-t1"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"pending","doc_id":"doc-t1"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"pending","doc_id":"doc-t1"}"""))
+
+        val result = timeoutClient.upsert(sampleDocument())
+
+        assertEquals("doc-t1", result.docId)
+        assertFalse(result.indexed, "upsert should return indexed=false on poll timeout")
+        assertNull(result.chunksCount)
+    }
+
+    @Test
+    fun `upsert throws when polling returns failed status`() = runTest {
+        val failConfigPath = Files.createTempFile("easyai-rag-fail-test", ".json")
+        runBlocking {
+            RagConfig.save(
+                RagConfig(
+                    enabled = true,
+                    baseUrl = server.url("/").toString().trimEnd('/'),
+                    workspace = "ws-1",
+                    indexPollIntervalMs = 10,
+                    indexPollMaxMs = 5_000
+                ),
+                failConfigPath
+            )
+        }
+        val failClient = EasyRagClient(failConfigPath)
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-f1","message":"inserted"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"failed","doc_id":"doc-f1","error":"embedding model unavailable"}"""))
+
+        val ex = assertFailsWith<RagException> {
+            failClient.upsert(sampleDocument())
+        }
+        assertTrue(ex.message!!.contains("indexing failed"), ex.message)
+        assertTrue(ex.message!!.contains("embedding model unavailable"), ex.message)
+    }
+
+    @Test
+    fun `readDocStatusByDocId returns parsed status map`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-s1","message":"inserted"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"processed","doc_id":"doc-s1","chunks_count":5,"file_path":"p"}"""))
+
+        val result = client.upsert(sampleDocument())
+
+        assertTrue(result.indexed)
+        assertEquals(5, result.chunksCount)
+    }
+
+    @Test
+    fun `readDocStatusByDocId returns null on 404`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-nf","message":"inserted"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+        server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"not found"}"""))
+
+        val result = client.upsert(sampleDocument())
+
+        assertFalse(result.indexed)
+    }
+
+    @Test
+    fun `upsert skips polling when index returns terminal status`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-sync","message":"inserted"}"""))
+        // Index endpoint returns a terminal status synchronously — polling should be skipped
+        server.enqueue(MockResponse().setBody("""{"status":"processed","chunks_count":4}"""))
+
+        val result = client.upsert(sampleDocument())
+
+        assertTrue(result.indexed)
+        assertEquals(4, result.chunksCount)
+
+        server.takeRequest() // auth-status
+        server.takeRequest() // insert
+        server.takeRequest() // index (returns terminal status)
+        // No status poll should be issued — verify no more requests
+        assertEquals(3, server.requestCount, "no status poll expected when index returns terminal status")
+    }
+
+    @Test
+    fun `upsert throws when index synchronously returns failed status`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-sf","message":"inserted"}"""))
+        // Index endpoint returns failed synchronously — must throw, consistent with the poll path
+        server.enqueue(MockResponse().setBody("""{"status":"failed","error":"sync indexing exploded"}"""))
+
+        val ex = assertFailsWith<RagException> {
+            client.upsert(sampleDocument())
+        }
+        assertTrue(ex.message!!.contains("indexing failed"), ex.message)
+        assertTrue(ex.message!!.contains("sync indexing exploded"), ex.message)
+
+        server.takeRequest() // auth-status
+        server.takeRequest() // insert
+        server.takeRequest() // index (returns failed)
+        // No status poll should be issued on sync failed
+        assertEquals(3, server.requestCount, "no status poll expected when index returns failed")
+    }
+
+    @Test
+    fun `upsert treats legacy final_status completed as synchronous terminal`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-legacy","message":"inserted"}"""))
+        // Legacy synchronous index response format: final_status + completed
+        server.enqueue(MockResponse().setBody("""{"status":"ok","doc_id":"doc-legacy","final_status":"completed","chunks_count":2}"""))
+
+        val result = client.upsert(sampleDocument())
+
+        assertTrue(result.indexed)
+        assertEquals(2, result.chunksCount)
+
+        server.takeRequest() // auth-status
+        server.takeRequest() // insert
+        server.takeRequest() // index (legacy terminal response)
+        // Legacy terminal response must skip polling
+        assertEquals(3, server.requestCount, "no status poll expected for legacy terminal response")
+    }
+
+    @Test
+    fun `upsert treats legacy finalStatus camelCase as synchronous terminal`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-legacy2","message":"inserted"}"""))
+        // Legacy synchronous index response format with camelCase field name
+        server.enqueue(MockResponse().setBody("""{"status":"ok","doc_id":"doc-legacy2","finalStatus":"completed","chunks_count":3}"""))
+
+        val result = client.upsert(sampleDocument())
+
+        assertTrue(result.indexed)
+        assertEquals(3, result.chunksCount)
+        assertEquals(3, server.requestCount, "no status poll expected for legacy terminal response")
+    }
+
+    @Test
+    fun `upsert throws with errorMsg field when polling returns failed status`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-em","message":"inserted"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+        // Failed status carrying the legacy errorMsg field instead of error
+        server.enqueue(MockResponse().setBody("""{"status":"failed","doc_id":"doc-em","errorMsg":"chunk pipeline rejected"}"""))
+
+        val ex = assertFailsWith<RagException> {
+            client.upsert(sampleDocument())
+        }
+        assertTrue(ex.message!!.contains("indexing failed"), ex.message)
+        assertTrue(ex.message!!.contains("chunk pipeline rejected"), ex.message)
+    }
+
+    @Test
+    fun `upsert polls when index returns non-terminal status`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-sync","message":"inserted"}"""))
+        // Index endpoint returns non-terminal status — code proceeds to poll
+        server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+        // Status poll returns processed immediately
+        server.enqueue(MockResponse().setBody("""{"status":"processed","doc_id":"doc-sync","chunks_count":4}"""))
+
+        val result = client.upsert(sampleDocument())
+
+        assertTrue(result.indexed)
+        assertEquals(4, result.chunksCount)
+
+        server.takeRequest() // auth-status
+        server.takeRequest() // insert
+        server.takeRequest() // index (non-terminal)
+        val statusRequest = server.takeRequest()
+        assertTrue(statusRequest.path!!.startsWith("/api/documents/status"), statusRequest.path)
+    }
+
+    @Test
+    fun `polling uses exponential backoff between polls`() = runBlocking {
+        val backoffConfigPath = Files.createTempFile("easyai-rag-backoff-test", ".json")
+        runBlocking {
+            RagConfig.save(
+                RagConfig(
+                    enabled = true,
+                    baseUrl = server.url("/").toString().trimEnd('/'),
+                    workspace = "ws-1",
+                    indexPollIntervalMs = 100,
+                    indexPollMaxMs = 2_000
+                ),
+                backoffConfigPath
+            )
+        }
+        val backoffClient = EasyRagClient(backoffConfigPath)
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-b1","message":"inserted"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+        // Return pending several times, then processed
+        server.enqueue(MockResponse().setBody("""{"status":"pending","doc_id":"doc-b1"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"pending","doc_id":"doc-b1"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"pending","doc_id":"doc-b1"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"processed","doc_id":"doc-b1","chunks_count":2}"""))
+
+        val startTime = System.currentTimeMillis()
+        val result = backoffClient.upsert(sampleDocument())
+        val elapsed = System.currentTimeMillis() - startTime
+
+        assertTrue(result.indexed)
+        assertEquals(2, result.chunksCount)
+        // Exponential backoff: 100 + 200 + 400 = 700ms of delay; allow margin for CI jitter
+        assertTrue(elapsed in 500..1_500, "expected ~700ms exponential backoff, got ${elapsed}ms")
+    }
+
+    @Test
+    fun `polling clamps zero interval to minimum to avoid busy loop`() = runBlocking {
+        val clampConfigPath = Files.createTempFile("easyai-rag-clamp-test", ".json")
+        runBlocking {
+            RagConfig.save(
+                RagConfig(
+                    enabled = true,
+                    baseUrl = server.url("/").toString().trimEnd('/'),
+                    workspace = "ws-1",
+                    indexPollIntervalMs = 0,
+                    indexPollMaxMs = 1_000
+                ),
+                clampConfigPath
+            )
+        }
+        val clampClient = EasyRagClient(clampConfigPath)
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-c1","message":"inserted"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"pending","doc_id":"doc-c1"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"processed","doc_id":"doc-c1","chunks_count":1}"""))
+
+        val startTime = System.currentTimeMillis()
+        val result = clampClient.upsert(sampleDocument())
+        val elapsed = System.currentTimeMillis() - startTime
+
+        assertTrue(result.indexed)
+        // Zero interval must be clamped to MIN_POLL_INTERVAL_MS (100ms), not busy-loop
+        assertTrue(elapsed >= 90, "expected clamped >=100ms delay between polls, got ${elapsed}ms")
+    }
+
+    // ------------------------------------------------------------------
+    // Workspace tenant configuration
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `getWorkspaceConfig returns parsed config on 200`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(
+            MockResponse().setBody("""
+                {
+                  "workspace": "ws-1",
+                  "llmModel": "gpt-4o",
+                  "llmApiKey": "sk-****",
+                  "llmBaseUrl": "https://api.openai.com/v1",
+                  "llmTemperature": 0.7,
+                  "llmMaxTokens": 4096,
+                  "embeddingModel": "text-embedding-3-small",
+                  "embeddingDim": 1536,
+                  "chunkSize": 1200,
+                  "chunkOverlapSize": 100,
+                  "language": "English",
+                  "defaultTopK": 40,
+                  "rerankEnabled": false,
+                  "createdAt": "2026-01-01T00:00:00Z",
+                  "updatedAt": "2026-01-02T00:00:00Z"
+                }
+            """.trimIndent())
+        )
+
+        val config = client.getWorkspaceConfig("ws-1")
+
+        assertEquals("ws-1", config?.workspace)
+        assertEquals("gpt-4o", config?.llmModel)
+        assertEquals("sk-****", config?.llmApiKey)
+        assertEquals(0.7f, config?.llmTemperature)
+        assertEquals(4096, config?.llmMaxTokens)
+        assertEquals(1536, config?.embeddingDim)
+        assertEquals(1200, config?.chunkSize)
+        assertEquals(100, config?.chunkOverlapSize)
+        assertEquals(false, config?.rerankEnabled)
+
+        server.takeRequest() // auth-status
+        val getRequest = server.takeRequest()
+        assertEquals("GET", getRequest.method)
+        assertTrue(getRequest.path!!.contains("/api/admin/tenant-config"), getRequest.path)
+        assertTrue(getRequest.path!!.contains("workspace=ws-1"), getRequest.path)
+    }
+
+    @Test
+    fun `getWorkspaceConfig returns null on 404`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"not found"}"""))
+
+        val config = client.getWorkspaceConfig("unknown-ws")
+
+        assertNull(config)
+    }
+
+    @Test
+    fun `upsertWorkspaceConfig sends snake_case body and parses camelCase response`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(
+            MockResponse().setBody("""
+                {
+                  "workspace": "ws-1",
+                  "llmModel": "claude-3",
+                  "llmTemperature": 0.0,
+                  "updatedAt": "2026-01-03T00:00:00Z"
+                }
+            """.trimIndent())
+        )
+
+        val result = client.upsertWorkspaceConfig(
+            RagWorkspaceConfigUpdate(
+                workspace = "ws-1",
+                llmModel = "claude-3",
+                llmTemperature = 0.0f
+            )
+        )
+
+        assertEquals("ws-1", result.workspace)
+        assertEquals("claude-3", result.llmModel)
+
+        server.takeRequest() // auth-status
+        val postRequest = server.takeRequest()
+        assertEquals("POST", postRequest.method)
+        assertTrue(postRequest.path!!.contains("/api/admin/tenant-config"), postRequest.path)
+        val body = postRequest.body.readUtf8()
+        assertTrue(body.contains(""""workspace":"ws-1""""), body)
+        assertTrue(body.contains(""""llm_model":"claude-3""""), body)
+        assertTrue(body.contains(""""llm_temperature":0.0"""), body)
+    }
+
+    @Test
+    fun `deleteWorkspaceConfig sends DELETE with workspace param`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"success"}"""))
+
+        client.deleteWorkspaceConfig("ws-1")
+
+        server.takeRequest() // auth-status
+        val deleteRequest = server.takeRequest()
+        assertEquals("DELETE", deleteRequest.method)
+        assertTrue(deleteRequest.path!!.contains("/api/admin/tenant-config"), deleteRequest.path)
+        assertTrue(deleteRequest.path!!.contains("workspace=ws-1"), deleteRequest.path)
+    }
+
+    @Test
+    fun `getWorkspaceConfig returns null when disabled`() = runTest {
+        val disabledConfigPath = Files.createTempFile("easyai-rag-disabled-test", ".json")
+        runBlocking {
+            RagConfig.save(RagConfig(enabled = false), disabledConfigPath)
+        }
+        val disabledClient = EasyRagClient(disabledConfigPath)
+
+        val config = disabledClient.getWorkspaceConfig("ws-1")
+
+        assertNull(config)
     }
 }

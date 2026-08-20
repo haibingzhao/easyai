@@ -1,4 +1,4 @@
-import { fetchJson, JSON_HEADERS } from '@/services/api-client';
+import { fetchJson, fetchVoid, JSON_HEADERS } from '@/services/api-client';
 
 export interface RagStatus {
   enabled: boolean;
@@ -29,6 +29,54 @@ export interface RagTestResult {
   message: string;
 }
 
+/**
+ * Workspace-granular tenant configuration from EasyRAG.
+ * All fields except `workspace` are nullable — `null` means "use global server default".
+ * API keys are masked by the server (first 4 chars + `****`).
+ */
+export interface WorkspaceTenantConfig {
+  workspace: string;
+  llmModel: string | null;
+  llmApiKey: string | null;
+  llmBaseUrl: string | null;
+  llmTemperature: number | null;
+  llmMaxTokens: number | null;
+  embeddingModel: string | null;
+  embeddingApiKey: string | null;
+  embeddingBaseUrl: string | null;
+  embeddingDim: number | null;
+  chunkSize: number | null;
+  chunkOverlapSize: number | null;
+  language: string | null;
+  defaultTopK: number | null;
+  rerankEnabled: boolean | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Request body for upserting workspace tenant configuration.
+ * All fields except `workspace` are optional; `undefined` means "do not modify".
+ * API keys sent as `"****"` or empty string preserve the existing value.
+ */
+export interface WorkspaceTenantConfigUpdate {
+  workspace: string;
+  llmModel?: string;
+  llmApiKey?: string;
+  llmBaseUrl?: string;
+  llmTemperature?: number;
+  llmMaxTokens?: number;
+  embeddingModel?: string;
+  embeddingApiKey?: string;
+  embeddingBaseUrl?: string;
+  embeddingDim?: number;
+  chunkSize?: number;
+  chunkOverlapSize?: number;
+  language?: string;
+  defaultTopK?: number;
+  rerankEnabled?: boolean;
+}
+
 class RagService {
   /**
    * Get RAG configuration status (password is masked) plus live connectivity.
@@ -53,6 +101,36 @@ class RagService {
    */
   async testConnection(): Promise<RagTestResult> {
     return fetchJson<RagTestResult>('/api/system/rag/test', { method: 'POST' });
+  }
+
+  /**
+   * Get the workspace-granular tenant configuration from EasyRAG.
+   */
+  async getWorkspaceConfig(workspace: string): Promise<WorkspaceTenantConfig> {
+    return fetchJson<WorkspaceTenantConfig>(
+      `/api/system/rag/workspace-config?workspace=${encodeURIComponent(workspace)}`
+    );
+  }
+
+  /**
+   * Create or update the workspace tenant configuration in EasyRAG.
+   */
+  async updateWorkspaceConfig(request: WorkspaceTenantConfigUpdate): Promise<WorkspaceTenantConfig> {
+    return fetchJson<WorkspaceTenantConfig>('/api/system/rag/workspace-config', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(request),
+    });
+  }
+
+  /**
+   * Delete the workspace tenant configuration in EasyRAG (revert to global defaults).
+   */
+  async resetWorkspaceConfig(workspace: string): Promise<void> {
+    return fetchVoid(
+      `/api/system/rag/workspace-config?workspace=${encodeURIComponent(workspace)}`,
+      { method: 'DELETE' }
+    );
   }
 }
 

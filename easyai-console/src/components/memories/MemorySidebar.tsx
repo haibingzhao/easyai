@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { Search, ChevronDown, ChevronRight, FileText, FolderOpen, Globe } from 'lucide-react';
 import type { MemoryEntry } from '@/types/memory';
-import { MEMORY_CATEGORIES, maturityLabelKey } from '@/types/memory';
+import { maturityLabelKey } from '@/types/memory';
+import { useCategoryStore } from '@/services/stores/category-store';
 import { i18n } from '@/utils/i18n';
 import type { Project } from '@/services/project-service';
 import { ToolTooltip } from '@/components/agent/ToolItem';
@@ -33,6 +34,7 @@ export const MemorySidebar: React.FC<MemorySidebarProps> = ({
   onToggleAutoGeneration,
   onSelect,
 }) => {
+  const memoryCategories = useCategoryStore((s) => s.memoryCategories);
   const [query, setQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState(FILTER_ANY);
   const [maturityFilter, setMaturityFilter] = useState(FILTER_ANY);
@@ -141,8 +143,8 @@ export const MemorySidebar: React.FC<MemorySidebarProps> = ({
           title={i18n('Category')}
         >
           <option value={FILTER_ANY}>{i18n('Category')}</option>
-          {MEMORY_CATEGORIES.map((c) => (
-            <option key={c.apiName} value={c.apiName}>
+          {memoryCategories.map((c) => (
+            <option key={c.code} value={c.code}>
               {i18n(c.labelKey)}
             </option>
           ))}
@@ -212,11 +214,11 @@ export const MemorySidebar: React.FC<MemorySidebarProps> = ({
               {/* Category groups */}
               {!collapsed && (
                 <div className="ml-2.5 border-l border-border/60 pl-2">
-                  {MEMORY_CATEGORIES.map((cat) => {
-                    const catEntries = scopeEntries.filter((e) => e.type === cat.apiName);
+                  {memoryCategories.map((cat) => {
+                    const catEntries = scopeEntries.filter((e) => e.type === cat.code);
                     if (catEntries.length === 0) return null;
                     return (
-                      <div key={cat.apiName} className="mb-0.5">
+                      <div key={cat.code} className="mb-0.5">
                         <div className="flex items-center gap-1 px-1.5 py-1">
                           <span className="text-[11px] text-muted-foreground truncate flex-1">
                             {i18n(cat.labelKey)}

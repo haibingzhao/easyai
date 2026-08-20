@@ -1,6 +1,7 @@
 package com.easy.easyai.tools.memory
 
 import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.memory.MemoryEntry
 import com.easy.easyai.core.memory.MemoryMaturity
 import com.easy.easyai.core.memory.MemoryOwnerContext
@@ -106,13 +107,17 @@ internal class MemoryWriteTool(
         name: String, type: String?, description: String?, content: String?,
         maturity: String?, scenarios: List<String>?, scope: MemoryScope, owner: MemoryOwnerContext
     ): ToolResult {
-        if (type.isNullOrBlank()) return errorResult("Error: 'type' is required for add (user_preferences/project_information/development_standards/task_summary/experience_lessons/other).")
+        val validTypes = MemoryType.entriesFor(DomainCatalog.activeDomain)
+        if (type.isNullOrBlank()) return errorResult("Error: 'type' is required for add (${validTypes.joinToString("/") { it.dirName }}).")
         if (description.isNullOrBlank()) return errorResult("Error: 'description' is required for add.")
         if (content.isNullOrBlank()) return errorResult("Error: 'content' is required for add.")
         if (!isValidMemoryName(name)) return errorResult("Error: 'name' must not contain '/', '\\', or '..'.")
 
         val memoryType = MemoryType.fromDirName(type)
-            ?: return errorResult("Error: Unknown type '$type'. Use: user_preferences, project_information, development_standards, task_summary, experience_lessons, other.")
+            ?: return errorResult("Error: Unknown type '$type'. Use: ${validTypes.joinToString(", ") { it.dirName }}.")
+        if (memoryType !in validTypes) {
+            return errorResult("Error: Type '$type' is not available in the current domain. Use: ${validTypes.joinToString(", ") { it.dirName }}.")
+        }
 
         // Name dedup check
         if (store.exists(name, scope, owner)) {

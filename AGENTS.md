@@ -55,8 +55,7 @@ These are project-specific traps that differ from framework defaults:
 - **No `println()`** — SLF4J logger only (CLI interactive prompts excepted)
 - **No builder pattern** — use `copy()` / wither methods on data classes
 - **No extension functions** — not visible from Java; use `@JvmStatic` companion methods
-- **No `ToolCallingChatModel`** — conflicts with custom ReAct loop
-- **No Spring AI `stream()` for tool calls** — use `call()`
+- **No `ToolCallingAdvisor` / `ChatClient` tool loop** — conflicts with custom ReAct loop; use raw `ChatModel.stream()` and parse tool calls manually
 - **No `transaction { }`** in repository — only `asyncTransaction { }` (Exposed R2DBC)
 - **No `.block()`, `.blockFirst()`, `runBlocking { }`** in repository layer
 - **No `any` types** in frontend TypeScript

@@ -35,8 +35,8 @@ class RagMemoryStoreTest {
     private val globalOwner = MemoryOwnerContext(userId = "alice")
     private val projectOwner = MemoryOwnerContext(userId = "alice", projectPath = projectPath)
     private val noProjectOwner = MemoryOwnerContext(userId = "alice")
-    private val globalBizId = RagBizIdResolver.globalBizId("alice")
-    private val projectBizId = RagBizIdResolver.projectBizId("alice", projectPath)!!
+    private val globalBizId = RagBizIdResolver.globalBizId("alice", RagBizIdResolver.MEMORY_TYPE)
+    private val projectBizId = RagBizIdResolver.projectBizId("alice", projectPath, RagBizIdResolver.MEMORY_TYPE)!!
 
     private fun sampleEntry(): MemoryEntry = MemoryEntry(
         name = "frp-remote-access",
@@ -63,12 +63,11 @@ class RagMemoryStoreTest {
 
         val doc = docSlot.captured
         assertEquals("experience_lessons/frp-remote-access.md", doc.key)
-        assertEquals("easyai:memory:experience_lessons/frp-remote-access.md", doc.externalId)
-        assertEquals("easyai/memory/experience_lessons/frp-remote-access.md", doc.filePath)
-        assertEquals(RagCategory.MEMORY, doc.category)
-        // biz_id carries isolation; scope metadata is no longer needed
+        assertEquals("easyai:experience_lessons/frp-remote-access.md", doc.externalId)
+        assertEquals("easyai/experience_lessons/frp-remote-access.md", doc.filePath)
+        // biz_id carries isolation + content type; scope metadata is no longer needed
         assertFalse(doc.metadata.containsKey("scope"))
-        assertEquals("memory", doc.metadata["category"])
+        assertFalse(doc.metadata.containsKey("category"))
         assertEquals("experience_lessons", doc.metadata["type"])
         assertEquals("frp-remote-access", doc.metadata["name"])
         assertEquals("medium", doc.metadata["maturity"])
@@ -112,7 +111,6 @@ class RagMemoryStoreTest {
         coEvery {
             client.search(
                 query = any(),
-                category = any(),
                 filters = any(),
                 topK = any(),
                 timeRangeStart = any(),
@@ -122,7 +120,7 @@ class RagMemoryStoreTest {
         } returns listOf(
             RagChunk(
                 content = storedContent,
-                filePath = "easyai/memory/experience_lessons/frp-remote-access.md",
+                filePath = "easyai/experience_lessons/frp-remote-access.md",
                 score = 0.9,
                 createTime = null,
                 metadata = emptyMap()
@@ -148,7 +146,6 @@ class RagMemoryStoreTest {
         coEvery {
             client.search(
                 query = any(),
-                category = any(),
                 filters = any(),
                 topK = any(),
                 timeRangeStart = any(),
@@ -162,7 +159,6 @@ class RagMemoryStoreTest {
         coVerify {
             client.search(
                 query = "query",
-                category = RagCategory.MEMORY,
                 filters = emptyMap(),
                 topK = 7,
                 timeRangeStart = 100L,
@@ -182,7 +178,6 @@ class RagMemoryStoreTest {
         coEvery {
             client.search(
                 query = any(),
-                category = any(),
                 filters = any(),
                 topK = any(),
                 timeRangeStart = any(),
@@ -190,8 +185,8 @@ class RagMemoryStoreTest {
                 bizId = any()
             )
         } returns listOf(
-            RagChunk(storedContent, "easyai/memory/experience_lessons/frp-remote-access.md", 0.9, null, emptyMap()),
-            RagChunk(storedContent, "easyai/memory/experience_lessons/frp-remote-access.md", 0.8, null, emptyMap())
+            RagChunk(storedContent, "easyai/experience_lessons/frp-remote-access.md", 0.9, null, emptyMap()),
+            RagChunk(storedContent, "easyai/experience_lessons/frp-remote-access.md", 0.8, null, emptyMap())
         )
 
         val results = store.search("query", MemoryScope.GLOBAL, globalOwner, 5)
@@ -210,8 +205,8 @@ class RagMemoryStoreTest {
         assertFalse(store.exists("frp-remote-access", MemoryScope.PROJECT, noProjectOwner))
         assertEquals(0, store.deleteAll(MemoryScope.PROJECT, noProjectOwner))
 
-        coVerify(exactly = 0) { client.search(any(), any(), any(), any(), any(), any(), any()) }
-        coVerify(exactly = 0) { client.list(any(), any(), any()) }
+        coVerify(exactly = 0) { client.search(any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { client.list(any(), any()) }
         coVerify(exactly = 0) { client.readByExternalId(any(), any()) }
     }
 
@@ -236,7 +231,7 @@ class RagMemoryStoreTest {
 
     @Test
     fun `delete removes existing document with bizId`() = runTest {
-        val externalId = "easyai:memory:experience_lessons/frp-remote-access.md"
+        val externalId = "easyai:experience_lessons/frp-remote-access.md"
         coEvery { client.readByExternalId(externalId, globalBizId) } returns
             RagDocumentDetail(
                 docId = "doc-1",
@@ -256,9 +251,9 @@ class RagMemoryStoreTest {
 
     @Test
     fun `deleteAll lists memory prefix then batch deletes with bizId`() = runTest {
-        coEvery { client.list(RagCategory.MEMORY, "easyai/memory/", globalBizId) } returns listOf(
-            docInfo("doc-1", "easyai/memory/user_preferences/a.md"),
-            docInfo("doc-2", "easyai/memory/project_information/b.md")
+        coEvery { client.list("easyai/", globalBizId) } returns listOf(
+            docInfo("doc-1", "easyai/user_preferences/a.md"),
+            docInfo("doc-2", "easyai/project_information/b.md")
         )
         coEvery { client.batchDelete(listOf("doc-1", "doc-2"), globalBizId) } returns 2
 
@@ -277,11 +272,11 @@ class RagMemoryStoreTest {
         val storedContent = docSlot.captured.content
 
         coEvery { client.readByExternalId(any(), any()) } returns null
-        coEvery { client.readByExternalId("easyai:memory:experience_lessons/frp-remote-access.md", globalBizId) } returns
+        coEvery { client.readByExternalId("easyai:experience_lessons/frp-remote-access.md", globalBizId) } returns
             RagDocumentDetail(
                 docId = "doc-1",
-                externalId = "easyai:memory:experience_lessons/frp-remote-access.md",
-                filePath = "easyai/memory/experience_lessons/frp-remote-access.md",
+                externalId = "easyai:experience_lessons/frp-remote-access.md",
+                filePath = "easyai/experience_lessons/frp-remote-access.md",
                 content = storedContent,
                 status = null,
                 createTime = null,
@@ -300,14 +295,14 @@ class RagMemoryStoreTest {
         store.write(sampleEntry(), MemoryScope.GLOBAL, globalOwner)
         val storedContent = docSlot.captured.content
 
-        coEvery { client.list(RagCategory.MEMORY, "easyai/memory/experience_lessons/", globalBizId) } returns listOf(
-            docInfo("doc-1", "easyai/memory/experience_lessons/frp-remote-access.md", externalId = "easyai:memory:experience_lessons/frp-remote-access.md")
+        coEvery { client.list("easyai/experience_lessons/", globalBizId) } returns listOf(
+            docInfo("doc-1", "easyai/experience_lessons/frp-remote-access.md", externalId = "easyai:experience_lessons/frp-remote-access.md")
         )
-        coEvery { client.readByExternalId("easyai:memory:experience_lessons/frp-remote-access.md", globalBizId) } returns
+        coEvery { client.readByExternalId("easyai:experience_lessons/frp-remote-access.md", globalBizId) } returns
             RagDocumentDetail(
                 docId = "doc-1",
                 externalId = null,
-                filePath = "easyai/memory/experience_lessons/frp-remote-access.md",
+                filePath = "easyai/experience_lessons/frp-remote-access.md",
                 content = storedContent,
                 status = null,
                 createTime = null,

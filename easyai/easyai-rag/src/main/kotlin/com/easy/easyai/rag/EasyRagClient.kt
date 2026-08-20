@@ -32,8 +32,9 @@ import kotlin.time.Duration.Companion.milliseconds
  * - [RagConfig] is reloaded per request so runtime changes apply without restart.
  * - Disabled integration: reads degrade to empty/null/false; writes raise [RagException]
  *   so callers surface the failure instead of silently losing data.
- * - `upsert` triggers synchronous indexing (write-then-read); HTTP 409 from the index
- *   endpoint means the document is already processed/processing and is treated as success.
+ * - `upsert` submits the document and triggers indexing, then polls the status
+ *   endpoint until a terminal state (`processed` / `failed`) is reached or timeout.
+ *   When the index endpoint returns a terminal status synchronously, polling is skipped.
  * - JWT login is performed lazily when the server reports `auth_required`, re-login once on 401.
  */
 internal class EasyRagClient(
@@ -102,25 +103,48 @@ internal class EasyRagClient(
             return RagUpsertResult(docId = docId, indexed = true, unchanged = true)
         }
 
-        // Synchronous indexing so the document is searchable immediately after write
+        // Submit indexing and poll until terminal state (processed / failed) or timeout.
+        // Backward-compatible: when the server returns a terminal status synchronously
+        // from the index endpoint, polling is skipped entirely.
         val indexResponse = try {
             exchange(
                 config, HttpMethod.POST, "/api/documents/$docId/index",
                 params = mapOf("workspace" to config.workspace, "bizId" to bizId),
-                timeoutMs = config.indexTimeoutMs
+                timeoutMs = config.indexSubmitTimeoutMs
             )
         } catch (e: RagException) {
             if (e.statusCode == CONFLICT) {
-                // Already processed or being processed by the global pipeline — fine
-                logger.debug("RAG index 409 for {}, treating as already indexed", docId)
+                logger.debug("RAG index 409 for {}, falling through to status polling", docId)
                 null
             } else {
                 throw e
             }
         }
-        val chunksCount = (indexResponse?.get("chunks_count") as? Number)?.toInt()
-        logger.debug("RAG upsert completed: externalId={}, docId={}, chunks={}", doc.externalId, docId, chunksCount)
-        return RagUpsertResult(docId = docId, indexed = true, chunksCount = chunksCount)
+        // If the index endpoint already returned a terminal status, skip polling.
+        // Accepts the new `status` field when it carries a document terminal state;
+        // otherwise falls back to the legacy `finalStatus` / `final_status` fields
+        // (where `completed` also counts as successfully processed).
+        val rawStatus = indexResponse?.get("status") as? String
+        val indexStatus = if (rawStatus == STATUS_PROCESSED || rawStatus == STATUS_FAILED) {
+            rawStatus
+        } else {
+            (indexResponse?.get("finalStatus") as? String)
+                ?: (indexResponse?.get("final_status") as? String)
+        }
+        if (indexStatus == STATUS_FAILED) {
+            val errorMsg = (indexResponse?.get("error") ?: indexResponse?.get("errorMsg")) as? String ?: "unknown error"
+            throw RagException("RAG indexing failed for $docId: $errorMsg")
+        }
+        if (indexStatus == STATUS_PROCESSED || indexStatus == STATUS_COMPLETED) {
+            val chunksCount = (indexResponse?.get("chunks_count") as? Number)?.toInt()
+            logger.debug("RAG upsert completed (sync terminal): externalId={}, docId={}, chunks={}", doc.externalId, docId, chunksCount)
+            return RagUpsertResult(docId = docId, indexed = true, chunksCount = chunksCount)
+        }
+        val pollResult = pollUntilTerminal(config, docId, bizId)
+        val chunksCount = pollResult?.let { (it["chunks_count"] as? Number)?.toInt() }
+        val indexed = pollResult != null && (pollResult["status"] as? String) == STATUS_PROCESSED
+        logger.debug("RAG upsert completed: externalId={}, docId={}, indexed={}, chunks={}", doc.externalId, docId, indexed, chunksCount)
+        return RagUpsertResult(docId = docId, indexed = indexed, chunksCount = chunksCount)
     }
 
     override suspend fun delete(externalId: String, bizId: String?) {
@@ -160,7 +184,7 @@ internal class EasyRagClient(
         return readByExternalId(config, externalId, bizId)
     }
 
-    override suspend fun list(category: RagCategory, pathPrefix: String, bizId: String?): List<RagDocInfo> {
+    override suspend fun list(pathPrefix: String, bizId: String?): List<RagDocInfo> {
         val config = RagConfig.load(configPath)
         if (!config.enabled) return emptyList()
         val result = mutableListOf<RagDocInfo>()
@@ -193,7 +217,6 @@ internal class EasyRagClient(
 
     override suspend fun search(
         query: String,
-        category: RagCategory,
         filters: Map<String, String>,
         topK: Int,
         timeRangeStart: Long?,
@@ -202,14 +225,13 @@ internal class EasyRagClient(
     ): List<RagChunk> {
         val config = RagConfig.load(configPath)
         if (!config.enabled) return emptyList()
-        val metadataFilters = filters + ("category" to category.code)
         val body = mapOfNonNull(
             "query" to query,
             "mode" to "naive",
             "chunkTopK" to topK,
             "timeRangeStart" to timeRangeStart,
             "timeRangeEnd" to timeRangeEnd,
-            "metadataFilters" to metadataFilters,
+            "metadataFilters" to filters.ifEmpty { null },
             "workspace" to config.workspace,
             "bizId" to bizId
         )
@@ -229,6 +251,82 @@ internal class EasyRagClient(
             )
         }
     }
+
+    // ------------------------------------------------------------------
+    // Workspace tenant configuration
+    // ------------------------------------------------------------------
+
+    override suspend fun getWorkspaceConfig(workspace: String): RagWorkspaceConfig? {
+        val config = RagConfig.load(configPath)
+        if (!config.enabled) return null
+        return try {
+            val response = exchange(
+                config, HttpMethod.GET, "/api/admin/tenant-config",
+                params = mapOf("workspace" to workspace),
+                timeoutMs = config.readTimeoutMs
+            )
+            parseWorkspaceConfig(response)
+        } catch (e: RagException) {
+            if (e.statusCode == NOT_FOUND) null else throw e
+        }
+    }
+
+    override suspend fun upsertWorkspaceConfig(config: RagWorkspaceConfigUpdate): RagWorkspaceConfig {
+        val ragConfig = loadEnabledConfig("upsertWorkspaceConfig")
+        val body = mapOfNonNull(
+            "workspace" to config.workspace,
+            "llm_model" to config.llmModel,
+            "llm_api_key" to config.llmApiKey,
+            "llm_base_url" to config.llmBaseUrl,
+            "llm_temperature" to config.llmTemperature,
+            "llm_max_tokens" to config.llmMaxTokens,
+            "embedding_model" to config.embeddingModel,
+            "embedding_api_key" to config.embeddingApiKey,
+            "embedding_base_url" to config.embeddingBaseUrl,
+            "embedding_dim" to config.embeddingDim,
+            "chunk_size" to config.chunkSize,
+            "chunk_overlap_size" to config.chunkOverlapSize,
+            "language" to config.language,
+            "default_top_k" to config.defaultTopK,
+            "rerank_enabled" to config.rerankEnabled
+        )
+        val response = exchange(
+            ragConfig, HttpMethod.POST, "/api/admin/tenant-config",
+            body = body, timeoutMs = ragConfig.readTimeoutMs
+        )
+        logger.info("RAG workspace config upserted for workspace={}", config.workspace)
+        return parseWorkspaceConfig(response)
+    }
+
+    override suspend fun deleteWorkspaceConfig(workspace: String) {
+        val config = loadEnabledConfig("deleteWorkspaceConfig")
+        exchange(
+            config, HttpMethod.DELETE, "/api/admin/tenant-config",
+            params = mapOf("workspace" to workspace),
+            timeoutMs = config.readTimeoutMs
+        )
+        logger.info("RAG workspace config deleted for workspace={}", workspace)
+    }
+
+    private fun parseWorkspaceConfig(node: Map<String, Any?>): RagWorkspaceConfig = RagWorkspaceConfig(
+        workspace = node["workspace"] as? String ?: "",
+        llmModel = node["llmModel"] as? String,
+        llmApiKey = node["llmApiKey"] as? String,
+        llmBaseUrl = node["llmBaseUrl"] as? String,
+        llmTemperature = (node["llmTemperature"] as? Number)?.toFloat(),
+        llmMaxTokens = (node["llmMaxTokens"] as? Number)?.toInt(),
+        embeddingModel = node["embeddingModel"] as? String,
+        embeddingApiKey = node["embeddingApiKey"] as? String,
+        embeddingBaseUrl = node["embeddingBaseUrl"] as? String,
+        embeddingDim = (node["embeddingDim"] as? Number)?.toInt(),
+        chunkSize = (node["chunkSize"] as? Number)?.toInt(),
+        chunkOverlapSize = (node["chunkOverlapSize"] as? Number)?.toInt(),
+        language = node["language"] as? String,
+        defaultTopK = (node["defaultTopK"] as? Number)?.toInt(),
+        rerankEnabled = node["rerankEnabled"] as? Boolean,
+        createdAt = node["createdAt"] as? String,
+        updatedAt = node["updatedAt"] as? String
+    )
 
     // ------------------------------------------------------------------
     // Internal helpers
@@ -304,6 +402,65 @@ internal class EasyRagClient(
                 backoffMs *= 2
             }
         }
+    }
+
+    /**
+     * Read document processing status by docId via `GET /api/documents/status`.
+     * Returns the raw response map, or `null` if the document is not found (404).
+     */
+    private suspend fun readDocStatusByDocId(config: RagConfig, docId: String, bizId: String?): Map<String, Any?>? {
+        return try {
+            exchange(
+                config, HttpMethod.GET, "/api/documents/status",
+                params = mapOf(
+                    "docId" to docId,
+                    "workspace" to config.workspace,
+                    "bizId" to bizId
+                ),
+                timeoutMs = config.readTimeoutMs
+            )
+        } catch (e: RagException) {
+            if (e.statusCode == NOT_FOUND) return null else throw e
+        }
+    }
+
+    /**
+     * Poll document status until a terminal state (`processed` / `failed`) is reached,
+     * using exponential backoff starting at [RagConfig.indexPollIntervalMs].
+     *
+     * @return the status response map when a terminal state is reached, or `null` on timeout
+     * @throws RagException when the document enters the `failed` state
+     */
+    private suspend fun pollUntilTerminal(config: RagConfig, docId: String, bizId: String?): Map<String, Any?>? {
+        // Clamp misconfigured values: a zero/negative interval would busy-loop the
+        // status endpoint, and capping the initial interval at MAX_POLL_INTERVAL_MS
+        // also prevents overflow when doubling it on each backoff step.
+        val pollMaxMs = config.indexPollMaxMs.coerceAtLeast(MIN_POLL_INTERVAL_MS)
+        val deadline = System.currentTimeMillis() + pollMaxMs
+        var currentInterval = config.indexPollIntervalMs.coerceIn(MIN_POLL_INTERVAL_MS, MAX_POLL_INTERVAL_MS)
+        while (System.currentTimeMillis() < deadline) {
+            val statusResponse = readDocStatusByDocId(config, docId, bizId) ?: run {
+                logger.debug("RAG poll: document {} not found, stopping poll", docId)
+                return null
+            }
+            val status = statusResponse["status"] as? String
+            logger.debug("RAG poll: docId={}, status={}", docId, status)
+            when (status) {
+                STATUS_PROCESSED -> return statusResponse
+                STATUS_FAILED -> {
+                    val errorMsg = (statusResponse["error"] ?: statusResponse["errorMsg"]) as? String ?: "unknown error"
+                    throw RagException("RAG indexing failed for $docId: $errorMsg")
+                }
+                else -> logger.debug("RAG poll: docId={}, unrecognized status='{}', continuing poll", docId, status)
+            }
+            val now = System.currentTimeMillis()
+            if (now >= deadline) break
+            val sleepMs = minOf(currentInterval, deadline - now)
+            delay(sleepMs.milliseconds)
+            currentInterval = minOf(currentInterval * 2, MAX_POLL_INTERVAL_MS)
+        }
+        logger.warn("RAG poll timed out after {}ms for docId={}", pollMaxMs, docId)
+        return null
     }
 
     private suspend fun exchange(
@@ -500,5 +657,12 @@ internal class EasyRagClient(
         const val RETRY_AFTER_401_DELAY_MS = 500L
         /** Cooldown (ms) after an auth failure before retrying — avoids 429 amplification. */
         const val AUTH_FAILURE_COOLDOWN_MS = 5_000L
+        const val MAX_POLL_INTERVAL_MS = 30_000L
+        /** Floor for poll interval / poll window — guards against zero or negative config values. */
+        const val MIN_POLL_INTERVAL_MS = 100L
+        const val STATUS_PROCESSED = "processed"
+        const val STATUS_FAILED = "failed"
+        /** Legacy terminal status value used by older synchronous index responses. */
+        const val STATUS_COMPLETED = "completed"
     }
 }

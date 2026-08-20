@@ -93,9 +93,8 @@ CommandController, UserCommandController, SkillController, FileController, AiCon
 
 ## ANTI-PATTERNS
 
-- `ToolCallingChatModel` — conflicts with custom ReAct loop
+- `ToolCallingAdvisor` / `ChatClient` tool loop — conflicts with custom ReAct loop; use raw `ChatModel.stream()` and parse tool calls manually
 - `println()` for diagnostics — SLF4J only
 - `.block()`, `.blockFirst()`, `runBlocking { }` in repository
 - `transaction { }` (sync) in repository — use `asyncTransaction { }`
-- Spring AI `stream()` for tool calls — use `call()`
 - Extension functions — not visible from Java

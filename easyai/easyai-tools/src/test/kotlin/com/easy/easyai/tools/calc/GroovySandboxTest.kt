@@ -123,6 +123,69 @@ class GroovySandboxTest {
     }
 
     @Nested
+    inner class `Step guard` {
+
+        @Test
+        fun `armed guard aborts an infinite loop at the step budget`() {
+            ScriptLoopGuard.arm(100)
+            try {
+                val exception = assertThrows(ScriptStepLimitException::class.java) {
+                    freshShell().evaluate("while (true) { }")
+                }
+                assertTrue(exception.message!!.contains("step limit"))
+            } finally {
+                ScriptLoopGuard.disarm()
+            }
+        }
+
+        @Test
+        fun `armed guard counts closure-driven iterations`() {
+            ScriptLoopGuard.arm(10)
+            try {
+                assertThrows(ScriptStepLimitException::class.java) {
+                    freshShell().evaluate("(1..100).each { it * 2 }")
+                }
+            } finally {
+                ScriptLoopGuard.disarm()
+            }
+        }
+
+        @Test
+        fun `unarmed guard is a no-op so bare shells keep working`() {
+            assertEquals("6", freshShell().evaluate("(1..3).sum()").toString())
+        }
+
+        @Test
+        fun `budget resets between executions on the same thread`() {
+            ScriptLoopGuard.arm(5)
+            try {
+                assertThrows(ScriptStepLimitException::class.java) {
+                    freshShell().evaluate("while (true) { }")
+                }
+            } finally {
+                ScriptLoopGuard.disarm()
+            }
+            // A fresh arm must start from the full budget again
+            ScriptLoopGuard.arm(1_000)
+            try {
+                assertEquals("55", freshShell().evaluate("(1..10).sum()").toString())
+            } finally {
+                ScriptLoopGuard.disarm()
+            }
+        }
+
+        @Test
+        fun `blocks script access to the guard by bare name`() {
+            assertBlocked("ScriptLoopGuard.disarm()")
+        }
+
+        @Test
+        fun `blocks script access to the guard by qualified name`() {
+            assertBlocked("com.easy.easyai.tools.calc.ScriptLoopGuard.arm(999999999999)")
+        }
+    }
+
+    @Nested
     inner class `Legitimate calculations still work` {
 
         @Test
