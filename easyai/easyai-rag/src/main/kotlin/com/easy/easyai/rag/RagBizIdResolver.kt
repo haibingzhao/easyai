@@ -4,14 +4,20 @@ import java.nio.file.Path
 import java.security.MessageDigest
 
 /**
- * Derives EasyRAG `biz_id` values for memory scopes.
+ * Derives EasyRAG `biz_id` values for memory and knowledge scopes.
  *
  * EasyRAG treats `biz_id` as a hard storage filter dimension (shared tables
  * with a `(id, workspace, biz_id)` composite key); cross-biz_id queries are
- * impossible. Memory therefore maps:
+ * impossible. The biz_id encodes both the **user/project scope** and the
+ * **content type** (memory vs knowledge), achieving storage-level isolation:
  *
- * - GLOBAL scope  -> `u_{userId}` (user-level slice, visible across projects)
- * - PROJECT scope -> `u_{userId}-{projectKey}` (user + project slice)
+ * - GLOBAL memory   -> `u_{userId}_m`
+ * - GLOBAL knowledge -> `u_{userId}_k`
+ * - PROJECT memory   -> `u_{userId}-{projectKey}-{hash8}_m`
+ * - PROJECT knowledge -> `u_{userId}-{projectKey}-{hash8}_k`
+ *
+ * This means vector search, keyword search, and all storage operations
+ * are filtered at the storage layer — no metadata post-filter needed.
  *
  * Charset constraint (shared with EasyRAG workspace validation):
  * `^[a-zA-Z0-9_\-][a-zA-Z0-9_\-\.]{0,63}$`.
@@ -23,22 +29,31 @@ internal object RagBizIdResolver {
     private const val SEGMENT_MAX_LENGTH = 20
     private const val HASH_LENGTH = 8
 
-    /** biz_id for GLOBAL scope: `u_{sanitized userId}`, capped at [MAX_GLOBAL_LENGTH]. */
-    fun globalBizId(userId: String?): String {
+    /** Content type suffix for memory. */
+    const val MEMORY_TYPE = "m"
+
+    /** Content type suffix for knowledge. */
+    const val KNOWLEDGE_TYPE = "k"
+
+    /**
+     * biz_id for GLOBAL scope: `u_{sanitized userId}_{contentType}`,
+     * capped at [MAX_GLOBAL_LENGTH] (before the content type suffix).
+     */
+    fun globalBizId(userId: String?, contentType: String): String {
         val user = sanitize(userId)?.take(MAX_GLOBAL_LENGTH - USER_PREFIX.length) ?: "system"
-        return USER_PREFIX + user
+        return "$USER_PREFIX${user}_$contentType"
     }
 
     /**
-     * biz_id for PROJECT scope: `u_{userId}-{lastPathSegment}-{pathHash8}`.
+     * biz_id for PROJECT scope: `u_{userId}-{lastPathSegment}-{pathHash8}_{contentType}`.
      * Returns null when [projectPath] is absent (PROJECT operations degrade).
      */
-    fun projectBizId(userId: String?, projectPath: Path?): String? {
+    fun projectBizId(userId: String?, projectPath: Path?, contentType: String): String? {
         if (projectPath == null) return null
         val user = (sanitize(userId) ?: "system").take(SEGMENT_MAX_LENGTH)
         val segment = (sanitize(projectPath.fileName?.toString()) ?: "p").take(SEGMENT_MAX_LENGTH)
         val hash = shortHash(projectPath.toAbsolutePath().normalize().toString())
-        return "$USER_PREFIX$user-$segment-$hash"
+        return "$USER_PREFIX$user-$segment-${hash}_$contentType"
     }
 
     /** Replace characters outside the EasyRAG scope charset with `_`; null when blank. */

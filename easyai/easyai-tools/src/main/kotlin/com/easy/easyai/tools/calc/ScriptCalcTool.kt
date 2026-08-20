@@ -3,11 +3,15 @@ package com.easy.easyai.tools.calc
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.tool.*
-import kotlinx.coroutines.*
+import groovy.lang.GroovyShell
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -82,22 +86,25 @@ class ScriptCalcTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
         onUpdate(ToolUpdate.Progress("Calculating…"))
 
         try {
-            val result = withTimeout(TIMEOUT_SECONDS.seconds) {
-                val shell = GroovySandbox.createSecureShell()
-                val outputCapture = StringWriter()
-                shell.context.setVariable("out", PrintWriter(outputCapture))
-                // Inject file data as __data__ variable if a file was provided
-                if (fileData != null) {
-                    shell.context.setVariable("__data__", fileData)
-                }
-                val evalResult = shell.evaluate(script)
-                val stdout = outputCapture.toString().trimEnd('\n')
-                // Prefer stdout (println output) over the last expression value
-                stdout.ifEmpty { evalResult?.toString() ?: "null" }
+            val shell = GroovySandbox.createSecureShell()
+            val outputCapture = StringWriter()
+            shell.context.setVariable("out", PrintWriter(outputCapture))
+            // Inject file data as __data__ variable if a file was provided
+            if (fileData != null) {
+                shell.context.setVariable("__data__", fileData)
             }
+            val evalResult = evaluateWithTimeout(shell, script, TIMEOUT_SECONDS.seconds)
+            val stdout = outputCapture.toString().trimEnd('\n')
+            // Prefer stdout (println output) over the last expression value
+            val result = stdout.ifEmpty { evalResult?.toString() ?: "null" }
             ToolResult(content = listOf(TextContent(result)))
-        } catch (_: TimeoutCancellationException) {
+        } catch (_: ScriptTimeoutException) {
             errorResult("Script execution timed out after ${TIMEOUT_SECONDS}s")
+        } catch (_: ScriptStepLimitException) {
+            errorResult(
+                "Script exceeded the $MAX_STEPS-step limit: likely an infinite loop. " +
+                    "Fix the loop condition or reduce the number of iterations."
+            )
         } catch (e: org.codehaus.groovy.control.CompilationFailedException) {
             logger.debug("Script compilation error: {}", e.message)
             // CompilationFailedException.message contains line/column details — keep full text
@@ -114,6 +121,58 @@ class ScriptCalcTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
             errorResult("Script execution error: ${e.message}")
         }
     }
+
+    /**
+     * Evaluates [script] on a dedicated daemon thread with a hard wall-clock timeout.
+     *
+     * kotlinx `withTimeout` cannot enforce this limit: `shell.evaluate` is a plain
+     * blocking call, the `withTimeout` block contains no suspension point, so the
+     * cancellation is only delivered after `evaluate` returns — a runaway script
+     * (e.g. `while (true)`) would hang the tool forever. `Thread.join(timeout)`
+     * provides a true hard timeout independent of the script's behavior; on expiry
+     * the worker is interrupted and abandoned (daemon, so it cannot block JVM exit).
+     *
+     * Pure-CPU loops that ignore interrupts are additionally bounded by the
+     * [ScriptLoopGuard] step budget (see [LoopInstrumentationCustomizer] in
+     * [GroovySandbox]), which aborts them deterministically well before the
+     * wall-clock timeout.
+     *
+     * Internal visibility (not private) so tests can verify the join(timeout)
+     * mechanism with a short timeout instead of waiting the full 10s.
+     */
+    internal fun evaluateWithTimeout(shell: GroovyShell, script: String, timeout: Duration): Any? {
+        var result: Any? = null
+        var thrown: Throwable? = null
+        val worker = Thread({
+            ScriptLoopGuard.arm(MAX_STEPS)
+            try {
+                result = shell.evaluate(script)
+            } catch (t: Throwable) {
+                thrown = t
+            } finally {
+                ScriptLoopGuard.disarm()
+            }
+        }, "calc-script-worker")
+        worker.isDaemon = true
+        worker.start()
+        worker.join(timeout.inWholeMilliseconds)
+        if (worker.isAlive) {
+            worker.interrupt()
+            logger.warn("Calc script exceeded {}ms timeout, worker interrupted", timeout.inWholeMilliseconds)
+            throw ScriptTimeoutException
+        }
+        // ScriptStepLimitException and other Exceptions propagate as-is; JVM Errors
+        // (e.g. StackOverflowError from unbounded recursion) are wrapped so the
+        // catch blocks in doExecute can turn them into a normal tool error.
+        thrown?.let {
+            if (it is Exception) throw it
+            throw RuntimeException("Script error: ${it.javaClass.simpleName}", it)
+        }
+        return result
+    }
+
+    /** Signals that the script exceeded its wall-clock timeout. */
+    internal object ScriptTimeoutException : RuntimeException("script timeout")
 
     /**
      * Validates [path] for safe file access. Returns an error message if invalid, or null if OK.
@@ -149,6 +208,12 @@ class ScriptCalcTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
 
     companion object {
         private const val TIMEOUT_SECONDS = 10
+        /**
+         * Step budget for loop/closure iterations. Tight enough to stop runaway loops
+         * within milliseconds, generous enough for real data-processing scripts
+         * (a 512KB file is a few tens of thousands of lines).
+         */
+        private const val MAX_STEPS = 1_000_000L
         /** Max file size: 512KB — enough for CSV/TSV data, prevents memory exhaustion. */
         private const val MAX_FILE_BYTES = 512L * 1024L
     }

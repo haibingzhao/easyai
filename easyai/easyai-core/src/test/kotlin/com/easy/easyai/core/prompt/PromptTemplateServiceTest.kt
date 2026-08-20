@@ -94,4 +94,39 @@ class PromptTemplateServiceTest {
             assertTrue(first == second)
         }
     }
+
+    @Nested
+    inner class `knowledge guidance` {
+
+        @Test
+        fun `appends static guidance when knowledge available on default prompt`() {
+            val rendered = service.build(null, contextWithTools("knowledge_search").copy(knowledgeAvailable = true))
+            assertTrue(rendered.contains("## Knowledge Base"))
+            assertTrue(rendered.contains("knowledge_search"))
+        }
+
+        @Test
+        fun `omits guidance when knowledge not available`() {
+            val rendered = service.build(null, contextWithTools("knowledge_search"))
+            assertFalse(rendered.contains("## Knowledge Base"))
+        }
+
+        @Test
+        fun `guides parallel issuance together with memory search`() {
+            val rendered = service.build(
+                null,
+                contextWithTools("memory_search", "knowledge_search")
+                    .copy(memoryAvailable = true, knowledgeAvailable = true)
+            )
+            assertTrue(rendered.contains("SAME response"))
+        }
+
+        @Test
+        fun `guidance output is stable across builds for cache friendliness`() {
+            val context = contextWithTools("knowledge_search").copy(knowledgeAvailable = true)
+            val first = service.build(null, context)
+            val second = service.build(null, context)
+            assertTrue(first == second)
+        }
+    }
 }

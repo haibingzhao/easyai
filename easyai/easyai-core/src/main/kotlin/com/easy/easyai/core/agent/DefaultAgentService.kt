@@ -4,6 +4,7 @@ import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
 import com.easy.easyai.core.event.MessageListener
+import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.message.MessageConverter
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.permission.PermissionService
@@ -46,6 +47,7 @@ class DefaultAgentService(
      */
     private val observationRegistry: ObservationRegistry = ObservationRegistry.NOOP,
     override val memoryStore: MemoryStore? = null,
+    override val knowledgeStore: KnowledgeStore? = null,
     override val waitForUserListener: WaitForUserListener? = null,
     override val outputSchemaValidator: OutputSchemaValidator? = null
 ) : AgentService, BeforeToolCallHook, AfterToolCallHook {

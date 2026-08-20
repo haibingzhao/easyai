@@ -1,5 +1,6 @@
 package com.easy.easyai.rag
 
+import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.memory.*
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -17,10 +18,11 @@ import java.time.format.DateTimeFormatter
  * - isolation: EasyRAG `biz_id` slices derived by [RagBizIdResolver]
  *   (GLOBAL -> user slice, PROJECT -> user + project slice)
  * - key layout: `{type}/{name}.md` (e.g. `experience_lessons/frp-setup.md`)
- * - externalId: `easyai:memory:{key}` (idempotent upsert, deterministic docId)
+ * - externalId: `easyai:{key}` (idempotent upsert, deterministic docId)
  * - content: YAML-frontmatter Markdown format (frontmatter carries description, type,
  *   keywords, maturity, scenarios, created/updated dates)
- * - writes are synchronously indexed, so entries are searchable immediately
+ * - writes submit indexing asynchronously and poll for completion; entries may not be
+ *   immediately searchable if the poll times out (indexed=false in RagUpsertResult)
  *
  * PROJECT operations without a project path degrade: reads return empty,
  * writes raise [MemoryBackendException].
@@ -111,7 +113,6 @@ internal class RagMemoryStore(
         val bizId = bizIdOf(scope, owner) ?: return@translateBackendErrors emptyList()
         val chunks = client.search(
             query = query,
-            category = RagCategory.MEMORY,
             topK = limit,
             timeRangeStart = timeRangeStart,
             timeRangeEnd = timeRangeEnd,
@@ -128,11 +129,9 @@ internal class RagMemoryStore(
             val bizId = requireBizId(scope, owner, "write")
             val key = keyOf(entry.path)
             val doc = RagDocument(
-                category = RagCategory.MEMORY,
                 key = key,
                 content = buildFileContent(entry),
                 metadata = buildMap {
-                    put("category", RagCategory.MEMORY.code)
                     put("type", entry.type.dirName)
                     put("name", entry.name)
                     put("description", entry.description)
@@ -147,8 +146,12 @@ internal class RagMemoryStore(
                     buildStructure = true
                 )
             )
-            client.upsert(doc, bizId)
-            logger.debug("Memory entry written to RAG: {} (bizId={})", doc.externalId, bizId)
+            val result = client.upsert(doc, bizId)
+            if (!result.indexed) {
+                logger.warn("Memory entry written but indexing not confirmed (poll timeout): {} (bizId={})", doc.externalId, bizId)
+            } else {
+                logger.debug("Memory entry written to RAG: {} (bizId={})", doc.externalId, bizId)
+            }
             Path.of(doc.filePath)
         }
 
@@ -158,7 +161,7 @@ internal class RagMemoryStore(
         translateBackendErrors("read") {
             val bizId = bizIdOf(scope, owner) ?: return@translateBackendErrors null
             val detail = client.readByExternalId(
-                RagConstants.externalIdOf(RagCategory.MEMORY, keyOf(path)), bizId
+                RagConstants.externalIdOf(keyOf(path)), bizId
             )
             detail?.content
         }
@@ -168,7 +171,7 @@ internal class RagMemoryStore(
     override suspend fun delete(path: String, scope: MemoryScope, owner: MemoryOwnerContext): Boolean =
         translateBackendErrors("delete") {
             val bizId = requireBizId(scope, owner, "delete")
-            val externalId = RagConstants.externalIdOf(RagCategory.MEMORY, keyOf(path))
+            val externalId = RagConstants.externalIdOf(keyOf(path))
             if (client.readByExternalId(externalId, bizId) == null) {
                 return@translateBackendErrors false
             }
@@ -180,7 +183,7 @@ internal class RagMemoryStore(
     override suspend fun deleteAll(scope: MemoryScope, owner: MemoryOwnerContext): Int =
         translateBackendErrors("deleteAll") {
             val bizId = bizIdOf(scope, owner) ?: return@translateBackendErrors 0
-            val docs = client.list(RagCategory.MEMORY, listPrefix(null), bizId)
+            val docs = client.list(listPrefix(null), bizId)
             val docIds = docs.map { it.docId }
             if (docIds.isEmpty()) return@translateBackendErrors 0
             val deleted = client.batchDelete(docIds, bizId)
@@ -193,7 +196,7 @@ internal class RagMemoryStore(
     override suspend fun list(scope: MemoryScope, owner: MemoryOwnerContext, type: MemoryType?): List<MemoryEntry> =
         translateBackendErrors("list") {
             val bizId = bizIdOf(scope, owner) ?: return@translateBackendErrors emptyList()
-            val docs = client.list(RagCategory.MEMORY, listPrefix(type), bizId)
+            val docs = client.list(listPrefix(type), bizId)
             val externalIds = docs.mapNotNull { it.externalId }.distinct()
             coroutineScope {
                 externalIds.map { externalId ->
@@ -213,9 +216,9 @@ internal class RagMemoryStore(
     override suspend fun findByName(name: String, scope: MemoryScope, owner: MemoryOwnerContext): MemoryEntry? =
         translateBackendErrors("findByName") {
             val bizId = bizIdOf(scope, owner) ?: return@translateBackendErrors null
-            for (type in MemoryType.entries) {
+            for (type in MemoryType.entriesFor(DomainCatalog.activeDomain)) {
                 val key = "${type.dirName}/$name.md"
-                val detail = client.readByExternalId(RagConstants.externalIdOf(RagCategory.MEMORY, key), bizId)
+                val detail = client.readByExternalId(RagConstants.externalIdOf(key), bizId)
                     ?: continue
                 val content = detail.content ?: continue
                 parseChunkToEntry(content, detail.filePath)?.let { return@translateBackendErrors it }
@@ -233,8 +236,8 @@ internal class RagMemoryStore(
 
     /** Derive the EasyRAG biz_id slice; null when PROJECT scope lacks a project path. */
     private fun bizIdOf(scope: MemoryScope, owner: MemoryOwnerContext): String? = when (scope) {
-        MemoryScope.GLOBAL -> RagBizIdResolver.globalBizId(owner.userId)
-        MemoryScope.PROJECT -> RagBizIdResolver.projectBizId(owner.userId, owner.projectPath)
+        MemoryScope.GLOBAL -> RagBizIdResolver.globalBizId(owner.userId, RagBizIdResolver.MEMORY_TYPE)
+        MemoryScope.PROJECT -> RagBizIdResolver.projectBizId(owner.userId, owner.projectPath, RagBizIdResolver.MEMORY_TYPE)
     }
 
     /** Like [bizIdOf] but fails mutating operations that lack a PROJECT context. */
@@ -249,7 +252,7 @@ internal class RagMemoryStore(
     private fun keyOf(path: String): String = path.trimStart('/')
 
     private fun listPrefix(type: MemoryType?): String {
-        val base = "${RagConstants.FILE_PATH_ROOT}/${RagCategory.MEMORY.code}/"
+        val base = "${RagConstants.FILE_PATH_ROOT}/"
         return if (type != null) "$base${type.dirName}/" else base
     }
 
@@ -260,7 +263,7 @@ internal class RagMemoryStore(
 
     /**
      * Parse a stored memory document (frontmatter + body) into a [MemoryEntry].
-     * [filePath] is the EasyRAG logical path `easyai/memory/{type}/{name}.md`,
+     * [filePath] is the EasyRAG logical path `easyai/{type}/{name}.md`,
      * used as fallback source for type/name when frontmatter is missing.
      */
     private fun parseChunkToEntry(content: String, filePath: String?): MemoryEntry? {
@@ -302,10 +305,10 @@ internal class RagMemoryStore(
         )
     }
 
-    /** Strip the `easyai/memory/` prefix, returning `{type}/{name}.md` or null. */
+    /** Strip the `easyai/` prefix, returning `{type}/{name}.md` or null. */
     private fun relativePathOf(filePath: String?): String? {
         if (filePath == null) return null
-        val prefix = "${RagConstants.FILE_PATH_ROOT}/${RagCategory.MEMORY.code}/"
+        val prefix = "${RagConstants.FILE_PATH_ROOT}/"
         if (!filePath.startsWith(prefix)) return null
         val relative = filePath.removePrefix(prefix)
         return if (relative.contains('/')) relative else null

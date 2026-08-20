@@ -73,8 +73,7 @@ npx tsc -b     # Type check
 
 ## Anti-Patterns to Avoid
 
-- **No `ToolCallingChatModel`** — conflicts with the custom ReAct loop.
-- **No Spring AI `stream()` for tool calls** — use `call()`.
+- **No `ToolCallingAdvisor` / `ChatClient` tool loop** — conflicts with the custom ReAct loop; use raw `ChatModel.stream()` and parse tool calls manually.
 - **No `transaction { }`** in repository — only `asyncTransaction { }` (Exposed R2DBC).
 - **No `.block()`, `.blockFirst()`, `runBlocking { }`** in repository layer.
 

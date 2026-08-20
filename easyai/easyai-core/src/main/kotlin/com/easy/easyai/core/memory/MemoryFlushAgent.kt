@@ -2,6 +2,7 @@ package com.easy.easyai.core.memory
 
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -94,10 +95,18 @@ class MemoryFlushAgent(
         }
 
         var written = 0
+        var failed = 0
         for (item in entries) {
             val entry = buildEntry(item)
-            store.write(entry, scope, owner)
-            written++
+            try {
+                store.write(entry, scope, owner)
+                written++
+            } catch (e: Exception) {
+                // Isolate per-entry failures (e.g. RAG indexing errors) so one bad
+                // entry does not discard the rest of the flush batch.
+                failed++
+                logger.warn("Memory flush: failed to write entry '{}': {}", entry.name, e.message)
+            }
         }
         flushedHashes.add(contextHash)
         // Evict oldest entries when capacity exceeded (LinkedHashSet guarantees insertion order)
@@ -105,7 +114,11 @@ class MemoryFlushAgent(
             flushedHashes.remove(flushedHashes.first())
         }
 
-        logger.info("Memory flush completed: wrote {} memory entries", written)
+        if (failed > 0) {
+            logger.warn("Memory flush completed with errors: wrote {} entries, {} failed", written, failed)
+        } else {
+            logger.info("Memory flush completed: wrote {} memory entries", written)
+        }
         return FlushResult(written = written)
     }
 
@@ -116,6 +129,10 @@ class MemoryFlushAgent(
     }
 
     private fun buildFlushPrompt(messages: List<EasyAiMessage>): String = buildString {
+        // Read the active domain at call time: bean construction order relative to
+        // domain configuration is not guaranteed, so capturing it in the constructor races.
+        val categoryList = MemoryType.entriesFor(DomainCatalog.activeDomain).joinToString("|") { it.dirName }
+        val categoryCount = MemoryType.entriesFor(DomainCatalog.activeDomain).size
         appendLine("Extract the most important durable facts, decisions, and context from the following conversation.")
         appendLine("Focus on information that should persist across sessions:")
         appendLine("- User preferences and working style")
@@ -127,9 +144,9 @@ class MemoryFlushAgent(
         appendLine()
         appendLine("Return ONLY a single JSON object (no markdown fences, no commentary) with this exact shape:")
         appendLine(
-            """{"memories": [{"title": "short unique title", "description": "one-line summary", "category": "user_preferences|project_information|development_standards|task_summary|experience_lessons|other", "keywords": ["keyword"], "scenarios": ["when this applies"], "maturity": "low|medium|high", "content": "markdown body with the full fact"}]}"""
+            """{"memories": [{"title": "short unique title", "description": "one-line summary", "category": "$categoryList", "keywords": ["keyword"], "scenarios": ["when this applies"], "maturity": "low|medium|high", "content": "markdown body with the full fact"}]}"""
         )
-        appendLine("Each entry in \"memories\" must be self-contained. \"category\" must be one of the six values listed. \"maturity\" must be one of low/medium/high. If no durable facts exist, return {\"memories\": []}.")
+        appendLine("Each entry in \"memories\" must be self-contained. \"category\" must be one of the $categoryCount values listed. \"maturity\" must be one of low/medium/high. If no durable facts exist, return {\"memories\": []}.")
         appendLine()
         appendLine("<conversation>")
         messages.forEach { msg ->

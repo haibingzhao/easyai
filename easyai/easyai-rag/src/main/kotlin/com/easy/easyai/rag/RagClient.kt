@@ -13,8 +13,9 @@ class RagException(
 ) : RuntimeException(message, cause)
 
 /**
- * Client abstraction over the EasyRAG REST API, content-type agnostic
- * (memory in phase 1, wiki in phase 2 — see [RagCategory]).
+ * Client abstraction over the EasyRAG REST API, content-type agnostic.
+ * Content-type isolation (memory vs knowledge) is achieved at the storage level
+ * via `biz_id` — see [RagBizIdResolver].
  *
  * All methods are suspending and never block. Implementations reload [RagConfig]
  * per request so runtime configuration changes apply without restart.
@@ -29,8 +30,8 @@ interface RagClient {
 
     /**
      * Idempotent upsert: `POST /api/documents/text` with the deterministic externalId,
-     * then synchronous indexing (`POST /api/documents/{docId}/index`) so the document
-     * is searchable immediately after the call returns.
+     * then submit indexing and poll until a terminal state (`processed` / `failed`)
+     * is reached or the poll timeout expires.
      *
      * @param bizId optional EasyRAG business-line slice; null = server default.
      */
@@ -46,16 +47,16 @@ interface RagClient {
     suspend fun readByExternalId(externalId: String, bizId: String? = null): RagDocumentDetail?
 
     /**
-     * List documents under [category] whose logical file path starts with [pathPrefix].
+     * List documents whose logical file path starts with [pathPrefix].
      * Fetches all pages transparently.
      */
-    suspend fun list(category: RagCategory, pathPrefix: String, bizId: String? = null): List<RagDocInfo>
+    suspend fun list(pathPrefix: String, bizId: String? = null): List<RagDocInfo>
 
     /**
      * Semantic retrieval via `POST /api/query/data` (naive mode, no LLM).
+     * Content-type isolation is handled by [bizId] at the storage layer.
      *
      * @param query natural language query
-     * @param category content category filter (metadata `category`)
      * @param filters additional exact metadata filters
      * @param topK max chunks to return
      * @param timeRangeStart inclusive business-time lower bound, epoch seconds
@@ -64,13 +65,30 @@ interface RagClient {
      */
     suspend fun search(
         query: String,
-        category: RagCategory,
         filters: Map<String, String> = emptyMap(),
         topK: Int = 5,
         timeRangeStart: Long? = null,
         timeRangeEnd: Long? = null,
         bizId: String? = null
     ): List<RagChunk>
+
+    /**
+     * Get the workspace-granular tenant configuration from EasyRAG.
+     * Returns `null` when no workspace-specific config exists (global defaults apply).
+     */
+    suspend fun getWorkspaceConfig(workspace: String): RagWorkspaceConfig?
+
+    /**
+     * Create or update the tenant configuration for a workspace.
+     * Uses merge semantics: `null` fields in [config] do not modify existing values.
+     * API keys sent as `"****"` or empty string also preserve the existing value.
+     */
+    suspend fun upsertWorkspaceConfig(config: RagWorkspaceConfigUpdate): RagWorkspaceConfig
+
+    /**
+     * Delete the tenant configuration for a workspace, reverting to global server defaults.
+     */
+    suspend fun deleteWorkspaceConfig(workspace: String)
 
     companion object {
         /** Creates the default HTTP-based client reading [RagConfig] from [configPath] per request. */

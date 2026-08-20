@@ -39,7 +39,10 @@ export interface UpdateMemoryRequest {
   scenarios?: string[];
 }
 
-/** Memory categories (backend MemoryType 6 classes), in display order. */
+/**
+ * Memory categories fallback (coding domain defaults).
+ * Prefer useCategoryStore().memoryCategories for dynamic domain-aware categories.
+ */
 export const MEMORY_CATEGORIES = [
   { apiName: 'user_preferences', labelKey: 'User Preferences' },
   { apiName: 'project_information', labelKey: 'Project Information' },

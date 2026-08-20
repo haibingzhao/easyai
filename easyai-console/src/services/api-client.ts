@@ -57,12 +57,38 @@ export async function authFetch(
   url: string,
   options?: AuthFetchOptions,
 ): Promise<Response> {
-  const headers = new Headers(options?.headers);
-  if (accessToken) {
-    headers.set('Authorization', `Bearer ${accessToken}`);
+  // Detect FormData body — the browser must auto-set Content-Type with the
+  // multipart boundary.  Passing an explicit `headers` object prevents that
+  // in some environments, so for FormData we authenticate via the `token`
+  // query parameter (already supported by JwtAuthenticationFilter) and
+  // omit `headers` from the fetch init entirely.
+  const isFormData = typeof FormData !== 'undefined' && options?.body instanceof FormData;
+
+  let effectiveUrl = url;
+  let fetchOptions: RequestInit = { ...options };
+
+  if (isFormData) {
+    // Remove headers so the browser auto-sets Content-Type: multipart/form-data
+    delete fetchOptions.headers;
+
+    // Append auth token as query parameter
+    if (accessToken) {
+      const separator = effectiveUrl.includes('?') ? '&' : '?';
+      effectiveUrl = `${effectiveUrl}${separator}token=${encodeURIComponent(accessToken)}`;
+    }
+  } else {
+    // Non-FormData: build headers normally
+    const hasOwnHeaders = options?.headers != null;
+    const headers = hasOwnHeaders ? new Headers(options.headers) : new Headers();
+    if (accessToken) {
+      headers.set('Authorization', `Bearer ${accessToken}`);
+    }
+    if (hasOwnHeaders || accessToken) {
+      fetchOptions.headers = headers;
+    }
   }
 
-  const res = await fetch(url, { ...options, headers });
+  const res = await fetch(effectiveUrl, fetchOptions);
 
   // Retry once on 401 by refreshing the token
   if (res.status === 401 && !options?._retried) {
@@ -70,8 +96,7 @@ export async function authFetch(
     if (!skipAuth) {
       const newToken = await refreshTokenIfNeeded();
       if (newToken) {
-        headers.set('Authorization', `Bearer ${newToken}`);
-        return authFetch(url, { ...options, headers, _retried: true });
+        return authFetch(url, { ...options, _retried: true });
       }
     }
   }

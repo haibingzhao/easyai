@@ -1,6 +1,6 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { MessageSquare, GitBranch, Settings, Bot, Database, Blocks, Brain, Terminal, Cpu, PanelLeftClose, PanelLeft } from 'lucide-react';
+import { MessageSquare, GitBranch, Settings, Bot, Database, Blocks, Brain, Terminal, Cpu, PanelLeftClose, PanelLeft, BookOpen } from 'lucide-react';
 import { NAV_ITEMS, EXTRA_NAV_ITEMS, APP_CONFIG, ICON_REGISTRY } from '@/constants/navigation';
 import { useNavStore } from '@/services/stores/nav-store';
 import { SIDEBAR_COLLAPSED_WIDTH } from './AppLayout';
@@ -16,6 +16,7 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Cpu,
   Database,
   Settings,
+  BookOpen,
 };
 
 /** Resolve icon by name: built-in map first, then external registry. */

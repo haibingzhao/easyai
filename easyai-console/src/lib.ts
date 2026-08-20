@@ -66,6 +66,7 @@ export { useAuthStore } from './services/stores/auth-store';
 export { useSettingsStore } from './services/stores/settings-store';
 export { useSessionStore } from './services/stores/session-store';
 export { useAgentStore } from './services/stores/agent-store';
+export { useCategoryStore } from './services/stores/category-store';
 export { convertSnapshot } from './services/stores/chat/message-converter';
 export { mergeToolResults } from './services/stores/chat/session-loader';
 
@@ -106,6 +107,7 @@ export { AgentCreatePage } from './pages/AgentCreatePage';
 export { ModelsPage } from './pages/ModelsPage';
 export { McpPage } from './pages/McpPage';
 export { MemoriesPage } from './pages/MemoriesPage';
+export { KnowledgePage } from './pages/KnowledgePage';
 export { CommandsPage } from './pages/CommandsPage';
 export { SettingsPage } from './pages/SettingsPage';
 export { SwarmPresetEditorPage } from './pages/SwarmPresetEditorPage';
