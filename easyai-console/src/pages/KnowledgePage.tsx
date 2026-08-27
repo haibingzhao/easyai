@@ -75,6 +75,7 @@ const KnowledgePanel: React.FC = () => {
   const deleteEntry = useKnowledgeStore((s) => s.deleteEntry);
   const clearError = useKnowledgeStore((s) => s.clearError);
   const clearDetail = useKnowledgeStore((s) => s.clearDetail);
+  const stopIndexingPoll = useKnowledgeStore((s) => s.stopIndexingPoll);
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -91,6 +92,11 @@ const KnowledgePanel: React.FC = () => {
     loadEntries();
     loadSources();
   }, [loadEntries, loadSources]);
+
+  // Stop indexing polling when unmounting the knowledge panel
+  useEffect(() => {
+    return () => stopIndexingPoll();
+  }, [stopIndexingPoll]);
 
   const handleSelect = useCallback(
     (key: string) => {

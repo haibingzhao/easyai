@@ -272,7 +272,7 @@ export const ChatPanel: React.FC = () => {
           if (cancelled) return false;
           hasPendingPermission = !!detail?.pendingPermission;
           if (detail) {
-            loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables);
+            loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength);
           }
         } else {
           // Safe to use incremental merge — pass pendingPermission from backend
@@ -284,7 +284,7 @@ export const ChatPanel: React.FC = () => {
         if (cancelled) return false;
         hasPendingPermission = !!detail?.pendingPermission;
         if (detail) {
-          loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables);
+          loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength);
         }
       }
 
@@ -349,7 +349,7 @@ export const ChatPanel: React.FC = () => {
         ]);
         if (cancelled) return;
         if (detail) {
-          loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables);
+          loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength);
         }
         setTodos(groupedTodos.main);
         setAllSubAgentTodos(
@@ -362,13 +362,20 @@ export const ChatPanel: React.FC = () => {
       }
     };
 
+    // Ownership guard: once the user switches sessions, the store's runningSessionId no
+    // longer matches the session watched by this effect. In-flight events from the old
+    // session must be dropped, otherwise they would mutate the new session's state
+    // (streaming blocks, or even committed messages) before the effect cleanup aborts.
+    const isStaleWatch = () => cancelled || useChatStore.getState().runningSessionId !== runningSessionId;
+
     // SSE-first: attach to the running session's event broadcast
     watchHandle = watchSession(runningSessionId, {
       onEvent: (event) => {
+        if (isStaleWatch()) return;
         useChatStore.getState().handleEvent(event);
       },
       onDone: (event) => {
-        if (cancelled) return;
+        if (isStaleWatch()) return;
         if (event.reason === 'not_streaming') {
           // Session not active on this server — fall back to polling
           poll();
@@ -378,7 +385,7 @@ export const ChatPanel: React.FC = () => {
         }
       },
       onError: () => {
-        if (cancelled) return;
+        if (isStaleWatch()) return;
         // SSE connection failed — fall back to polling
         poll();
       },
@@ -387,7 +394,7 @@ export const ChatPanel: React.FC = () => {
     // Periodic checkpoint refresh during SSE — surfaces team member file changes
     // that don't flow through the parent's SSE stream (members use isolated session IDs).
     const checkpointTimer = setInterval(async () => {
-      if (cancelled) return;
+      if (isStaleWatch()) return;
       try {
         const checkpoints = await getCheckpoints(runningSessionId);
         if (cancelled) return;

@@ -1,9 +1,16 @@
-export function formatTokenCount(count: number): string {
-  if (count >= 1000000) {
-    return `${(count / 1000000).toFixed(1)}M`;
+/**
+ * Format a raw token count with a K/M abbreviation.
+ *
+ * @param base Numbering base for the abbreviations: 1000 (SI, default — used for
+ *   cumulative usage counters) or 1024 (binary — used for context-window sizes,
+ *   matching the model-config convention where "256K" means 256 x 1024 = 262144).
+ */
+export function formatTokenCount(count: number, base: 1000 | 1024 = 1000): string {
+  if (count >= base * base) {
+    return `${(count / (base * base)).toFixed(1)}M`;
   }
-  if (count >= 1000) {
-    return `${(count / 1000).toFixed(1)}K`;
+  if (count >= base) {
+    return `${(count / base).toFixed(1)}K`;
   }
   return count.toString();
 }
@@ -75,3 +82,4 @@ export function formatDurationSeconds(seconds: number): string {
   if (h > 0) return `${h}h ${m}m ${s}s`;
   return `${m}m ${s}s`;
 }
+

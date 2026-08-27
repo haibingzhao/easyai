@@ -129,6 +129,12 @@ class ChatStreamService(
             emit(ChatStreamEvent.Done(reason = "not_streaming").toSse("done"))
             return@flow
         }
+        // Attach-time context push: the tap has replay=0, so a watch subscriber that
+        // connects after buildSseFlow started would otherwise miss the handshake
+        // session_context event. Re-emit it from the live session on every attach.
+        executionService?.getActiveSession(sessionId)?.let { session ->
+            emit(sessionContextSse(session))
+        }
         tap.transformWhile { sse ->
             emit(sse)
             sse.event() != "done" && sse.event() != "error"
@@ -148,6 +154,17 @@ class ChatStreamService(
 
     private fun errorSse(message: String?, isRetryable: Boolean = false): ServerSentEvent<ChatStreamEvent> =
         ChatStreamEvent.Error(errorMessage = message, isRetryable = isRetryable).toSse("error")
+
+    /**
+     * Handshake event carrying the session's active model context window, so the
+     * frontend token bar renders the real usage percentage instead of a hardcoded default.
+     */
+    private fun sessionContextSse(session: ChatSession): ServerSentEvent<ChatStreamEvent> =
+        ChatStreamEvent.SessionContext(
+            sessionId = session.id,
+            modelContextLength = session.agentContext.modelContextLength,
+            modelId = session.agentContext.modelId
+        ).toSse()
 
     // ==================== Public API ====================
 
@@ -840,6 +857,13 @@ class ChatStreamService(
         // Bridge channel: background pump -> this HTTP consumer. UNLIMITED so the pump never
         // blocks while the client is disconnected (events are bounded by the execution itself).
         val bridge = Channel<ServerSentEvent<ChatStreamEvent>>(Channel.UNLIMITED)
+
+        // SSE handshake: push the session context (active model's context window) before
+        // any agent event, so the frontend token bar uses the real window size from the
+        // first frame. Also broadcast to the tap for watch subscribers already attached.
+        val contextSse = sessionContextSse(session)
+        tap.tryEmit(contextSse)
+        emit(contextSse)
 
         // Set up goal status channel for real-time SSE notifications.
         // Reuse the pre-registered channel/listener if provided (chatFlow path);

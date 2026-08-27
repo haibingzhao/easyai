@@ -650,6 +650,35 @@ class EasyRagClientTest {
     }
 
     @Test
+    fun `upsert with awaitIndexing=false returns after submission without polling`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-ff","message":"inserted"}"""))
+        // Index submission accepted with non-terminal status — fire-and-forget must not poll
+        server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+
+        val result = client.upsert(sampleDocument(), awaitIndexing = false)
+
+        assertFalse(result.indexed, "fire-and-forget returns without indexing confirmation")
+        server.takeRequest() // auth-status
+        server.takeRequest() // insert
+        server.takeRequest() // index (submission accepted)
+        assertEquals(3, server.requestCount, "no status poll expected in fire-and-forget mode")
+    }
+
+    @Test
+    fun `upsert with awaitIndexing=false still throws on synchronous failed status`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-sff","message":"inserted"}"""))
+        // Server already knows indexing failed — surface it even in fire-and-forget mode
+        server.enqueue(MockResponse().setBody("""{"status":"failed","error":"embedding rejected"}"""))
+
+        val ex = assertFailsWith<RagException> {
+            client.upsert(sampleDocument(), awaitIndexing = false)
+        }
+        assertTrue(ex.message!!.contains("embedding rejected"), ex.message)
+    }
+
+    @Test
     fun `upsert throws when index synchronously returns failed status`() = runTest {
         enqueueAuthStatus()
         server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-sf","message":"inserted"}"""))

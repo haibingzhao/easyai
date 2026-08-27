@@ -15,6 +15,7 @@ export { AskQuestionToolMessage } from './AskQuestionToolMessage';
 export { SubAgentToolMessage } from './SubAgentToolMessage';
 export { GoalToolMessage } from './GoalToolMessage';
 export { MemoryToolMessage } from './MemoryToolMessage';
+export { KnowledgeToolMessage } from './KnowledgeToolMessage';
 export { CalcToolMessage } from './CalcToolMessage';
 export { WebFetchToolMessage } from './WebFetchToolMessage';
 export { LoadSkillToolMessage } from './LoadSkillToolMessage';

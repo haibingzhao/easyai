@@ -202,6 +202,7 @@ interface LoadSessionStateShape {
   cancelReason: string | null;
   cumulativeUsage: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number } | null;
   contextTokens: number;
+  contextWindow: number;
   checkpointsByMessageId: Record<string, CheckpointInfo>;
   revertState: null;
   fileReviewOverrides: Record<string, 'accepted' | 'rejected'>;
@@ -225,7 +226,8 @@ export function loadSessionMessagesImpl(
   checkpoints: CheckpointInfo[] | undefined,
   set: LoadSetFn,
   endReason?: string | null,
-  variables?: Record<string, string>
+  variables?: Record<string, string>,
+  modelContextLength?: number | null
 ): void {
   // Separate sub-agent messages (parentToolCallId != null) from parent-level messages
   const subAgentSnapshots = messages.filter((msg) => msg.parentToolCallId != null);
@@ -278,6 +280,9 @@ export function loadSessionMessagesImpl(
     checkpointsByMessageId,
     revertState: null,
     fileReviewOverrides: {},
+    // Adopt the backend-reported context window when provided (model-specific,
+    // e.g. 256K/1M); keeps the token bar percentage real instead of the 200K default.
+    ...(modelContextLength != null && modelContextLength > 0 ? { contextWindow: modelContextLength } : {}),
     // currentGoal is NOT reset here — callers (loadSessionMessages) reset it
     // on session switch; loadSessionMessagesIncremental must preserve it.
     // Clear queued messages from previous session to prevent stale queue UI

@@ -67,28 +67,28 @@ class PromptTemplateServiceTest {
     inner class `memory guidance` {
 
         @Test
-        fun `appends static guidance when memory available on default prompt`() {
-            val rendered = service.build(null, contextWithTools("memory_search").copy(memoryAvailable = true))
+        fun `appends static guidance when memory_search tool registered on default prompt`() {
+            val rendered = service.build(null, contextWithTools("memory_search"))
             assertTrue(rendered.contains("## Memory"))
             assertTrue(rendered.contains("memory_search"))
         }
 
         @Test
-        fun `omits guidance when memory not available`() {
-            val rendered = service.build(null, contextWithTools("memory_search"))
+        fun `omits guidance when memory_search tool not registered`() {
+            val rendered = service.build(null, contextWithTools("read", "bash"))
             assertFalse(rendered.contains("## Memory"))
         }
 
         @Test
-        fun `appends guidance on custom template when memory available`() {
-            val rendered = service.build("You are a coding agent.", contextWithTools().copy(memoryAvailable = true))
+        fun `appends guidance on custom template when memory_search tool registered`() {
+            val rendered = service.build("You are a coding agent.", contextWithTools("memory_search"))
             assertTrue(rendered.contains("You are a coding agent."))
             assertTrue(rendered.contains("## Memory"))
         }
 
         @Test
         fun `guidance output is stable across builds for cache friendliness`() {
-            val context = contextWithTools("memory_search").copy(memoryAvailable = true)
+            val context = contextWithTools("memory_search")
             val first = service.build(null, context)
             val second = service.build(null, context)
             assertTrue(first == second)
@@ -99,15 +99,15 @@ class PromptTemplateServiceTest {
     inner class `knowledge guidance` {
 
         @Test
-        fun `appends static guidance when knowledge available on default prompt`() {
-            val rendered = service.build(null, contextWithTools("knowledge_search").copy(knowledgeAvailable = true))
+        fun `appends static guidance when knowledge_search tool registered on default prompt`() {
+            val rendered = service.build(null, contextWithTools("knowledge_search"))
             assertTrue(rendered.contains("## Knowledge Base"))
             assertTrue(rendered.contains("knowledge_search"))
         }
 
         @Test
-        fun `omits guidance when knowledge not available`() {
-            val rendered = service.build(null, contextWithTools("knowledge_search"))
+        fun `omits guidance when knowledge_search tool not registered`() {
+            val rendered = service.build(null, contextWithTools("read", "bash"))
             assertFalse(rendered.contains("## Knowledge Base"))
         }
 
@@ -116,14 +116,13 @@ class PromptTemplateServiceTest {
             val rendered = service.build(
                 null,
                 contextWithTools("memory_search", "knowledge_search")
-                    .copy(memoryAvailable = true, knowledgeAvailable = true)
             )
             assertTrue(rendered.contains("SAME response"))
         }
 
         @Test
         fun `guidance output is stable across builds for cache friendliness`() {
-            val context = contextWithTools("knowledge_search").copy(knowledgeAvailable = true)
+            val context = contextWithTools("knowledge_search")
             val first = service.build(null, context)
             val second = service.build(null, context)
             assertTrue(first == second)

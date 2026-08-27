@@ -12,6 +12,7 @@ import type {
   GoalStatusEvent,
   CompactionEndEvent,
   RetryEvent,
+  SessionContextEvent,
 } from '@/types/socket-event';
 import type { Message, ToolResult, ToolResultContentBlock, ContextReferences, QueuedMessage } from '@/types/message';
 import type { TodoInfo, SubAgentTodoGroup } from '@/types/todo';
@@ -47,6 +48,7 @@ export interface ChatStateShape {
   pendingMessageData: Record<string, { usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number; durationMs?: number; modelName?: string }; references?: ContextReferences }>;
   cumulativeUsage: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number } | null;
   contextTokens: number;
+  contextWindow: number;
   todos: TodoInfo[];
   subAgentTodos: Record<string, SubAgentTodoGroup>;
   sessionVariables: Record<string, string>;
@@ -442,6 +444,16 @@ export function handleChatEvent(
       // Update the optimistically-added user message so it becomes editable.
       const ackEvent = event as UserMessageAckEvent;
       state.setLastUserMessageId(ackEvent.messageId);
+      break;
+    }
+    case 'session_context': {
+      // SSE handshake: the backend reports the active model's context window
+      // (from model config options.contextToken). Update the token bar divisor
+      // so the percentage reflects the real window instead of the 200K default.
+      const ctxEvent = event as SessionContextEvent;
+      if (ctxEvent.modelContextLength > 0) {
+        set({ contextWindow: ctxEvent.modelContextLength });
+      }
       break;
     }
     case 'user_message_added': {

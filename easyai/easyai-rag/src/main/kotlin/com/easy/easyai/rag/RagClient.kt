@@ -30,12 +30,15 @@ interface RagClient {
 
     /**
      * Idempotent upsert: `POST /api/documents/text` with the deterministic externalId,
-     * then submit indexing and poll until a terminal state (`processed` / `failed`)
-     * is reached or the poll timeout expires.
+     * then submit indexing.
      *
      * @param bizId optional EasyRAG business-line slice; null = server default.
+     * @param awaitIndexing when true (default), poll until indexing reaches a terminal
+     *   state (`processed` / `failed`) or the poll timeout expires; when false, return
+     *   right after the indexing submission is accepted (fire-and-forget), unless the
+     *   server already reports a terminal status synchronously.
      */
-    suspend fun upsert(doc: RagDocument, bizId: String? = null): RagUpsertResult
+    suspend fun upsert(doc: RagDocument, bizId: String? = null, awaitIndexing: Boolean = true): RagUpsertResult
 
     /** Delete the document bound to [externalId]; missing documents are ignored. */
     suspend fun delete(externalId: String, bizId: String? = null)

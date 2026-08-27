@@ -16,6 +16,7 @@ import { AskQuestionToolMessage } from './AskQuestionToolMessage';
 import { SubAgentToolMessage } from './SubAgentToolMessage';
 import { GoalToolMessage } from './GoalToolMessage';
 import { MemoryToolMessage } from './MemoryToolMessage';
+import { KnowledgeToolMessage } from './KnowledgeToolMessage';
 import { CalcToolMessage } from './CalcToolMessage';
 import { WebFetchToolMessage } from './WebFetchToolMessage';
 import { LoadSkillToolMessage } from './LoadSkillToolMessage';
@@ -41,6 +42,8 @@ const TOOL_RENDERERS: Record<string, React.ComponentType<ToolMessageProps>> = {
   memory_read: MemoryToolMessage,
   memory_write: MemoryToolMessage,
   memory_list: MemoryToolMessage,
+  knowledge_search: KnowledgeToolMessage,
+  knowledge_read: KnowledgeToolMessage,
   calc: CalcToolMessage,
   webfetch: WebFetchToolMessage,
   load_skill: LoadSkillToolMessage,

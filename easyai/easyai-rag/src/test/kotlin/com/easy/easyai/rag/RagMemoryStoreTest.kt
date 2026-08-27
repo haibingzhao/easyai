@@ -57,7 +57,7 @@ class RagMemoryStoreTest {
     fun `write builds RagDocument with new key layout and passes GLOBAL bizId`() = runTest {
         val docSlot = slot<RagDocument>()
         val bizSlot = slot<String>()
-        coEvery { client.upsert(capture(docSlot), capture(bizSlot)) } returns RagUpsertResult(docId = "doc-1", indexed = true)
+        coEvery { client.upsert(capture(docSlot), capture(bizSlot), any()) } returns RagUpsertResult(docId = "doc-1", indexed = true)
 
         store.write(sampleEntry(), MemoryScope.GLOBAL, globalOwner)
 
@@ -84,7 +84,7 @@ class RagMemoryStoreTest {
     @Test
     fun `write passes PROJECT bizId derived from user and project path`() = runTest {
         val bizSlot = slot<String>()
-        coEvery { client.upsert(any(), capture(bizSlot)) } returns RagUpsertResult(docId = "doc-1", indexed = true)
+        coEvery { client.upsert(any(), capture(bizSlot), any()) } returns RagUpsertResult(docId = "doc-1", indexed = true)
 
         store.write(sampleEntry(), MemoryScope.PROJECT, projectOwner)
 
@@ -96,7 +96,7 @@ class RagMemoryStoreTest {
         assertFailsWith<MemoryBackendException> {
             store.write(sampleEntry(), MemoryScope.PROJECT, noProjectOwner)
         }
-        coVerify(exactly = 0) { client.upsert(any(), any()) }
+        coVerify(exactly = 0) { client.upsert(any(), any(), any()) }
     }
 
     // ── search ─────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ class RagMemoryStoreTest {
     @Test
     fun `frontmatter content round-trips through write and search`() = runTest {
         val docSlot = slot<RagDocument>()
-        coEvery { client.upsert(capture(docSlot), any()) } returns RagUpsertResult(docId = "doc-1", indexed = true)
+        coEvery { client.upsert(capture(docSlot), any(), any()) } returns RagUpsertResult(docId = "doc-1", indexed = true)
         store.write(sampleEntry(), MemoryScope.GLOBAL, globalOwner)
         val storedContent = docSlot.captured.content
 
@@ -171,7 +171,7 @@ class RagMemoryStoreTest {
     @Test
     fun `search deduplicates chunks of the same entry`() = runTest {
         val docSlot = slot<RagDocument>()
-        coEvery { client.upsert(capture(docSlot), any()) } returns RagUpsertResult(docId = "doc-1", indexed = true)
+        coEvery { client.upsert(capture(docSlot), any(), any()) } returns RagUpsertResult(docId = "doc-1", indexed = true)
         store.write(sampleEntry(), MemoryScope.GLOBAL, globalOwner)
         val storedContent = docSlot.captured.content
 
@@ -267,7 +267,7 @@ class RagMemoryStoreTest {
     @Test
     fun `findByName derives externalId per type and reads directly with bizId`() = runTest {
         val docSlot = slot<RagDocument>()
-        coEvery { client.upsert(capture(docSlot), any()) } returns RagUpsertResult(docId = "doc-1", indexed = true)
+        coEvery { client.upsert(capture(docSlot), any(), any()) } returns RagUpsertResult(docId = "doc-1", indexed = true)
         store.write(sampleEntry(), MemoryScope.GLOBAL, globalOwner)
         val storedContent = docSlot.captured.content
 
@@ -291,7 +291,7 @@ class RagMemoryStoreTest {
     @Test
     fun `list fetches full content per document with type prefix and bizId`() = runTest {
         val docSlot = slot<RagDocument>()
-        coEvery { client.upsert(capture(docSlot), any()) } returns RagUpsertResult(docId = "doc-1", indexed = true)
+        coEvery { client.upsert(capture(docSlot), any(), any()) } returns RagUpsertResult(docId = "doc-1", indexed = true)
         store.write(sampleEntry(), MemoryScope.GLOBAL, globalOwner)
         val storedContent = docSlot.captured.content
 
@@ -318,7 +318,7 @@ class RagMemoryStoreTest {
 
     @Test
     fun `RagException is translated to MemoryBackendException`() = runTest {
-        coEvery { client.upsert(any(), any()) } throws RagException("connection refused", cause = null)
+        coEvery { client.upsert(any(), any(), any()) } throws RagException("connection refused", cause = null)
 
         assertFailsWith<MemoryBackendException> {
             store.write(sampleEntry(), MemoryScope.GLOBAL, globalOwner)

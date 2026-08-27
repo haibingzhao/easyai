@@ -140,6 +140,8 @@ export interface SessionDetail {
   lastAgentId?: string | null;
   /** Model config ID from the last message (derived server-side) */
   lastConfigId?: string | null;
+  /** Context window length of the model used in the last message (from config.contextToken), null if unresolvable */
+  modelContextLength?: number | null;
   /** Session-scoped variables (key -> value) persisted for this session */
   variables?: Record<string, string> | null;
 }

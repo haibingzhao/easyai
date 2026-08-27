@@ -28,7 +28,8 @@ export type EventType =
   | 'checkpoint'
   | 'revert'
   | 'goal_status'
-  | 'user_message_ack';
+  | 'user_message_ack'
+  | 'session_context';
 
 interface BaseEvent {
   type: EventType;
@@ -283,6 +284,19 @@ export interface UserMessageAckEvent extends BaseEvent {
   messageId: string;
 }
 
+/**
+ * SSE handshake event pushed at stream establishment. Carries the active model's
+ * context window so the token bar renders the real usage percentage instead of
+ * the hardcoded default. Also re-emitted on watch attach.
+ */
+export interface SessionContextEvent extends BaseEvent {
+  type: 'session_context';
+  sessionId: string;
+  /** Active model's context window in tokens (from model config options.contextToken). */
+  modelContextLength: number;
+  modelId?: string;
+}
+
 export type ChatStreamEvent =
   | StartEvent
   | TextStartEvent
@@ -310,7 +324,8 @@ export type ChatStreamEvent =
   | CheckpointEvent
   | RevertEvent
   | GoalStatusEvent
-  | UserMessageAckEvent;
+  | UserMessageAckEvent
+  | SessionContextEvent;
 
 // Re-export for backward compatibility
 export type SocketEvent = ChatStreamEvent;

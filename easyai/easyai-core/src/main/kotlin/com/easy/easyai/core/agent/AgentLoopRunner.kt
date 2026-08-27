@@ -365,10 +365,12 @@ internal class AgentLoopRunner(
             id = messageId,
             content = contentBlocks,
             stopReason = when (finishReasonStr) {
-                "stop" -> StopReason.STOP
                 "length" -> StopReason.LENGTH
                 "tool_calls" -> StopReason.TOOL_USE
-                else -> StopReason.STOP
+                // Some OpenAI-compatible providers report "stop" (or no finish reason at
+                // all) even when the response contains tool calls; trust the actual
+                // content over the provider flag.
+                else -> if (responseToolCalls.isNotEmpty()) StopReason.TOOL_USE else StopReason.STOP
             },
             usage = rawUsage
         )
@@ -429,8 +431,6 @@ internal class AgentLoopRunner(
             teamStatusSummary = context.teamStatusSummary,
             instructions = context.instructions,
             cwd = context.projectPath?.toString(),
-            memoryAvailable = services.memoryStore != null,
-            knowledgeAvailable = services.knowledgeStore != null,
             tools = toolsData,
             outputSchema = context.outputSchema,
             outputSchemaMultiTurn = context.outputSchemaMultiTurn,

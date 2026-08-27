@@ -1,5 +1,6 @@
 package com.easy.easyai.web.service
 
+import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.SessionManager
 import com.easy.easyai.core.model.*
@@ -21,7 +22,9 @@ class SessionService(
     /** Optional: cleans up Team Agent in-memory coordination state on session deletion. */
     private val teamStateRegistry: TeamCoordinationStateRegistry? = null,
     /** Optional: cascade-deletes Team Agent execution/round records + member sub-sessions. */
-    private val teamExecutionStore: TeamExecutionStore? = null
+    private val teamExecutionStore: TeamExecutionStore? = null,
+    /** Optional: resolves the last message's model config to report its context window. */
+    private val configStore: ModelProviderConfigStore? = null
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper = SharedObjectMapper.instance
@@ -63,6 +66,17 @@ class SessionService(
         // Get last message config (agentId, configId) to allow frontend to restore selection
         val lastConfig = sessionStore.getLastMessageConfig(id)
 
+        // Resolve the last message's model context window so the frontend token bar
+        // renders the real usage percentage instead of a hardcoded default (best-effort).
+        val modelContextLength = lastConfig?.configId?.let { configId ->
+            try {
+                configStore?.getConfig(configId, userId)?.options?.contextToken
+            } catch (e: Exception) {
+                logger.warn("Failed to resolve model config {} for session {}: {}", configId, id, e.message)
+                null
+            }
+        }
+
         // Load persisted session variables for frontend display (Summary -> References)
         val variables = loadSessionVariablesMap(id, userId)
 
@@ -77,6 +91,7 @@ class SessionService(
             endReason = endReason?.takeIf { it != "normal" },
             lastAgentId = lastConfig?.agentId,
             lastConfigId = lastConfig?.configId,
+            modelContextLength = modelContextLength,
             variables = variables
         )
     }

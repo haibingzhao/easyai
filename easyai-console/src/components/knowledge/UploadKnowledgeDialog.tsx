@@ -46,8 +46,8 @@ export const UploadKnowledgeDialog: React.FC<UploadKnowledgeDialogProps> = ({ op
     }
     setFiles(arr);
     setPaths(pathArr);
-    // Auto-detect source from folder name (leading segment of webkitRelativePath)
-    if (useRelativePath && arr.length > 0) {
+    // Auto-detect source from folder name only when user hasn't entered one manually
+    if (useRelativePath && arr.length > 0 && !source.trim()) {
       const firstPath = fileList[0].webkitRelativePath;
       const folderName = firstPath ? firstPath.split('/')[0] : undefined;
       if (folderName && folderName !== arr[0].name) {

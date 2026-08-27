@@ -65,7 +65,7 @@ export async function authFetch(
   const isFormData = typeof FormData !== 'undefined' && options?.body instanceof FormData;
 
   let effectiveUrl = url;
-  let fetchOptions: RequestInit = { ...options };
+  const fetchOptions: RequestInit = { ...options };
 
   if (isFormData) {
     // Remove headers so the browser auto-sets Content-Type: multipart/form-data

@@ -48,7 +48,8 @@ data class RagDocument(
  *
  * @param docId EasyRAG document id (deterministically derived from externalId)
  * @param indexed whether indexing reached the terminal `processed` state (either
- *   synchronously from the index endpoint or via status polling); false when the poll times out
+ *   synchronously from the index endpoint or via status polling); false when the poll
+ *   times out or indexing was submitted without awaiting confirmation
  * @param chunksCount chunk count reported by indexing, if available
  * @param unchanged true when the server skipped the write because content was identical
  */

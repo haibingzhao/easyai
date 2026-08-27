@@ -27,6 +27,7 @@ function createMockState(overrides: Partial<ChatStateShape> = {}): ChatStateShap
     pendingMessageData: {},
     cumulativeUsage: null,
     contextTokens: 0,
+    contextWindow: 200_000,
     todos: [],
     subAgentTodos: {},
     sessionVariables: {},

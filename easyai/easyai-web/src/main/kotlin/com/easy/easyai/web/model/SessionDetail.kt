@@ -17,6 +17,8 @@ data class SessionDetail(
     val lastAgentId: String? = null,
     /** Model config ID from the last message — used by frontend to restore model selection. */
     val lastConfigId: String? = null,
+    /** Context window (tokens) of the last message's model — used by frontend token bar for the real percentage. */
+    val modelContextLength: Int? = null,
     /** Session-scoped variables (key -> value) persisted for this session, for frontend display. */
     val variables: Map<String, String>? = null
 )

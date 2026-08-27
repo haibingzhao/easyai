@@ -124,9 +124,9 @@ interface ChatState {
   clearChat: () => void;
   handleEvent: (event: SocketEvent) => void;
   commitStreamingMessage: () => void;
-  loadSessionMessages: (messages: MessageSnapshot[], pendingPermission?: PendingPermissionInfo | null, checkpoints?: CheckpointInfo[], endReason?: string | null, variables?: Record<string, string> | null) => void;
+  loadSessionMessages: (messages: MessageSnapshot[], pendingPermission?: PendingPermissionInfo | null, checkpoints?: CheckpointInfo[], endReason?: string | null, variables?: Record<string, string> | null, modelContextLength?: number | null) => void;
   /** Merge delta snapshots into _lastSnapshots and re-process. Used for incremental recovery after streaming. */
-  loadSessionMessagesIncremental: (deltaSnapshots: MessageSnapshot[], pendingPermission?: PendingPermissionInfo | null, checkpoints?: CheckpointInfo[], endReason?: string | null, variables?: Record<string, string> | null) => void;
+  loadSessionMessagesIncremental: (deltaSnapshots: MessageSnapshot[], pendingPermission?: PendingPermissionInfo | null, checkpoints?: CheckpointInfo[], endReason?: string | null, variables?: Record<string, string> | null, modelContextLength?: number | null) => void;
   /** Refresh goal state from backend for the given session. Sets currentGoal to null if no goal exists. */
   refreshGoal: (sessionId: string) => Promise<void>;
   addQueuedMessage: (msg: QueuedMessage) => void;
@@ -167,7 +167,20 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   runningSessionId: null,
   _lastSnapshots: [],
 
-  setSessionId: (id) => set({ sessionId: id }),
+  // When the session identity changes, clear streaming render state left over from the
+  // old session (streamingBlocks / isStreaming / ...), otherwise the previous session's
+  // in-flight tool cards would be rendered at the end of the new session's message list.
+  // Same-id calls (e.g. re-selecting the current session) keep live streaming untouched.
+  setSessionId: (id) => set((state) => (id === state.sessionId ? { sessionId: id } : {
+    sessionId: id,
+    streamingBlocks: [],
+    streamingToolOutputs: {},
+    isStreaming: false,
+    isFileWriting: false,
+    isCompacting: false,
+    retryInfo: null,
+    pendingMessageData: {},
+  })),
   setRunningSessionId: (id) => set({ runningSessionId: id, ...(id !== null ? { _lastSnapshots: [] } : {}) }),
 
   setAgentId: (id) => set({ agentId: id }),
@@ -466,7 +479,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   commitStreamingMessage: () => set((state) => commitStreamingMessageImpl(state)),
 
-  loadSessionMessages: (messages, pendingPermission, checkpoints, endReason, variables) => {
+  loadSessionMessages: (messages, pendingPermission, checkpoints, endReason, variables, modelContextLength) => {
     // Store raw snapshots for incremental merge support
     set({ _lastSnapshots: messages, currentGoal: null, swarmRuns: {} }); // Reset goal + swarm tracking on full session load (session switch)
     // Safe cast: Zustand's set (Partial<ChatState>) is structurally compatible with
@@ -474,10 +487,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     // The callback in loadSessionMessagesImpl currently ignores the state parameter.
     // Use `variables ?? {}` (not `?? undefined`) so that switching to a session without
     // variables explicitly clears the previous session's variables (fixes #1).
-    loadSessionMessagesImpl(messages, pendingPermission, checkpoints, set as Parameters<typeof loadSessionMessagesImpl>[3], endReason, variables ?? {});
+    loadSessionMessagesImpl(messages, pendingPermission, checkpoints, set as Parameters<typeof loadSessionMessagesImpl>[3], endReason, variables ?? {}, modelContextLength);
   },
 
-  loadSessionMessagesIncremental: (deltaSnapshots, pendingPermission, checkpoints, endReason, variables) => {
+  loadSessionMessagesIncremental: (deltaSnapshots, pendingPermission, checkpoints, endReason, variables, modelContextLength) => {
     const existingSnapshots = get()._lastSnapshots;
     // Pre-compute merged snapshots for _lastSnapshots cache (so future incremental calls chain correctly)
     const snapshotMap = new Map<string, MessageSnapshot>();
@@ -493,7 +506,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       .sort((a, b) => a.timestamp - b.timestamp);
     // Update cache and re-run full processing pipeline on merged set
     set({ _lastSnapshots: mergedSnapshots });
-    loadSessionMessagesImpl(mergedSnapshots, pendingPermission, checkpoints, set as Parameters<typeof loadSessionMessagesImpl>[3], endReason, variables ?? undefined);
+    loadSessionMessagesImpl(mergedSnapshots, pendingPermission, checkpoints, set as Parameters<typeof loadSessionMessagesImpl>[3], endReason, variables ?? undefined, modelContextLength);
   },
 
   refreshGoal: async (sessionId) => {
