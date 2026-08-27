@@ -4,6 +4,7 @@ import com.easy.easyai.autoconfigure.openai.OpenAiChatModelFactory
 import com.fasterxml.jackson.core.JsonProcessingException
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.openai.client.OpenAIClientAsync
+import com.openai.core.JsonField
 import com.openai.core.http.AsyncStreamResponse
 import com.openai.errors.OpenAIInvalidDataException
 import com.openai.models.chat.completions.*
@@ -37,7 +38,6 @@ import reactor.core.publisher.Flux
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.stream.Stream
 
 /**
  * A [ChatModel] decorator around [OpenAiChatModel] that closes the underlying OpenAI SDK
@@ -202,7 +202,10 @@ internal class StreamClosingOpenAiChatModel(
         if (toolCallAdditionalProperties.isNotEmpty()) {
             assistantMessageMetadata[TOOL_CALL_ADDITIONAL_PROPERTIES_METADATA_KEY] = toolCallAdditionalProperties
         }
-        val toolCalls = message.toolCalls()
+        // Explicit non-null type mirrors the upstream Java declaration
+        // (`List<AssistantMessage.ToolCall> toolCalls = ...`) in OpenAiChatModel.buildGeneration,
+        // keeping the flexible type inferred from Optional.orElse from being treated as nullable.
+        val toolCalls: List<AssistantMessage.ToolCall> = message.toolCalls()
             .map { list ->
                 list.filter { it.function().isPresent }.map { tc ->
                     val funcCall = tc.function().get()
@@ -328,10 +331,23 @@ internal class StreamClosingOpenAiChatModel(
 
     /**
      * Merges streamed chunks so that multi-chunk tool calls are assembled into complete
-     * ChatCompletion units. Adapted from the private `ChunkMerger` in
-     * `OpenAiChatModel` (Spring AI 2.0.0).
+     * ChatCompletion units. Originally adapted from the private `ChunkMerger` in
+     * `OpenAiChatModel` (Spring AI 2.0.0), then deliberately reworked — do NOT blindly
+     * resync with upstream. Upstream keys slot assignment on `toolCall.id().isPresent`,
+     * which misclassifies every fragment when an OpenAI-compatible provider sends
+     * continuation deltas with `"id": ""` (observed on qwen/DashScope). Here a blank id
+     * is treated as absent and routing keys on the streaming tool-call `index`, with
+     * id/name heuristics only as fallback.
      */
     private object ChunkMerger {
+
+        /**
+         * Upper bound for tool-call indices honored while merging; anything outside
+         * `[0, MAX_MERGED_TOOL_CALLS)` (garbage or negative values from non-conforming
+         * providers) is treated as "no index" and falls back to heuristic routing instead
+         * of padding unbounded placeholder slots or crashing the stream.
+         */
+        private const val MAX_MERGED_TOOL_CALLS = 64
 
         fun hasToolCall(chunk: ChatCompletionChunk): Boolean {
             return chunk.choices().isNotEmpty() && chunk.choices()[0].delta().toolCalls().isPresent
@@ -370,37 +386,95 @@ internal class StreamClosingOpenAiChatModel(
         }
 
         private fun mergeDeltas(left: Delta, right: Delta): Delta {
-            val tcs = Stream.of(left.toolCalls(), right.toolCalls())
-                .flatMap { it.stream() }
-                .reduce { tcs1, tcs2 ->
-                    Assert.isTrue(tcs2.size <= 1, "no more than one tool call per message currently supported")
-                    val toolCall = tcs2[0]
-                    if (toolCall.id().isPresent) {
-                        val result = ArrayList(tcs1)
-                        result.add(toolCall)
-                        result
-                    } else {
-                        val lastFromTc1 = tcs1[tcs1.size - 1]
-                        val lastFromTc1F = lastFromTc1.function().get()
-
-                        val concatenatedArgs = Stream
-                            .of(lastFromTc1F.arguments(), toolCall.function().flatMap { it.arguments() })
-                            .flatMap { it.stream() }
-                            .reduce { args1, args2 -> args1 + args2 }
-                            .orElse("")
-
-                        val result = ArrayList(tcs1)
-                        result[tcs1.size - 1] = lastFromTc1.toBuilder()
-                            .putAllAdditionalProperties(toolCall._additionalProperties())
-                            .function(lastFromTc1F.toBuilder().arguments(concatenatedArgs).build())
-                            .build()
-                        result
-                    }
-                }
-                .orElse(emptyList())
-
-            return left.toBuilder().toolCalls(tcs).build()
+            // Slot-based merge where the slot position equals the streaming tool-call `index`.
+            // Providers fragment deltas differently:
+            //  - standard OpenAI: first delta carries id+name+index, continuations carry
+            //    index + an arguments fragment and no id;
+            //  - qwen/DashScope and others: continuations carry id:"" (empty string), so
+            //    `id().isPresent` alone would misclassify every fragment as a NEW tool call.
+            // A blank id is therefore treated as absent and slot assignment relies primarily
+            // on `index`, falling back to id / name heuristics when index is unavailable.
+            val slots = ArrayList(left.toolCalls().orElse(emptyList()))
+            for (incoming in right.toolCalls().orElse(emptyList())) {
+                mergeToolCallInto(slots, incoming)
+            }
+            return left.toBuilder().toolCalls(slots).build()
         }
+
+        /** Assign [incoming] to its slot (new or existing) and merge it in. */
+        private fun mergeToolCallInto(slots: ArrayList<Delta.ToolCall>, incoming: Delta.ToolCall) {
+            val index = resolveIndex(incoming._index())
+            val id = incoming.id().orElse(null)?.takeIf { it.isNotBlank() }
+            val name = incoming.function().flatMap { it.name() }.orElse(null)?.takeIf { it.isNotBlank() }
+
+            val target = when {
+                // 1. Index within the existing range AND not announcing a NEW non-blank
+                //    id (some providers restart indexing per sequential call): continuation
+                //    of that slot.
+                index != null && index < slots.size &&
+                    (id == null || id == slots[index].id().orElse(null)) -> index
+                // 1b. Index beyond the range: new slot (pad gaps with placeholders).
+                index != null -> {
+                    while (slots.size < index) {
+                        slots.add(Delta.ToolCall.builder().index(slots.size.toLong()).build())
+                    }
+                    slots.size
+                }
+                // 2. Non-blank id: merge into the slot with the same id, else new slot.
+                id != null -> slots.indexOfFirst { it.id().orElse(null) == id }.takeIf { it >= 0 } ?: slots.size
+                // 3. No id/index but carries a name while the last slot already has one:
+                //    a new tool call begins (name only appears in the first delta).
+                name != null && slots.isNotEmpty() &&
+                    slots.last().function().flatMap { it.name() }.orElse("").isNotBlank() -> slots.size
+                // 4. Otherwise a continuation: merge into the last slot (new slot if empty).
+                else -> (slots.size - 1).coerceAtLeast(0)
+            }
+
+            if (target >= slots.size) {
+                // Seed the new slot with a placeholder carrying the slot index so that
+                // later merges can always recover a stable index.
+                slots.add(combineToolCalls(Delta.ToolCall.builder().index(target.toLong()).build(), incoming))
+            } else {
+                slots[target] = combineToolCalls(slots[target], incoming)
+            }
+        }
+
+        /**
+         * Defensive streaming-index read: the bare SDK getter `index()` throws when the
+         * field is missing/null, and garbage values must not drive slot allocation, so
+         * absent / null / out-of-range all degrade to "no index".
+         */
+        private fun resolveIndex(field: JsonField<Long>): Int? {
+            val value = field.asKnown().orElse(null) ?: field.asNumber().orElse(null)?.toLong()
+            return value?.toInt()?.takeIf { it in 0 until MAX_MERGED_TOOL_CALLS }
+        }
+
+        /** Field-level merge: arguments concatenate; id/name/type take the first non-blank value. */
+        private fun combineToolCalls(base: Delta.ToolCall, extra: Delta.ToolCall): Delta.ToolCall {
+            // Same defensive resolution as routing so both sides never diverge.
+            val index = (resolveIndex(base._index()) ?: resolveIndex(extra._index()))?.toLong() ?: 0L
+            val builder = Delta.ToolCall.builder().index(index)
+
+            firstNonBlank(base.id().orElse(null), extra.id().orElse(null))?.let { builder.id(it) }
+            base.type().or { extra.type() }.ifPresent { builder.type(it) }
+
+            val baseFn = base.function().orElse(null)
+            val extraFn = extra.function().orElse(null)
+            if (baseFn != null || extraFn != null) {
+                val fnBuilder = Delta.ToolCall.Function.builder()
+                firstNonBlank(baseFn?.name()?.orElse(null), extraFn?.name()?.orElse(null))?.let { fnBuilder.name(it) }
+                val arguments = baseFn?.arguments()?.orElse("") ?: ""
+                fnBuilder.arguments(arguments + (extraFn?.arguments()?.orElse("") ?: ""))
+                builder.function(fnBuilder.build())
+            }
+
+            builder.putAllAdditionalProperties(base._additionalProperties())
+            builder.putAllAdditionalProperties(extra._additionalProperties())
+            return builder.build()
+        }
+
+        private fun firstNonBlank(a: String?, b: String?): String? =
+            a?.takeIf { it.isNotBlank() } ?: b?.takeIf { it.isNotBlank() }
 
         /** Convert a ChatCompletionChunk into a ChatCompletion. */
         fun chunkToChatCompletion(chunk: ChatCompletionChunk): ChatCompletion {
@@ -437,18 +511,31 @@ internal class StreamClosingOpenAiChatModel(
                     .content(cccc.delta().content())
                     .refusal(cccc.delta().refusal())
                 cccc.delta().toolCalls().ifPresent { ccctcs ->
-                    msgBuilder.toolCalls(ccctcs.map { tc ->
-                        val toolCallBuilder = ChatCompletionMessageFunctionToolCall.builder()
-                        toolCallBuilder.putAllAdditionalProperties(tc._additionalProperties())
-                        toolCallBuilder.id(tc.id().get())
-                        toolCallBuilder.function(
-                            ChatCompletionMessageFunctionToolCall.Function.builder()
-                                .name(tc.function().get().name().get())
-                                .arguments(tc.function().get().arguments().get())
-                                .build()
-                        )
-                        ChatCompletionMessageToolCall.ofFunction(toolCallBuilder.build())
-                    })
+                    // Streaming deltas may carry tool calls without id/name/arguments (some
+                    // OpenAI-compatible providers split them across non-final chunks). Use
+                    // optional-safe access so a missing field never throws NoSuchElementException;
+                    // tool calls without a function body at all cannot be represented and are
+                    // skipped. Providers that never emit an id would otherwise drop the whole
+                    // tool call here, so synthesize one to keep it executable and traceable.
+                    msgBuilder.toolCalls(
+                        ccctcs.mapNotNull { tc ->
+                            val function = tc.function().orElse(null) ?: return@mapNotNull null
+                            val id = tc.id().orElse(null)?.takeIf { it.isNotBlank() }
+                                ?: "call_" + UUID.randomUUID().toString().replace("-", "")
+                            ChatCompletionMessageToolCall.ofFunction(
+                                ChatCompletionMessageFunctionToolCall.builder()
+                                    .putAllAdditionalProperties(tc._additionalProperties())
+                                    .id(id)
+                                    .function(
+                                        ChatCompletionMessageFunctionToolCall.Function.builder()
+                                            .name(function.name().orElse(null) ?: "")
+                                            .arguments(function.arguments().orElse(null) ?: "")
+                                            .build()
+                                    )
+                                    .build()
+                            )
+                        }
+                    )
                 }
                 choiceBuilder.message(msgBuilder.build())
                 choiceBuilder.build()

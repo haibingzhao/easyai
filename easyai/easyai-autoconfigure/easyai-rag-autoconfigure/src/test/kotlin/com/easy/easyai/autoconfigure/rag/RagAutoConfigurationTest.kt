@@ -83,7 +83,7 @@ class RagAutoConfigurationTest {
 private class FakeRagClient : RagClient {
     override suspend fun isEnabled(): Boolean = true
     override suspend fun healthCheck(): Boolean = true
-    override suspend fun upsert(doc: RagDocument, bizId: String?): RagUpsertResult =
+    override suspend fun upsert(doc: RagDocument, bizId: String?, awaitIndexing: Boolean): RagUpsertResult =
         RagUpsertResult(docId = "fake", indexed = true)
     override suspend fun delete(externalId: String, bizId: String?) {}
     override suspend fun batchDelete(docIds: List<String>, bizId: String?): Int = 0

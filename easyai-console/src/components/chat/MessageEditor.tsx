@@ -437,7 +437,7 @@ export const MessageEditor: React.FC = () => {
               getCheckpoints(sid).catch(() => [] as CheckpointInfo[]),
             ]).then(([detail, checkpoints]) => {
               useChatStore.getState().loadSessionMessages(
-                detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables
+                detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength
               );
             }).catch(() => { /* best-effort */ });
           }

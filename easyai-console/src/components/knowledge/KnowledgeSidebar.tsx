@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
-import { Search, FileText, Upload } from 'lucide-react';
+import { Search, FileText, Upload, Loader2, X } from 'lucide-react';
 import type { KnowledgeEntryDto } from '@/services/knowledge-service';
 import { useCategoryStore } from '@/services/stores/category-store';
+import { useKnowledgeStore } from '@/services/stores/knowledge-store';
 import { i18n } from '@/utils/i18n';
 
 interface KnowledgeSidebarProps {
@@ -22,6 +23,9 @@ export const KnowledgeSidebar: React.FC<KnowledgeSidebarProps> = ({
   onUploadClick,
 }) => {
   const knowledgeCategories = useCategoryStore((s) => s.knowledgeCategories);
+  const indexingKeys = useKnowledgeStore((s) => s.indexingKeys);
+  const indexingProgress = useKnowledgeStore((s) => s.indexingProgress);
+  const stopIndexingPoll = useKnowledgeStore((s) => s.stopIndexingPoll);
   const [query, setQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState(FILTER_ANY);
   const [sourceFilter, setSourceFilter] = useState(FILTER_ANY);
@@ -51,6 +55,31 @@ export const KnowledgeSidebar: React.FC<KnowledgeSidebarProps> = ({
           {i18n('Upload Knowledge')}
         </button>
       </div>
+
+      {/* Indexing progress bar */}
+      {indexingProgress && indexingKeys.size > 0 && (
+        <div className="px-3 pb-2">
+          <div className="flex items-center gap-2 mb-1">
+            <Loader2 className="size-3 animate-spin text-primary shrink-0" />
+            <span className="text-[11px] text-muted-foreground flex-1 min-w-0">
+              {i18n('Indexing')} {indexingProgress.done}/{indexingProgress.total}
+            </span>
+            <button
+              onClick={stopIndexingPoll}
+              className="text-muted-foreground hover:text-foreground shrink-0"
+              title={i18n('Dismiss')}
+            >
+              <X className="size-3" />
+            </button>
+          </div>
+          <div className="h-1 rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full bg-primary rounded-full transition-all duration-500"
+              style={{ width: `${indexingProgress.total > 0 ? (indexingProgress.done / indexingProgress.total) * 100 : 0}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Search box */}
       <div className="p-3 pb-1.5">
@@ -120,12 +149,21 @@ export const KnowledgeSidebar: React.FC<KnowledgeSidebarProps> = ({
                 <div className="text-[11px] text-muted-foreground truncate">{entry.description}</div>
               )}
               <div className="flex items-center gap-1.5 mt-0.5">
-                {entry.category && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-600 dark:text-green-400">
-                    {i18n(knowledgeCategories.find((c) => c.code === entry.category)?.labelKey ?? entry.category)}
+                {indexingKeys.has(entry.key) && entry.chunksCount == null ? (
+                  <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">
+                    <Loader2 className="size-2.5 animate-spin" />
+                    {i18n('Indexing')}
                   </span>
+                ) : (
+                  <>
+                    {entry.category && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-600 dark:text-green-400">
+                        {i18n(knowledgeCategories.find((c) => c.code === entry.category)?.labelKey ?? entry.category)}
+                      </span>
+                    )}
+                    <span className="text-[10px] text-muted-foreground">{entry.source}</span>
+                  </>
                 )}
-                <span className="text-[10px] text-muted-foreground">{entry.source}</span>
               </div>
             </div>
           </button>

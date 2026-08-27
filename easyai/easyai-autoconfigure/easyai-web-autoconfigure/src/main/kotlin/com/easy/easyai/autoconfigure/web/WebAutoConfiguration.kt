@@ -184,9 +184,11 @@ open class WebAutoConfiguration {
         @Autowired(required = false)
         teamStateRegistry: TeamCoordinationStateRegistry? = null,
         @Autowired(required = false)
-        teamExecutionStore: TeamExecutionStore? = null
+        teamExecutionStore: TeamExecutionStore? = null,
+        @Autowired(required = false)
+        configStore: ModelProviderConfigStore? = null
     ): SessionService {
-        return SessionService(sessionManager, sessionStore, snapshotService, fileStorageService, teamStateRegistry, teamExecutionStore)
+        return SessionService(sessionManager, sessionStore, snapshotService, fileStorageService, teamStateRegistry, teamExecutionStore, configStore)
     }
 
     @Bean

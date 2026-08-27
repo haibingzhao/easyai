@@ -242,4 +242,36 @@ describe('useChatStore', () => {
       expect(state.streamingBlocks).toEqual([]);
     });
   });
+
+  describe('setSessionId', () => {
+    it('should clear leftover streaming state when switching to a different session', () => {
+      // Simulate viewing a running session with in-flight tool blocks
+      useChatStore.getState().setSessionId('session-a');
+      useChatStore.getState().setStreaming(true);
+      useChatStore.getState().startToolBlock('tc1', 'Bash');
+      useChatStore.getState().startToolBlock('tc2', 'mcp__trading__global-news');
+      useChatStore.getState().appendToolOutput('tc1', 'partial output');
+
+      // Switch to another (completed) session
+      useChatStore.getState().setSessionId('session-b');
+
+      const switched = useChatStore.getState();
+      expect(switched.sessionId).toBe('session-b');
+      expect(switched.isStreaming).toBe(false);
+      expect(switched.streamingBlocks).toEqual([]);
+      expect(switched.streamingToolOutputs).toEqual({});
+    });
+
+    it('should preserve live streaming state when re-setting the same session', () => {
+      useChatStore.getState().setSessionId('session-a');
+      useChatStore.getState().setStreaming(true);
+      useChatStore.getState().startToolBlock('tc1', 'Bash');
+
+      useChatStore.getState().setSessionId('session-a');
+
+      const state = useChatStore.getState();
+      expect(state.isStreaming).toBe(true);
+      expect(state.streamingBlocks).toHaveLength(1);
+    });
+  });
 });

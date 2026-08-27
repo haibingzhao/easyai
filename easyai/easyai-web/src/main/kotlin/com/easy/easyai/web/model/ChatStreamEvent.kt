@@ -38,7 +38,8 @@ import com.fasterxml.jackson.annotation.JsonIgnore
     JsonSubTypes.Type(value = ChatStreamEvent.Checkpoint::class, name = "checkpoint"),
     JsonSubTypes.Type(value = ChatStreamEvent.Revert::class, name = "revert"),
     JsonSubTypes.Type(value = ChatStreamEvent.GoalStatus::class, name = "goal_status"),
-    JsonSubTypes.Type(value = ChatStreamEvent.UserMessageAck::class, name = "user_message_ack")
+    JsonSubTypes.Type(value = ChatStreamEvent.UserMessageAck::class, name = "user_message_ack"),
+    JsonSubTypes.Type(value = ChatStreamEvent.SessionContext::class, name = "session_context")
 ])
 sealed interface ChatStreamEvent {
     @get:JsonIgnore
@@ -342,6 +343,22 @@ sealed interface ChatStreamEvent {
         val messageId: String
     ) : ChatStreamEvent {
         override val type: String get() = "user_message_ack"
+    }
+
+    /**
+     * Session context metadata pushed at SSE handshake (stream establishment).
+     * Carries the active model's context window so the frontend token bar renders
+     * the real usage percentage instead of a hardcoded default. Emitted on every
+     * stream build (chat/resume/answer/permission) and on watch attach, so a model
+     * switch always reaches the frontend with the next handshake.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    data class SessionContext(
+        val sessionId: String,
+        val modelContextLength: Int,
+        val modelId: String? = null
+    ) : ChatStreamEvent {
+        override val type: String get() = "session_context"
     }
 
     /** Goal status change notification */

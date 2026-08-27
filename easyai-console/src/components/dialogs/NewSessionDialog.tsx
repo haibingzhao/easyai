@@ -39,7 +39,7 @@ export const NewSessionDialog: React.FC<NewSessionDialogProps> = ({ open, onClos
           return [] as CheckpointInfo[];
         }),
       ]);
-      loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables);
+      loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength);
       useNavStore.getState().setSelectedFile(null);
       // Load file review state
       const reviewState = await getFileReviewState(sessionId).catch((e) => {

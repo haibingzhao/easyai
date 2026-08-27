@@ -200,16 +200,16 @@ function MemoryCard({ toolName, summary, status, expandable, isExpanded, onToggl
         </div>
       </div>
 
-      {/* Expanded content */}
-      {isExpanded && children && (
+      {/* Expanded content (hidden on failure — error section below handles it) */}
+      {isExpanded && children && !isFailed && (
         <>
           <div className="border-t border-border" />
           {children}
         </>
       )}
 
-      {/* Error output */}
-      {isFailed && output && (
+      {/* Error output (also respects expand/collapse state) */}
+      {isExpanded && isFailed && output && (
         <>
           <div className="border-t border-border" />
           <div className="p-3">

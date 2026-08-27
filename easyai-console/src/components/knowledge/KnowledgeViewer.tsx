@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { BookOpen, Copy, Check, Trash2, FolderTree, Link2, List } from 'lucide-react';
+import { BookOpen, Copy, Check, Trash2, FolderTree, Link2, List, Loader2 } from 'lucide-react';
 import type { KnowledgeDetailDto } from '@/services/knowledge-service';
 import { markdownCodeComponents } from '@/components/chat/markdownCodeComponents';
 import { useCategoryStore } from '@/services/stores/category-store';
+import { useKnowledgeStore } from '@/services/stores/knowledge-store';
 import { i18n } from '@/utils/i18n';
 
 interface KnowledgeViewerProps {
@@ -21,6 +22,7 @@ export const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({
   onSelectKey,
 }) => {
   const knowledgeCategories = useCategoryStore((s) => s.knowledgeCategories);
+  const indexingKeys = useKnowledgeStore((s) => s.indexingKeys);
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -118,8 +120,17 @@ export const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({
 
         {/* Metadata row */}
         <div className="mt-2 flex items-center gap-3 text-[11px] text-muted-foreground">
-          {entry.chunksCount != null && (
-            <span>{entry.chunksCount} chunks</span>
+          {indexingKeys.has(entry.key) && entry.chunksCount == null ? (
+            <span className="inline-flex items-center gap-1 text-primary">
+              <Loader2 className="size-3 animate-spin" />
+              {i18n('Indexing in progress...')}
+            </span>
+          ) : (
+            <>
+              {entry.chunksCount != null && (
+                <span>{entry.chunksCount} chunks</span>
+              )}
+            </>
           )}
           {entry.updatedAt != null && (
             <span>{i18n('Updated')}: {new Date(entry.updatedAt).toLocaleString()}</span>

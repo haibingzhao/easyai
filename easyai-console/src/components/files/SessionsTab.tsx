@@ -36,7 +36,7 @@ export const SessionsTab: React.FC = () => {
         sessionService.getSessionDetail(sessionId),
         getCheckpoints(sessionId).catch(() => [] as CheckpointInfo[]),
       ]);
-      loadSessionMessages(detail!.messages, detail!.pendingPermission, checkpoints, detail!.endReason, detail!.variables);
+      loadSessionMessages(detail!.messages, detail!.pendingPermission, checkpoints, detail!.endReason, detail!.variables, detail!.modelContextLength);
       useNavStore.getState().setSelectedFile(null);
 
       // Restore Agent and Model selectors from the last message's config

@@ -149,12 +149,12 @@ class PromptTemplateService(
         // Append time-access guidance when the calc tool is available.
         // The segment is static text, keeping the system prompt prefix stable for LLM caching.
         val timeAccessSegment = if (context.tools.any { it["name"] == "calc" }) TIME_ACCESS_SEGMENT else null
-        // Append memory guidance when the memory system is enabled. Static text for cache stability;
+        // Append memory guidance when the agent has memory_search tool registered. Static text for cache stability;
         // actual memory retrieval happens on demand via memory_search / memory_read tool calls.
-        val memoryGuidanceSegment = if (context.memoryAvailable) MEMORY_GUIDANCE_SEGMENT else null
-        // Append knowledge guidance when the knowledge base is enabled. Static text for cache stability;
+        val memoryGuidanceSegment = if (context.tools.any { it["name"] == "memory_search" }) MEMORY_GUIDANCE_SEGMENT else null
+        // Append knowledge guidance when the agent has knowledge_search tool registered. Static text for cache stability;
         // actual retrieval happens on demand via knowledge_search / knowledge_read tool calls.
-        val knowledgeGuidanceSegment = if (context.knowledgeAvailable) KNOWLEDGE_GUIDANCE_SEGMENT else null
+        val knowledgeGuidanceSegment = if (context.tools.any { it["name"] == "knowledge_search" }) KNOWLEDGE_GUIDANCE_SEGMENT else null
         return listOfNotNull(base.takeIf { it.isNotBlank() }, varsSegment, timeAccessSegment, memoryGuidanceSegment, knowledgeGuidanceSegment)
             .joinToString("\n\n")
     }

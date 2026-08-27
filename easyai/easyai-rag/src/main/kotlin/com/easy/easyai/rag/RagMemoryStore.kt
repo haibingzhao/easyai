@@ -21,8 +21,9 @@ import java.time.format.DateTimeFormatter
  * - externalId: `easyai:{key}` (idempotent upsert, deterministic docId)
  * - content: YAML-frontmatter Markdown format (frontmatter carries description, type,
  *   keywords, maturity, scenarios, created/updated dates)
- * - writes submit indexing asynchronously and poll for completion; entries may not be
- *   immediately searchable if the poll times out (indexed=false in RagUpsertResult)
+ * - writes submit indexing fire-and-forget (no polling): the write returns as soon as
+ *   the document is stored and indexing is triggered server-side; entries become
+ *   searchable once the server finishes vectorization / knowledge-graph building
  *
  * PROJECT operations without a project path degrade: reads return empty,
  * writes raise [MemoryBackendException].
@@ -146,12 +147,10 @@ internal class RagMemoryStore(
                     buildStructure = true
                 )
             )
-            val result = client.upsert(doc, bizId)
-            if (!result.indexed) {
-                logger.warn("Memory entry written but indexing not confirmed (poll timeout): {} (bizId={})", doc.externalId, bizId)
-            } else {
-                logger.debug("Memory entry written to RAG: {} (bizId={})", doc.externalId, bizId)
-            }
+            // Fire-and-forget: memory writes must not block on indexing confirmation;
+            // vectorization / knowledge-graph building continues server-side.
+            client.upsert(doc, bizId, awaitIndexing = false)
+            logger.debug("Memory entry written to RAG (indexing submitted): {} (bizId={})", doc.externalId, bizId)
             Path.of(doc.filePath)
         }
 

@@ -69,7 +69,7 @@ class KnowledgeController(
                 val resolvedSource = source?.takeIf { it.isNotBlank() } ?: "default"
                 validateSource(resolvedSource)
 
-                logger.info("Uploading {} file(s) for source '{}' by user '{}'", fileParts.size, resolvedSource, userId)
+                logger.info("Uploading {} file(s) for source '{}' with category '{}' by user '{}'", fileParts.size, resolvedSource, category, userId)
 
                 val items = fileParts.zip(paths).map { (filePart, path) ->
                     val content = readPartContent(filePart)

@@ -105,9 +105,13 @@ internal class RagKnowledgeStore(
         )
 
         return try {
-            val result = client.upsert(doc, bizId)
+            // Fire-and-forget: submit indexing but don't poll for completion.
+            // The server indexes asynchronously; entries become searchable shortly after.
+            // This avoids blocking the upload response for potentially minutes per file
+            // (pollUntilTerminal can wait up to indexPollMaxMs=5min per document).
+            val result = client.upsert(doc, bizId, awaitIndexing = false)
             if (!result.indexed) {
-                logger.warn("Knowledge entry uploaded but indexing not confirmed (poll timeout): {}", externalId)
+                logger.debug("Knowledge entry indexing submitted (not yet confirmed): {}", externalId)
             } else {
                 logger.debug("Knowledge entry uploaded: {}", externalId)
             }
@@ -148,7 +152,7 @@ internal class RagKnowledgeStore(
                 val extId = doc.externalId ?: return@mapNotNull null
                 async {
                     val detail = client.readByExternalId(extId, bizId) ?: return@async null
-                    parseDetailToEntry(detail.content, detail.filePath)
+                    parseDetailToEntry(detail.content, detail.filePath, chunksCount = detail.chunksCount)
                 }
             }.awaitAll().filterNotNull()
         }
@@ -195,7 +199,7 @@ internal class RagKnowledgeStore(
                     }
                     if (detail == null) return@async null
                     // Longer preview than list mode: reduces follow-up knowledge_read calls.
-                    parseDetailToEntry(detail.content, detail.filePath, SEARCH_PREVIEW_LENGTH)
+                    parseDetailToEntry(detail.content, detail.filePath, SEARCH_PREVIEW_LENGTH, chunksCount = detail.chunksCount)
                 }
             }.awaitAll().filterNotNull()
         }
@@ -222,7 +226,7 @@ internal class RagKnowledgeStore(
         val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
         val externalId = RagConstants.externalIdOf(key)
         val doc = client.readByExternalId(externalId, bizId) ?: return null
-        val entry = parseDetailToEntry(doc.content, doc.filePath) ?: return null
+        val entry = parseDetailToEntry(doc.content, doc.filePath, chunksCount = doc.chunksCount) ?: return null
         val fullContent = stripFrontmatter(doc.content ?: "")
         val toc = extractToc(fullContent)
         val parent = deriveParent(key, bizId)
@@ -292,7 +296,8 @@ internal class RagKnowledgeStore(
     private fun parseDetailToEntry(
         content: String?,
         filePath: String?,
-        previewLength: Int = CONTENT_PREVIEW_LENGTH
+        previewLength: Int = CONTENT_PREVIEW_LENGTH,
+        chunksCount: Int? = null
     ): KnowledgeEntry? {
         if (content == null) return null
         val (frontmatter, body) = splitFrontmatter(content)
@@ -312,7 +317,7 @@ internal class RagKnowledgeStore(
             ext = ext,
             content = body.take(previewLength),
             updatedAt = meta["updated"]?.toLongOrNull(),
-            chunksCount = null
+            chunksCount = chunksCount
         )
     }
 

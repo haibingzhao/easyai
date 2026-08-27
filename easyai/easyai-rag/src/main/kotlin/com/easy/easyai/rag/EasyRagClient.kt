@@ -73,7 +73,7 @@ internal class EasyRagClient(
         }
     }
 
-    override suspend fun upsert(doc: RagDocument, bizId: String?): RagUpsertResult {
+    override suspend fun upsert(doc: RagDocument, bizId: String?, awaitIndexing: Boolean): RagUpsertResult {
         val config = loadEnabledConfig("upsert")
         val body = mapOfNonNull(
             "text" to doc.content,
@@ -139,6 +139,11 @@ internal class EasyRagClient(
             val chunksCount = (indexResponse?.get("chunks_count") as? Number)?.toInt()
             logger.debug("RAG upsert completed (sync terminal): externalId={}, docId={}, chunks={}", doc.externalId, docId, chunksCount)
             return RagUpsertResult(docId = docId, indexed = true, chunksCount = chunksCount)
+        }
+        if (!awaitIndexing) {
+            // Fire-and-forget: submission was accepted, indexing continues server-side.
+            logger.debug("RAG indexing submitted (not awaiting): externalId={}, docId={}", doc.externalId, docId)
+            return RagUpsertResult(docId = docId, indexed = false)
         }
         val pollResult = pollUntilTerminal(config, docId, bizId)
         val chunksCount = pollResult?.let { (it["chunks_count"] as? Number)?.toInt() }

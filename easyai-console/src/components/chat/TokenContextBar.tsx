@@ -91,7 +91,8 @@ export const TokenContextBar: React.FC = () => {
     <div className={expanded ? 'px-4 py-1.5' : 'px-4 py-1'}>
       <div className="flex items-center gap-2" style={expanded ? { marginBottom: 'calc(var(--spacing) * 1.5)' } : undefined}>
         <span className="text-sm font-semibold tabular-nums">
-          {percentage}% {formatTokenCount(contextTokens)} / {formatTokenCount(contextWindow)}
+          {/* Binary base (1024) to match model-config convention: "256K" = 262144 */}
+          {percentage}% {formatTokenCount(contextTokens, 1024)} / {formatTokenCount(contextWindow, 1024)}
         </span>
         <span className="text-xs text-muted-foreground">
           {i18n('context used')}
