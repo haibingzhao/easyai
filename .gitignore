@@ -10,6 +10,7 @@
 .sisyphus/
 .trae/
 .qwen/
+.workbuddy
 .playwright-mcp/
 .claude/
 Output

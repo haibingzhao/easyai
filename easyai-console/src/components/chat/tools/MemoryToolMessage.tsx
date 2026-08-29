@@ -276,7 +276,6 @@ function MemoryReadView({ toolCall, result, status, streamingOutput }: ToolMessa
   const [expanded, setExpanded] = useState(false);
   const parsed = parseArgs<{ path: string }>(toolCall.args);
   const output = extractResultOutput(result, streamingOutput);
-  const isFailed = status === 'FAILED';
 
   return (
     <MemoryCard
@@ -289,7 +288,7 @@ function MemoryReadView({ toolCall, result, status, streamingOutput }: ToolMessa
         </span>
       }
       status={status}
-      expandable={!isFailed && !!output}
+      expandable={!!output}
       isExpanded={expanded}
       onToggle={() => setExpanded(!expanded)}
       result={result}
@@ -323,6 +322,7 @@ function ActionBadge({ action }: { action: string }) {
 function MemoryWriteView({ toolCall, result, status, streamingOutput }: ToolMessageProps) {
   const [expanded, setExpanded] = useState(false);
   const parsed = parseArgs<MemoryWriteArgs>(toolCall.args);
+  const output = extractResultOutput(result, streamingOutput);
   const isFailed = status === 'FAILED';
 
   // Determine if batch mode
@@ -360,7 +360,7 @@ function MemoryWriteView({ toolCall, result, status, streamingOutput }: ToolMess
         </span>
       }
       status={status}
-      expandable={!isFailed && !!detailContent}
+      expandable={isFailed ? !!output : !!detailContent}
       isExpanded={expanded}
       onToggle={() => setExpanded(!expanded)}
       result={result}

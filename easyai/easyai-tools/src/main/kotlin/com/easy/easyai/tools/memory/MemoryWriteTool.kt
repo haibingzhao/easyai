@@ -15,6 +15,7 @@ import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.tool.ToolUpdate
 import com.easy.easyai.common.util.SharedObjectMapper
+import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import kotlinx.coroutines.CoroutineScope
 import java.time.LocalDate
 
@@ -26,26 +27,44 @@ internal class MemoryWriteTool(
     override val executionMode = ToolExecutionMode.SEQUENTIAL
 
     data class Parameters(
+        @field:JsonPropertyDescription("Operation type: 'add', 'update' or 'remove'. Required unless batch 'operations' is provided.")
         val action: String? = null,
+        @field:JsonPropertyDescription("Bare entry file name WITHOUT directories and WITHOUT '.md' extension; must not contain '/', '\\' or '..'. The category goes in 'type', NOT in the name. Example: 'stage2_2026-08-27_conclusion'")
         val name: String? = null,
+        @field:JsonPropertyDescription("Category directory name - one of the valid types listed in this tool's description. Never put the category inside 'name'.")
         val type: String? = null,
+        @field:JsonPropertyDescription("One-line summary of what the memory captures. Required for add.")
         val description: String? = null,
+        @field:JsonPropertyDescription("Full body text of the entry. Required for add and update.")
         val content: String? = null,
+        @field:JsonPropertyDescription("Exact substring to replace during update; omit to replace the whole content.")
         val oldText: String? = null,
+        @field:JsonPropertyDescription("'project' (default) or 'global'.")
         val scope: String? = null,
+        @field:JsonPropertyDescription("Optional maturity tag, e.g. 'high', 'medium', 'low'.")
         val maturity: String? = null,
+        @field:JsonPropertyDescription("A real JSON array of strings describing when this memory applies, e.g. [\"debugging\", \"code review\"]. Never pass a single JSON-encoded string here.")
         val scenarios: List<String>? = null,
+        @field:JsonPropertyDescription("Batch mode: list of operation objects {action, name, type, description, content, oldText, maturity, scenarios} executed atomically with rollback on failure.")
         val operations: List<Operation>? = null
     )
 
     data class Operation(
+        @field:JsonPropertyDescription("'add', 'update' or 'remove'.")
         val action: String,
+        @field:JsonPropertyDescription("Bare entry file name without directories, '.md' extension or path separators.")
         val name: String,
+        @field:JsonPropertyDescription("Category directory name from this tool's description; required for add.")
         val type: String? = null,
+        @field:JsonPropertyDescription("One-line summary. Required for add.")
         val description: String? = null,
+        @field:JsonPropertyDescription("Full body text. Required for add and update.")
         val content: String? = null,
+        @field:JsonPropertyDescription("Exact substring to replace during update.")
         val oldText: String? = null,
+        @field:JsonPropertyDescription("Optional maturity tag.")
         val maturity: String? = null,
+        @field:JsonPropertyDescription("A real JSON array of strings; never a single JSON-encoded string.")
         val scenarios: List<String>? = null
     )
 
@@ -60,7 +79,7 @@ internal class MemoryWriteTool(
         onUpdate: suspend (ToolUpdate) -> Unit
     ): ToolResult {
         val params = try {
-            SharedObjectMapper.instance.convertValue(args, Parameters::class.java)
+            SharedObjectMapper.instance.convertValue(normalizeScenarioArgs(args), Parameters::class.java)
         } catch (e: Exception) {
             return errorResult("Error: Invalid parameters: ${e.message}")
         }
@@ -108,10 +127,21 @@ internal class MemoryWriteTool(
         maturity: String?, scenarios: List<String>?, scope: MemoryScope, owner: MemoryOwnerContext
     ): ToolResult {
         val validTypes = MemoryType.entriesFor(DomainCatalog.activeDomain)
-        if (type.isNullOrBlank()) return errorResult("Error: 'type' is required for add (${validTypes.joinToString("/") { it.dirName }}).")
-        if (description.isNullOrBlank()) return errorResult("Error: 'description' is required for add.")
-        if (content.isNullOrBlank()) return errorResult("Error: 'content' is required for add.")
-        if (!isValidMemoryName(name)) return errorResult("Error: 'name' must not contain '/', '\\', or '..'.")
+
+        // Report every violated parameter at once so the caller can fix them all in a single retry.
+        if (type.isNullOrBlank() || description.isNullOrBlank() || content.isNullOrBlank() || !isValidMemoryName(name)) {
+            val problems = mutableListOf<String>()
+            if (type.isNullOrBlank()) problems.add("- 'type' is required for add; valid values: ${validTypes.joinToString(", ") { it.dirName }}")
+            if (description.isNullOrBlank()) problems.add("- 'description' is required for add")
+            if (content.isNullOrBlank()) problems.add("- 'content' is required for add")
+            if (!isValidMemoryName(name)) {
+                problems.add(
+                    "- 'name' must be a bare file name without directory separators ('/') and without '.md'; " +
+                        "the category belongs in 'type', not in the name"
+                )
+            }
+            return errorResult("Error: invalid parameters for add:\n${problems.joinToString("\n")}")
+        }
 
         val memoryType = MemoryType.fromDirName(type)
             ?: return errorResult("Error: Unknown type '$type'. Use: ${validTypes.joinToString(", ") { it.dirName }}.")
@@ -246,6 +276,37 @@ internal class MemoryWriteTool(
         for (action in rollbackActions.reversed()) {
             try { action() } catch (_: Exception) { /* best effort */ }
         }
+    }
+
+    /**
+     * Normalize LLM-provided scenario arguments before deserialization:
+     * a JSON-encoded string ("[\"s1\",\"s2\"]") is parsed back into a real string array;
+     * any other scalar is wrapped as a single-element array.
+     */
+    private fun normalizeScenarioArgs(args: Map<String, Any?>): Map<String, Any?> {
+        val result = HashMap<String, Any?>(args)
+        args["scenarios"]?.let { result["scenarios"] = coerceToStringList(it) }
+        (args["operations"] as? List<*>)?.let { ops ->
+            result["operations"] = ops.map { op ->
+                if (op is Map<*, *> && op.containsKey("scenarios")) {
+                    @Suppress("UNCHECKED_CAST")
+                    val mutable = HashMap(op as Map<Any?, Any?>)
+                    mutable["scenarios"] = coerceToStringList(mutable["scenarios"])
+                    mutable
+                } else {
+                    op
+                }
+            }
+        }
+        return result
+    }
+
+    private fun coerceToStringList(value: Any?): Any? {
+        if (value !is String) return value
+        return runCatching {
+            val node = SharedObjectMapper.instance.readTree(value)
+            if (node.isArray) node.toList().map { it.asString() } else listOf(value)
+        }.getOrElse { listOf(value) }
     }
 
     private fun resolveScope(scopeStr: String?): MemoryScope = when (scopeStr?.lowercase()) {
