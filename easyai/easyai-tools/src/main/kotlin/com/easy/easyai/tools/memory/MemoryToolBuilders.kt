@@ -1,6 +1,8 @@
 package com.easy.easyai.tools.memory
 
+import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.memory.MemoryStore
+import com.easy.easyai.core.memory.MemoryType
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import org.springframework.stereotype.Component
@@ -55,7 +57,18 @@ class MemoryWriteToolBuilder : AbstractMemoryToolBuilder() {
         tracksFileChanges = true
     )
 
-    override fun createTool(store: MemoryStore): ToolDefinition = MemoryWriteTool(metadata, store)
+    override fun createTool(store: MemoryStore): ToolDefinition {
+        // Inject the active domain's valid type list into the LLM-visible description so the
+        // model can emit a valid 'type' on the first attempt instead of failing with an enum error.
+        val validTypes = MemoryType.entriesFor(DomainCatalog.activeDomain).joinToString(", ") { it.dirName }
+        val parameterRules = """
+
+Parameter rules (violating any of these is the most common call failure):
+- 'type': must be exactly one of: $validTypes. Never invent aliases such as 'project' or 'user'.
+- 'name': bare file name only - no directory segments (no '/'), no '.md' suffix. The category goes into 'type', NOT into 'name'.
+- 'scenarios': a real JSON array of strings like ["scenario one"]. Never pass it as a single JSON-encoded string."""
+        return MemoryWriteTool(metadata.copy(description = metadata.description + parameterRules), store)
+    }
 }
 
 @Component

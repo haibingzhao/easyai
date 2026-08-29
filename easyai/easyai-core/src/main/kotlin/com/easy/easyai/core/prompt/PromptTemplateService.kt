@@ -225,7 +225,8 @@ the user's request to recall relevant context: user preferences, past decisions,
 conventions, and prior conclusions. When `knowledge_search` is also available, issue it in the
 SAME response as `memory_search` so both run in parallel. Use `memory_read` to load the full
 content of a specific entry, and `memory_write` to persist durable facts worth remembering
-across sessions.
+across sessions. When calling `memory_write`, pass the category via its 'type' parameter
+(never inside 'name') and keep 'name' as a bare file name without directories or '.md'.
         """.trimIndent()
 
         /** Static guidance for on-demand knowledge retrieval via knowledge_* tools (cache-stable). */

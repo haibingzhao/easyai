@@ -207,7 +207,6 @@ function KnowledgeReadView({ toolCall, result, status, streamingOutput }: ToolMe
   const [expanded, setExpanded] = useState(false);
   const parsed = parseArgs<{ key: string }>(toolCall.args);
   const output = extractResultOutput(result, streamingOutput);
-  const isFailed = status === 'FAILED';
 
   return (
     <KnowledgeCard
@@ -220,7 +219,7 @@ function KnowledgeReadView({ toolCall, result, status, streamingOutput }: ToolMe
         </span>
       }
       status={status}
-      expandable={!isFailed && !!output}
+      expandable={!!output}
       isExpanded={expanded}
       onToggle={() => setExpanded(!expanded)}
       result={result}
