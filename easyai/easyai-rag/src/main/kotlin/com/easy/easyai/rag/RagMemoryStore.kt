@@ -21,9 +21,12 @@ import java.time.format.DateTimeFormatter
  * - externalId: `easyai:{key}` (idempotent upsert, deterministic docId)
  * - content: YAML-frontmatter Markdown format (frontmatter carries description, type,
  *   keywords, maturity, scenarios, created/updated dates)
+ * - processing: heading-aligned chunking only (`skipKg=true`, `buildStructure=false`) —
+ *   memory retrieval is raw-chunk (`mode=naive`), so the knowledge graph and structure
+ *   index would be built but never read
  * - writes submit indexing fire-and-forget (no polling): the write returns as soon as
  *   the document is stored and indexing is triggered server-side; entries become
- *   searchable once the server finishes vectorization / knowledge-graph building
+ *   searchable once the server finishes chunking and vectorization
  *
  * PROJECT operations without a project path degrade: reads return empty,
  * writes raise [MemoryBackendException].
@@ -139,16 +142,20 @@ internal class RagMemoryStore(
                     entry.maturity?.let { put("maturity", it.apiName) }
                 },
                 createTime = createTimeOf(entry),
-                // Memory entries are Markdown: chunk by heading structure, build the
-                // knowledge graph (skipKg=false) and the structure index (TOC + summaries).
+                // Memory entries are short Markdown documents retrieved as raw chunks:
+                // heading-aligned chunking keeps frontmatter + body inside one chunk so
+                // parseChunkToEntry can rebuild a complete entry, while KG extraction and
+                // the structure index are skipped — memory_search queries with mode=naive,
+                // which never reads entities/relations or the structure index, so both
+                // would only add per-write LLM cost.
                 options = RagProcessingOptions(
                     chunkMethod = CHUNK_METHOD_STRUCTURE_AWARE,
-                    skipKg = false,
-                    buildStructure = true
+                    skipKg = true,
+                    buildStructure = false
                 )
             )
             // Fire-and-forget: memory writes must not block on indexing confirmation;
-            // vectorization / knowledge-graph building continues server-side.
+            // chunking and vectorization continue server-side.
             client.upsert(doc, bizId, awaitIndexing = false)
             logger.debug("Memory entry written to RAG (indexing submitted): {} (bizId={})", doc.externalId, bizId)
             Path.of(doc.filePath)
@@ -386,7 +393,7 @@ internal class RagMemoryStore(
 
     private companion object {
         const val FRONTMATTER_DELIMITER = "---"
-        /** Markdown heading-based chunking, required for Markdown memories. */
+        /** Markdown heading-based chunking: no LLM cost, keeps entry sections intact. */
         const val CHUNK_METHOD_STRUCTURE_AWARE = "structure_aware"
         val DATE_FMT: DateTimeFormatter = DateTimeFormatter.ISO_LOCAL_DATE
     }
