@@ -50,3 +50,5 @@ logs/
 *.keystore
 *.pfx
 desktop-config.json
+
+vibe_images
