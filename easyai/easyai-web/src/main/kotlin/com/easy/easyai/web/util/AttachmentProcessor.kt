@@ -2,6 +2,7 @@ package com.easy.easyai.web.util
 
 import com.easy.easyai.core.model.ContentBlock
 import com.easy.easyai.core.model.FileRefContent
+import com.easy.easyai.core.model.FolderRefContent
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.web.model.ChatAttachment
 import com.easy.easyai.web.service.FileStorageService
@@ -82,22 +83,50 @@ object AttachmentProcessor {
     /**
      * Process attachments into [ContentBlock]s using the new file-reference approach.
      *
+     * - Attachments with `filePath` pointing at a directory → [FolderRefContent].
      * - Attachments with `filePath` (local files) → [FileRefContent] directly.
      * - Attachments with `data` (clipboard images) → saved to disk via [FileStorageService] → [FileRefContent].
      *
-     * @return List of [FileRefContent] blocks.
+     * Attachments have no inline position in the message text, so they are anchored at
+     * the end of the cleaned text via [anchorOffset] (the caller passes the cleaned text
+     * length from [extractInlineFileRefs]).
+     *
+     * @param anchorOffset displayOffset assigned to the produced blocks (end of cleaned text).
+     * @param projectDir project directory for directory-attachment validation; a directory
+     *   attachment outside it is rejected with the same fail-closed rule as inline folder refs.
+     * @return List of [FileRefContent] / [FolderRefContent] blocks.
      * @throws AttachmentValidationException when validation fails.
      */
     fun processAttachments(
         attachments: List<ChatAttachment>?,
         fileStorageService: FileStorageService,
-        sessionId: String
+        sessionId: String,
+        anchorOffset: Int,
+        projectDir: Path?
     ): List<ContentBlock> {
         if (attachments.isNullOrEmpty()) return emptyList()
 
         val blocks = mutableListOf<ContentBlock>()
         for (att in attachments) {
             if (att.filePath != null) {
+                // Directory attachment (e.g. folder mention restored from history) → FolderRefContent
+                val attPath = try {
+                    Path.of(att.filePath).toAbsolutePath().normalize()
+                } catch (_: Exception) {
+                    throw AttachmentValidationException("Invalid path for attachment '${att.name}'")
+                }
+                if (Files.isDirectory(attPath)) {
+                    // Security: same fail-closed rule as inline folder refs. The path is surfaced
+                    // to the LLM together with an instruction to explore it via tools, so an
+                    // unchecked client-supplied path would leak directories outside the project.
+                    if (projectDir == null || !attPath.startsWith(projectDir)) {
+                        throw AttachmentValidationException(
+                            "Directory attachment '${att.name}' must be inside the project directory"
+                        )
+                    }
+                    blocks.add(FolderRefContent(filePath = attPath.toString(), name = att.name, displayOffset = anchorOffset))
+                    continue
+                }
                 // Validate file type is supported
                 if (!isSupportedMimeType(att.mimeType, att.name)) {
                     throw AttachmentValidationException(
@@ -108,7 +137,8 @@ object AttachmentProcessor {
                 blocks.add(FileRefContent(
                     filePath = att.filePath,
                     name = att.name,
-                    mimeType = att.mimeType
+                    mimeType = att.mimeType,
+                    displayOffset = anchorOffset
                 ))
             } else if (att.data != null) {
                 if (att.mimeType !in SUPPORTED_IMAGE_MIMES) {
@@ -133,7 +163,8 @@ object AttachmentProcessor {
                 blocks.add(FileRefContent(
                     filePath = filePath,
                     name = att.name,
-                    mimeType = att.mimeType
+                    mimeType = att.mimeType,
+                    displayOffset = anchorOffset
                 ))
             }
         }
@@ -162,7 +193,9 @@ object AttachmentProcessor {
         /** Cleaned message text with all inline refs removed. */
         val cleanedText: String,
         /** FileRefContent blocks for each valid file reference found. */
-        val fileRefBlocks: List<FileRefContent>
+        val fileRefBlocks: List<FileRefContent>,
+        /** FolderRefContent blocks for each valid folder reference found. */
+        val folderRefBlocks: List<FolderRefContent> = emptyList()
     )
 
     /**
@@ -173,27 +206,59 @@ object AttachmentProcessor {
      * - The cleaned text (refs stripped out)
      * - [FileRefContent] blocks for each valid file reference
      *
-     * Folder references (prefixed with 📁) are stripped from text but not converted to
-     * [FileRefContent] since they don't map to a single file.
+     * Folder references (prefixed with 📁) are stripped from text and converted to
+     * [FolderRefContent] blocks (path-only; directories never map to a single file).
      *
      * @param text the raw message text from the frontend
      * @param projectDir optional project directory for path validation; if null, no validation
-     * @return [InlineRefResult] with cleaned text and file ref blocks
+     * @return [InlineRefResult] with cleaned text, file ref blocks and folder ref blocks
      */
     fun extractInlineFileRefs(text: String, projectDir: Path? = null): InlineRefResult {
         if (!text.contains(FILE_REF_CHAR)) return InlineRefResult(text, emptyList())
 
         val blocks = mutableListOf<FileRefContent>()
+        val folderBlocks = mutableListOf<FolderRefContent>()
+        // Chars stripped so far: refs are removed from text, so the cleaned-text offset
+        // of the current match is its original index minus everything removed before it.
+        var removedChars = 0
         val cleanedText = INLINE_REF_REGEX.replace(text) { match ->
             val rawName = match.groupValues[1]
             val filePath = match.groupValues[2]
+            val cleanedOffset = match.range.first - removedChars
+            removedChars += match.value.length
 
-            // Folder refs: strip from text but don't create a FileRefContent
+            // Folder refs: strip from text and emit a FolderRefContent (path-only hint)
             if (rawName.startsWith(FOLDER_PREFIX)) {
+                val resolvedDir = try {
+                    Path.of(filePath).toAbsolutePath().normalize()
+                } catch (_: Exception) {
+                    logger.warn("Inline folder ref: invalid path, skipping: {}", filePath)
+                    return@replace ""
+                }
+
+                // Security: path must be within project directory (required — fail closed)
+                if (projectDir == null) {
+                    logger.warn("Inline folder ref: no project directory configured, skipping: {}", filePath)
+                    return@replace ""
+                }
+                if (!resolvedDir.startsWith(projectDir)) {
+                    logger.warn("Inline folder ref: path outside project directory, skipping: {}", filePath)
+                    return@replace ""
+                }
+
+                // Path must exist and be a directory
+                if (!Files.isDirectory(resolvedDir)) {
+                    logger.warn("Inline folder ref: directory not found, skipping: {}", filePath)
+                    return@replace ""
+                }
+
+                folderBlocks.add(FolderRefContent(
+                    filePath = resolvedDir.toString(),
+                    name = rawName.removePrefix(FOLDER_PREFIX),
+                    displayOffset = cleanedOffset
+                ))
                 return@replace ""
             }
-
-            val name = rawName
 
             // Validate path
             val resolvedPath = try {
@@ -227,19 +292,20 @@ object AttachmentProcessor {
             }
 
             // Determine MIME type
-            val mimeType = resolveMimeType(resolvedPath, name)
+            val mimeType = resolveMimeType(resolvedPath, rawName)
 
             blocks.add(FileRefContent(
                 filePath = resolvedPath.toString(),
-                name = name,
+                name = rawName,
                 mimeType = mimeType,
-                source = "inline"
+                source = "inline",
+                displayOffset = cleanedOffset
             ))
 
             "" // Remove the ref from text
         }
 
-        return InlineRefResult(cleanedText, blocks)
+        return InlineRefResult(cleanedText, blocks, folderBlocks)
     }
 
     /**
@@ -248,7 +314,7 @@ object AttachmentProcessor {
      *
      * @param messageText the raw message text from the frontend
      * @param projectDir optional project directory for path validation
-     * @return list of [ContentBlock]s: one [TextContent] (if non-blank) + [FileRefContent]s
+     * @return list of [ContentBlock]s: one [TextContent] (if non-blank) + [FileRefContent]s + [FolderRefContent]s
      */
     fun buildContentBlocks(messageText: String, projectDir: Path? = null): List<ContentBlock> {
         val result = extractInlineFileRefs(messageText, projectDir)
@@ -257,6 +323,7 @@ object AttachmentProcessor {
             blocks.add(TextContent(result.cleanedText))
         }
         blocks.addAll(result.fileRefBlocks)
+        blocks.addAll(result.folderRefBlocks)
         return blocks
     }
 

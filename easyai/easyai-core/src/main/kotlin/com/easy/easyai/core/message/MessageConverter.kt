@@ -111,6 +111,12 @@ class DefaultMessageConverter(
                         )
                     }
 
+                    // Refs are re-inserted into the original text at their recorded
+                    // displayOffset so the LLM sees which sentence each ref belongs to
+                    // (uploaded attachments are anchored at the end of the text by
+                    // AttachmentProcessor).
+                    val anchoredInsertions = mutableListOf<Pair<Int, String>>() // offset to snippet
+
                     for (resolved in resolvedRefs) {
                         val ref = resolved.ref
                         val path = resolved.path
@@ -132,15 +138,40 @@ class DefaultMessageConverter(
                                 logger.warn("FileRefContent: failed to read text file: {}", ref.filePath, e)
                                 continue
                             }
-                            // Escape XML special characters in attribute value
-                            val escapedName = ref.name
-                                .replace("&", "&amp;")
-                                .replace("\"", "&quot;")
-                                .replace("<", "&lt;")
-                                .replace(">", "&gt;")
                             // Wrap file content in CDATA to safely embed arbitrary text in XML
-                            textParts.add("<file name=\"$escapedName\">\n<![CDATA[$fileText]]>\n</file>")
+                            val snippet = "<file name=\"${escapeXmlAttr(ref.name)}\">\n<![CDATA[$fileText]]>\n</file>"
+                            anchoredInsertions.add(ref.displayOffset to snippet)
                         }
+                    }
+
+                    // Folder references → inline [folder name: path] markers at their recorded
+                    // offsets (one marker per occurrence — sentence-to-folder mapping preserved).
+                    // Directory contents are never inlined — explored via list/read tools.
+                    val folderRefs = msg.content.filterIsInstance<FolderRefContent>()
+                    for (folder in folderRefs) {
+                        anchoredInsertions.add(folder.displayOffset to "[folder ${folder.name}: ${folder.filePath}]")
+                    }
+
+                    if (anchoredInsertions.isNotEmpty()) {
+                        // Invariant: textParts[0] is always the user's own text — buildContentBlocks
+                        // emits at most one TextContent and generated blocks (<attached-files>) are
+                        // appended after it. Offsets are relative to that text.
+                        var base = if (textParts.isNotEmpty()) textParts.removeAt(0) else ""
+                        var delta = 0
+                        for ((offset, snippet) in anchoredInsertions.sortedBy { it.first }) {
+                            val at = (offset + delta).coerceIn(0, base.length)
+                            base = base.substring(0, at) + snippet + base.substring(at)
+                            delta += snippet.length
+                        }
+                        textParts.add(0, base)
+                    }
+
+                    if (folderRefs.isNotEmpty()) {
+                        // Instruction stated once for all inline-anchored folders
+                        textParts.add(
+                            "(Folder paths marked inline above are user-referenced directories; their contents are not " +
+                                "inlined here — use directory listing and file reading tools to explore them as needed.)"
+                        )
                     }
 
                     val text = textParts.joinToString("\n\n")
@@ -194,6 +225,13 @@ class DefaultMessageConverter(
                 else -> emptyList()
             }
         }
+
+    /** Escape XML special characters for safe use in attribute values. */
+    private fun escapeXmlAttr(value: String): String = value
+        .replace("&", "&amp;")
+        .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
 
     override fun fromSpringAiResponse(response: ChatResponse): AssistantMessage {
         val result = response.result

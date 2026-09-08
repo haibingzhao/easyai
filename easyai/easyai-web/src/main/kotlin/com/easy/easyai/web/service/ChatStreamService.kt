@@ -244,20 +244,21 @@ class ChatStreamService(
         val session = executionService?.getActiveSession(sessionId)
             ?: throw IllegalStateException("No active session for queue operation: $sessionId")
 
-        // Process command expansion for queued messages (e.g., /goal creates a fresh goal).
-        // Side effects (goal creation, notification) happen immediately so the Summary
-        // panel reflects the new goal state before the agent picks up the message.
-        commandService?.resolveAndExpand(content, userId, sessionId)?.let { expansion ->
-            logger.info("Processed command '{}' in queued {} message for session {}",
-                expansion.commandName, type, sessionId)
-        }
-
-        // Validate and decode image attachments; also extract inline @ file references
+        // Validate attachments and extract inline @ references BEFORE command expansion
+        // (which has side effects: goal creation, notification) so an invalid attachment
+        // fails fast without leaving partial state.
+        // Attachments have no inline position — anchor them at the end of the cleaned text.
         val projectDir = session.agentContext.projectPath?.toAbsolutePath()?.normalize()
         val contentBlocks = AttachmentProcessor.buildContentBlocks(content, projectDir).toMutableList()
         if (fileStorageService != null) {
             // New path: process all attachments via FileRefContent (no base64 in DB)
-            contentBlocks.addAll(AttachmentProcessor.processAttachments(attachments, fileStorageService, sessionId))
+            val textEnd = contentBlocks.filterIsInstance<TextContent>().firstOrNull()?.text?.length ?: 0
+            contentBlocks.addAll(
+                AttachmentProcessor.processAttachments(
+                    attachments, fileStorageService, sessionId,
+                    anchorOffset = textEnd, projectDir = projectDir
+                )
+            )
         } else {
             // Legacy path: base64 ImageContent (backward compatibility)
             val decodedImages = AttachmentProcessor.decodeImageAttachments(attachments)
@@ -266,6 +267,14 @@ class ChatStreamService(
             }
         }
         val userMessage = UserMessage(content = contentBlocks)
+
+        // Process command expansion for queued messages (e.g., /goal creates a fresh goal).
+        // Side effects (goal creation, notification) happen immediately so the Summary
+        // panel reflects the new goal state before the agent picks up the message.
+        commandService?.resolveAndExpand(content, userId, sessionId)?.let { expansion ->
+            logger.info("Processed command '{}' in queued {} message for session {}",
+                expansion.commandName, type, sessionId)
+        }
 
         val queueId = when (type) {
             "steer" -> session.steerWithId(userMessage)
@@ -380,22 +389,6 @@ class ChatStreamService(
             return flowOf(errorSse("Message is required"))
         }
 
-        // Process attachments: prefer new FileRefContent path over legacy base64
-        val fileRefBlocks = if (fileStorageService != null) {
-            try {
-                AttachmentProcessor.processAttachments(attachments, fileStorageService, session.id)
-            } catch (e: AttachmentValidationException) {
-                return flowOf(errorSse(e.message))
-            }
-        } else {
-            try {
-                val decodedImages = AttachmentProcessor.decodeImageAttachments(attachments)
-                decodedImages.map { (img, bytes) -> ImageContent(bytes, img.mimeType) }
-            } catch (e: AttachmentValidationException) {
-                return flowOf(errorSse(e.message))
-            }
-        }
-
         // Text attachments are inlined by the frontend; backend only handles images.
         val messageText = message.orEmpty()
 
@@ -405,6 +398,37 @@ class ChatStreamService(
         // Generate a messageId for this user turn
         val userMessageId = UUID.randomUUID().toString()
         val projectPath = agentContext.projectPath
+        val projectDir = projectPath?.toAbsolutePath()?.normalize()
+
+        // Build content blocks (text + file refs / images) up front, before any side-effecting
+        // step below (revert-state cleanup, command expansion which creates goals), so that an
+        // attachment validation failure returns early without leaving partial state.
+        // Inline @ references (‛[name](path)‛) become FileRefContent/FolderRefContent blocks
+        // anchored at their sentence position; attachments have no inline position and are
+        // anchored at the end of the cleaned text.
+        val contentBlocks = AttachmentProcessor.buildContentBlocks(messageText, projectDir).toMutableList()
+        if (fileStorageService != null) {
+            // New path: attachments → FileRefContent/FolderRefContent (no base64 in DB)
+            try {
+                val textEnd = contentBlocks.filterIsInstance<TextContent>().firstOrNull()?.text?.length ?: 0
+                contentBlocks.addAll(
+                    AttachmentProcessor.processAttachments(
+                        attachments, fileStorageService, session.id,
+                        anchorOffset = textEnd, projectDir = projectDir
+                    )
+                )
+            } catch (e: AttachmentValidationException) {
+                return flowOf(errorSse(e.message))
+            }
+        } else {
+            // Legacy path: base64 ImageContent (backward compatibility)
+            try {
+                val decodedImages = AttachmentProcessor.decodeImageAttachments(attachments)
+                decodedImages.forEach { (img, bytes) -> contentBlocks.add(ImageContent(bytes, img.mimeType)) }
+            } catch (e: AttachmentValidationException) {
+                return flowOf(errorSse(e.message))
+            }
+        }
 
         // Cleanup revert state when user sends a new message
         if (projectPath != null) {
@@ -435,13 +459,6 @@ class ChatStreamService(
         val commandExpansion = commandService?.resolveAndExpand(
             message, agentContext.userId ?: "system", session.id
         )
-
-        // Build content blocks (text + file refs / images)
-        // Extract inline @ file references from message text (e.g. ‛[name](path)‛)
-        // and convert them to FileRefContent blocks so the LLM can read file contents.
-        val projectDir = projectPath?.toAbsolutePath()?.normalize()
-        val contentBlocks = AttachmentProcessor.buildContentBlocks(messageText, projectDir).toMutableList()
-        contentBlocks.addAll(fileRefBlocks)
 
         val messages = buildList {
             addAll(history)

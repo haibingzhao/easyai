@@ -48,6 +48,7 @@ export async function loadAttachment(file: File): Promise<Attachment> {
 }
 
 export function getAttachmentIcon(mimeType: string): string {
+  if (mimeType === 'application/x-directory') return '📁';
   if (mimeType.startsWith('image/')) return '🖼️';
   if (mimeType.includes('text')) return '📃';
   return '📎';
