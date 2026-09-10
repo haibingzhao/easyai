@@ -152,11 +152,11 @@ internal class EasyRagClient(
         return RagUpsertResult(docId = docId, indexed = indexed, chunksCount = chunksCount)
     }
 
-    override suspend fun delete(externalId: String, bizId: String?) {
+    override suspend fun delete(externalId: String, bizId: String?): Boolean {
         val config = loadEnabledConfig("delete")
         val detail = readByExternalId(config, externalId, bizId) ?: run {
             logger.debug("RAG delete: no document for externalId={}, nothing to do", externalId)
-            return
+            return false
         }
         withConflictRetry("delete $externalId") {
             exchange(
@@ -166,6 +166,7 @@ internal class EasyRagClient(
             )
         }
         logger.debug("RAG deleted document: externalId={}, docId={}", externalId, detail.docId)
+        return true
     }
 
     override suspend fun batchDelete(docIds: List<String>, bizId: String?): Int {

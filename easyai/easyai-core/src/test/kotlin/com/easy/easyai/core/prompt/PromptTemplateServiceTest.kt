@@ -93,6 +93,17 @@ class PromptTemplateServiceTest {
             val second = service.build(null, context)
             assertTrue(first == second)
         }
+
+        @Test
+        fun `guidance covers stale entry update and remove rules`() {
+            val guidance = service.build(null, contextWithTools("memory_search")).substringAfter("## Memory")
+            assertTrue(guidance.contains("### Keeping memories current"), guidance)
+            assertTrue(guidance.contains("action='update'"), guidance)
+            assertTrue(guidance.contains("action='remove'"), guidance)
+            // Staleness rules must stay free of concrete dates: injecting today would break
+            // the cache stability asserted above.
+            assertFalse(Regex("\\d{4}").containsMatchIn(guidance), guidance)
+        }
     }
 
     @Nested

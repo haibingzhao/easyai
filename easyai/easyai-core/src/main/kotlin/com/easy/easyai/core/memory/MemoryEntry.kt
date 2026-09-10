@@ -14,6 +14,8 @@ import java.time.LocalDate
  * @property updated Last modification date.
  * @property maturity Maturity level (low/medium/high), null when not set.
  * @property scenarios Usage scenarios that this memory applies to.
+ * @property lastAccessed Date the entry was last retrieved by an agent; a staleness hint
+ *   only — it never feeds the business time used by time-range filtering.
  */
 data class MemoryEntry(
     val name: String,
@@ -25,5 +27,6 @@ data class MemoryEntry(
     val created: LocalDate? = null,
     val updated: LocalDate? = null,
     val maturity: MemoryMaturity? = null,
-    val scenarios: List<String> = emptyList()
+    val scenarios: List<String> = emptyList(),
+    val lastAccessed: LocalDate? = null
 )

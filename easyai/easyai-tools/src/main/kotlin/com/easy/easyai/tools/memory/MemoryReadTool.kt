@@ -41,13 +41,15 @@ internal class MemoryReadTool(
         for (scope in listOf(MemoryScope.PROJECT, MemoryScope.GLOBAL)) {
             val content = store.read(path, scope, owner)
             if (content != null) {
-                // Record access: find the matching entry to get metadata
+                // Record access from the authoritative entry: touch marks the retrieval day and
+                // returns the entry, replacing the old whole-scope list that cost one request
+                // per stored entry.
                 try {
-                    val entry = store.list(scope, owner).find { it.path == path }
+                    val entry = store.touch(path, scope, owner)
                     if (entry != null) {
                         agentContext.memoryAccessTracker.recordAccess(MemoryRef(entry.name, entry.description, entry.type, scope))
                     } else {
-                        logger.debug("Memory entry not found in list for path: {} (scope: {})", path, scope)
+                        logger.debug("Memory entry not found for path: {} (scope: {})", path, scope)
                     }
                 } catch (e: Exception) {
                     logger.warn("Failed to record memory access for path: {} (scope: {}): {}", path, scope, e.message)

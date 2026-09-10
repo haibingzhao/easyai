@@ -114,26 +114,71 @@ interface MemoryStore {
     ): List<MemoryEntry>
 
     /**
+     * Read a specific memory entry by relative path, fully materialized.
+     *
+     * Unlike [read], the result carries the parsed metadata (type, description, dates,
+     * maturity) instead of the raw stored document, resolved from the backend's
+     * authoritative full text in a single lookup.
+     *
+     * @param path Relative path from memory root, e.g. "experience_lessons/frp-setup.md".
+     * @param scope Global or Project scope.
+     * @param owner Ownership context for backend isolation.
+     * @return The entry if found, or null.
+     */
+    suspend fun readEntry(
+        path: String,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext = MemoryOwnerContext()
+    ): MemoryEntry?
+
+    /**
+     * Record that an entry was retrieved today, so staleness ("unused for N days") can be
+     * reported later. Implementations must read the backend's authoritative full document
+     * before rewriting it and must throttle to at most one write per entry per day.
+     *
+     * HARD CONSTRAINT: never implement this by writing back an entry obtained from [search] —
+     * a retrieved chunk may hold only part of the body, so rewriting it would silently
+     * truncate the stored document.
+     *
+     * @param path Relative path from memory root.
+     * @param scope Global or Project scope.
+     * @param owner Ownership context for backend isolation.
+     * @return The authoritative entry as stored after this call, or null when the entry does
+     *   not exist. Callers reuse it instead of a separate [readEntry] round trip.
+     */
+    suspend fun touch(path: String, scope: MemoryScope, owner: MemoryOwnerContext = MemoryOwnerContext()): MemoryEntry?
+
+    /**
      * Check if a memory entry exists by name.
      *
      * @param name Entry name identifier.
      * @param scope Global or Project scope.
      * @param owner Ownership context for backend isolation.
+     * @param type Known category of the entry; when non-null the lookup is resolved
+     *   directly instead of probing every type in the active domain.
      */
-    suspend fun exists(name: String, scope: MemoryScope, owner: MemoryOwnerContext = MemoryOwnerContext()): Boolean
+    suspend fun exists(
+        name: String,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext = MemoryOwnerContext(),
+        type: MemoryType? = null
+    ): Boolean
 
     /**
-     * Find a memory entry by name across all types.
+     * Find a memory entry by name.
      *
      * @param name Entry name identifier.
      * @param scope Global or Project scope.
      * @param owner Ownership context for backend isolation.
+     * @param type Known category of the entry; null searches across all types of the
+     *   active domain.
      * @return The entry if found, or null.
      */
     suspend fun findByName(
         name: String,
         scope: MemoryScope,
-        owner: MemoryOwnerContext = MemoryOwnerContext()
+        owner: MemoryOwnerContext = MemoryOwnerContext(),
+        type: MemoryType? = null
     ): MemoryEntry?
 
     /**

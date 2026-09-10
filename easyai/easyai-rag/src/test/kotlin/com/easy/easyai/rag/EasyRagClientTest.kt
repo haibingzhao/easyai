@@ -170,7 +170,7 @@ class EasyRagClientTest {
         enqueueAuthStatus()
         server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"not found"}"""))
 
-        client.delete("easyai:global/feedback/no-println.md")
+        assertFalse(client.delete("easyai:global/feedback/no-println.md"))
 
         server.takeRequest() // auth-status
         val lookup = server.takeRequest()
@@ -185,7 +185,7 @@ class EasyRagClientTest {
         server.enqueue(MockResponse().setBody("""{"doc_id":"doc-9","external_id":"x","status":"completed","file_path":"p","content":"c","create_time":1,"chunks_count":1}"""))
         server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
 
-        client.delete("easyai:global/user/a.md")
+        assertTrue(client.delete("easyai:global/user/a.md"))
 
         server.takeRequest() // auth-status
         server.takeRequest() // by-external-id
@@ -334,7 +334,7 @@ class EasyRagClientTest {
         server.enqueue(MockResponse().setBody("""{"doc_id":"doc-9","external_id":"x","status":"completed","file_path":"p","content":"c","create_time":1,"chunks_count":1}"""))
         server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
 
-        client.delete("easyai:feedback/no-println.md", bizId = "u_alice")
+        assertTrue(client.delete("easyai:feedback/no-println.md", bizId = "u_alice"))
 
         server.takeRequest() // auth-status
         val lookup = server.takeRequest()

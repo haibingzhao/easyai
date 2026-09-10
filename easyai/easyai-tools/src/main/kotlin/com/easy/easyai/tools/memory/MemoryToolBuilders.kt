@@ -19,7 +19,8 @@ Write as declarative facts, not instructions to yourself.
 ✓ 'Project uses Kotlin + Spring Boot'  ✗ 'Use Kotlin for backend'
 
 Actions: 'add' creates new, 'update' modifies existing, 'remove' deletes.
-Use memory_list first to see existing entries before updating.
+Retrieval already reports each hit's 'updated' date and 'maturity'; when a hit conflicts with
+what you now know, 'update' that entry rather than adding a contradictory one.
 For batch operations, pass an 'operations' array instead of single params."""
 
 @Component
@@ -30,7 +31,8 @@ class MemorySearchToolBuilder : AbstractMemoryToolBuilder() {
             "extracted from the user's question to recall relevant memories (user preferences, past " +
             "decisions, project conventions, prior findings). Searches across name, description, and content. " +
             "Optionally restrict results by business time via 'timeRangeStart'/'timeRangeEnd' " +
-            "(epoch seconds or ISO date like 2026-01-01).",
+            "(epoch seconds or ISO date like 2026-01-01). " +
+            "Each hit reports its 'updated' date and 'maturity' so staleness can be judged.",
         permissionCategory = "memory"
     )
 
@@ -76,7 +78,7 @@ class MemoryListToolBuilder : AbstractMemoryToolBuilder() {
     override val metadata = ToolMetadata(
         name = "memory_list",
         description = "List all memory entries. Optionally filter by type (user/feedback/project/reference). " +
-            "Shows name, type, description, path, and dates for each entry.",
+            "Shows name, type, description, path, dates, maturity and staleness hints for governance review.",
         permissionCategory = "memory"
     )
 

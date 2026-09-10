@@ -71,6 +71,10 @@ class RagMemoryStoreTest {
         assertEquals("experience_lessons", doc.metadata["type"])
         assertEquals("frp-remote-access", doc.metadata["name"])
         assertEquals("medium", doc.metadata["maturity"])
+        // Freshness copy: only the first chunk keeps the frontmatter, so retrieval reads the
+        // dates of later hits from this per-chunk metadata
+        assertEquals("2025-12-01", doc.metadata["created"])
+        assertEquals("2026-01-15", doc.metadata["updated"])
         // Markdown memories: heading-based chunking only — KG and structure index are
         // never read by memory_search (mode=naive), so they must not be built
         assertEquals("structure_aware", doc.options.chunkMethod)
@@ -106,7 +110,8 @@ class RagMemoryStoreTest {
     fun `frontmatter content round-trips through write and search`() = runTest {
         val docSlot = slot<RagDocument>()
         coEvery { client.upsert(capture(docSlot), any(), any()) } returns RagUpsertResult(docId = "doc-1", indexed = true)
-        store.write(sampleEntry(), MemoryScope.GLOBAL, globalOwner)
+        val entry = sampleEntry().copy(lastAccessed = LocalDate.of(2026, 2, 3))
+        store.write(entry, MemoryScope.GLOBAL, globalOwner)
         val storedContent = docSlot.captured.content
 
         coEvery {
@@ -140,6 +145,53 @@ class RagMemoryStoreTest {
         assertEquals(sampleEntry().updated, parsed.updated)
         assertEquals(MemoryMaturity.MEDIUM, parsed.maturity)
         assertEquals(sampleEntry().scenarios, parsed.scenarios)
+        assertEquals(entry.lastAccessed, parsed.lastAccessed)
+    }
+
+    @Test
+    fun `search falls back to chunk metadata when the hit chunk lacks frontmatter`() = runTest {
+        val updatedEpoch = LocalDate.of(2026, 1, 15).atStartOfDay(ZoneId.systemDefault()).toEpochSecond()
+        coEvery {
+            client.search(
+                query = any(),
+                filters = any(),
+                topK = any(),
+                timeRangeStart = any(),
+                timeRangeEnd = any(),
+                bizId = any()
+            )
+        } returns listOf(
+            RagChunk(
+                content = "## Later heading\n\nBody text with no frontmatter at all.",
+                filePath = "easyai/experience_lessons/frp-remote-access.md",
+                score = 0.8,
+                createTime = updatedEpoch,
+                metadata = mapOf("maturity" to "high", "description" to "frp relay setup for remote Mac access")
+            )
+        )
+
+        val parsed = store.search("frp", MemoryScope.GLOBAL, globalOwner, 5).single()
+
+        assertEquals(sampleEntry().description, parsed.description)
+        assertEquals(MemoryMaturity.HIGH, parsed.maturity)
+        assertEquals(LocalDate.of(2026, 1, 15), parsed.updated)
+        assertNull(parsed.created)
+    }
+
+    @Test
+    fun `search drops a chunk whose entry cannot be located`() = runTest {
+        coEvery {
+            client.search(
+                query = any(),
+                filters = any(),
+                topK = any(),
+                timeRangeStart = any(),
+                timeRangeEnd = any(),
+                bizId = any()
+            )
+        } returns listOf(RagChunk("body without frontmatter", filePath = null, score = 0.8, createTime = null, metadata = emptyMap()))
+
+        assertEquals(0, store.search("anything", MemoryScope.GLOBAL, globalOwner, 5).size)
     }
 
     @Test
@@ -221,33 +273,24 @@ class RagMemoryStoreTest {
     // ── delete / deleteAll ─────────────────────────────────────────────
 
     @Test
-    fun `delete returns false and skips client delete when document is absent`() = runTest {
-        coEvery { client.readByExternalId(any(), any()) } returns null
+    fun `delete reports false when the backend matches no document`() = runTest {
+        coEvery { client.delete(any(), any()) } returns false
 
         val deleted = store.delete("experience_lessons/frp-remote-access.md", MemoryScope.GLOBAL, globalOwner)
 
         assertFalse(deleted)
-        coVerify(exactly = 0) { client.delete(any(), any()) }
+        coVerify(exactly = 1) { client.delete("easyai:experience_lessons/frp-remote-access.md", globalBizId) }
     }
 
     @Test
-    fun `delete removes existing document with bizId`() = runTest {
-        val externalId = "easyai:experience_lessons/frp-remote-access.md"
-        coEvery { client.readByExternalId(externalId, globalBizId) } returns
-            RagDocumentDetail(
-                docId = "doc-1",
-                externalId = externalId,
-                filePath = null,
-                content = "x",
-                status = null,
-                createTime = null,
-                chunksCount = null
-            )
+    fun `delete removes existing document with bizId and no pre-read`() = runTest {
+        coEvery { client.delete(any(), any()) } returns true
 
         val deleted = store.delete("experience_lessons/frp-remote-access.md", MemoryScope.GLOBAL, globalOwner)
 
         assertTrue(deleted)
-        coVerify { client.delete(externalId, globalBizId) }
+        coVerify(exactly = 1) { client.delete("easyai:experience_lessons/frp-remote-access.md", globalBizId) }
+        coVerify(exactly = 0) { client.readByExternalId(any(), any()) }
     }
 
     @Test
@@ -266,27 +309,82 @@ class RagMemoryStoreTest {
     // ── findByName / list ──────────────────────────────────────────────
 
     @Test
-    fun `findByName derives externalId per type and reads directly with bizId`() = runTest {
-        val docSlot = slot<RagDocument>()
-        coEvery { client.upsert(capture(docSlot), any(), any()) } returns RagUpsertResult(docId = "doc-1", indexed = true)
-        store.write(sampleEntry(), MemoryScope.GLOBAL, globalOwner)
-        val storedContent = docSlot.captured.content
+    fun `findByName with an explicit type reads the document directly`() = runTest {
+        coEvery { client.readByExternalId(EXTERNAL_ID, globalBizId) } returns detail(storedContentOf(sampleEntry()))
 
-        coEvery { client.readByExternalId(any(), any()) } returns null
-        coEvery { client.readByExternalId("easyai:experience_lessons/frp-remote-access.md", globalBizId) } returns
-            RagDocumentDetail(
-                docId = "doc-1",
-                externalId = "easyai:experience_lessons/frp-remote-access.md",
-                filePath = "easyai/experience_lessons/frp-remote-access.md",
-                content = storedContent,
-                status = null,
-                createTime = null,
-                chunksCount = null
-            )
+        val found = store.findByName("frp-remote-access", MemoryScope.GLOBAL, globalOwner, MemoryType.EXPERIENCE_LESSONS)
 
-        val found = store.findByName("frp-remote-access", MemoryScope.GLOBAL, globalOwner)
         assertEquals(sampleEntry().name, found?.name)
         assertEquals(MemoryType.EXPERIENCE_LESSONS, found?.type)
+        coVerify(exactly = 0) { client.list(any(), any()) }
+        coVerify(exactly = 1) { client.readByExternalId(any(), any()) }
+    }
+
+    @Test
+    fun `findByName without a type probes the document list instead of every type`() = runTest {
+        val content = storedContentOf(sampleEntry())
+        coEvery { client.list("easyai/", globalBizId) } returns listOf(docInfo("doc-1", FILE_PATH, externalId = EXTERNAL_ID))
+        coEvery { client.readByExternalId(EXTERNAL_ID, globalBizId) } returns detail(content)
+
+        val found = store.findByName("frp-remote-access", MemoryScope.GLOBAL, globalOwner)
+
+        assertEquals(sampleEntry().name, found?.name)
+        coVerify(exactly = 1) { client.list(any(), any()) }
+        coVerify(exactly = 1) { client.readByExternalId(any(), any()) }
+    }
+
+    @Test
+    fun `findByName returns null after one list call when no candidate matches`() = runTest {
+        coEvery { client.list(any(), any()) } returns listOf(
+            docInfo("doc-9", "easyai/other/unrelated.md", externalId = "easyai:other/unrelated.md")
+        )
+
+        assertNull(store.findByName("frp-remote-access", MemoryScope.GLOBAL, globalOwner))
+
+        coVerify(exactly = 1) { client.list(any(), any()) }
+        coVerify(exactly = 0) { client.readByExternalId(any(), any()) }
+    }
+
+    // ── readEntry / touch ──────────────────────────────────────────────
+
+    @Test
+    fun `readEntry resolves one document by path without listing the scope`() = runTest {
+        coEvery { client.readByExternalId(EXTERNAL_ID, globalBizId) } returns detail(storedContentOf(sampleEntry()))
+
+        val entry = store.readEntry("experience_lessons/frp-remote-access.md", MemoryScope.GLOBAL, globalOwner)
+
+        assertEquals("frp-remote-access", entry?.name)
+        assertEquals(MemoryMaturity.MEDIUM, entry?.maturity)
+        coVerify(exactly = 1) { client.readByExternalId(any(), any()) }
+        coVerify(exactly = 0) { client.list(any(), any()) }
+    }
+
+    @Test
+    fun `touch stamps today and rewrites the full stored body`() = runTest {
+        val content = storedContentOf(sampleEntry())
+        coEvery { client.readByExternalId(EXTERNAL_ID, globalBizId) } returns detail(content)
+        val docSlot = slot<RagDocument>()
+        coEvery { client.upsert(capture(docSlot), any(), any()) } returns RagUpsertResult(docId = "doc-1", indexed = true)
+
+        val touched = store.touch("experience_lessons/frp-remote-access.md", MemoryScope.GLOBAL, globalOwner)
+
+        assertEquals(LocalDate.now(), touched?.lastAccessed)
+        // A retrieval hit can carry only part of the body, so touch must rewrite the complete
+        // document it read back, not a chunk fragment.
+        assertTrue(docSlot.captured.content.contains("Use frps on the ECS"))
+        assertTrue(docSlot.captured.content.contains("last_accessed: ${LocalDate.now()}"))
+    }
+
+    @Test
+    fun `touch skips the write when lastAccessed is today`() = runTest {
+        // The single upsert here comes from seeding the stored content, not from the touch.
+        coEvery { client.readByExternalId(EXTERNAL_ID, globalBizId) } returns
+            detail(storedContentOf(sampleEntry().copy(lastAccessed = LocalDate.now())))
+
+        val touched = store.touch("experience_lessons/frp-remote-access.md", MemoryScope.GLOBAL, globalOwner)
+
+        assertEquals(LocalDate.now(), touched?.lastAccessed)
+        coVerify(exactly = 1) { client.upsert(any(), any(), any()) }
     }
 
     @Test
@@ -337,4 +435,27 @@ class RagMemoryStoreTest {
         createdAt = null,
         updatedAt = null
     )
+
+    private fun detail(content: String) = RagDocumentDetail(
+        docId = "doc-1",
+        externalId = EXTERNAL_ID,
+        filePath = FILE_PATH,
+        content = content,
+        status = null,
+        createTime = null,
+        chunksCount = null
+    )
+
+    /** Serialize [entry] the way [RagMemoryStore.write] would, so parsing tests use real input. */
+    private suspend fun storedContentOf(entry: MemoryEntry): String {
+        val docSlot = slot<RagDocument>()
+        coEvery { client.upsert(capture(docSlot), any(), any()) } returns RagUpsertResult(docId = "doc-1", indexed = true)
+        store.write(entry, MemoryScope.GLOBAL, globalOwner)
+        return docSlot.captured.content
+    }
+
+    private companion object {
+        const val FILE_PATH = "easyai/experience_lessons/frp-remote-access.md"
+        const val EXTERNAL_ID = "easyai:experience_lessons/frp-remote-access.md"
+    }
 }
