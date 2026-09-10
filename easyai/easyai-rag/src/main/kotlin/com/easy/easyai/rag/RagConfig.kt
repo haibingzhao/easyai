@@ -6,11 +6,14 @@ import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Persistent EasyRAG connection configuration stored at `~/.easyai/rag.json`.
  *
- * Loaded per-request so runtime changes take effect without restart.
+ * Loaded per-request so runtime changes take effect without restart; the parsed result is
+ * memoized per path and re-read only when the file's last-modified time changes, because a
+ * request issues several loads and each uncached load costs a disk read plus a parse.
  * Mirrors the file-based pattern of `IntegrationConfig`.
  *
  * @param enabled master switch for the RAG integration
@@ -41,6 +44,11 @@ data class RagConfig(
     companion object {
         private val logger = LoggerFactory.getLogger(RagConfig::class.java)
 
+        /** Memoized parse results keyed by config path, invalidated on last-modified time change. */
+        private val cache = ConcurrentHashMap<Path, CachedConfig>()
+
+        private class CachedConfig(val modifiedMillis: Long, val config: RagConfig)
+
         /** Default config file location: `~/.easyai/rag.json` */
         @JvmStatic
         fun defaultConfigPath(): Path = Path.of(System.getProperty("user.home"), ".easyai", "rag.json")
@@ -51,8 +59,21 @@ data class RagConfig(
          */
         @JvmStatic
         suspend fun load(path: Path = defaultConfigPath()): RagConfig = withContext(Dispatchers.IO) {
-            if (!Files.exists(path)) return@withContext RagConfig()
-            try {
+            // Modification time doubles as the cache key; it is 0 for an absent file, so a file
+            // that appears later always misses the cache instead of reusing the default config.
+            val modified = path.toFile().lastModified()
+            val cached = cache[path]
+            if (cached != null && cached.modifiedMillis == modified) {
+                return@withContext cached.config
+            }
+            val config = readConfig(path)
+            cache[path] = CachedConfig(modified, config)
+            config
+        }
+
+        private fun readConfig(path: Path): RagConfig {
+            if (!Files.exists(path)) return RagConfig()
+            return try {
                 val content = Files.readString(path)
                 SharedObjectMapper.instance.readValue(content, RagConfig::class.java)
             } catch (e: Exception) {
@@ -70,6 +91,9 @@ data class RagConfig(
             val content = SharedObjectMapper.instance.writerWithDefaultPrettyPrinter()
                 .writeValueAsString(config)
             Files.writeString(path, content)
+            // Drop the memo explicitly: file systems can report the same modification time
+            // for writes within one tick, which would otherwise hide this update.
+            cache.remove(path)
             logger.info("RAG config saved to {}", path)
         }
     }
