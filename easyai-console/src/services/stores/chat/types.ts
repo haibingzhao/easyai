@@ -8,6 +8,7 @@ import type {
   ThinkingContentBlock,
   ToolCallContentBlock,
   FileRefContentBlock,
+  FolderRefContentBlock,
 } from '@/services/session-service';
 
 // Type guard functions for ContentBlock
@@ -29,6 +30,10 @@ export function isImageBlock(b: ContentBlock): b is ImageContentBlock {
 
 export function isFileRefBlock(b: ContentBlock): b is FileRefContentBlock {
   return b.type === 'fileRef';
+}
+
+export function isFolderRefBlock(b: ContentBlock): b is FolderRefContentBlock {
+  return b.type === 'folderRef';
 }
 
 export interface ThinkingBlockData {

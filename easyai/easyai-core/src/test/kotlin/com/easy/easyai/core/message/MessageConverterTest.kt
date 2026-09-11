@@ -104,7 +104,7 @@ class MessageConverterTest {
             val messages = listOf(
                 UserMessage(content = listOf(
                     TextContent("Please read this"),
-                    FileRefContent(filePath = file.toString(), name = "small.txt", mimeType = "text/plain", source = "inline")
+                    FileRefContent(filePath = file.toString(), name = "small.txt", mimeType = "text/plain", source = "inline", displayOffset = 16)
                 ))
             )
             val result = converter.toSpringAiMessages(messages)
@@ -112,6 +112,112 @@ class MessageConverterTest {
             val text = result[0].text!!
             assertTrue(text.contains("Hello from file"), "Expected file content to be inlined, got: $text")
             assertTrue(text.contains("<file name=\"small.txt\">"), "Expected XML wrapper")
+        }
+
+        @Test
+        fun `anchors folder marker at end of text for directory attachments`() {
+            val messages = listOf(
+                UserMessage(content = listOf(
+                    TextContent("Save the summary here"),
+                    FolderRefContent(filePath = "/proj/summary", name = "summary", displayOffset = 21)
+                ))
+            )
+            val result = converter.toSpringAiMessages(messages)
+
+            assertEquals(1, result.size)
+            val text = result[0].text!!
+            // Directory attachments (no inline position) anchor at the end of the text
+            assertTrue(
+                text.startsWith("Save the summary here[folder summary: /proj/summary]"),
+                "Expected end-anchored marker, got: $text"
+            )
+            assertTrue(text.contains("directory listing"), "Expected LLM instruction to explore via tools")
+            assertFalse(text.contains("<folders>"), "Aggregated fallback block should be gone")
+        }
+
+        @Test
+        fun `anchors folder references inline at their recorded offsets`() {
+            val base = "save x to  and y to , ok"
+            val messages = listOf(
+                UserMessage(content = listOf(
+                    TextContent(base),
+                    FolderRefContent(filePath = "/proj/a", name = "a", displayOffset = 10),
+                    FolderRefContent(filePath = "/proj/b", name = "b", displayOffset = 20)
+                ))
+            )
+            val result = converter.toSpringAiMessages(messages)
+
+            assertEquals(1, result.size)
+            val text = result[0].text!!
+            // Markers sit exactly where the user placed them — sentence-to-folder mapping preserved
+            assertTrue(
+                text.contains("save x to [folder a: /proj/a] and y to [folder b: /proj/b], ok"),
+                "Expected inline anchored markers, got: $text"
+            )
+            assertFalse(text.contains("<folders>"), "Anchored folders should not fall back to the trailing list")
+            assertEquals(1, text.split("directory listing").size - 1, "Explore instruction should appear exactly once")
+        }
+
+        @Test
+        fun `anchors file content inline at its recorded offset`(@TempDir tempDir: Path) {
+            val file = tempDir.resolve("a.txt")
+            Files.writeString(file, "HELLO")
+            val messages = listOf(
+                UserMessage(content = listOf(
+                    TextContent("read  now"),
+                    FileRefContent(filePath = file.toString(), name = "a.txt", mimeType = "text/plain", source = "inline", displayOffset = 5)
+                ))
+            )
+            val result = converter.toSpringAiMessages(messages)
+
+            assertEquals(1, result.size)
+            val text = result[0].text!!
+            assertTrue(
+                text.contains("read <file name=\"a.txt\">\n<![CDATA[HELLO]]>\n</file> now"),
+                "Expected file content anchored inline at offset, got: $text"
+            )
+        }
+
+        @Test
+        fun `anchors mixed file and folder refs in ascending offset order`(@TempDir tempDir: Path) {
+            val file = tempDir.resolve("f.txt")
+            Files.writeString(file, "X")
+            val messages = listOf(
+                UserMessage(content = listOf(
+                    TextContent("a  b  c"),
+                    FileRefContent(filePath = file.toString(), name = "f.txt", mimeType = "text/plain", source = "inline", displayOffset = 2),
+                    FolderRefContent(filePath = "/proj/d", name = "d", displayOffset = 5)
+                ))
+            )
+            val result = converter.toSpringAiMessages(messages)
+
+            assertEquals(1, result.size)
+            val text = result[0].text!!
+            assertTrue(
+                text.contains("a <file name=\"f.txt\">\n<![CDATA[X]]>\n</file> b [folder d: /proj/d] c"),
+                "Expected both refs anchored at their positions, got: $text"
+            )
+        }
+
+        @Test
+        fun `renders one inline marker per folder reference including duplicates`() {
+            val messages = listOf(
+                UserMessage(content = listOf(
+                    TextContent("Compare  with  and again "),
+                    FolderRefContent(filePath = "/proj/a", name = "a", displayOffset = 8),
+                    FolderRefContent(filePath = "/proj/b", name = "b", displayOffset = 16),
+                    FolderRefContent(filePath = "/proj/a", name = "a", displayOffset = 25)
+                ))
+            )
+            val result = converter.toSpringAiMessages(messages)
+
+            assertEquals(1, result.size)
+            val text = result[0].text!!
+            assertFalse(text.contains("<folders>"), "Aggregated fallback block should be gone")
+            // Inline markers are positional: each occurrence gets its own marker, no dedup
+            assertEquals(2, Regex("\\[folder a: /proj/a\\]").findAll(text).count(), "Duplicate path: each occurrence gets its own marker")
+            assertEquals(1, Regex("\\[folder b: /proj/b\\]").findAll(text).count())
+            assertEquals(1, text.split("directory listing").size - 1, "Explore instruction should appear exactly once")
         }
 
         @Test
@@ -125,8 +231,8 @@ class MessageConverterTest {
             val messages = listOf(
                 UserMessage(content = listOf(
                     TextContent("Read these files"),
-                    FileRefContent(filePath = file1.toString(), name = "a.txt", mimeType = "text/plain", source = "inline"),
-                    FileRefContent(filePath = file2.toString(), name = "b.txt", mimeType = "text/plain", source = "inline")
+                    FileRefContent(filePath = file1.toString(), name = "a.txt", mimeType = "text/plain", source = "inline", displayOffset = 16),
+                    FileRefContent(filePath = file2.toString(), name = "b.txt", mimeType = "text/plain", source = "inline", displayOffset = 16)
                 ))
             )
             val result = lowLimitConverter.toSpringAiMessages(messages)
@@ -153,8 +259,8 @@ class MessageConverterTest {
             val messages = listOf(
                 UserMessage(content = listOf(
                     TextContent("Check these"),
-                    FileRefContent(filePath = textFile.toString(), name = "big.txt", mimeType = "text/plain", source = "inline"),
-                    FileRefContent(filePath = imageFile.toString(), name = "tiny.png", mimeType = "image/png", source = "inline")
+                    FileRefContent(filePath = textFile.toString(), name = "big.txt", mimeType = "text/plain", source = "inline", displayOffset = 12),
+                    FileRefContent(filePath = imageFile.toString(), name = "tiny.png", mimeType = "image/png", source = "inline", displayOffset = 12)
                 ))
             )
             val result = lowLimitConverter.toSpringAiMessages(messages)

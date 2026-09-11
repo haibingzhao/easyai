@@ -14,8 +14,9 @@ import {
   isToolCallBlock,
   isImageBlock,
   isFileRefBlock,
+  isFolderRefBlock,
 } from './types';
-import { parseAllRefs } from '@/utils/attachment-utils';
+import { parseAllRefs, buildFolderRef } from '@/utils/attachment-utils';
 
 /**
  * Convert sub-agent streaming blocks to Message[] for committed subAgentMessages.
@@ -82,6 +83,7 @@ export function convertSnapshot(msg: MessageSnapshot): Message {
     const textContent = msg.content.filter(isTextBlock).map(b => b.text).join('');
     const imageBlocks = msg.content.filter(isImageBlock);
     const fileRefBlocks = msg.content.filter(isFileRefBlock);
+    const folderRefBlocks = msg.content.filter(isFolderRefBlock);
     // Parse all refs (files and folders) from text content
     const allRefs = parseAllRefs(textContent);
 
@@ -111,6 +113,19 @@ export function convertSnapshot(msg: MessageSnapshot): Message {
       });
     });
 
+    // FolderRefContent blocks: re-insert the encoded ref at its recorded offset so
+    // the inline 📁 chip renders at its original sentence position in history.
+    let displayContent = textContent;
+    let insertDelta = 0;
+    folderRefBlocks
+      .sort((a, b) => a.displayOffset - b.displayOffset)
+      .forEach((ref) => {
+        const encoded = buildFolderRef(ref.name, ref.filePath);
+        const at = Math.min(Math.max(ref.displayOffset + insertDelta, 0), displayContent.length);
+        displayContent = displayContent.slice(0, at) + encoded + displayContent.slice(at);
+        insertDelta += encoded.length;
+      });
+
     // All refs (files and folders) parsed from message text
     allRefs.forEach((ref, i) => {
       // Avoid duplicates with FileRefContent blocks
@@ -125,9 +140,6 @@ export function convertSnapshot(msg: MessageSnapshot): Message {
         });
       }
     });
-
-    // Strip file ref markers from display text
-    const displayContent = textContent;
 
     return {
       role: allAttachments.length > 0 ? 'user-with-attachments' : role,

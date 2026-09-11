@@ -15,7 +15,7 @@ easyai-core/src/main/kotlin/com/easy/easyai/core/
 ├── tool/        # ToolDefinition, ToolBuilder, ToolExecutionEngine, ToolFactory, ToolMetadata
 ├── event/       # AgentEvent (sealed hierarchy), MessageListener
 ├── permission/  # PermissionService, PermissionEvaluator, PermissionRule, SafeCommandDetector
-├── memory/      # MemoryStore, FileMemoryStore, MemoryFlushAgent, MemoryLoader, MemoryEntry
+├── memory/      # MemoryStore (interface), MemoryEntry, MemoryType, MemoryFlushAgent, MemoryAccessTracker
 ├── goal/        # GoalState, GoalCompletionCheck, GoalStatusNotifier, GoalStore
 ├── command/     # UserCommandDefinition, AsyncUserCommandStore
 ├── model/       # EasyAiMessage, ProjectInfo, TodoInfo, ToolCallStatus
@@ -32,7 +32,7 @@ easyai-core/src/main/kotlin/com/easy/easyai/core/
 | Tool definition | `tool/ToolDefinition.kt` | Interface: name, description, doExecute() |
 | Events | `event/AgentEvent.kt` | Sealed: MessageStart/End, ToolExecution*, Error, etc. |
 | Permission | `permission/PermissionService.kt` | Rule evaluation, user prompt flow |
-| Memory | `memory/FileMemoryStore.kt` | File-based CRUD + search |
+| Memory | `memory/MemoryStore.kt` | Storage interface; the only implementation is `RagMemoryStore` in `easyai-rag` (one EasyRAG document per entry) |
 | Goal tracking | `goal/GoalState.kt` + `GoalCompletionCheck.kt` | Auto-pause on completion |
 | Message conversion | `message/MessageConverter.kt` | EasyAI ↔ Spring AI message types |
 

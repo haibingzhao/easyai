@@ -40,8 +40,13 @@ interface RagClient {
      */
     suspend fun upsert(doc: RagDocument, bizId: String? = null, awaitIndexing: Boolean = true): RagUpsertResult
 
-    /** Delete the document bound to [externalId]; missing documents are ignored. */
-    suspend fun delete(externalId: String, bizId: String? = null)
+    /**
+     * Delete the document bound to [externalId].
+     *
+     * @return true when a document was found and deleted, false when nothing matched
+     *   [externalId] (missing documents are tolerated, not thrown).
+     */
+    suspend fun delete(externalId: String, bizId: String? = null): Boolean
 
     /** Batch delete documents by their EasyRAG doc ids; individual failures are collected, not thrown. */
     suspend fun batchDelete(docIds: List<String>, bizId: String? = null): Int

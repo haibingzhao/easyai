@@ -227,6 +227,14 @@ SAME response as `memory_search` so both run in parallel. Use `memory_read` to l
 content of a specific entry, and `memory_write` to persist durable facts worth remembering
 across sessions. When calling `memory_write`, pass the category via its 'type' parameter
 (never inside 'name') and keep 'name' as a bare file name without directories or '.md'.
+
+### Keeping memories current
+
+Each `memory_search` hit carries `updated` and `maturity`; read them to judge staleness.
+An entry that contradicts the current code or the user's latest statement must be corrected
+with `memory_write action='update'` — never add a rival entry alongside a stale one.
+Use `memory_write action='remove'` only for entries proven obsolete or superseded; when
+unsure, leave them untouched. `memory_list` adds `unused for N days` for a full review view.
         """.trimIndent()
 
         /** Static guidance for on-demand knowledge retrieval via knowledge_* tools (cache-stable). */

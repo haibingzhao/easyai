@@ -26,6 +26,15 @@ class MemoryWriteToolTest {
         val written = mutableListOf<MemoryEntry>()
         var existsResult = false
 
+        /** Types handed to the duplicate check, so tests can assert it stays type qualified. */
+        val existsTypes = mutableListOf<MemoryType?>()
+
+        /** Types handed to every name lookup, for the same assertion on update and remove. */
+        val lookups = mutableListOf<MemoryType?>()
+
+        /** Entries the tool resolved by name; batch operations reuse them instead of re-looking up. */
+        var entriesByName: Map<String, MemoryEntry> = emptyMap()
+
         override suspend fun loadAll(
             scope: MemoryScope,
             owner: MemoryOwnerContext,
@@ -55,9 +64,31 @@ class MemoryWriteToolTest {
 
         override suspend fun list(scope: MemoryScope, owner: MemoryOwnerContext, type: MemoryType?): List<MemoryEntry> = emptyList()
 
-        override suspend fun exists(name: String, scope: MemoryScope, owner: MemoryOwnerContext): Boolean = existsResult
+        override suspend fun readEntry(path: String, scope: MemoryScope, owner: MemoryOwnerContext): MemoryEntry? =
+            entriesByName.values.firstOrNull { it.path == path }
 
-        override suspend fun findByName(name: String, scope: MemoryScope, owner: MemoryOwnerContext): MemoryEntry? = null
+        override suspend fun touch(path: String, scope: MemoryScope, owner: MemoryOwnerContext): MemoryEntry? =
+            readEntry(path, scope, owner)
+
+        override suspend fun exists(
+            name: String,
+            scope: MemoryScope,
+            owner: MemoryOwnerContext,
+            type: MemoryType?
+        ): Boolean {
+            existsTypes.add(type)
+            return existsResult
+        }
+
+        override suspend fun findByName(
+            name: String,
+            scope: MemoryScope,
+            owner: MemoryOwnerContext,
+            type: MemoryType?
+        ): MemoryEntry? {
+            lookups.add(type)
+            return entriesByName[name]
+        }
 
         override suspend fun refreshIndex(scope: MemoryScope) {}
     }
@@ -161,6 +192,63 @@ class MemoryWriteToolTest {
             val result = execute(addArgs())
             assertFalse(result.isError)
             assertEquals(MemoryType.OTHER, store.written.single().type)
+        }
+    }
+
+    @Nested
+    inner class `type qualified name lookup` {
+
+        private fun existingEntry(): MemoryEntry = MemoryEntry(
+            name = "test_entry",
+            description = "d",
+            type = MemoryType.OTHER,
+            content = "old body",
+            path = "other/test_entry.md"
+        )
+
+        @Test
+        fun `add duplicate check is type qualified`() {
+            execute(addArgs())
+
+            // The category is validated before the check, so the store can resolve the key in
+            // one request instead of probing every type of the active domain.
+            assertEquals(listOf(MemoryType.OTHER), store.existsTypes)
+        }
+
+        @Test
+        fun `update resolves the name through the announced type`() {
+            store.entriesByName = mapOf("test_entry" to existingEntry())
+
+            execute(mapOf("action" to "update", "name" to "test_entry", "type" to "other", "content" to "new body"))
+
+            assertEquals(listOf(MemoryType.OTHER), store.lookups)
+            assertEquals("new body", store.written.single().content)
+        }
+
+        @Test
+        fun `an unusable type falls back to the cross-type probe`() {
+            store.entriesByName = mapOf("test_entry" to existingEntry())
+
+            execute(mapOf("action" to "update", "name" to "test_entry", "type" to "not_a_type", "content" to "new body"))
+
+            assertEquals(listOf<MemoryType?>(null), store.lookups)
+        }
+
+        @Test
+        fun `batch operations reuse their pre-read snapshot`() {
+            store.entriesByName = mapOf("test_entry" to existingEntry())
+
+            execute(
+                mapOf(
+                    "operations" to listOf(
+                        mapOf("action" to "update", "name" to "test_entry", "type" to "other", "content" to "new body")
+                    )
+                )
+            )
+
+            // The batch pre-reads the entry once and passes it down; the handler must not look
+            // the same name up a second time.
+            assertEquals(1, store.lookups.size)
         }
     }
 }

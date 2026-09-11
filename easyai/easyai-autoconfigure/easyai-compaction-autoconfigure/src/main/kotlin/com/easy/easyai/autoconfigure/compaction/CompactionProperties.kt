@@ -51,5 +51,12 @@ data class CompactionProperties(
      * Context usage ratio that triggers memory flush before compaction (0.75 = 75%).
      * Only used when a MemoryStore is available.
      */
-    var memoryFlushThreshold: Float = 0.75f
+    var memoryFlushThreshold: Float = 0.75f,
+
+    /**
+     * Whether a memory flush may delete existing entries it proves obsolete.
+     * Disabled by default: deletion is physical with no recycle bin, so a flush only reports
+     * such entries as review candidates until this is turned on explicitly.
+     */
+    var memoryFlushAllowRemove: Boolean = false
 )

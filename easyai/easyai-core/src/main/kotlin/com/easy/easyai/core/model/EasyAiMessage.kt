@@ -23,6 +23,7 @@ enum class Role {
     JsonSubTypes.Type(value = TextContent::class, name = "text"),
     JsonSubTypes.Type(value = ImageContent::class, name = "image"),
     JsonSubTypes.Type(value = FileRefContent::class, name = "fileRef"),
+    JsonSubTypes.Type(value = FolderRefContent::class, name = "folderRef"),
     JsonSubTypes.Type(value = ThinkingContent::class, name = "thinking"),
     JsonSubTypes.Type(value = ToolCallContent::class, name = "toolCall"),
     JsonSubTypes.Type(value = ToolResultContent::class, name = "toolResult"),
@@ -73,10 +74,45 @@ data class FileRefContent(
      * - `"attachment"` (default): uploaded via paperclip attachment; path must be within [com.easy.easyai.core.message.DefaultMessageConverter.allowedBaseDir].
      * - `"inline"`: extracted from `@` mention in message text by AttachmentProcessor; already validated against project directory.
      */
-    val source: String = "attachment"
+    val source: String = "attachment",
+    /**
+     * Character offset in the cleaned message text where this file reference sits.
+     * Inline @ mentions record the chip's sentence position; uploaded attachments
+     * are anchored at the end of the cleaned text by AttachmentProcessor. The
+     * converter re-inserts file content at this offset so the LLM sees which
+     * sentence each file belongs to.
+     */
+    val displayOffset: Int
 ) : ContentBlock {
     @get:JsonIgnore
     override val type: String get() = "fileRef"
+}
+
+/**
+ * Reference to a directory on the local filesystem.
+ * Extracted from `@` mentions prefixed with 📁 in message text by AttachmentProcessor,
+ * or restored from history as a directory attachment.
+ *
+ * Unlike [FileRefContent], directory contents are never inlined into the LLM context:
+ * the message converter emits a path-only hint so the LLM can explore it via tools.
+ */
+data class FolderRefContent(
+    /** Absolute path to the directory on the local filesystem. */
+    val filePath: String,
+    /** Display name of the directory. */
+    val name: String,
+    /**
+     * Character offset in the cleaned message text where the 📁 chip was originally
+     * positioned. Inline @ mentions record the chip's sentence position; directory
+     * attachments are anchored at the end of the cleaned text by AttachmentProcessor.
+     * The frontend re-inserts the encoded ref at this offset when rendering history
+     * so the inline chip appears at its original sentence position, and the converter
+     * uses it to anchor the [folder name: path] marker for the LLM.
+     */
+    val displayOffset: Int
+) : ContentBlock {
+    @get:JsonIgnore
+    override val type: String get() = "folderRef"
 }
 
 data class ThinkingContent(

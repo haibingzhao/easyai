@@ -5,8 +5,11 @@ import com.easy.easyai.core.memory.*
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -20,10 +23,18 @@ import java.time.format.DateTimeFormatter
  * - key layout: `{type}/{name}.md` (e.g. `experience_lessons/frp-setup.md`)
  * - externalId: `easyai:{key}` (idempotent upsert, deterministic docId)
  * - content: YAML-frontmatter Markdown format (frontmatter carries description, type,
- *   keywords, maturity, scenarios, created/updated dates)
+ *   keywords, maturity, scenarios, created/updated and optionally last_accessed dates)
+ * - processing: heading-aligned chunking only (`skipKg=true`, `buildStructure=false`) —
+ *   memory retrieval is raw-chunk (`mode=naive`), so the knowledge graph and structure
+ *   index would be built but never read
+ * - freshness: retrieval reports `updated` / `maturity`. Heading-aligned chunking keeps the
+ *   frontmatter in the first chunk only, so hits on later chunks are backfilled from the
+ *   per-chunk metadata echoed by the server
+ * - name lookup: resolved through the document list (one request) or directly through the
+ *   known type, never by probing every type in the domain
  * - writes submit indexing fire-and-forget (no polling): the write returns as soon as
  *   the document is stored and indexing is triggered server-side; entries become
- *   searchable once the server finishes vectorization / knowledge-graph building
+ *   searchable once the server finishes chunking and vectorization
  *
  * PROJECT operations without a project path degrade: reads return empty,
  * writes raise [MemoryBackendException].
@@ -119,8 +130,30 @@ internal class RagMemoryStore(
             timeRangeEnd = timeRangeEnd,
             bizId = bizId
         )
-        chunks.mapNotNull { chunk -> parseChunkToEntry(chunk.content, chunk.filePath) }
+        chunks.mapNotNull { entryFromChunk(it) }
             .distinctBy { "${it.type.dirName}/${it.name}" }
+    }
+
+    /**
+     * Rebuild an entry from a retrieval hit. The stored frontmatter is the source of truth,
+     * but heading-aligned chunking keeps it in the first chunk only: a hit on a later chunk
+     * has no description or dates, so backfill them from the per-chunk metadata and the
+     * chunk's business create time (which [createTimeOf] sets to `updated`).
+     */
+    private fun entryFromChunk(chunk: RagChunk): MemoryEntry? {
+        val parsed = parseChunkToEntry(chunk.content, chunk.filePath) ?: return null
+        val maturity = parsed.maturity
+            ?: (chunk.metadata["maturity"] as? String)?.let { MemoryMaturity.fromApiName(it) }
+        val description = parsed.description.ifBlank { chunk.metadata["description"] as? String ?: "" }
+        val updated = parsed.updated ?: epochToLocalDate(chunk.createTime)
+        if (maturity == parsed.maturity && description == parsed.description && updated == parsed.updated) {
+            return parsed
+        }
+        return parsed.copy(maturity = maturity, description = description, updated = updated)
+    }
+
+    private fun epochToLocalDate(epochSeconds: Long?): LocalDate? = epochSeconds?.let {
+        runCatching { Instant.ofEpochSecond(it).atZone(ZoneId.systemDefault()).toLocalDate() }.getOrNull()
     }
 
     // ── write ──────────────────────────────────────────────────────────
@@ -137,18 +170,26 @@ internal class RagMemoryStore(
                     put("name", entry.name)
                     put("description", entry.description)
                     entry.maturity?.let { put("maturity", it.apiName) }
+                    // Redundant freshness copy: chunks after the first one carry no
+                    // frontmatter, and retrieval needs these dates to judge staleness.
+                    entry.created?.let { put("created", it.format(DATE_FMT)) }
+                    entry.updated?.let { put("updated", it.format(DATE_FMT)) }
                 },
                 createTime = createTimeOf(entry),
-                // Memory entries are Markdown: chunk by heading structure, build the
-                // knowledge graph (skipKg=false) and the structure index (TOC + summaries).
+                // Memory entries are short Markdown documents retrieved as raw chunks:
+                // heading-aligned chunking keeps frontmatter + body inside one chunk so
+                // parseChunkToEntry can rebuild a complete entry, while KG extraction and
+                // the structure index are skipped — memory_search queries with mode=naive,
+                // which never reads entities/relations or the structure index, so both
+                // would only add per-write LLM cost.
                 options = RagProcessingOptions(
                     chunkMethod = CHUNK_METHOD_STRUCTURE_AWARE,
-                    skipKg = false,
-                    buildStructure = true
+                    skipKg = true,
+                    buildStructure = false
                 )
             )
             // Fire-and-forget: memory writes must not block on indexing confirmation;
-            // vectorization / knowledge-graph building continues server-side.
+            // chunking and vectorization continue server-side.
             client.upsert(doc, bizId, awaitIndexing = false)
             logger.debug("Memory entry written to RAG (indexing submitted): {} (bizId={})", doc.externalId, bizId)
             Path.of(doc.filePath)
@@ -165,18 +206,32 @@ internal class RagMemoryStore(
             detail?.content
         }
 
+    override suspend fun readEntry(path: String, scope: MemoryScope, owner: MemoryOwnerContext): MemoryEntry? =
+        translateBackendErrors("readEntry") {
+            val bizId = bizIdOf(scope, owner) ?: return@translateBackendErrors null
+            readEntryByExternalId(RagConstants.externalIdOf(keyOf(path)), bizId)
+        }
+
+    /** Read one document by externalId and materialize it; one request, no type probing. */
+    private suspend fun readEntryByExternalId(externalId: String, bizId: String): MemoryEntry? {
+        val detail = client.readByExternalId(externalId, bizId) ?: return null
+        val content = detail.content ?: return null
+        return parseChunkToEntry(content, detail.filePath)
+    }
+
     // ── delete / deleteAll ─────────────────────────────────────────────
 
     override suspend fun delete(path: String, scope: MemoryScope, owner: MemoryOwnerContext): Boolean =
         translateBackendErrors("delete") {
             val bizId = requireBizId(scope, owner, "delete")
             val externalId = RagConstants.externalIdOf(keyOf(path))
-            if (client.readByExternalId(externalId, bizId) == null) {
-                return@translateBackendErrors false
+            // The client resolves externalId -> docId and reports whether anything matched;
+            // pre-reading here used to cost one extra round trip per deletion.
+            val deleted = client.delete(externalId, bizId)
+            if (deleted) {
+                logger.debug("Memory entry deleted from RAG: {}", externalId)
             }
-            client.delete(externalId, bizId)
-            logger.debug("Memory entry deleted from RAG: {}", externalId)
-            true
+            deleted
         }
 
     override suspend fun deleteAll(scope: MemoryScope, owner: MemoryOwnerContext): Int =
@@ -197,9 +252,10 @@ internal class RagMemoryStore(
             val bizId = bizIdOf(scope, owner) ?: return@translateBackendErrors emptyList()
             val docs = client.list(listPrefix(type), bizId)
             val externalIds = docs.mapNotNull { it.externalId }.distinct()
+            val semaphore = Semaphore(MAX_CONCURRENT_READS)
             coroutineScope {
                 externalIds.map { externalId ->
-                    async { client.readByExternalId(externalId, bizId) }
+                    async { semaphore.withPermit { client.readByExternalId(externalId, bizId) } }
                 }.awaitAll()
             }.mapNotNull { detail ->
                 val content = detail?.content ?: return@mapNotNull null
@@ -209,21 +265,51 @@ internal class RagMemoryStore(
 
     // ── exists / findByName ────────────────────────────────────────────
 
-    override suspend fun exists(name: String, scope: MemoryScope, owner: MemoryOwnerContext): Boolean =
-        findByName(name, scope, owner) != null
+    override suspend fun exists(
+        name: String,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext,
+        type: MemoryType?
+    ): Boolean = findByName(name, scope, owner, type) != null
 
-    override suspend fun findByName(name: String, scope: MemoryScope, owner: MemoryOwnerContext): MemoryEntry? =
-        translateBackendErrors("findByName") {
-            val bizId = bizIdOf(scope, owner) ?: return@translateBackendErrors null
-            for (type in MemoryType.entriesFor(DomainCatalog.activeDomain)) {
-                val key = "${type.dirName}/$name.md"
-                val detail = client.readByExternalId(RagConstants.externalIdOf(key), bizId)
-                    ?: continue
-                val content = detail.content ?: continue
-                parseChunkToEntry(content, detail.filePath)?.let { return@translateBackendErrors it }
-            }
-            null
+    override suspend fun findByName(
+        name: String,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext,
+        type: MemoryType?
+    ): MemoryEntry? = translateBackendErrors("findByName") {
+        val bizId = bizIdOf(scope, owner) ?: return@translateBackendErrors null
+        // Resolve through documents (written synchronously server-side, so a fresh write is
+        // immediately visible) and never through search: the vector index is submitted
+        // fire-and-forget and would miss an entry written moments ago.
+        val externalId = if (type != null) {
+            RagConstants.externalIdOf("${type.dirName}/$name.md")
+        } else {
+            val candidates = candidateExternalIds(name)
+            client.list(listPrefix(null), bizId)
+                .firstOrNull { it.externalId in candidates }
+                ?.externalId
+                ?: return@translateBackendErrors null
         }
+        readEntryByExternalId(externalId, bizId)
+    }
+
+    /** Possible externalIds for [name] across the types of the active domain. */
+    private fun candidateExternalIds(name: String): Set<String> =
+        MemoryType.entriesFor(DomainCatalog.activeDomain)
+            .map { RagConstants.externalIdOf("${it.dirName}/$name.md") }
+            .toSet()
+
+    override suspend fun touch(path: String, scope: MemoryScope, owner: MemoryOwnerContext): MemoryEntry? {
+        val today = LocalDate.now()
+        // Read the authoritative full document first: a search hit may carry only part of
+        // the body, and rewriting that would truncate the stored entry.
+        val entry = readEntry(path, scope, owner) ?: return null
+        if (entry.lastAccessed == today) return entry
+        val touched = entry.copy(lastAccessed = today)
+        write(touched, scope, owner)
+        return touched
+    }
 
     // ── refreshIndex ───────────────────────────────────────────────────
 
@@ -256,6 +342,8 @@ internal class RagMemoryStore(
     }
 
     private fun createTimeOf(entry: MemoryEntry): Long {
+        // Business time is the last modification date only: lastAccessed is a staleness hint
+        // and must not shift the timeRangeStart/timeRangeEnd window of retrieval.
         val date = entry.updated ?: LocalDate.now()
         return date.atStartOfDay(ZoneId.systemDefault()).toEpochSecond()
     }
@@ -289,6 +377,7 @@ internal class RagMemoryStore(
         val maturity = meta["maturity"]?.let { MemoryMaturity.fromApiName(it) }
         val created = meta["created"]?.let { runCatching { LocalDate.parse(it, DATE_FMT) }.getOrNull() }
         val updated = meta["updated"]?.let { runCatching { LocalDate.parse(it, DATE_FMT) }.getOrNull() }
+        val lastAccessed = meta["last_accessed"]?.let { runCatching { LocalDate.parse(it, DATE_FMT) }.getOrNull() }
 
         return MemoryEntry(
             name = name,
@@ -300,7 +389,8 @@ internal class RagMemoryStore(
             created = created,
             updated = updated,
             maturity = maturity,
-            scenarios = scenarios
+            scenarios = scenarios,
+            lastAccessed = lastAccessed
         )
     }
 
@@ -361,6 +451,7 @@ internal class RagMemoryStore(
         entry.maturity?.let { appendLine("maturity: ${it.apiName}") }
         appendLine("created: ${(entry.created ?: LocalDate.now()).format(DATE_FMT)}")
         appendLine("updated: ${(entry.updated ?: LocalDate.now()).format(DATE_FMT)}")
+        entry.lastAccessed?.let { appendLine("last_accessed: ${it.format(DATE_FMT)}") }
         appendLine(FRONTMATTER_DELIMITER)
         appendLine()
         append(entry.content)
@@ -386,8 +477,10 @@ internal class RagMemoryStore(
 
     private companion object {
         const val FRONTMATTER_DELIMITER = "---"
-        /** Markdown heading-based chunking, required for Markdown memories. */
+        /** Markdown heading-based chunking: no LLM cost, keeps entry sections intact. */
         const val CHUNK_METHOD_STRUCTURE_AWARE = "structure_aware"
+        /** Caps the per-document read fan-out of [list] so large scopes cannot starve the pool. */
+        const val MAX_CONCURRENT_READS = 16
         val DATE_FMT: DateTimeFormatter = DateTimeFormatter.ISO_LOCAL_DATE
     }
 }

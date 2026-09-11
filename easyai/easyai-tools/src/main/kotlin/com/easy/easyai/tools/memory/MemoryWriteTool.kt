@@ -112,14 +112,24 @@ internal class MemoryWriteTool(
         maturity: String?,
         scenarios: List<String>?,
         scope: MemoryScope,
-        owner: MemoryOwnerContext
+        owner: MemoryOwnerContext,
+        snapshot: MemoryEntry? = null
     ): ToolResult {
         return when (action.lowercase()) {
             "add" -> handleAdd(name, type, description, content, maturity, scenarios, scope, owner)
-            "update" -> handleUpdate(name, content, oldText, scope, owner)
-            "remove" -> handleRemove(name, scope, owner)
+            "update" -> handleUpdate(name, lookupType(type), content, oldText, scope, owner, snapshot)
+            "remove" -> handleRemove(name, lookupType(type), scope, owner, snapshot)
             else -> errorResult("Error: Unknown action '$action'. Use 'add', 'update', or 'remove'.")
         }
+    }
+
+    /**
+     * Narrow the name lookup to the announced type. A type the caller got wrong (or that is
+     * unavailable in the active domain) falls back to the cross-type probe instead of
+     * reporting a false "not found".
+     */
+    private fun lookupType(type: String?): MemoryType? = type?.let {
+        MemoryType.fromDirName(it)?.takeIf { candidate -> candidate in MemoryType.entriesFor(DomainCatalog.activeDomain) }
     }
 
     private suspend fun handleAdd(
@@ -149,8 +159,8 @@ internal class MemoryWriteTool(
             return errorResult("Error: Type '$type' is not available in the current domain. Use: ${validTypes.joinToString(", ") { it.dirName }}.")
         }
 
-        // Name dedup check
-        if (store.exists(name, scope, owner)) {
+        // Name dedup check: the type is already validated, so resolve the key directly
+        if (store.exists(name, scope, owner, memoryType)) {
             return errorResult("Entry '$name' already exists in ${scope.name.lowercase()} scope. Use action='update' to modify it.")
         }
 
@@ -171,11 +181,17 @@ internal class MemoryWriteTool(
     }
 
     private suspend fun handleUpdate(
-        name: String, content: String?, oldText: String?, scope: MemoryScope, owner: MemoryOwnerContext
+        name: String,
+        type: MemoryType?,
+        content: String?,
+        oldText: String?,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext,
+        snapshot: MemoryEntry? = null
     ): ToolResult {
         if (content.isNullOrBlank()) return errorResult("Error: 'content' is required for update.")
 
-        val existing = store.findByName(name, scope, owner)
+        val existing = snapshot ?: store.findByName(name, scope, owner, type)
             ?: return errorResult("Entry '$name' not found in ${scope.name.lowercase()} scope. Use action='add' to create it.")
 
         val updatedContent = if (oldText != null) {
@@ -198,8 +214,14 @@ internal class MemoryWriteTool(
         return ToolResult(content = listOf(TextContent("Memory entry updated: $path")))
     }
 
-    private suspend fun handleRemove(name: String, scope: MemoryScope, owner: MemoryOwnerContext): ToolResult {
-        val existing = store.findByName(name, scope, owner)
+    private suspend fun handleRemove(
+        name: String,
+        type: MemoryType?,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext,
+        snapshot: MemoryEntry? = null
+    ): ToolResult {
+        val existing = snapshot ?: store.findByName(name, scope, owner, type)
             ?: return errorResult("Entry '$name' not found in ${scope.name.lowercase()} scope.")
 
         val deleted = store.delete(existing.path, scope, owner)
@@ -220,14 +242,18 @@ internal class MemoryWriteTool(
 
         try {
             for ((i, op) in operations.withIndex()) {
-                // Capture snapshot BEFORE executing for rollback of update/remove
+                // Reuse this pre-execution snapshot as the entry to modify/delete: looking it
+                // up again inside the handler doubled the reads of every batch operation.
                 val preExisting = when (op.action.lowercase()) {
-                    "update" -> store.findByName(op.name, scope, owner)
-                    "remove" -> store.findByName(op.name, scope, owner)
+                    "update" -> store.findByName(op.name, scope, owner, lookupType(op.type))
+                    "remove" -> store.findByName(op.name, scope, owner, lookupType(op.type))
                     else -> null
                 }
 
-                val result = executeSingle(op.action, op.name, op.type, op.description, op.content, op.oldText, op.maturity, op.scenarios, scope, owner)
+                val result = executeSingle(
+                    op.action, op.name, op.type, op.description, op.content, op.oldText,
+                    op.maturity, op.scenarios, scope, owner, preExisting
+                )
                 if (result.isError) {
                     safeRollback(createdPaths, rollbackActions, scope, owner)
                     return errorResult(
@@ -249,6 +275,9 @@ internal class MemoryWriteTool(
                     }
                     "update" -> {
                         if (preExisting != null) {
+                            // Restoring the pre-write body deliberately rolls the entry back to
+                            // its previous `updated` date: a rolled-back change is no longer a
+                            // change, so the stale date is the accurate one.
                             rollbackActions.add { store.write(preExisting, scope, owner) }
                         }
                     }

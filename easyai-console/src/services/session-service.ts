@@ -29,7 +29,7 @@ export interface SessionListItem {
   streaming?: boolean;
 }
 
-export type ContentBlockType = 'text' | 'image' | 'thinking' | 'toolCall' | 'custom' | 'fileRef';
+export type ContentBlockType = 'text' | 'image' | 'thinking' | 'toolCall' | 'custom' | 'fileRef' | 'folderRef';
 
 export interface ContentBlockBase {
   type: ContentBlockType;
@@ -77,6 +77,16 @@ export interface FileRefContentBlock extends ContentBlockBase {
   filePath: string;
   name: string;
   mimeType: string;
+  /** Character offset in the cleaned text where this ref was originally positioned. */
+  displayOffset: number;
+}
+
+export interface FolderRefContentBlock extends ContentBlockBase {
+  type: 'folderRef';
+  filePath: string;
+  name: string;
+  /** Character offset in the cleaned text where the 📁 chip was originally positioned. */
+  displayOffset: number;
 }
 
 export interface ToolResultContentBlock {
@@ -93,7 +103,7 @@ export interface ToolResultContentBlock {
   usage?: UsageSnapshot;
 }
 
-export type ContentBlock = TextContentBlock | ImageContentBlock | ThinkingContentBlock | ToolCallContentBlock | ToolResultContentBlock | CustomContentBlock | FileRefContentBlock;
+export type ContentBlock = TextContentBlock | ImageContentBlock | ThinkingContentBlock | ToolCallContentBlock | ToolResultContentBlock | CustomContentBlock | FileRefContentBlock | FolderRefContentBlock;
 
 export type UsageSnapshot = UsageInfo;
 

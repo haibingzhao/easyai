@@ -85,7 +85,7 @@ private class FakeRagClient : RagClient {
     override suspend fun healthCheck(): Boolean = true
     override suspend fun upsert(doc: RagDocument, bizId: String?, awaitIndexing: Boolean): RagUpsertResult =
         RagUpsertResult(docId = "fake", indexed = true)
-    override suspend fun delete(externalId: String, bizId: String?) {}
+    override suspend fun delete(externalId: String, bizId: String?): Boolean = true
     override suspend fun batchDelete(docIds: List<String>, bizId: String?): Int = 0
     override suspend fun readByExternalId(externalId: String, bizId: String?): RagDocumentDetail? = null
     override suspend fun list(pathPrefix: String, bizId: String?): List<RagDocInfo> = emptyList()

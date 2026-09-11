@@ -218,6 +218,9 @@ object ChatEventConverter {
                 is FileRefContent -> {
                     // File references aren't streamed via SSE; they are stored as metadata
                 }
+                is FolderRefContent -> {
+                    // Folder references aren't streamed via SSE; they are stored as metadata
+                }
             }
             contentIndex++
         }

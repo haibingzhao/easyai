@@ -83,7 +83,8 @@ class CompactionAutoConfiguration(
         val memoryFlushAgent = memoryStore?.let {
             MemoryFlushAgent(
                 store = it,
-                threshold = properties.memoryFlushThreshold
+                threshold = properties.memoryFlushThreshold,
+                allowRemovals = properties.memoryFlushAllowRemove
             )
         }
         return CompactionTransformContextService(
