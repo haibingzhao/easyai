@@ -2,9 +2,11 @@ package com.easy.easyai.autoconfigure.rag
 
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.memory.MemoryStore
+import com.easy.easyai.core.skill.SkillStore
 import com.easy.easyai.rag.RagClient
 import com.easy.easyai.rag.RagKnowledgeStores
 import com.easy.easyai.rag.RagMemoryStores
+import com.easy.easyai.rag.RagSkillStores
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
@@ -19,6 +21,7 @@ import org.springframework.context.annotation.Configuration
  * - `ragClient`: HTTP client for the EasyRAG REST API (config from `~/.easyai/rag.json`).
  * - `memoryStore`: RAG-backed memory store (when `easyai.memory.enabled=true`).
  * - `knowledgeStore`: RAG-backed knowledge base store (when `easyai.knowledge.enabled=true`).
+ * - `skillStore`: RAG-backed skill retrieval index (when `easyai.skills.rag.enabled=true`).
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass(RagClient::class)
@@ -37,4 +40,14 @@ class RagAutoConfiguration {
     @Bean
     @ConditionalOnProperty(prefix = "easyai.knowledge", name = ["enabled"], havingValue = "true", matchIfMissing = true)
     fun knowledgeStore(ragClient: RagClient): KnowledgeStore = RagKnowledgeStores.create(ragClient)
+
+    /**
+     * Skill retrieval index. Unlike memory/knowledge this is **off by default**
+     * (`matchIfMissing = false`): turning it on suppresses the eager skill listing in the
+     * system prompt, so it must be an explicit operator decision.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "easyai.skills.rag", name = ["enabled"], havingValue = "true", matchIfMissing = false)
+    fun skillStore(ragClient: RagClient): SkillStore = RagSkillStores.create(ragClient)
 }

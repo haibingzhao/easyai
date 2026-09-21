@@ -1,5 +1,6 @@
 package com.easy.easyai.core.util
 
+import com.easy.easyai.core.agent.ContentFilteredException
 import java.net.SocketException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeoutException
@@ -10,6 +11,11 @@ import java.util.concurrent.TimeoutException
  * Client errors (4xx) like auth errors are not retryable.
  */
 fun isRetryableError(e: Exception): Boolean {
+    // Content-safety rejection is deterministic: replaying the same prompt re-triggers
+    // the same filter, so it must never be presented as retryable.
+    if (e is ContentFilteredException) {
+        return false
+    }
     // Check exception type first (handles cases where message is null)
     // SocketException covers ConnectException and SocketTimeoutException as subclasses
     if (e is SocketException || e is UnknownHostException || e is TimeoutException) {

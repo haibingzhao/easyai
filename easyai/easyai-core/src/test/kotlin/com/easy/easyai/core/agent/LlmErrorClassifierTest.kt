@@ -310,5 +310,48 @@ class LlmErrorClassifierTest {
             assertFalse(LlmErrorClassifier.isEndpointOutage(NonTransientAiException("401 Unauthorized")))
             assertFalse(LlmErrorClassifier.isEndpointOutage(RuntimeException("boom")))
         }
+
+        @Test
+        fun `content filtered rejection is not an outage`() {
+            val sse = RuntimeException(
+                "200: {\"code\":\"InvalidParameter\",\"message\":\"Output data may contain inappropriate content.\"}"
+            )
+            assertFalse(LlmErrorClassifier.isEndpointOutage(sse))
+        }
+    }
+
+    @Nested
+    inner class `isContentFiltered` {
+
+        @Test
+        fun `detects inappropriate content rejection frame`() {
+            val e = RuntimeException(
+                """200: {"request_id":"x","code":"InvalidParameter","message":"Output data may contain inappropriate content."}"""
+            )
+            assertTrue(LlmErrorClassifier.isContentFiltered(e))
+        }
+
+        @Test
+        fun `detects via nested cause chain`() {
+            val inner = RuntimeException("Output data may contain inappropriate content.")
+            val wrapped = RuntimeException("Error processing streaming response", inner)
+            assertTrue(LlmErrorClassifier.isContentFiltered(wrapped))
+        }
+
+        @Test
+        fun `InvalidParameter alone without content keyword is not content filtered`() {
+            assertFalse(LlmErrorClassifier.isContentFiltered(RuntimeException("400 InvalidParameter: missing model field")))
+        }
+
+        @Test
+        fun `InvalidParameter co-occurring with content is detected`() {
+            assertTrue(LlmErrorClassifier.isContentFiltered(RuntimeException("InvalidParameter: content may be sensitive")))
+        }
+
+        @Test
+        fun `unrelated errors are not content filtered`() {
+            assertFalse(LlmErrorClassifier.isContentFiltered(TransientAiException("503 Service Unavailable")))
+            assertFalse(LlmErrorClassifier.isContentFiltered(RuntimeException("boom")))
+        }
     }
 }

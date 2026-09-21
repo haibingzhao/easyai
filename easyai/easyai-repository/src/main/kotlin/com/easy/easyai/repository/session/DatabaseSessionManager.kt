@@ -42,7 +42,21 @@ class DatabaseSessionManager(
     /** Optional: agent store for dynamic sub-agents resolution */
     private val agentStore: AsyncAgentStore? = null,
     /** Optional: team execution store for TEAM session status recovery */
-    private val teamExecutionStore: TeamExecutionStore? = null
+    private val teamExecutionStore: TeamExecutionStore? = null,
+    /**
+     * Optional per-request skill view, keyed by the requesting user and the session's project.
+     *
+     * Preferred over the static [skills] list when present: skill enablement lives in the catalog
+     * table, so a snapshot taken at bean creation would keep advertising skills the user switched
+     * off. The project path restricts the view to the granularities that session can address.
+     * The supplier is synchronous by contract (it reads an already-resolved view), which is what
+     * keeps prompt rendering off the database.
+     *
+     * Declared last so existing positional callers (Java consumers and hand-written tests) keep
+     * resolving to the same parameter after this addition — inserting in the middle would silently
+     * reroute them and change the JVM constructor descriptor.
+     */
+    private val skillsSupplier: ((String?, Path?) -> List<Map<String, Any?>>)? = null
 ) : SessionManager {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val saveMutex = Mutex()
@@ -56,7 +70,7 @@ class DatabaseSessionManager(
         baseContext: AgentContext,
         projectPath: Path?
     ): Pair<AgentContext, List<ToolDefinition>> {
-        val (agentSkills, allowedSkillNames) = resolveSkillsForAgent(agentDef.id)
+        val (agentSkills, allowedSkillNames) = resolveSkillsForAgent(agentDef.id, baseContext.userId, projectPath)
         val enrichedContext = baseContext.copy(
             skills = agentSkills,
             allowedSkillNames = allowedSkillNames,
@@ -195,15 +209,19 @@ class DatabaseSessionManager(
      * Returns (filtered skills data, allowed skill names list).
      * Empty allowedSkillNames means no skills are allowed (consistent with toolNames semantics).
      */
-    private suspend fun resolveSkillsForAgent(agentId: String): Pair<List<Map<String, Any?>>, List<String>> {
+    private suspend fun resolveSkillsForAgent(agentId: String, userId: String?, projectPath: Path?): Pair<List<Map<String, Any?>>, List<String>> {
         val store = agentStore ?: return emptyList<Map<String, Any?>>() to emptyList()
         val allowedConfigs = store.getAgentToolConfigs(agentId, TargetType.SKILL)
         if (allowedConfigs.isEmpty()) return emptyList<Map<String, Any?>>() to emptyList()  // No whitelist = no skills
         val allowedNames = allowedConfigs.map { it.targetName }
         val allowedSet = allowedNames.toSet()
-        val filteredSkills = skills.filter { (it["name"] as? String) in allowedSet }
+        val filteredSkills = skillsFor(userId, projectPath).filter { (it["name"] as? String) in allowedSet }
         return filteredSkills to allowedNames
     }
+
+    /** Live view when a supplier is wired, otherwise the startup snapshot. */
+    private fun skillsFor(userId: String?, projectPath: Path?): List<Map<String, Any?>> =
+        skillsSupplier?.invoke(userId, projectPath) ?: skills
 
     /**
      * Get an existing session or create a new one with default configuration.
@@ -239,7 +257,7 @@ class DatabaseSessionManager(
         val resolvedContext = agentContext.copy(
             sessionId = id,
             projectPath = projectPath,
-            skills = agentContext.skills.ifEmpty { skills },
+            skills = agentContext.skills.ifEmpty { skillsFor(agentContext.userId, projectPath) },
             subAgents = agentContext.subAgents.ifEmpty { resolvedSubAgents }
         )
 
@@ -440,7 +458,7 @@ class DatabaseSessionManager(
             userId = userId,
             projectId = projectId,
             projectPath = projectPath,
-            skills = skills,
+            skills = skillsFor(userId, projectPath),
             subAgents = subAgentsData,
             instructions = emptyList(),
             modelContextLength = config.options?.contextToken ?: 204_800

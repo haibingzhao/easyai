@@ -5,7 +5,6 @@ import com.easy.easyai.core.agent.CompletionCheckInput
 import com.easy.easyai.core.agent.CompletionCheckResult
 import com.easy.easyai.swarm.model.TaskReportResult
 import org.slf4j.LoggerFactory
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -27,27 +26,23 @@ class TaskCompletionReportCheck(
 ) : AgentCompletionCheck {
 
     private val logger = LoggerFactory.getLogger(javaClass)
-    private val retryCounters = ConcurrentHashMap<String, Int>()
+
+    override fun maxNudges(): Int = maxRetries
 
     override suspend fun check(input: CompletionCheckInput): CompletionCheckResult {
-        val sessionKey = input.agentContext.sessionId ?: "swarm-worker"
-
         // Tool was already called — done
         if (reportRef.get() != null) {
-            retryCounters.remove(sessionKey)
             return CompletionCheckResult.Done
         }
 
-        // Check retry budget
-        val retries = retryCounters[sessionKey] ?: 0
-        if (retries >= maxRetries) {
+        // Check retry budget — the attempt count is kept by the loop's per-run ledger,
+        // so this check stays stateless (see AgentCompletionCheck for why that matters)
+        if (input.nudgeAttempt >= maxRetries) {
             logger.warn("report_task_result not called after {} retries, proceeding without report", maxRetries)
-            retryCounters.remove(sessionKey)
             return CompletionCheckResult.Done
         }
 
-        retryCounters[sessionKey] = retries + 1
-        logger.info("report_task_result not yet called, nudging agent (attempt {}/{})", retries + 1, maxRetries)
+        logger.info("report_task_result not yet called, nudging agent (attempt {}/{})", input.nudgeAttempt + 1, maxRetries)
 
         return CompletionCheckResult.Continue(prompt = NUDGE_PROMPT)
     }

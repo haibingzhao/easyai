@@ -227,7 +227,8 @@ internal class EasyRagClient(
         topK: Int,
         timeRangeStart: Long?,
         timeRangeEnd: Long?,
-        bizId: String?
+        bizId: String?,
+        bizIds: List<String>?
     ): List<RagChunk> {
         val config = RagConfig.load(configPath)
         if (!config.enabled) return emptyList()
@@ -239,7 +240,11 @@ internal class EasyRagClient(
             "timeRangeEnd" to timeRangeEnd,
             "metadataFilters" to filters.ifEmpty { null },
             "workspace" to config.workspace,
-            "bizId" to bizId
+            "bizId" to bizId,
+            // Server normalises this (trim / drop blanks / order-preserving dedup) and falls
+            // back to the single-biz contract when the set ends up empty, so blanks are safe
+            // to send. A non-empty set overrides `bizId` server-side.
+            "bizIds" to bizIds?.filter { it.isNotBlank() }?.distinct()?.takeIf { it.isNotEmpty() }
         )
         val response = exchange(config, HttpMethod.POST, "/api/query/data", body = body, timeoutMs = config.readTimeoutMs)
         val chunks = (response["chunks"] as? List<*>)
@@ -253,7 +258,8 @@ internal class EasyRagClient(
                 createTime = (chunk["create_time"] as? Number)?.toLong(),
                 metadata = (chunk["metadata"] as? Map<*, *>)
                     ?.entries?.associate { (k, v) -> k.toString() to v }
-                    ?: emptyMap()
+                    ?: emptyMap(),
+                bizId = chunk["biz_id"] as? String
             )
         }
     }

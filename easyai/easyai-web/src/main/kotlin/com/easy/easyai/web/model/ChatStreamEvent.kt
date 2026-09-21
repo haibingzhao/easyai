@@ -214,7 +214,7 @@ sealed interface ChatStreamEvent {
     data class Done(
         val reason: String = "stop",
         val usage: UsageInfo? = null,
-        /** Why the agent loop ended: "normal" | "max_iterations" */
+        /** Why the agent loop ended: "normal" | "max_iterations" | "cancelled" | "error" | "completion_check_stalled" */
         val endReason: String? = null
     ) : ChatStreamEvent {
         override val type: String get() = "done"
@@ -286,7 +286,9 @@ sealed interface ChatStreamEvent {
         val pattern: String,
         val arguments: Map<String, Any?> = emptyMap(),
         val subAgentToolCallId: String? = null,
-        val subAgentName: String? = null
+        val subAgentName: String? = null,
+        /** Optional explanation shown to the user, e.g. AI risk assessment reason. */
+        val reason: String? = null
     ) : ChatStreamEvent {
         override val type: String get() = "permission_request"
     }

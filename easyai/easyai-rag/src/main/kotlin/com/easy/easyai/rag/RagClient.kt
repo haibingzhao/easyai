@@ -70,6 +70,11 @@ interface RagClient {
      * @param timeRangeStart inclusive business-time lower bound, epoch seconds
      * @param timeRangeEnd inclusive business-time upper bound, epoch seconds
      * @param bizId optional EasyRAG business-line slice; null = server default
+     * @param bizIds multiple slices searched in **one** round trip (native set filter at the
+     *   storage layer, not N queries). The server ranks a **single global top-k** over the
+     *   union — callers wanting a per-slice quota must over-fetch and re-quota themselves.
+     *   Takes precedence over [bizId]; blank/duplicate entries are dropped, and an empty
+     *   result set restores the single-slice contract.
      */
     suspend fun search(
         query: String,
@@ -77,7 +82,8 @@ interface RagClient {
         topK: Int = 5,
         timeRangeStart: Long? = null,
         timeRangeEnd: Long? = null,
-        bizId: String? = null
+        bizId: String? = null,
+        bizIds: List<String>? = null
     ): List<RagChunk>
 
     /**

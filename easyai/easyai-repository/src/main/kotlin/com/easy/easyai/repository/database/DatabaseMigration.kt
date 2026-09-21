@@ -48,6 +48,8 @@ class DatabaseMigration(
                 Tables.TodoTable,
                 Tables.PermissionRuleTable,
                 Tables.McpServerConfigTable,
+                Tables.SkillTable,
+                Tables.StorageSettingsTable,
                 Tables.UserCommandTable,
                 Tables.SwarmRunTable,
                 Tables.SwarmTaskTable,

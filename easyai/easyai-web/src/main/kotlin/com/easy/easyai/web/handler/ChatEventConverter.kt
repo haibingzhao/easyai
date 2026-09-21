@@ -154,7 +154,8 @@ object ChatEventConverter {
                 pattern = event.pattern,
                 arguments = event.arguments,
                 subAgentToolCallId = event.subAgentToolCallId,
-                subAgentName = event.subAgentName
+                subAgentName = event.subAgentName,
+                reason = event.reason
             )
         )
         is UserMessageAddedEvent -> listOf(

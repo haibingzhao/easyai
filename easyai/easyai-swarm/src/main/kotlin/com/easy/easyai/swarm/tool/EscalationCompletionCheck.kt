@@ -5,7 +5,6 @@ import com.easy.easyai.core.agent.CompletionCheckInput
 import com.easy.easyai.core.agent.CompletionCheckResult
 import com.easy.easyai.core.model.AssistantMessage
 import org.slf4j.LoggerFactory
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -35,14 +34,12 @@ class EscalationCompletionCheck(
 ) : AgentCompletionCheck {
 
     private val logger = LoggerFactory.getLogger(javaClass)
-    private val retryCounters = ConcurrentHashMap<String, Int>()
+
+    override fun maxNudges(): Int = maxRetries
 
     override suspend fun check(input: CompletionCheckInput): CompletionCheckResult {
-        val sessionKey = input.agentContext.sessionId ?: "swarm-member"
-
         // If escalation was already recorded via tool call, we're done
         if (escalationRef.get() != null) {
-            retryCounters.remove(sessionKey)
             return CompletionCheckResult.Done
         }
 
@@ -59,21 +56,18 @@ class EscalationCompletionCheck(
         }
 
         if (!hasEscalationSignal) {
-            retryCounters.remove(sessionKey)
             return CompletionCheckResult.Done
         }
 
-        // Output has escalation signal but tool was NOT called — nudge the member
-        val retries = retryCounters[sessionKey] ?: 0
-        if (retries >= maxRetries) {
+        // Output has escalation signal but tool was NOT called — nudge the member.
+        // The attempt count comes from the loop's per-run ledger, keeping this check stateless.
+        if (input.nudgeAttempt >= maxRetries) {
             logger.warn("Escalation signal detected but tool not called after {} retries, proceeding", maxRetries)
-            retryCounters.remove(sessionKey)
             return CompletionCheckResult.Done
         }
 
-        retryCounters[sessionKey] = retries + 1
         logger.info("Escalation signal detected in member output but escalate tool not called, nudging (attempt {}/{})",
-            retries + 1, maxRetries)
+            input.nudgeAttempt + 1, maxRetries)
 
         return CompletionCheckResult.Continue(prompt = NUDGE_PROMPT)
     }

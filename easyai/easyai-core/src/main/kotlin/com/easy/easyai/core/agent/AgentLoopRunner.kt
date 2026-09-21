@@ -303,6 +303,14 @@ internal class AgentLoopRunner(
                     thinkingStartTime = 0L
                     thinkingDuration = 0L
                     textStartTime = 0L
+                } else if (LlmErrorClassifier.isContentFiltered(e)) {
+                    // Output blocked by the provider's content safety policy. Deterministic
+                    // rejection: never retried, surfaced with an actionable user message.
+                    logger.warn("${logPrefix}[Turn {}] LLM output blocked by content safety policy (no retry): {}",
+                        turnId, e.message)
+                    throw ContentFilteredException(
+                        "模型输出被内容安全策略拦截，请调整问题后重试", e
+                    )
                 } else {
                     logger.error("${logPrefix}LLM call failed after {} retries: {}", retryCount, e.message)
                     throw e

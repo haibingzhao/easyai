@@ -57,6 +57,39 @@ class SkillDiscoveryTest {
         }
     }
 
+    /**
+     * A re-scan runs per tool call now, so the walk has to be bounded: an unbounded one would follow
+     * vendored trees and every nested checkout under a skill root on each call.
+     */
+    @Nested
+    inner class ScanLimits {
+        @Test
+        fun `finds a skill within the scan depth`(@TempDir tempDir: Path) {
+            val deep = tempDir.resolve("a/b/c").createDirectories()
+            deep.resolve("SKILL.md").writeText("---\nname: within\ndescription: Inside the bound\n---\nContent")
+
+            assertEquals(listOf("within"), discovery.scanDirectory(tempDir).map { it.name })
+        }
+
+        @Test
+        fun `stops below the scan depth`(@TempDir tempDir: Path) {
+            val tooDeep = tempDir.resolve("a/b/c/d").createDirectories()
+            tooDeep.resolve("SKILL.md").writeText("---\nname: beyond\ndescription: Out of reach\n---\nContent")
+
+            assertTrue(discovery.scanDirectory(tempDir).isEmpty(), "a skill that deep is vendored content")
+        }
+
+        @Test
+        fun `does not walk into vendored or generated trees`(@TempDir tempDir: Path) {
+            for (ignored in listOf("node_modules", ".git", "__pycache__")) {
+                val nested = tempDir.resolve(ignored).resolve("pkg").createDirectories()
+                nested.resolve("SKILL.md").writeText("---\nname: $ignored\ndescription: Not a skill\n---\nContent")
+            }
+
+            assertTrue(discovery.scanDirectory(tempDir).isEmpty(), "dependency and cache directories hold no skills")
+        }
+    }
+
     @Nested
     inner class DiscoverFromHome {
         @Test

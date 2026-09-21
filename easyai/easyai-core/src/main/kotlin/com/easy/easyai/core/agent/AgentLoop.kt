@@ -82,6 +82,22 @@ internal class AgentLoop(
     private var completionCheckBonusBudget = MAX_COMPLETION_CHECK_BONUS
     private var completionCheckBonusPending = false
 
+    /**
+     * Per-run ledger of completion-check nudges, keyed by check class name.
+     *
+     * This lives on the loop (one instance per run) rather than on the checks themselves,
+     * because globally registered checks are Spring singletons shared by every concurrent
+     * session — nudge state scoped to a single run must not be stored on them.
+     *
+     * Distinct from [completionCheckBonusBudget], which bounds iterations *beyond*
+     * [AgentContext.maxIterations]; this ledger bounds how often *one check* may resume
+     * the loop *within* the normal iteration budget.
+     */
+    private val nudgeLedger = HashMap<String, NudgeRecord>()
+
+    /** Tool names executed during this run, surfaced to completion checks for scope decisions. */
+    private val invokedToolNames = mutableSetOf<String>()
+
     /** Why the loop ended — set during run() before end() is called. */
     @Volatile
     var endReason: String = "normal"
@@ -126,11 +142,14 @@ internal class AgentLoop(
             // Detect and execute pending toolCalls (resume scenario)
             pendingToolCallExecutor.executePendingToolCallsIfNeeded(transcript, this)
 
-            // Clear stale completion-check state from a previous abnormal termination
-            context.sessionId?.let { sid ->
-                services.completionChecks.filterIsInstance<OutputSchemaCompletionCheck>()
-                    .forEach { it.resetSession(sid) }
-            }
+            // Warn once if the same check class is registered twice: both instances share a
+            // single ledger entry, so the effective nudge budget is halved.
+            services.completionChecks
+                .groupingBy { ledgerKey(it) }.eachCount()
+                .filterValues { it > 1 }
+                .forEach { (key, count) ->
+                    logger.warn("${logPrefix}Completion check {} registered {} times; they share one nudge ledger", key, count)
+                }
 
             var turnId = 0
             var continueLoop = true
@@ -146,22 +165,26 @@ internal class AgentLoop(
                     turnId++
                 }
 
-                // Determine end reason:
+                // Determine end reason. A completion check may already have set an explicit
+                // reason (see handleCompletionCheckStop) — that takes precedence over derivation.
+                // Otherwise:
                 // 1. max_iterations — loop exhausted its iteration budget (runInnerLoop returned false
                 //    because turnId >= maxIterations inside runInnerLoop, NOT because of abort/pause)
                 // 2. cancelled — abort was requested (either caught at while-top via break, or inside
                 //    runInnerLoop which returned false; in both cases isAbortRequested() is true)
                 // 3. normal — any other exit (LLM finished, needPause, etc.)
-                endReason = when {
-                    turnId >= context.maxIterations && !config.isAbortRequested() -> {
-                        logger.warn("${logPrefix}Agent loop ended: max iterations ({}) reached at turn {}", context.maxIterations, turnId)
-                        "max_iterations"
+                if (endReason == "normal") {
+                    endReason = when {
+                        turnId >= context.maxIterations && !config.isAbortRequested() -> {
+                            logger.warn("${logPrefix}Agent loop ended: max iterations ({}) reached at turn {}", context.maxIterations, turnId)
+                            "max_iterations"
+                        }
+                        config.isAbortRequested() -> {
+                            logger.info("${logPrefix}Agent loop ended: abort requested at turn {}", turnId)
+                            "cancelled"
+                        }
+                        else -> "normal"
                     }
-                    config.isAbortRequested() -> {
-                        logger.info("${logPrefix}Agent loop ended: abort requested at turn {}", turnId)
-                        "cancelled"
-                    }
-                    else -> "normal"
                 }
             } catch (_: CancellationException) {
                 // Graceful shutdown: SSE client disconnected or coroutine cancelled.
@@ -287,7 +310,11 @@ internal class AgentLoop(
                 if (tc == null) {
                     logger.warn("${logPrefix}ToolCallResult for {} has no matching ToolCallContent, skipping", r.toolCallId)
                     continue
-                } else if (r.needPause) {
+                }
+                // Record the invocation for completion checks: unlike the transcript, this survives
+                // context compaction, so "did the agent touch X during this run?" stays accurate.
+                invokedToolNames.add(tc.name)
+                if (r.needPause) {
                     // Skip WaitForUserContent results - don't add to transcript or ToolResultMessage
                     logger.debug("${logPrefix}Skipping needPause tool result for {} ({})", r.toolCallId, tc.name)
                     waitForUserReason = r.pauseReason ?: "ask_question"
@@ -376,46 +403,74 @@ internal class AgentLoop(
 
         // When original logic says "stop", run completion checks
         if (!continueLoop && services.completionChecks.isNotEmpty()) {
-            val checkInput = CompletionCheckInput(
+            val baseInput = CompletionCheckInput(
                 agentContext = context,
                 transcript = transcript.toList(),
-                turnId = turnId
+                turnId = turnId,
+                toolNamesInvoked = invokedToolNames.toSet()
             )
             for (check in services.completionChecks) {
+                val key = ledgerKey(check)
+                val record = nudgeLedger[key]
                 val result = try {
-                    check.check(checkInput)
+                    check.check(
+                        baseInput.copy(
+                            nudgeAttempt = record?.attempts ?: 0,
+                            previousSignature = record?.signature
+                        )
+                    )
                 } catch (e: Exception) {
                     logger.warn("${logPrefix}[Turn {}] Completion check {} failed: {}", turnId, check::class.simpleName, e.message)
                     CompletionCheckResult.Done
                 }
-                if (result is CompletionCheckResult.Continue) {
-                    logger.info("${logPrefix}[Turn {}] Completion check {} requested continuation", turnId, check::class.simpleName)
-                    // Multi-turn: only enable API-level structured output when OutputSchemaCompletionCheck triggers
-                    if (check is OutputSchemaCompletionCheck && context.outputSchemaMultiTurn && context.outputSchema != null) {
-                        loopRunner.enableForcedStructuredOutput()
-                    }
-                    // Grant bonus only if the next iteration will hit maxIterations
-                    if (turnId + 1 >= context.maxIterations) {
-                        if (completionCheckBonusBudget > 0) {
-                            completionCheckBonusBudget--
-                            completionCheckBonusPending = true
-                        } else {
-                            // Budget exhausted and next turn is past limit → cannot continue
-                            logger.info("${logPrefix}[Turn {}] Completion-check bonus budget exhausted, stopping", turnId)
+                when (result) {
+                    is CompletionCheckResult.Continue -> {
+                        val attempts = (record?.attempts ?: 0) + 1
+                        if (attempts > check.maxNudges()) {
+                            logger.info(
+                                "${logPrefix}[Turn {}] Completion check {} hit its nudge cap ({}), stopping",
+                                turnId, check::class.simpleName, check.maxNudges()
+                            )
+                            handleCompletionCheckStop(check, turnId, notice = null, transcript = transcript)
                             break
                         }
+                        logger.info("${logPrefix}[Turn {}] Completion check {} requested continuation (nudge {}/{})", turnId, check::class.simpleName, attempts, check.maxNudges())
+                        nudgeLedger[key] = NudgeRecord(attempts = attempts, signature = result.signature)
+                        // Multi-turn: only enable API-level structured output when OutputSchemaCompletionCheck triggers
+                        if (check is OutputSchemaCompletionCheck && context.outputSchemaMultiTurn && context.outputSchema != null) {
+                            loopRunner.enableForcedStructuredOutput()
+                        }
+                        // Grant bonus only if the next iteration will hit maxIterations
+                        if (turnId + 1 >= context.maxIterations) {
+                            if (completionCheckBonusBudget > 0) {
+                                completionCheckBonusBudget--
+                                completionCheckBonusPending = true
+                            } else {
+                                // Budget exhausted and next turn is past limit → cannot continue
+                                handleCompletionCheckStop(check, turnId, notice = null, transcript = transcript)
+                                break
+                            }
+                        }
+                        continueLoop = true
+                        // Inject prompt as UserMessage with metadata for frontend
+                        result.prompt?.let { promptText ->
+                            val msg = UserMessage(
+                                id = generateMessageId(),
+                                content = listOf(TextContent(promptText)),
+                                metadata = mapOf(UserMessage.SOURCE_KEY to UserMessage.SOURCE_COMPLETION_CHECK)
+                            )
+                            appendAndNotify(msg, transcript)
+                        }
+                        break  // Any one check says continue → continue
                     }
-                    continueLoop = true
-                    // Inject prompt as UserMessage with metadata for frontend
-                    result.prompt?.let { promptText ->
-                        val msg = UserMessage(
-                            id = generateMessageId(),
-                            content = listOf(TextContent(promptText)),
-                            metadata = mapOf(UserMessage.SOURCE_KEY to UserMessage.SOURCE_COMPLETION_CHECK)
-                        )
-                        appendAndNotify(msg, transcript)
+                    is CompletionCheckResult.Stalled -> {
+                        handleCompletionCheckStop(check, turnId, notice = result.notice, transcript = transcript)
+                        break
                     }
-                    break  // Any one check says continue → continue
+                    is CompletionCheckResult.Done -> {
+                        // Cleared on success so a later regression in the same run gets its full budget
+                        nudgeLedger.remove(key)
+                    }
                 }
             }
         }
@@ -454,6 +509,38 @@ internal class AgentLoop(
 
         logger.debug("${logPrefix}[Turn {}] runInnerLoop finished, continueLoop={}, transcriptSize={}", turnId, continueLoop, transcript.size)
         return continueLoop
+    }
+
+    /** Ledger key for a check. Two instances of the same class intentionally share one entry. */
+    private fun ledgerKey(check: AgentCompletionCheck): String =
+        check::class.qualifiedName ?: check::class.java.name
+
+    /**
+     * Stop auto-continuation on [check]'s behalf: record why the loop ended and, when the check
+     * provided one, surface [notice] so the user learns the run stopped with work outstanding
+     * instead of ending silently.
+     */
+    private suspend fun ProducerScope<AgentEvent, List<AssistantMessage>>.handleCompletionCheckStop(
+        check: AgentCompletionCheck,
+        turnId: Int,
+        notice: String?,
+        transcript: MutableList<EasyAiMessage>
+    ) {
+        logger.warn(
+            "${logPrefix}[Turn {}] Completion check {} stopped auto-continuation: {}",
+            turnId, check::class.simpleName, notice ?: "no notice provided"
+        )
+        endReason = AgentCompletionCheck.END_REASON_STALLED
+        if (notice != null) {
+            appendAndNotify(
+                UserMessage(
+                    id = generateMessageId(),
+                    content = listOf(TextContent(notice)),
+                    metadata = mapOf(UserMessage.SOURCE_KEY to UserMessage.SOURCE_COMPLETION_CHECK)
+                ),
+                transcript
+            )
+        }
     }
 
     /**
@@ -498,7 +585,8 @@ internal class AgentLoop(
                 arguments = parsedArgs,
                 projectId = context.projectId,
                 projectPath = context.projectPath,
-                parentAgentId = context.parentAgentId
+                parentAgentId = context.parentAgentId,
+                userId = context.userId
             ))
             when (beforeResult) {
                 is BeforeToolCallResult.Block -> {
@@ -519,6 +607,7 @@ internal class AgentLoop(
                         permission = beforeResult.permission,
                         pattern = beforeResult.pattern,
                         arguments = beforeResult.arguments,
+                        reason = beforeResult.reason,
                         sessionId = context.sessionId ?: "default"
                     ))
                     results.add(ToolCallResult(
@@ -721,4 +810,7 @@ internal class AgentLoop(
          */
         private const val MAX_COMPLETION_CHECK_BONUS = 1
     }
+
+    /** Nudge bookkeeping for a single completion check within one run. */
+    private data class NudgeRecord(val attempts: Int, val signature: String?)
 }

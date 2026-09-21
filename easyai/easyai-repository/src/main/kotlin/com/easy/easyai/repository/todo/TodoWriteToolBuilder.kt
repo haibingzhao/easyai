@@ -26,7 +26,7 @@ class TodoWriteToolBuilder(
     private val todoStore: AsyncTodoStore? = null
 ) : ToolBuilder {
     override val metadata = ToolMetadata(
-        name = "todo_write",
+        name = TodoWriteTool.TOOL_NAME,
         description = DESCRIPTION,
         permissionCategory = "todo",
         uiRenderer = "todo_write"
@@ -67,6 +67,7 @@ Create or update the task todo list to track your progress on multi-step tasks.
 7. BEFORE giving your final answer or concluding the task, you MUST call this tool to update the todo list
 8. Mark ALL completed tasks as "completed" before responding with your final result
 9. If there is an in_progress task that you just finished, mark it as "completed" BEFORE saying you're done
+10. If a task turns out to be outside this request, mark it "cancelled" or drop it — do not leave it pending
 
 ## When NOT to Use
 - Single straightforward task

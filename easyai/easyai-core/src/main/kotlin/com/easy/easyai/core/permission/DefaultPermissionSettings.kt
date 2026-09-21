@@ -23,7 +23,9 @@ object DefaultPermissionSettings {
         val useMcp: Boolean = true,
         val readOtherPaths: List<String> = emptyList(),
         val writeOtherPaths: List<String> = emptyList(),
-        val otherCommands: List<String> = emptyList()
+        val otherCommands: List<String> = emptyList(),
+        /** Model config id used for AI shell risk checks; null disables the feature. */
+        val aiCheckModelId: String? = null
     )
 
     /** Default settings (no user rules). */
@@ -75,6 +77,11 @@ object DefaultPermissionSettings {
             rules.add(PermissionRule("shell.other", pattern, PermissionAction.ALLOW))
         }
 
+        // AI risk check opt-in: the model config id travels in the rule pattern
+        if (!settings.aiCheckModelId.isNullOrBlank()) {
+            rules.add(PermissionRule("shell.ai", settings.aiCheckModelId, PermissionAction.ALLOW))
+        }
+
         return rules
     }
 
@@ -101,6 +108,9 @@ object DefaultPermissionSettings {
         val otherCommands = rules
             .filter { it.permission == "shell.other" && it.action == PermissionAction.ALLOW }
             .map { it.pattern.removeSuffix("*") }
+        val aiCheckModelId = rules
+            .lastOrNull { it.permission == "shell.ai" && it.action == PermissionAction.ALLOW }
+            ?.pattern
 
         return Settings(
             readFileProject = readFileProject,
@@ -113,7 +123,8 @@ object DefaultPermissionSettings {
             useMcp = useMcp,
             readOtherPaths = readOtherPaths,
             writeOtherPaths = writeOtherPaths,
-            otherCommands = otherCommands
+            otherCommands = otherCommands,
+            aiCheckModelId = aiCheckModelId
         )
     }
 

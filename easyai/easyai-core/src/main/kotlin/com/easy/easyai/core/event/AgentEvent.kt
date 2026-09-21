@@ -26,7 +26,7 @@ data class AgentEndEvent(
     val sessionId: String,
     val reason: String,
     val messages: List<EasyAiMessage> = emptyList(),
-    /** Why the agent loop ended: "normal" | "max_iterations" */
+    /** Why the agent loop ended: "normal" | "max_iterations" | "cancelled" | "error" | "completion_check_stalled" | "input_schema_validation_failed" */
     val endReason: String = "normal"
 ) : AgentEvent {
     override val type: String get() = "agent_end"
@@ -200,7 +200,9 @@ data class PermissionRequestEvent(
     val arguments: Map<String, Any?>,
     val sessionId: String,
     val subAgentToolCallId: String? = null,
-    val subAgentName: String? = null
+    val subAgentName: String? = null,
+    /** Optional explanation shown to the user, e.g. AI risk assessment reason. */
+    val reason: String? = null
 ) : AgentEvent {
     override val type: String get() = "permission_request"
 }

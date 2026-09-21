@@ -142,6 +142,28 @@ internal object LlmErrorClassifier {
     }
 
     /**
+     * Check if the error indicates the model's OUTPUT was rejected by the provider's
+     * content safety / moderation policy. Anthropic-compatible gateways (e.g. DeepSeek)
+     * abort the SSE stream mid-generation with a frame such as:
+     * `200: {"code":"InvalidParameter","message":"Output data may contain inappropriate content."}`
+     *
+     * This is a deterministic rejection: replaying the same prompt re-triggers the same
+     * filter, so it must never enter the retry loop and should surface an actionable
+     * message to the user instead.
+     */
+    fun isContentFiltered(e: Throwable): Boolean {
+        var current: Throwable? = e
+        var depth = 0
+        while (current != null && depth++ < MAX_CAUSE_DEPTH) {
+            if (isContentFilteredMessage(current.message?.lowercase() ?: "")) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
+    }
+
+    /**
      * Check if the error indicates the LLM endpoint itself is down or
      * unreachable (outage), as opposed to a transient per-request problem.
      *
@@ -153,6 +175,11 @@ internal object LlmErrorClassifier {
      */
     fun isEndpointOutage(e: Throwable): Boolean {
         if (isContextOverflow(e)) {
+            return false
+        }
+        // Content-safety rejection is a per-request policy outcome, not endpoint
+        // unavailability; counting it would trip the breaker on legitimate outages.
+        if (isContentFiltered(e)) {
             return false
         }
         var current: Throwable? = e
@@ -192,6 +219,25 @@ internal object LlmErrorClassifier {
         return RATE_LIMIT_STATUS_REGEX.containsMatchIn(message) ||
             message.contains("rate limit") ||
             message.contains("too many requests")
+    }
+
+    /**
+     * Check if the message carries content-safety / moderation rejection indicators.
+     * "InvalidParameter" alone is too generic (many 4xx carry it), so it is only
+     * treated as content filtering when it co-occurs with a content/sensitive keyword.
+     */
+    private fun isContentFilteredMessage(message: String): Boolean {
+        if (message.contains("inappropriate content")) {
+            return true
+        }
+        if (message.contains("content policy") ||
+            message.contains("content security") ||
+            message.contains("data may contain inappropriate")
+        ) {
+            return true
+        }
+        return message.contains("invalidparameter") &&
+            (message.contains("content") || message.contains("sensitive"))
     }
 
     /**
@@ -235,3 +281,13 @@ internal object LlmErrorClassifier {
         return false
     }
 }
+
+/**
+ * Thrown when the LLM call is rejected by the provider's content safety policy
+ * (see [LlmErrorClassifier.isContentFiltered]). Carries a user-facing, actionable
+ * message while preserving the upstream cause for diagnostics. Never retried.
+ */
+internal class ContentFilteredException(
+    message: String,
+    cause: Throwable?,
+) : RuntimeException(message, cause)

@@ -198,6 +198,16 @@
             </dependency>
             <dependency>
                 <groupId>com.easy</groupId>
+                <artifactId>easyai-storage</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-storage-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
                 <artifactId>easyai-anthropic-autoconfigure</artifactId>
                 <version>${revision}</version>
             </dependency>

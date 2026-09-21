@@ -96,13 +96,16 @@ data class RagDocumentDetail(
  * @param score relevance score
  * @param createTime business time of the source document in epoch seconds
  * @param metadata metadata passed through from the source document
+ * @param bizId slice the chunk came from. Always echoed by the server, which is what makes
+ *   a single multi-slice (`bizIds`) query resolvable back to its scope client-side.
  */
 data class RagChunk(
     val content: String,
     val filePath: String?,
     val score: Double?,
     val createTime: Long?,
-    val metadata: Map<String, Any?>
+    val metadata: Map<String, Any?>,
+    val bizId: String? = null
 )
 
 /**

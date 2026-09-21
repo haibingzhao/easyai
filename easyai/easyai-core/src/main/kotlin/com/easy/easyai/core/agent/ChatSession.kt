@@ -193,6 +193,9 @@ class ChatSession(
             } else if (lastEndReason == "max_iterations") {
                 lastEndReason = "normal" // consume the reason to avoid re-triggering on subsequent resumes
                 workingMessages.add(UserMessage("[System: The previous execution reached the maximum iteration limit. Please continue the task efficiently and aim to complete it within this new execution cycle.]"))
+            } else if (lastEndReason == AgentCompletionCheck.END_REASON_STALLED) {
+                lastEndReason = "normal" // consume the reason to avoid re-triggering on subsequent resumes
+                workingMessages.add(UserMessage("[System: The previous execution stopped with todo items still open because repeating the reminder produced no progress. Ask the user whether those items should be worked on now, or close them out.]"))
             }
         }
 

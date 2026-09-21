@@ -6,12 +6,15 @@ import { setupService } from '@/services/setup-service';
 import type { DatabaseInfo, DatabaseSetupRequest } from '@/services/setup-service';
 import { IntegrationsTab } from '@/components/settings/IntegrationsTab';
 import { RagTab } from '@/components/settings/RagTab';
+import { StorageTab } from '@/components/settings/StorageTab';
+import { MediaTab } from '@/components/settings/MediaTab';
 import { i18n } from '@/utils/i18n';
 import {
   User,
   Settings,
   Info,
   Database,
+  HardDrive,
   Loader2,
   CheckCircle2,
   AlertCircle,
@@ -34,6 +37,8 @@ const menuItems: MenuItem[] = [
   { id: 'integrations', label: 'Integrations', icon: <Globe className="w-4 h-4" /> },
   { id: 'rag', label: 'RAG', icon: <Layers className="w-4 h-4" /> },
   { id: 'database', label: 'Database', icon: <Database className="w-4 h-4" /> },
+  { id: 'storage', label: 'Storage', icon: <HardDrive className="w-4 h-4" /> },
+  { id: 'media', label: 'Media', icon: <Sparkles className="w-4 h-4" /> },
   { id: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
 ];
 
@@ -85,6 +90,8 @@ export const SettingsPage: React.FC = () => {
         {activeTab === 'integrations' && <IntegrationsTab />}
         {activeTab === 'rag' && <RagTab />}
         {activeTab === 'database' && <DatabaseTab />}
+        {activeTab === 'storage' && <StorageTab />}
+        {activeTab === 'media' && <MediaTab />}
         {activeTab === 'about' && <AboutTab />}
       </main>
     </div>

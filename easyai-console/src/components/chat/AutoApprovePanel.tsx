@@ -6,6 +6,7 @@ import {
   Globe,
   Plug,
   Loader2,
+  Sparkles,
 } from 'lucide-react';
 import { useProjectStore } from '@/services/stores/project-store';
 import {
@@ -13,6 +14,8 @@ import {
   updatePermissionSetting,
 } from '@/services/permission-service';
 import type { PermissionSettingsDto } from '@/types/permission';
+import { modelConfigService } from '@/services/model-config-service';
+import type { ModelProviderConfig } from '@/types/settings';
 import { MultiSelectDropdown } from './MultiSelectDropdown';
 import { FileBrowserDropdown } from './FileBrowserDropdown';
 import { i18n } from '@/utils/i18n';
@@ -90,6 +93,8 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
   const [savingKeys, setSavingKeys] = useState<Set<string>>(new Set());
   /** Tracks which list sections are expanded (checkbox toggles expand/collapse). */
   const [expandedLists, setExpandedLists] = useState<Set<string>>(new Set());
+  /** User's saved model provider configs for the AI risk check dropdown. */
+  const [modelConfigs, setModelConfigs] = useState<ModelProviderConfig[]>([]);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -121,6 +126,18 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
     })();
   }, [currentProjectId]);
 
+  // ---- Load model configs for the AI risk check dropdown (non-blocking) ----
+  useEffect(() => {
+    (async () => {
+      try {
+        const configs = await modelConfigService.getUserConfigurations();
+        setModelConfigs(configs);
+      } catch {
+        // Dropdown stays empty; AI check simply cannot be enabled.
+      }
+    })();
+  }, []);
+
   // ---- Close on outside click / escape ----
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -146,7 +163,7 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
 
   // ---- Debounced API call ----
   const debouncedUpdate = useCallback(
-    (key: string, value: boolean | string[]) => {
+    (key: string, value: boolean | string[] | string | null) => {
       console.log('[AutoApprovePanel] debouncedUpdate called:', { key, value, currentProjectId });
       if (!currentProjectId) {
         console.warn('[AutoApprovePanel] debouncedUpdate: currentProjectId is null, skipping');
@@ -269,6 +286,17 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
       if (!settings) return;
       setSettings((prev) => (prev ? { ...prev, [key]: list } : prev));
       debouncedUpdate(key, list);
+    },
+    [settings, debouncedUpdate],
+  );
+
+  // ---- Select the AI risk check model (null = disabled) ----
+  const handleAiModelChange = useCallback(
+    (value: string) => {
+      if (!settings) return;
+      const modelId: string | null = value || null;
+      setSettings((prev) => (prev ? { ...prev, aiCheckModelId: modelId } : prev));
+      debouncedUpdate('aiCheckModelId', modelId);
     },
     [settings, debouncedUpdate],
   );
@@ -446,7 +474,34 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
           <BoolCheckbox settingKey="useBrowser" checked={settings.useBrowser} label={i18n('允许使用浏览器')} />
         </section>
 
-        {/* ---- 5. MCP Services ---- */}
+        {/* ---- 5. AI Risk Check ---- */}
+        <section>
+          <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+            <Sparkles className="w-4 h-4" />
+            {i18n('AI 风险检查')}
+          </div>
+          <div className="flex items-center gap-2 py-1">
+            <select
+              value={settings.aiCheckModelId ?? ''}
+              disabled={settings.executeAllCommands || modelConfigs.length === 0}
+              onChange={(e) => handleAiModelChange(e.target.value)}
+              className="flex-1 text-sm bg-background border border-border rounded px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="">{i18n('不开启')}</option>
+              {modelConfigs.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+            {isSaving('aiCheckModelId') && (
+              <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground ml-1">
+            {i18n('选择模型后，需要确认的命令先由 AI 判断风险，无风险则自动放行，有风险再人工确认')}
+          </p>
+        </section>
+
+        {/* ---- 6. MCP Services ---- */}
         <section>
           <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
             <Plug className="w-4 h-4" />

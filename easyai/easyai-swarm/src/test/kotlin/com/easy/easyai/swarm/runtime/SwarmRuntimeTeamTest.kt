@@ -567,12 +567,14 @@ class SwarmRuntimeTeamTest {
 
         private fun makeInput(
             messages: List<com.easy.easyai.core.model.EasyAiMessage>,
-            sessionId: String? = "test-session"
+            sessionId: String? = "test-session",
+            nudgeAttempt: Int = 0
         ): CompletionCheckInput {
             return CompletionCheckInput(
                 agentContext = AgentContext(agentId = "test-member", sessionId = sessionId),
                 transcript = messages,
-                turnId = 1
+                turnId = 1,
+                nudgeAttempt = nudgeAttempt
             )
         }
 
@@ -621,17 +623,17 @@ class SwarmRuntimeTeamTest {
         }
 
         @Test
-        fun `returns Done after max retries exceeded`() = runBlocking {
+        fun `returns Done once the loop ledger reports the retry budget as spent`() = runBlocking {
             val ref = AtomicReference<EscalationResult?>(null)
             val check = EscalationCompletionCheck(ref, maxRetries = 1)
-            val input = makeInput(listOf(assistantMsg("I am BLOCKED")))
+            val messages = listOf(assistantMsg("I am BLOCKED"))
 
-            // First call: Continue
-            val first = check.check(input)
+            // First nudge of the run: nothing tried yet -> Continue
+            val first = check.check(makeInput(messages, nudgeAttempt = 0))
             assertTrue(first is CompletionCheckResult.Continue)
 
-            // Second call: Done (max retries exceeded)
-            val second = check.check(input)
+            // The loop's per-run ledger reports the budget as spent -> Done
+            val second = check.check(makeInput(messages, nudgeAttempt = 1))
             assertEquals(CompletionCheckResult.Done, second)
         }
 

@@ -47,7 +47,7 @@ Parameters:
         patternKeys = listOf("command", "cmd")
     )
     override val permissionEvaluator = ToolPermissionEvaluator { ctx ->
-        ctx.sharedEvaluator.evaluateShellPermission(ctx.rules, ctx.projectPath, ctx.arguments)
+        ctx.sharedEvaluator.evaluateShellPermission(ctx.rules, ctx.projectPath, ctx.arguments, ctx.userId)
     }
     override val defaultPermissionRules = listOf(
         PermissionRule("shell.safe", "*", PermissionAction.ALLOW),

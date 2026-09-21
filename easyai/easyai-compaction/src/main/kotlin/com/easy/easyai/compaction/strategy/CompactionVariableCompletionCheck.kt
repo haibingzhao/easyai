@@ -5,7 +5,6 @@ import com.easy.easyai.core.agent.CompletionCheckInput
 import com.easy.easyai.core.agent.CompletionCheckResult
 import org.slf4j.LoggerFactory
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Completion check that ensures the compaction agent calls update_variable before finishing.
@@ -23,7 +22,8 @@ class CompactionVariableCompletionCheck(
 ) : AgentCompletionCheck {
 
     private val logger = LoggerFactory.getLogger(javaClass)
-    private val retryCounter = AtomicInteger(0)
+
+    override fun maxNudges(): Int = maxRetries
 
     override suspend fun check(input: CompletionCheckInput): CompletionCheckResult {
         // Tool was already called — done
@@ -31,14 +31,13 @@ class CompactionVariableCompletionCheck(
             return CompletionCheckResult.Done
         }
 
-        // Check retry budget
-        val retries = retryCounter.getAndIncrement()
-        if (retries >= maxRetries) {
+        // Check retry budget — the attempt count is kept by the loop's per-run ledger
+        if (input.nudgeAttempt >= maxRetries) {
             logger.warn("update_variable not called after {} retries, proceeding without variable extraction", maxRetries)
             return CompletionCheckResult.Done
         }
 
-        logger.info("update_variable not yet called, nudging compaction agent (attempt {}/{})", retries + 1, maxRetries)
+        logger.info("update_variable not yet called, nudging compaction agent (attempt {}/{})", input.nudgeAttempt + 1, maxRetries)
         return CompletionCheckResult.Continue(prompt = NUDGE_PROMPT)
     }
 

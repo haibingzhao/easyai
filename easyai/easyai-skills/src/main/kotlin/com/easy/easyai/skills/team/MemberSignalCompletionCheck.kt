@@ -23,7 +23,8 @@ class MemberSignalCompletionCheck(
 ) : AgentCompletionCheck {
 
     private val logger = LoggerFactory.getLogger(javaClass)
-    private var retries = 0
+
+    override fun maxNudges(): Int = maxRetries
 
     override suspend fun check(input: CompletionCheckInput): CompletionCheckResult {
         // Signal already recorded via tool call — done
@@ -42,15 +43,16 @@ class MemberSignalCompletionCheck(
             return CompletionCheckResult.Done
         }
 
-        // Output has block signal but tool was NOT called — nudge the member
-        if (retries >= maxRetries) {
+        // Output has block signal but tool was NOT called — nudge the member.
+        // The attempt count comes from the loop's per-run ledger, keeping this check stateless
+        // (an instance field would also be unsafe if this check were ever shared across members).
+        if (input.nudgeAttempt >= maxRetries) {
             logger.warn("Block signal detected but '{}' not called after {} retries, proceeding", toolName, maxRetries)
             return CompletionCheckResult.Done
         }
 
-        retries++
         logger.info("Block signal detected in member output but '{}' not called, nudging (attempt {}/{})",
-            toolName, retries, maxRetries)
+            toolName, input.nudgeAttempt + 1, maxRetries)
 
         return CompletionCheckResult.Continue(prompt =
             "Your response indicates you are blocked or unable to proceed, but you did not use the '$toolName' tool. " +
