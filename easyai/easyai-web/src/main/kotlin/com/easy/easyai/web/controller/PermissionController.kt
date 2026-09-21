@@ -146,7 +146,8 @@ class PermissionController(
                 useMcp = settings.useMcp,
                 readOtherPaths = settings.readOtherPaths,
                 writeOtherPaths = settings.writeOtherPaths,
-                otherCommands = settings.otherCommands
+                otherCommands = settings.otherCommands,
+                aiCheckModelId = settings.aiCheckModelId
             )
         }
     }

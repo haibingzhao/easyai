@@ -286,7 +286,9 @@ sealed interface ChatStreamEvent {
         val pattern: String,
         val arguments: Map<String, Any?> = emptyMap(),
         val subAgentToolCallId: String? = null,
-        val subAgentName: String? = null
+        val subAgentName: String? = null,
+        /** Optional explanation shown to the user, e.g. AI risk assessment reason. */
+        val reason: String? = null
     ) : ChatStreamEvent {
         override val type: String get() = "permission_request"
     }

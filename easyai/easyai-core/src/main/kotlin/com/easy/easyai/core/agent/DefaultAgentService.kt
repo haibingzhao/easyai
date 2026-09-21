@@ -88,7 +88,8 @@ class DefaultAgentService(
                 toolName = context.toolName,
                 arguments = context.arguments,
                 projectId = context.projectId,
-                projectPath = context.projectPath
+                projectPath = context.projectPath,
+                userId = context.userId
             )
             return when (result.action) {
                 PermissionAction.ALLOW -> BeforeToolCallResult.Allow
@@ -108,7 +109,8 @@ class DefaultAgentService(
                             pattern = result.pattern,
                             toolCallId = context.toolCallId,
                             toolName = context.toolName,
-                            arguments = context.arguments
+                            arguments = context.arguments,
+                            reason = result.reason
                         )
                     }
                 }

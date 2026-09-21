@@ -2,8 +2,12 @@ package com.easy.easyai.core.permission
 
 import com.easy.easyai.core.tool.ToolBuilder
 import com.easy.easyai.core.tool.ToolFactory
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Core permission service that evaluates tool call permissions and manages rules.
@@ -17,7 +21,8 @@ import java.nio.file.Path
  */
 class PermissionService(
     private val ruleStore: PermissionRuleStore,
-    private val toolFactory: ToolFactory? = null
+    private val toolFactory: ToolFactory? = null,
+    private val aiRiskChecker: ShellAiRiskChecker? = null
 ) : SharedPermissionEvaluator {
     private val logger = LoggerFactory.getLogger(javaClass)
 
@@ -29,6 +34,17 @@ class PermissionService(
     private var builderCache: Map<String, ToolBuilder>? = null
 
     /**
+     * LRU cache of AI risk check results, keyed by command + rules digest.
+     * Prevents repeated LLM calls for the same command against the same config.
+     * Access is synchronized: cache hits are rare enough that contention is negligible.
+     */
+    private val aiRiskCache = object : LinkedHashMap<String, AiRiskResult>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, AiRiskResult>): Boolean {
+            return size > MAX_AI_RISK_CACHE_ENTRIES
+        }
+    }
+
+    /**
      * Evaluate permission for a tool call with project path context.
      * Delegates to the ToolBuilder's permissionEvaluator.
      *
@@ -36,13 +52,15 @@ class PermissionService(
      * @param projectPath The project root path for project-scoped checks
      * @param toolName The name of the tool being called
      * @param arguments The tool call arguments
+     * @param userId Session owner, used for user-scoped lookups (AI risk check model config)
      * @return The permission check result
      */
     suspend fun evaluateWithContext(
         projectId: String,
         projectPath: Path?,
         toolName: String,
-        arguments: Map<String, Any?>
+        arguments: Map<String, Any?>,
+        userId: String? = null
     ): PermissionCheckResult {
         val builder = findBuilder(toolName)
         if (builder == null) {
@@ -62,7 +80,7 @@ class PermissionService(
         val defaults = builder.defaultPermissionRules
         val rules = defaults + userRules
 
-        val ctx = PermissionEvalContext(rules, projectPath, arguments, this)
+        val ctx = PermissionEvalContext(rules, projectPath, arguments, this, userId)
         val result = evaluator.evaluate(ctx)
         if(result.action == PermissionAction.DENY) {
             logger.debug("Permission check DENY for tool '{}', project '{}', arguments: {}", toolName, projectId, arguments)
@@ -82,7 +100,8 @@ class PermissionService(
         toolName: String,
         arguments: Map<String, Any?>,
         projectId: String?,
-        projectPath: Path?
+        projectPath: Path?,
+        userId: String? = null
     ): PermissionCheckResult {
         if (projectId == null) {
             logger.debug("No projectId in BeforeToolCallContext, allowing tool call {} ({})", toolName, toolCallId)
@@ -92,7 +111,7 @@ class PermissionService(
                 pattern = extractPattern(toolName, arguments)
             )
         }
-        return evaluateWithContext(projectId, projectPath, toolName, arguments)
+        return evaluateWithContext(projectId, projectPath, toolName, arguments, userId)
     }
 
     /**
@@ -140,7 +159,7 @@ class PermissionService(
      * Update a single permission setting for a project.
      * Adds or removes rules to match the desired setting value.
      */
-    suspend fun updateSetting(projectId: String, key: String, value: Any) {
+    suspend fun updateSetting(projectId: String, key: String, value: Any?) {
         val currentSettings = getEffectiveSettings(projectId)
         val updatedSettings = applySettingUpdate(currentSettings, key, value)
         val newRules = DefaultPermissionSettings.toUserRules(updatedSettings)
@@ -224,11 +243,15 @@ class PermissionService(
     /**
      * Evaluate shell command permission.
      * Uses SafeCommandDetector for classification, then checks rules.
+     * When static rules fall through to ASK and the project has opted in via a
+     * "shell.ai" ALLOW rule (pattern = model config id), an AI risk check runs
+     * first: safe commands are allowed, risky ones keep the ASK with the AI's reason.
      */
-    override fun evaluateShellPermission(
+    override suspend fun evaluateShellPermission(
         rules: List<PermissionRule>,
         projectPath: Path?,
-        arguments: Map<String, Any?>
+        arguments: Map<String, Any?>,
+        userId: String?
     ): PermissionCheckResult {
         val command = extractCommand(arguments)
         val pattern = command ?: "*"
@@ -242,8 +265,7 @@ class PermissionService(
         // 2. Classify the command
         var isUnsafeCommand = false
         if (command != null) {
-            val safety = SafeCommandDetector.classify(command)
-            when (safety) {
+            when (val safety = SafeCommandDetector.classify(command)) {
                 SafeCommandDetector.CommandSafety.SAFE_READ, SafeCommandDetector.CommandSafety.SAFE_WRITE -> {
                     // Check shell.safe rule
                     val safeResult = PermissionEvaluator.evaluate("shell.safe", "*", rules)
@@ -281,9 +303,63 @@ class PermissionService(
             }
         }
 
-        // 3. Default: ASK — use the correct permission type based on command safety
+        // 3. Default: ASK — but run an AI risk check first when opted in via "shell.ai" rule.
         val defaultPermission = if (isUnsafeCommand) "shell.other" else "shell.safe"
+        val aiModelConfigId = rules
+            .lastOrNull { it.permission == "shell.ai" && it.action == PermissionAction.ALLOW }
+            ?.pattern
+        if (aiRiskChecker != null && !aiModelConfigId.isNullOrBlank() && command != null) {
+            // Code that never appears in the command text can only yield an "unknown"
+            // verdict, so ask a human without paying for a round trip.
+            if (InterpreterScriptDetector.loadsInvisibleScript(command)) {
+                logger.debug("AI risk check skipped for '{}': executed code is not visible", command)
+                return PermissionCheckResult(
+                    PermissionAction.ASK,
+                    defaultPermission,
+                    pattern,
+                    INVISIBLE_SCRIPT_REASON
+                )
+            }
+            val aiResult = checkAiRisk(command, projectPath, userId, aiModelConfigId, rules)
+            if (aiResult.allowed) {
+                return PermissionCheckResult(PermissionAction.ALLOW, "shell.ai", pattern, aiResult.reason)
+            }
+            return PermissionCheckResult(PermissionAction.ASK, defaultPermission, pattern, aiResult.reason)
+        }
         return PermissionCheckResult(PermissionAction.ASK, defaultPermission, pattern)
+    }
+
+    /**
+     * Run the AI risk check with caching and safe fallback.
+     * Any failure (timeout, LLM error, unavailable checker) yields a
+     * non-allowed result so the caller falls back to the regular ASK flow.
+     */
+    private suspend fun checkAiRisk(
+        command: String,
+        projectPath: Path?,
+        userId: String?,
+        modelConfigId: String,
+        rules: List<PermissionRule>
+    ): AiRiskResult {
+        val checker = aiRiskChecker ?: return AiRiskResult(allowed = false)
+        val cacheKey = "$command|$modelConfigId|${rules.hashCode()}"
+        synchronized(aiRiskCache) { aiRiskCache[cacheKey] }?.let { return it }
+
+        val result = try {
+            withTimeout(AI_CHECK_TIMEOUT_MS.milliseconds) {
+                checker.checkRisk(command, projectPath, userId, modelConfigId, rules)
+            }
+        } catch (e: TimeoutCancellationException) {
+            logger.warn("AI risk check timed out for command '{}'", command)
+            AiRiskResult(allowed = false, reason = "AI 检查超时")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("AI risk check failed for command '{}': {}", command, e.message)
+            AiRiskResult(allowed = false, reason = "AI 检查不可用")
+        }
+        synchronized(aiRiskCache) { aiRiskCache[cacheKey] = result }
+        return result
     }
 
     /**
@@ -393,7 +469,7 @@ class PermissionService(
     /**
      * Apply a setting update to produce new settings.
      */
-    private fun applySettingUpdate(current: DefaultPermissionSettings.Settings, key: String, value: Any): DefaultPermissionSettings.Settings {
+    private fun applySettingUpdate(current: DefaultPermissionSettings.Settings, key: String, value: Any?): DefaultPermissionSettings.Settings {
         return when (key) {
             "readFileProject" -> current.copy(readFileProject = value as Boolean)
             "readFileAll" -> current.copy(readFileAll = value as Boolean)
@@ -406,12 +482,23 @@ class PermissionService(
             "readOtherPaths" -> current.copy(readOtherPaths = @Suppress("UNCHECKED_CAST") (value as List<String>))
             "writeOtherPaths" -> current.copy(writeOtherPaths = @Suppress("UNCHECKED_CAST") (value as List<String>))
             "otherCommands" -> current.copy(otherCommands = @Suppress("UNCHECKED_CAST") (value as List<String>))
+            "aiCheckModelId" -> current.copy(aiCheckModelId = value as? String)
             else -> current
         }
     }
 
     companion object {
         private val DEFAULT_PATTERN_KEYS = listOf("command", "cmd", "path", "file", "filepath", "file_path", "url")
+
+        /** Timeout for a single AI risk check LLM call. */
+        private const val AI_CHECK_TIMEOUT_MS = 15_000L
+
+        /** Upper bound of cached AI risk check results. */
+        private const val MAX_AI_RISK_CACHE_ENTRIES = 200
+
+        /** Verdict reason used when the executed code cannot be shown to the model. */
+        private const val INVISIBLE_SCRIPT_REASON =
+            "命令通过解释器执行脚本或模块，其内容未参与 AI 判定，需人工确认"
 
         /** MCP tool names follow the pattern "serverName__toolName" (double underscore separator). */
         internal fun isMcpTool(toolName: String): Boolean = toolName.contains("__")

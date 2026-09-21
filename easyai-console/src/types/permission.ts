@@ -48,6 +48,8 @@ export interface PermissionSettingsDto {
   readOtherPaths: string[];
   writeOtherPaths: string[];
   otherCommands: string[];
+  /** Model config id for AI shell risk checks; null disables the feature. */
+  aiCheckModelId: string | null;
 }
 
 /**
@@ -65,5 +67,5 @@ export interface FileNodeDto {
  */
 export interface UpdateSettingRequest {
   key: string;
-  value: boolean | string[];
+  value: boolean | string[] | string | null;
 }

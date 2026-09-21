@@ -12,7 +12,8 @@ data class BeforeToolCallContext(
     val arguments: Map<String, Any?>,
     val projectId: String? = null,
     val projectPath: Path? = null,
-    val parentAgentId: String? = null
+    val parentAgentId: String? = null,
+    val userId: String? = null
 )
 
 sealed interface BeforeToolCallResult {
@@ -31,7 +32,9 @@ sealed interface BeforeToolCallResult {
         val pattern: String,
         val toolCallId: String,
         val toolName: String,
-        val arguments: Map<String, Any?>
+        val arguments: Map<String, Any?>,
+        /** Optional explanation, e.g. AI risk assessment reason. */
+        val reason: String? = null
     ) : BeforeToolCallResult
 }
 

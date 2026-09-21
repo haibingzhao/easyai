@@ -200,7 +200,9 @@ data class PermissionRequestEvent(
     val arguments: Map<String, Any?>,
     val sessionId: String,
     val subAgentToolCallId: String? = null,
-    val subAgentName: String? = null
+    val subAgentName: String? = null,
+    /** Optional explanation shown to the user, e.g. AI risk assessment reason. */
+    val reason: String? = null
 ) : AgentEvent {
     override val type: String get() = "permission_request"
 }

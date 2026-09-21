@@ -11,7 +11,7 @@ import java.nio.file.Path
  * the appropriate evaluator — PermissionService requires no changes.
  */
 fun interface ToolPermissionEvaluator {
-    fun evaluate(context: PermissionEvalContext): PermissionCheckResult
+    suspend fun evaluate(context: PermissionEvalContext): PermissionCheckResult
 }
 
 /**
@@ -21,12 +21,14 @@ fun interface ToolPermissionEvaluator {
  * @property projectPath Project root path for project-scoped checks
  * @property arguments Tool call arguments for pattern extraction
  * @property sharedEvaluator Hook to PermissionService's shared evaluation utilities
+ * @property userId Owner of the session, used for user-scoped lookups (e.g. AI risk check model config)
  */
 data class PermissionEvalContext(
     val rules: List<PermissionRule>,
     val projectPath: Path?,
     val arguments: Map<String, Any?>,
-    val sharedEvaluator: SharedPermissionEvaluator
+    val sharedEvaluator: SharedPermissionEvaluator,
+    val userId: String? = null
 )
 
 /**
@@ -42,10 +44,11 @@ interface SharedPermissionEvaluator {
         read: Boolean
     ): PermissionCheckResult
 
-    fun evaluateShellPermission(
+    suspend fun evaluateShellPermission(
         rules: List<PermissionRule>,
         projectPath: Path?,
-        arguments: Map<String, Any?>
+        arguments: Map<String, Any?>,
+        userId: String? = null
     ): PermissionCheckResult
 
     fun evaluateSimplePermission(

@@ -58,7 +58,9 @@ data class PermissionSettingsDto(
     val useMcp: Boolean,
     val readOtherPaths: List<String>,
     val writeOtherPaths: List<String>,
-    val otherCommands: List<String>
+    val otherCommands: List<String>,
+    /** Model config id for AI shell risk checks; null disables the feature. */
+    val aiCheckModelId: String? = null
 )
 
 /**
@@ -66,7 +68,8 @@ data class PermissionSettingsDto(
  */
 data class UpdateSettingRequest(
     val key: String,
-    val value: Any
+    /** Nullable: e.g. aiCheckModelId accepts null to disable the AI check. */
+    val value: Any?
 )
 
 /**

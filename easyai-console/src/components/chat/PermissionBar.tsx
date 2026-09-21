@@ -139,6 +139,12 @@ export const PermissionBar: React.FC = () => {
               {pendingPermission.pattern}
             </p>
           )}
+          {pendingPermission.reason && (
+            <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+              <span className="font-medium">{i18n('AI 风险评估')}{': '}</span>
+              {pendingPermission.reason}
+            </p>
+          )}
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               onClick={() => handleAllow(false)}
