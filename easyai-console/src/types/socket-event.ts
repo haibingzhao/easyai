@@ -229,6 +229,8 @@ export interface PermissionRequestEvent extends BaseEvent {
   arguments?: Record<string, unknown>;
   subAgentToolCallId?: string;
   subAgentName?: string;
+  /** Optional explanation shown to the user, e.g. AI risk assessment reason. */
+  reason?: string;
 }
 
 export interface MessageEndEvent extends BaseEvent {

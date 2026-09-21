@@ -138,16 +138,25 @@ class TaskCompletionReportTest {
     @Nested
     inner class `TaskCompletionReportCheck` {
 
+        /** The check is stateless: how far along the run is comes from [CompletionCheckInput.nudgeAttempt]. */
+        private fun checkInput(
+            sessionKey: String = "swarm-worker-test",
+            turnId: Int = 1,
+            nudgeAttempt: Int = 0,
+            transcript: List<com.easy.easyai.core.model.EasyAiMessage> = emptyList(),
+        ) = CompletionCheckInput(
+            agentContext = agentContext(sessionKey),
+            transcript = transcript,
+            turnId = turnId,
+            nudgeAttempt = nudgeAttempt,
+        )
+
         @Test
         fun `returns Done when tool was already called`(): Unit = runBlocking {
             val ref = AtomicReference(TaskReportResult(TaskReportStatus.SUCCESS, ""))
             val check = TaskCompletionReportCheck(ref)
 
-            val result = check.check(CompletionCheckInput(
-                agentContext = agentContext(),
-                transcript = emptyList(),
-                turnId = 1,
-            ))
+            val result = check.check(checkInput())
 
             assertIs<CompletionCheckResult.Done>(result)
         }
@@ -157,10 +166,8 @@ class TaskCompletionReportTest {
             val ref = AtomicReference<TaskReportResult>()
             val check = TaskCompletionReportCheck(ref, maxRetries = 1)
 
-            val result = check.check(CompletionCheckInput(
-                agentContext = agentContext(),
+            val result = check.check(checkInput(
                 transcript = listOf(AssistantMessage(content = listOf(TextContent("I finished the task.")))),
-                turnId = 1,
             ))
 
             assertIs<CompletionCheckResult.Continue>(result)
@@ -168,51 +175,31 @@ class TaskCompletionReportTest {
         }
 
         @Test
-        fun `returns Done after max retries exhausted`(): Unit = runBlocking {
+        fun `returns Done once the loop ledger reports the retry budget as spent`(): Unit = runBlocking {
             val ref = AtomicReference<TaskReportResult>()
             val check = TaskCompletionReportCheck(ref, maxRetries = 1)
-            val sessionKey = "swarm-worker-test"
 
-            // First call — Continue (retry 0/1)
-            check.check(CompletionCheckInput(
-                agentContext = agentContext(sessionKey),
-                transcript = emptyList(),
-                turnId = 1,
-            ))
+            // First nudge of the run: the ledger reports nothing tried yet
+            assertIs<CompletionCheckResult.Continue>(check.check(checkInput(nudgeAttempt = 0)))
 
-            // Second call — Done (retry 1/1 exhausted)
-            val result = check.check(CompletionCheckInput(
-                agentContext = agentContext(sessionKey),
-                transcript = emptyList(),
-                turnId = 2,
-            ))
-
-            assertIs<CompletionCheckResult.Done>(result)
+            // The ledger reports the budget as spent
+            assertIs<CompletionCheckResult.Done>(check.check(checkInput(turnId = 2, nudgeAttempt = 1)))
         }
 
         @Test
         fun `returns Done when tool called after nudge`(): Unit = runBlocking {
             val ref = AtomicReference<TaskReportResult>()
             val check = TaskCompletionReportCheck(ref, maxRetries = 2)
-            val sessionKey = "swarm-worker-test"
 
             // First call — Continue (tool not called)
-            val first = check.check(CompletionCheckInput(
-                agentContext = agentContext(sessionKey),
-                transcript = emptyList(),
-                turnId = 1,
-            ))
+            val first = check.check(checkInput(nudgeAttempt = 0))
             assertIs<CompletionCheckResult.Continue>(first)
 
             // Simulate tool call
             ref.set(TaskReportResult(TaskReportStatus.FAILED, "Could not fetch data"))
 
             // Second call — Done (tool was called)
-            val second = check.check(CompletionCheckInput(
-                agentContext = agentContext(sessionKey),
-                transcript = emptyList(),
-                turnId = 2,
-            ))
+            val second = check.check(checkInput(turnId = 2, nudgeAttempt = 1))
             assertIs<CompletionCheckResult.Done>(second)
         }
     }

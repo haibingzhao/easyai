@@ -5,7 +5,6 @@ import com.easy.easyai.core.agent.CompletionCheckInput
 import com.easy.easyai.core.agent.CompletionCheckResult
 import com.easy.easyai.core.model.AssistantMessage
 import org.slf4j.LoggerFactory
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Completion check that validates the final assistant output against a JSON Schema.
@@ -13,6 +12,15 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * When validation fails, injects a retry prompt (up to [maxRetries] times) to guide
  * the LLM to produce valid JSON output.
+ *
+ * In multi-turn mode ([com.easy.easyai.core.agent.AgentContext.outputSchemaMultiTurn]) the
+ * structured-output iteration is skipped when the tool-calling phase already emitted
+ * schema-conforming JSON — see [check].
+ *
+ * Stateless: the loop's per-run nudge ledger supplies [CompletionCheckInput.nudgeAttempt],
+ * which doubles as "the structured-output phase has already been forced" in multi-turn mode.
+ * Being run-scoped is also a fix over the previous session-keyed counter map, whose markers
+ * survived an abnormal termination and leaked into the next run of the same session.
  */
 class OutputSchemaCompletionCheck(
     private val validator: OutputSchemaValidator,
@@ -20,44 +28,41 @@ class OutputSchemaCompletionCheck(
 ) : AgentCompletionCheck {
 
     private val logger = LoggerFactory.getLogger(javaClass)
-    private val retryCounters = ConcurrentHashMap<String, Int>()
 
-    /**
-     * Clears stale state for the given session.
-     * Called at the start of each agent loop run to prevent leaked state
-     * from a previous abnormal termination (abort, cancellation, etc.).
-     */
-    fun resetSession(sessionId: String) {
-        retryCounters.remove(sessionId)
-        retryCounters.remove("$sessionId-forced")
-    }
+    /** One nudge for the forced structured-output phase, plus the validation retries. */
+    override fun maxNudges(): Int = maxRetries + 1
 
     override suspend fun check(input: CompletionCheckInput): CompletionCheckResult {
         val schema = input.agentContext.outputSchema
         val sessionKey = input.agentContext.sessionId
 
         if (schema == null || sessionKey == null) {
-            // Clean up any stale counters
-            if (sessionKey != null) retryCounters.remove(sessionKey)
             return CompletionCheckResult.Done
         }
 
-        // Multi-turn mode: first trigger → force a structured output iteration
-        if (input.agentContext.outputSchemaMultiTurn) {
-            val forcedKey = "$sessionKey-forced"
-            if (retryCounters[forcedKey] == null) {
-                retryCounters[forcedKey] = 1
-                logger.info("Multi-turn output schema: triggering structured output phase for session {}", sessionKey)
-                return CompletionCheckResult.Continue(prompt = buildFinalOutputPrompt(schema))
+        // Last assistant text, resolved once: shared by the multi-turn fast path below
+        // and the regular validation at the end of this function.
+        val text = (input.transcript.lastOrNull { it is AssistantMessage } as? AssistantMessage)?.text().orEmpty()
+
+        // Multi-turn mode: the tool-calling phase is free-form, so a dedicated structured-output
+        // iteration is normally forced afterwards. Skip that iteration when the phase already
+        // produced schema-conforming output: it saves a full LLM round-trip, and it keeps a usable
+        // result on gateways whose model rejects API-level structured output (HTTP 400), which
+        // would otherwise abort the run and discard the valid output.
+        if (input.agentContext.outputSchemaMultiTurn && input.nudgeAttempt == 0) {
+            if (text.isNotBlank() && validator.validateOutput(schema, text) is ValidationResult.Valid) {
+                logger.info(
+                    "Multi-turn output schema: tool-phase output already conforms, " +
+                        "skipping structured output phase for session {}",
+                    sessionKey
+                )
+                return CompletionCheckResult.Done
             }
-            // Already in structured phase: fall through to normal validation (keep marker for cleanup)
+            logger.info("Multi-turn output schema: triggering structured output phase for session {}", sessionKey)
+            return CompletionCheckResult.Continue(prompt = buildFinalOutputPrompt(schema))
         }
+        // nudgeAttempt > 0 in multi-turn mode: already forced — fall through to validation
 
-        // Find the last AssistantMessage in transcript
-        val lastAssistant = input.transcript.lastOrNull { it is AssistantMessage } as? AssistantMessage
-            ?: return CompletionCheckResult.Done
-
-        val text = lastAssistant.text()
         if (text.isBlank()) return CompletionCheckResult.Done
 
         val result = validator.validateOutput(schema, text)
@@ -65,22 +70,17 @@ class OutputSchemaCompletionCheck(
         return when {
             result is ValidationResult.Valid -> {
                 logger.debug("Output schema validation passed for session {}", sessionKey)
-                retryCounters.remove(sessionKey)
-                retryCounters.remove("$sessionKey-forced")
                 CompletionCheckResult.Done
             }
-            (retryCounters[sessionKey] ?: 0) >= maxRetries -> {
+            input.nudgeAttempt >= maxRetries -> {
                 logger.warn(
                     "Output schema validation failed after {} retries for session {}, returning original result",
                     maxRetries, sessionKey
                 )
-                retryCounters.remove(sessionKey)
-                retryCounters.remove("$sessionKey-forced")
                 CompletionCheckResult.Done  // Exceeded retries, return original
             }
             else -> {
-                val attempt = (retryCounters[sessionKey] ?: 0) + 1
-                retryCounters[sessionKey] = attempt
+                val attempt = input.nudgeAttempt + 1
                 val errors = (result as ValidationResult.Invalid).errors
                 logger.info(
                     "Output schema validation failed (attempt {}/{}) for session {}: {}",

@@ -26,7 +26,7 @@ data class AgentEndEvent(
     val sessionId: String,
     val reason: String,
     val messages: List<EasyAiMessage> = emptyList(),
-    /** Why the agent loop ended: "normal" | "max_iterations" */
+    /** Why the agent loop ended: "normal" | "max_iterations" | "cancelled" | "error" | "completion_check_stalled" | "input_schema_validation_failed" */
     val endReason: String = "normal"
 ) : AgentEvent {
     override val type: String get() = "agent_end"

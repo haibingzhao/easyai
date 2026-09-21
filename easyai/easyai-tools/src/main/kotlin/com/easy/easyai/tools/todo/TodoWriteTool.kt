@@ -105,6 +105,9 @@ class TodoWriteTool(
     }
 
     companion object {
+        /** Canonical tool name; also the key completion checks use to detect list ownership. */
+        const val TOOL_NAME: String = "todo_write"
+
         private val objectMapper = SharedObjectMapper.instance
     }
 }
