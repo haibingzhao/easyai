@@ -1,6 +1,5 @@
 package com.easy.easyai.autoconfigure.core
 
-import com.easy.easyai.skills.SkillPromptFormat
 import org.springframework.boot.context.properties.ConfigurationProperties
 
 @ConfigurationProperties(prefix = "easyai")
@@ -25,6 +24,23 @@ data class SkillProperties(
     var paths: List<String> = emptyList(),
     var homeSkillDirs: List<String> = listOf(".agents/skills", ".easyai/skills"),
     var injectIntoSystemPrompt: Boolean = true,
-    var systemPromptFormat: SkillPromptFormat = SkillPromptFormat.CONCISE,
+    /** On-demand discovery through EasyRAG; off by default so behaviour is unchanged. */
+    var rag: SkillRagProperties = SkillRagProperties(),
+)
+
+/**
+ * Skill retrieval-index settings (`easyai.skills.rag.*`).
+ *
+ * [enabled] additionally requires `easyai.rag.enabled=true` (the index store) and
+ * `easyai.r2dbc.enabled=true` (the catalog table that owns per-user slicing); with either missing
+ * the wiring below never activates and the full skill list keeps being injected.
+ */
+data class SkillRagProperties(
+    /** Master switch: index skills per owner and let `skill_search` discover them. */
+    var enabled: Boolean = false,
+    /** Skills returned per local search; applied to each granularity slice. */
+    var searchTopK: Int = 5,
+    /** Index writes in flight during startup reconciliation; bounds pressure on the RAG pipeline. */
+    var indexConcurrency: Int = 4,
 )
 

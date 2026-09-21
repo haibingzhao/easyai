@@ -34,9 +34,11 @@ export const SkillSelector: React.FC<SkillSelectorProps> = ({ selectedSkills, on
         <div className="space-y-2">
           {skills.map((skill) => {
             const isSelected = selectedSkills.includes(skill.name);
+            // Same-named skills of two projects must not collide as React keys or look identical.
+            const isProject = skill.scope === 'project';
             return (
               <label
-                key={skill.name}
+                key={`${skill.name}@${skill.projectPath ?? 'global'}`}
                 className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
                   disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
                 } ${
@@ -56,7 +58,12 @@ export const SkillSelector: React.FC<SkillSelectorProps> = ({ selectedSkills, on
                   <BookOpen className="w-4 h-4" />
                 </span>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium">{skill.name}</div>
+                  <div className="text-sm font-medium">
+                    {isProject && (
+                      <span className="text-xs font-normal text-muted-foreground" title={skill.projectPath || undefined}>[project] </span>
+                    )}
+                    {skill.name}
+                  </div>
                   {skill.description && (
                     <div className="text-xs text-muted-foreground">{skill.description}</div>
                   )}

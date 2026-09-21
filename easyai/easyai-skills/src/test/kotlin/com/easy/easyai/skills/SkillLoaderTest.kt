@@ -73,6 +73,38 @@ class SkillLoaderTest {
             assertEquals("test-skill", frontmatter["name"])
             assertEquals("Content", body)
         }
+
+        // H3: the delimiter must be matched on a line boundary, not by substring search. Under the old
+        // `indexOf("---", 3)` split, a value containing `---` truncated the frontmatter mid-YAML and
+        // the body started with the leftover of the value.
+        @Test
+        fun `a value containing the delimiter does not end the frontmatter`() {
+            val content = "---\nname: some---thing\ndescription: has --- inside\n---\nreal body"
+            val (frontmatter, body) = SkillLoader.extractFrontmatter(content)
+            assertEquals("some---thing", frontmatter["name"], "a `---` inside a value is content, not a fence")
+            assertEquals("has --- inside", frontmatter["description"])
+            assertEquals("real body", body)
+        }
+
+        // H3: `----` (four or more dashes) is not a fence; a substring match at offset 3 would slice
+        // through it and leave a stray `-` at the head of the body.
+        @Test
+        fun `a longer dash run is not a fence`() {
+            val content = "---\nname: x\n----\nstill frontmatter\n---\nbody"
+            val (frontmatter, body) = SkillLoader.extractFrontmatter(content)
+            // YAML treats `----` as an unparsable line, so the whole frontmatter falls back to empty;
+            // what must NOT happen is a body that starts with `-` sliced off `----`.
+            assertTrue(body == "body" || body.startsWith("still") || frontmatter.isEmpty(),
+                "a longer dash run must not be treated as a fence: fm=$frontmatter body=$body")
+        }
+
+        @Test
+        fun `an unterminated frontmatter returns the raw content as body`() {
+            val content = "---\nname: broken\nno closing fence"
+            val (frontmatter, body) = SkillLoader.extractFrontmatter(content)
+            assertTrue(frontmatter.isEmpty())
+            assertEquals(content, body)
+        }
     }
 
     @Nested

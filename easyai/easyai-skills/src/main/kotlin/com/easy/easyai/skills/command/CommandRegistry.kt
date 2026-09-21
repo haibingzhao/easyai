@@ -23,8 +23,10 @@ class DefaultCommandRegistry(
 ) : CommandRegistry {
 
     override fun resolve(name: String): CommandInfo? {
-        // 1. Try skill by name
-        skillRegistry?.get(name)?.let { return it.toCommand() }
+        // 1. Try skill by name. A slash command carries no session context, so GLOBAL is the
+        // preferred hit and any other granularity with this name is the fallback.
+        skillRegistry?.let { reg -> reg.get(name, null) ?: reg.all().firstOrNull { it.name == name } }
+            ?.let { return it.toCommand() }
 
         // 2. Try MCP "server:prompt" exact match
         if (name.contains(":")) {

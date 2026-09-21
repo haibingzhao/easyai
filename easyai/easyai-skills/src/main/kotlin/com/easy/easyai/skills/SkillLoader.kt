@@ -1,18 +1,21 @@
 package com.easy.easyai.skills
 
+import org.slf4j.LoggerFactory
 import tools.jackson.dataformat.yaml.YAMLMapper
 import tools.jackson.module.kotlin.readValue
 import java.nio.file.Path
 import kotlin.io.path.readText
-import org.slf4j.LoggerFactory
 
 /**
  * Parses SKILL.md files: extracts YAML front matter and markdown body.
  */
-object SkillLoader {
+internal object SkillLoader {
 
     private val logger = LoggerFactory.getLogger(SkillLoader::class.java)
     private val yamlMapper = YAMLMapper()
+
+    /** Frontmatter delimiter on its own line. Values may contain `---` without breaking the split. */
+    private const val FRONTMATTER_DELIMITER = "---"
 
     /**
      * Parse a SKILL.md file at the given path.
@@ -48,20 +51,26 @@ object SkillLoader {
     }
 
     /**
-     * Split content at `---` boundary, parse YAML frontmatter.
+     * Split content at a `---` line boundary, parse the YAML frontmatter.
+     *
+     * Matching is line-based: a `---` inside a value (e.g. `name: some---thing`) does not terminate
+     * the frontmatter, and a longer dash run like `----` does not leak a stray `-` into the body.
+     * The rule matches [com.easy.easyai.rag.RagSkillStore]'s chunk parser so the same document reads
+     * identically from disk and from the retrieval index.
+     *
      * Returns (frontmatter map, markdown body).
      */
     fun extractFrontmatter(content: String): Pair<Map<String, Any?>, String> {
-        val trimmed = content.trim()
-        if (!trimmed.startsWith("---")) {
+        val lines = content.lines()
+        if (lines.firstOrNull()?.trim() != FRONTMATTER_DELIMITER) {
             return emptyMap<String, Any?>() to content
         }
-        val endIndex = trimmed.indexOf("---", 3)
-        if (endIndex == -1) {
+        val endIndex = lines.drop(1).indexOfFirst { it.trim() == FRONTMATTER_DELIMITER }
+        if (endIndex < 0) {
             return emptyMap<String, Any?>() to content
         }
-        val yamlContent = trimmed.substring(3, endIndex).trim()
-        val body = trimmed.substring(endIndex + 3).trim()
+        val yamlContent = lines.subList(1, endIndex + 1).joinToString("\n").trim()
+        val body = lines.subList(endIndex + 2, lines.size).joinToString("\n").trim()
         val map: Map<String, Any?> = try {
             yamlMapper.readValue(yamlContent)
         } catch (e: Exception) {

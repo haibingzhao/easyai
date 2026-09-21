@@ -4,7 +4,12 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.io.path.createDirectories
+import kotlin.io.path.deleteIfExists
+import kotlin.io.path.writeText
 
 class SkillRegistryTest {
 
@@ -31,20 +36,27 @@ class SkillRegistryTest {
             )
             registry.register(skill)
 
-            val result = registry.get("test")
+            val result = registry.get("test", null)
             assertEquals(skill, result)
         }
 
         @Test
-        fun `duplicate name replaces with warning`() {
-            val skill1 = SkillInfo("test", "First", Path.of("/dir1/SKILL.md"), "content1")
-            val skill2 = SkillInfo("test", "Second", Path.of("/dir2/SKILL.md"), "content2")
+        fun `same name in two projects coexists and each request hits its own`() {
+            val config = SkillConfig(
+                enabled = false,
+                homeSkillDirs = listOf(".easyai/skills"),
+            )
+            val reg = DefaultSkillRegistry(discovery, config)
+            val alpha = SkillInfo("pdf", "Alpha", Path.of("/projects/alpha/.easyai/skills/pdf/SKILL.md"), "a")
+            val beta = SkillInfo("pdf", "Beta", Path.of("/projects/beta/.easyai/skills/pdf/SKILL.md"), "b")
 
-            registry.register(skill1)
-            registry.register(skill2)
+            reg.register(alpha)
+            reg.register(beta)
 
-            val result = registry.get("test")
-            assertEquals("Second", result?.description)
+            assertEquals("Alpha", reg.get("pdf", Path.of("/projects/alpha"))?.description)
+            assertEquals("Beta", reg.get("pdf", Path.of("/projects/beta"))?.description)
+            assertNull(reg.get("pdf", null), "a project-granularity skill must not answer a GLOBAL request")
+            assertEquals(2, reg.all().size, "the composite key keeps both rows in the snapshot")
         }
 
         @Test
@@ -57,52 +69,7 @@ class SkillRegistryTest {
 
         @Test
         fun `get returns null for unknown skill`() {
-            assertNull(registry.get("nonexistent"))
-        }
-    }
-
-    @Nested
-    inner class FormatSkills {
-        private lateinit var registry: SkillRegistry
-
-        @BeforeEach
-        fun setUp() {
-            val config = SkillConfig(enabled = false)
-            registry = DefaultSkillRegistry(discovery, config)
-        }
-
-        @Test
-        fun `concise format includes name and description`() {
-            registry.register(SkillInfo("review", "Review code", Path.of("/r/SKILL.md"), "content"))
-
-            val result = registry.format(verbose = false)
-
-            assertTrue(result.contains("## Available Skills"))
-            assertTrue(result.contains("**review**: Review code"))
-        }
-
-        @Test
-        fun `verbose format uses XML style`() {
-            registry.register(SkillInfo("review", "Review code", Path.of("/r/SKILL.md"), "content"))
-
-            val result = registry.format(verbose = true)
-
-            assertTrue(result.contains("<available_skills>"))
-            assertTrue(result.contains("<name>review</name>"))
-        }
-
-        @Test
-        fun `excludes skills without description`() {
-            registry.register(SkillInfo("no-desc", null, Path.of("/x/SKILL.md"), "content"))
-
-            val result = registry.format(verbose = false)
-            assertTrue(result.isEmpty())
-        }
-
-        @Test
-        fun `returns empty when no skills`() {
-            val result = registry.format()
-            assertTrue(result.isEmpty())
+            assertNull(registry.get("nonexistent", null))
         }
 
         @Test
@@ -110,6 +77,126 @@ class SkillRegistryTest {
             registry.register(SkillInfo("test", "Test", Path.of("/some/path/SKILL.md"), "content"))
             val dirs = registry.dirs()
             assertTrue(dirs.any { it.toString().contains("/some/path") })
+        }
+    }
+
+    /**
+     * Re-scanning is what makes a SKILL.md written during a session loadable without a restart, so the
+     * delta it reports is the answer an agent acts on: it must say what appeared, what vanished, and
+     * nothing at all when the disk did not move.
+     */
+    @Nested
+    inner class ReScan {
+
+        /** Isolated sources: one explicit root, and home/ancestor scanning left off unless asked for. */
+        private fun registry(root: Path, ancestorDirNames: List<String> = emptyList()) = DefaultSkillRegistry(
+            discovery,
+            SkillConfig(
+                enabled = true,
+                paths = listOf(root.toString()),
+                homeSkillDirs = ancestorDirNames,
+                workDir = root.toString()
+            )
+        )
+
+        private fun writeSkill(root: Path, name: String): Path {
+            val skillDir = root.resolve(name).createDirectories()
+            skillDir.resolve("SKILL.md").writeText("---\nname: $name\ndescription: $name does things\n---\nContent")
+            return skillDir
+        }
+
+        @Test
+        fun `a skill written after startup becomes loadable on the next re-scan`(@TempDir tempDir: Path) {
+            val underScan = registry(tempDir)
+            assertNull(underScan.get("pdf", null), "the directory did not exist at construction time")
+
+            writeSkill(tempDir, "pdf")
+            val delta = underScan.rescan(emptySet())
+
+            assertEquals(listOf("pdf"), delta.added)
+            assertEquals(1, delta.total)
+            assertNotNull(underScan.get("pdf", null))
+        }
+
+        @Test
+        fun `a skill whose file is gone stops being loadable`(@TempDir tempDir: Path) {
+            val underScan = registry(tempDir)
+            val skillDir = writeSkill(tempDir, "pdf")
+            underScan.rescan(emptySet())
+
+            skillDir.resolve("SKILL.md").deleteIfExists()
+            val delta = underScan.rescan(emptySet())
+
+            assertEquals(listOf("pdf"), delta.removed)
+            assertEquals(emptyList<String>(), delta.added)
+            assertNull(underScan.get("pdf", null))
+            assertEquals(0, delta.total)
+        }
+
+        @Test
+        fun `an unchanged re-scan reports nothing and keeps the snapshot`(@TempDir tempDir: Path) {
+            val underScan = registry(tempDir)
+            writeSkill(tempDir, "pdf")
+            underScan.rescan(emptySet())
+
+            val second = underScan.rescan(emptySet())
+
+            assertEquals(emptyList<String>(), second.added, "a steady state must not look like churn")
+            assertEquals(emptyList<String>(), second.removed)
+            assertEquals(1, second.total)
+            assertNotNull(underScan.get("pdf", null))
+        }
+
+        @Test
+        fun `the extra root reaches a project the server was not started in`(@TempDir tempDir: Path) {
+            val project = tempDir.resolve("work/repo").createDirectories()
+            val underScan = registry(tempDir.resolve("server"), ancestorDirNames = listOf("nested-skills"))
+            writeSkill(project.resolve("nested-skills"), "pdf")
+
+            assertEquals(emptyList<String>(), underScan.rescan(emptySet()).added, "the request root is not free real estate")
+            val delta = underScan.rescan(setOf(project))
+
+            assertEquals(listOf("pdf"), delta.added)
+            assertEquals(listOf(SkillKey("pdf", project)), delta.addedKeys)
+            assertEquals(
+                project.resolve("nested-skills/pdf"),
+                underScan.get("pdf", project)?.location?.parent,
+                "the discovered directory is what the catalog row and the load gate compare against"
+            )
+        }
+
+        @Test
+        fun `a re-scan that names fewer roots still keeps the other projects`(@TempDir tempDir: Path) {
+            val alpha = tempDir.resolve("alpha").createDirectories()
+            val beta = tempDir.resolve("beta").createDirectories()
+            val underScan = registry(tempDir.resolve("server"), ancestorDirNames = listOf("nested-skills"))
+            writeSkill(alpha.resolve("nested-skills"), "pdf")
+            writeSkill(beta.resolve("nested-skills"), "pdf")
+            underScan.rescan(setOf(alpha, beta))
+            assertEquals(2, underScan.all().size)
+
+            // A refresh triggered by one session must never prune the other project's skill:
+            // known roots are re-read on every pass, so nothing is "missing" just because it was not asked for.
+            val delta = underScan.rescan(setOf(alpha))
+
+            assertEquals(emptyList<String>(), delta.removed)
+            assertNotNull(underScan.get("pdf", beta), "beta's snapshot survived a scan that only mentioned alpha")
+        }
+
+        @Test
+        fun `re-registering the same location is not reported as a name collision`(@TempDir tempDir: Path) {
+            val underScan = registry(tempDir)
+            writeSkill(tempDir, "pdf")
+            underScan.rescan(emptySet())
+            val seenDirs = underScan.dirs()
+
+            underScan.rescan(emptySet())
+
+            assertEquals(
+                seenDirs, underScan.dirs(),
+                "dirs() is a record of every directory ever seen, so a re-scan only adds to it"
+            )
+            assertTrue(Files.isDirectory(tempDir.resolve("pdf")))
         }
     }
 }

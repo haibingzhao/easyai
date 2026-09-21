@@ -1,20 +1,24 @@
 package com.easy.easyai.rag
 
+import com.easy.easyai.core.skill.SkillOwnerContext
+import com.easy.easyai.core.skill.SkillScope
 import java.nio.file.Path
 import java.security.MessageDigest
 
 /**
- * Derives EasyRAG `biz_id` values for memory and knowledge scopes.
+ * Derives EasyRAG `biz_id` values for memory, knowledge and skill scopes.
  *
  * EasyRAG treats `biz_id` as a hard storage filter dimension (shared tables
  * with a `(id, workspace, biz_id)` composite key); cross-biz_id queries are
  * impossible. The biz_id encodes both the **user/project scope** and the
- * **content type** (memory vs knowledge), achieving storage-level isolation:
+ * **content type** (memory vs knowledge vs skill), achieving storage-level isolation:
  *
  * - GLOBAL memory   -> `u_{userId}_m`
  * - GLOBAL knowledge -> `u_{userId}_k`
  * - PROJECT memory   -> `u_{userId}-{projectKey}-{hash8}_m`
  * - PROJECT knowledge -> `u_{userId}-{projectKey}-{hash8}_k`
+ * - GLOBAL skill    -> `u_{userId}_s`
+ * - PROJECT skill   -> `u_{userId}-{projectKey}-{hash8}_s`
  *
  * This means vector search, keyword search, and all storage operations
  * are filtered at the storage layer — no metadata post-filter needed.
@@ -34,6 +38,9 @@ internal object RagBizIdResolver {
 
     /** Content type suffix for knowledge. */
     const val KNOWLEDGE_TYPE = "k"
+
+    /** Content type suffix for skills. */
+    const val SKILL_TYPE = "s"
 
     /**
      * biz_id for GLOBAL scope: `u_{sanitized userId}_{contentType}`,
@@ -65,6 +72,33 @@ internal object RagBizIdResolver {
                 else -> '_'
             }
         }.joinToString("")
+    }
+
+    /**
+     * biz_ids of every slice the given scopes resolve to for [owner], de-duplicated and
+     * in order. [SkillScope.PROJECT] contributes nothing when the owner has no project path,
+     * so the set naturally degrades to the global slice alone.
+     */
+    fun skillBizIds(scopes: List<SkillScope>, owner: SkillOwnerContext): List<String> =
+        scopes.mapNotNull { scope ->
+            when (scope) {
+                SkillScope.GLOBAL -> globalBizId(owner.userId, SKILL_TYPE)
+                SkillScope.PROJECT -> projectBizId(owner.userId, owner.projectPath, SKILL_TYPE)
+            }
+        }.distinct()
+
+    /**
+     * Reverse mapping used to label search results: which granularity produced this chunk?
+     * Returns null for foreign/unrecognised biz_ids, so a mislabelled hit never masquerades as
+     * one of the caller's own slices.
+     */
+    fun skillScopeOf(bizId: String?, owner: SkillOwnerContext): SkillScope? {
+        if (bizId == null) return null
+        return when (bizId) {
+            globalBizId(owner.userId, SKILL_TYPE) -> SkillScope.GLOBAL
+            projectBizId(owner.userId, owner.projectPath, SKILL_TYPE) -> SkillScope.PROJECT
+            else -> null
+        }
     }
 
     /** First [HASH_LENGTH] hex chars of the SHA-256 of [value]. */

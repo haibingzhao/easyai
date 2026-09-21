@@ -150,6 +150,10 @@ export interface SkillInfo {
   name: string;
   description: string | null;
   tags: string[];
+  /** Granularity the skill was discovered at: "global" or "project". */
+  scope?: string;
+  /** Set when scope is "project" — disambiguates same-named skills across projects. */
+  projectPath?: string | null;
 }
 
 /**

@@ -1,6 +1,7 @@
 package com.easy.easyai.autoconfigure.rag
 
 import com.easy.easyai.core.memory.MemoryStore
+import com.easy.easyai.core.skill.SkillStore
 import com.easy.easyai.rag.RagChunk
 import com.easy.easyai.rag.RagClient
 import com.easy.easyai.rag.RagDocInfo
@@ -19,8 +20,8 @@ import kotlin.test.assertTrue
 
 /**
  * Condition-matrix tests for [RagAutoConfiguration]: the RAG beans only exist
- * when `easyai.rag.enabled=true`, and the RAG-backed [MemoryStore] only when
- * memory is enabled as well.
+ * when `easyai.rag.enabled=true`, the RAG-backed [MemoryStore] only when memory is enabled as
+ * well, and the skill index only on its own explicit opt-in.
  */
 class RagAutoConfigurationTest {
 
@@ -77,6 +78,38 @@ class RagAutoConfigurationTest {
                 assertFalse(beans.values.first()::class.java.name.contains("EasyRagClient"))
             }
     }
+
+    @Test
+    fun `no skill store until the skill flag is switched on explicitly`() {
+        contextRunner
+            .withPropertyValues("easyai.rag.enabled=true", "easyai.memory.enabled=true")
+            .run { context ->
+                assertEquals(1, context.getBeanNamesForType(MemoryStore::class.java).size)
+                assertEquals(
+                    0,
+                    context.getBeanNamesForType(SkillStore::class.java).size,
+                    "skills must keep the pre-RAG behaviour until somebody asks for the index"
+                )
+            }
+    }
+
+    @Test
+    fun `the skill store is RAG-backed once both switches are on`() {
+        contextRunner
+            .withPropertyValues("easyai.rag.enabled=true", "easyai.skills.rag.enabled=true")
+            .run { context ->
+                assertEquals("RagSkillStore", context.getBean(SkillStore::class.java)::class.java.simpleName)
+            }
+    }
+
+    @Test
+    fun `the skill flag alone cannot conjure a store without the RAG client`() {
+        contextRunner
+            .withPropertyValues("easyai.rag.enabled=false", "easyai.skills.rag.enabled=true")
+            .run { context ->
+                assertEquals(0, context.getBeanNamesForType(SkillStore::class.java).size)
+            }
+    }
 }
 
 /** Minimal fake for conditional-bean override tests. */
@@ -95,7 +128,8 @@ private class FakeRagClient : RagClient {
         topK: Int,
         timeRangeStart: Long?,
         timeRangeEnd: Long?,
-        bizId: String?
+        bizId: String?,
+        bizIds: List<String>?
     ): List<RagChunk> = emptyList()
 
     override suspend fun getWorkspaceConfig(workspace: String): RagWorkspaceConfig? = null

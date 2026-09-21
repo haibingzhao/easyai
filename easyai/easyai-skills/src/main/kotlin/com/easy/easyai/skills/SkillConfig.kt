@@ -9,8 +9,5 @@ data class SkillConfig(
     val paths: List<String> = emptyList(),
     val homeSkillDirs: List<String> = listOf(".agents/skills", ".easyai/skills"),
     val injectIntoSystemPrompt: Boolean = true,
-    val systemPromptFormat: SkillPromptFormat = SkillPromptFormat.CONCISE,
     val workDir: String = ".",
 )
-
-enum class SkillPromptFormat { VERBOSE, CONCISE }
