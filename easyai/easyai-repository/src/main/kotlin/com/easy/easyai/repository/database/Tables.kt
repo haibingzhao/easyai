@@ -156,7 +156,7 @@ object Tables {
         val updatedAt = long("updated_at")
         /** Dirty marker bumped only by updateMessage() — used for incremental fetch fallback. */
         val contentUpdatedAt = long("content_updated_at").default(0L)
-        /** Why the last agent execution ended: "normal", "max_iterations", "cancelled", "error". Cleared on each new run. */
+        /** Why the last agent execution ended: "normal", "max_iterations", "cancelled", "error", "completion_check_stalled". Cleared on each new run. */
         val endReason = varchar("end_reason", 32).nullable()
         /** JSON-serialized GoalState when a /goal is active; null when no goal is set. */
         val goalJson = text("goal_json").nullable()
@@ -307,6 +307,95 @@ object Tables {
 
         init {
             uniqueIndex(userId, name)  // unique MCP server name per user
+        }
+    }
+
+    /**
+     * Skill catalog table — provenance and lifecycle truth for skills.
+     *
+     * Content itself stays on disk (install_path/SKILL.md); this table records ownership,
+     * enablement, source, and the content checksum used for index reconciliation. Because
+     * every row carries its owner, startup can enumerate which per-user RAG slices to
+     * reconcile without a request context. One row addresses one
+     * (owner, name, granularity) triple: `project_hash` distinguishes a GLOBAL skill
+     * ('') from same-named PROJECT skills of different workspaces.
+     */
+    object SkillTable : Table("skill") {
+        val id = varchar("id", 255)
+        val name = varchar("name", 128)
+
+        /** Column stays `source`; the Kotlin name avoids clashing with `ColumnSet.source`. */
+        val skillSource = varchar("source", 16).default("LOCAL")   // LOCAL
+        val version = varchar("version", 32).default("0.0.0")
+        val checksum = varchar("checksum", 64)                // SHA-256 hex of SKILL.md bytes
+        val enabled = bool("enabled").default(true)
+        val installPath = varchar("install_path", 512)        // absolute skill directory path
+        val origin = varchar("origin", 512).nullable()        // market object key / URL, provenance only
+        val userId = varchar("user_id", 255).default("system")
+        val projectHash = varchar("project_hash", 16).default("")  // granularity key: '' = GLOBAL, else sha256(projectPath) prefix
+        val createdAt = long("created_at")
+        val updatedAt = long("updated_at")
+
+        override val primaryKey = PrimaryKey(id)
+
+        init {
+            index(false, userId)
+            uniqueIndex(userId, name, projectHash)  // unique skill name per user per granularity
+        }
+    }
+
+    /**
+     * Per-user object-storage configuration — one row per owner, edited from the frontend
+     * Settings page and hot-applied by the resolver. The database is the only storage
+     * configuration source. Credentials stay server-side; read endpoints mask them.
+     */
+    object StorageSettingsTable : Table("storage_settings") {
+        val id = varchar("id", 255)
+        val userId = varchar("user_id", 255).default("system")
+        val enabled = bool("enabled").default(false)
+        val storageType = varchar("storage_type", 16).default("aliyun")
+        val endpoint = varchar("endpoint", 256).default("")
+        val bucket = varchar("bucket", 256).default("")
+        val accessKeyId = varchar("access_key_id", 256).default("")
+        val accessKeySecret = varchar("access_key_secret", 512).default("")
+        val localDir = varchar("local_dir", 512).default("")
+        val createdAt = long("created_at")
+        val updatedAt = long("updated_at")
+
+        override val primaryKey = PrimaryKey(id)
+
+        init {
+            uniqueIndex(userId)  // one storage row per user
+        }
+    }
+
+    /**
+     * Per-user media-generation provider credentials — one row per `(user, service_kind)`, edited
+     * from the frontend Settings page and hot-applied by the resolver. The database is the only
+     * media-provider configuration source. Credentials stay server-side; read endpoints mask them.
+     * This table is deliberately separate from `model_provider_config` (which feeds the ChatModel).
+     */
+    object MediaProviderSettingsTable : Table("media_provider_settings") {
+        val id = varchar("id", 255)
+        val userId = varchar("user_id", 255).default("system")
+        val serviceKind = varchar("service_kind", 16)
+        val enabled = bool("enabled").default(false)
+        val providerType = varchar("provider_type", 32).default("openai")
+        val baseUrl = varchar("base_url", 512).default("")
+        val region = varchar("region", 64).default("")
+        val apiKey = text("api_key").nullable()
+        val accessKeyId = varchar("access_key_id", 256).default("")
+        val accessKeySecret = text("access_key_secret").nullable()
+        val defaultModel = varchar("default_model", 128).default("")
+        val options = text("options").nullable()
+        val timeoutSeconds = long("timeout_seconds").default(600L)
+        val createdAt = long("created_at")
+        val updatedAt = long("updated_at")
+
+        override val primaryKey = PrimaryKey(id)
+
+        init {
+            uniqueIndex(userId, serviceKind)  // one credential row per user+kind
         }
     }
 

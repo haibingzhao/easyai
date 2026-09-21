@@ -6,7 +6,9 @@ import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import java.sql.Connection
 import java.sql.DriverManager
+import java.sql.SQLException
 
 class FlywayMigrationRunnerTest {
 
@@ -78,8 +80,9 @@ class FlywayMigrationRunnerTest {
                 .load()
 
             val result = flyway.migrate()
-            assertTrue(result.migrationsExecuted >= 2, "V1 and V2 should be executed")
-            assertEquals("2", result.targetSchemaVersion)
+            assertTrue(result.migrationsExecuted >= 6, "V1 through V6 should be executed")
+            // Asserted against what Flyway actually applied, so adding V7 never means touching this file.
+            assertEquals(maxVersionOnClasspath(flyway), result.targetSchemaVersion)
         }
 
         @Test
@@ -94,7 +97,7 @@ class FlywayMigrationRunnerTest {
                 .baselineVersion("0")
                 .load()
             val result = flyway.migrate()
-            assertEquals("2", result.targetSchemaVersion)
+            assertEquals(maxVersionOnClasspath(flyway), result.targetSchemaVersion)
 
             DriverManager.getConnection(jdbcUrl, "sa", "").use { conn ->
                 // Core tables
@@ -106,7 +109,112 @@ class FlywayMigrationRunnerTest {
                 conn.createStatement().executeQuery("SELECT id FROM team_round_record").close()
                 // Swarm tables
                 conn.createStatement().executeQuery("SELECT member_session_id FROM swarm_team_member_execution").close()
+                // Skill catalog table (V3): the columns the retrieval slices are derived from
+                conn.createStatement().executeQuery(
+                    "SELECT id, name, source, version, checksum, enabled, install_path, origin, user_id " +
+                        "FROM skill"
+                ).close()
+                // Storage settings table (V4): per-user object-storage configuration rows
+                conn.createStatement().executeQuery(
+                    "SELECT user_id, enabled, storage_type, endpoint, bucket, access_key_id, access_key_secret, local_dir " +
+                        "FROM storage_settings"
+                ).close()
+                // V6: the granularity column the unique identity is built on, and the index swap itself.
+                conn.createStatement().executeQuery(
+                    "SELECT id, name, install_path, user_id, project_hash FROM skill"
+                ).close()
+                conn.createStatement().use { statement ->
+                    val indexes = mutableSetOf<String>()
+                    statement.executeQuery(
+                        "SELECT DISTINCT INDEX_NAME FROM INFORMATION_SCHEMA.INDEXES " +
+                            "WHERE UPPER(TABLE_NAME) = 'SKILL'"
+                    ).use { rs -> while (rs.next()) indexes += rs.getString(1).uppercase() }
+                    assertTrue(
+                        "UQ_SKILL_USER_NAME_HASH" in indexes,
+                        "V6 must leave the triple unique index in place, got: $indexes"
+                    )
+                    assertTrue(
+                        "UQ_SKILL_USER_NAME" !in indexes,
+                        "the old (user_id, name) unique index would collapse two projects' same-named skills again, got: $indexes"
+                    )
+                }
             }
         }
+
+        @Test
+        fun `skills can share a name across owners and projects but not within one triple`() {
+            val jdbcUrl = "jdbc:h2:mem:flyway_skill_names;MODE=MYSQL;DB_CLOSE_DELAY=-1"
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { conn ->
+                conn.applySkillSchema()
+                conn.applyProjectScopedIdentity()
+                conn.executeSkillInsert("alice", "pdf-report")
+                conn.executeSkillInsert("bob", "pdf-report")
+                // Same owner, same name, another project: the row V3 could not express.
+                conn.executeSkillInsert("alice", "pdf-report", id = "row-3", projectHash = "1234abcd5678ef90")
+
+                // A different id, so the only constraint this can trip is the (user_id, name, project_hash) one.
+                val error = assertThrows(SQLException::class.java) {
+                    conn.executeSkillInsert("alice", "pdf-report", id = "row-4")
+                }
+                assertTrue("UQ_SKILL" in error.message!!.uppercase(), "got: ${error.message}")
+            }
+        }
+
+        @Test
+        fun `the skill migration can be replayed without error`() {
+            // Every statement is `IF NOT EXISTS`, which is what lets a partially migrated or restored
+            // database come up: replaying the scripts must not raise a duplicate-object error.
+            val statements = skillStatements()
+            assertTrue(statements.size >= 3, "expected the table plus two indexes, got $statements")
+
+            DriverManager.getConnection("jdbc:h2:mem:flyway_skill_replay;MODE=MYSQL;DB_CLOSE_DELAY=-1", "sa", "")
+                .use { conn ->
+                    repeat(2) {
+                        conn.applySkillSchema()
+                        conn.applyProjectScopedIdentity()
+                    }
+                }
+        }
+
+        private fun statementsOf(resource: String): List<String> {
+            val sql = this.javaClass.getResourceAsStream(resource)
+                ?.bufferedReader()?.readText()
+                ?: error("$resource is not on the test classpath")
+            // Comments may hold semicolons, so drop them before splitting on statement boundaries.
+            return sql.lineSequence()
+                .filterNot { it.trimStart().startsWith("--") }
+                .joinToString("\n")
+                .split(';')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+        }
+
+        private fun skillStatements(): List<String> = statementsOf(SKILL_MIGRATION)
+
+        private fun Connection.applySkillSchema() = skillStatements().forEach { createStatement().execute(it) }
+
+        private fun Connection.applyProjectScopedIdentity() =
+            statementsOf(PROJECT_SCOPED_IDENTITY).forEach { createStatement().execute(it) }
+
+        private fun Connection.executeSkillInsert(
+            userId: String,
+            name: String,
+            id: String = "$userId-$name",
+            projectHash: String = ""
+        ) {
+            createStatement().execute(
+                "INSERT INTO skill (id, name, checksum, install_path, created_at, updated_at, user_id, project_hash) " +
+                    "VALUES ('$id', '$name', 'a', '/home/$userId/.easyai/skills/$name', 1, 1, '$userId', '$projectHash')"
+            )
+        }
+    }
+
+    companion object {
+        private const val SKILL_MIGRATION = "/db/migration/V3__create_skill_table.sql"
+        private const val PROJECT_SCOPED_IDENTITY = "/db/migration/V6__skill_project_scoped_identity.sql"
+
+        /** The newest versioned script Flyway sees, so this file never lags behind a new migration. */
+        private fun maxVersionOnClasspath(flyway: Flyway): String =
+            flyway.info().all().mapNotNull { it.version }.maxOf { it }.toString()
     }
 }
