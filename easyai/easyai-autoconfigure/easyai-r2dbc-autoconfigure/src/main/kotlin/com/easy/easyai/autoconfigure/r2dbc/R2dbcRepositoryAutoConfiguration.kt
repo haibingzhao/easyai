@@ -1,5 +1,6 @@
 package com.easy.easyai.autoconfigure.r2dbc
 
+import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.config.DefaultModelConfigService
 import com.easy.easyai.api.config.ModelConfigGroupStore
 import com.easy.easyai.api.config.ModelConfigService
@@ -16,6 +17,7 @@ import com.easy.easyai.core.goal.GoalStatusNotifier
 import com.easy.easyai.core.goal.GoalStore
 import com.easy.easyai.core.permission.PermissionRuleStore
 import com.easy.easyai.core.permission.PermissionService
+import com.easy.easyai.core.permission.ShellAiRiskChecker
 import com.easy.easyai.core.prompt.InstructionsLoader
 import com.easy.easyai.core.team.TeamExecutionStore
 import com.easy.easyai.core.team.TeamMemberHistoryLoader
@@ -33,7 +35,15 @@ import com.easy.easyai.repository.mcp.R2dbcMcpServerStore
 import com.easy.easyai.repository.permission.R2dbcAsyncPermissionRuleStore
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.repository.project.R2dbcAsyncProjectStore
+import com.easy.easyai.core.skill.AsyncSkillCatalogStore
+import com.easy.easyai.core.media.MediaProviderStore
+import com.easy.easyai.core.storage.StorageSettingsStore
 import com.easy.easyai.repository.session.*
+import com.easy.easyai.repository.media.R2dbcMediaProviderStore
+import com.easy.easyai.repository.skill.R2dbcAsyncSkillCatalogStore
+import com.easy.easyai.repository.storage.R2dbcStorageSettingsStore
+import com.easy.easyai.skills.SkillPromptSource
+import com.easy.easyai.skills.SkillRegistry
 import com.easy.easyai.repository.swarm.R2dbcSwarmPresetStore
 import com.easy.easyai.repository.swarm.R2dbcSwarmRunStore
 import com.easy.easyai.repository.todo.AsyncTodoStore
@@ -53,6 +63,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Lazy
 import org.springframework.core.annotation.Order
+import java.nio.file.Path
 
 /**
  * Auto-Configuration for async R2DBC-based repository layer.
@@ -67,9 +78,22 @@ class R2dbcRepositoryAutoConfiguration(
     private val r2dbcProperties: R2dbcProperties,
     private val easyAiProperties: EasyAiProperties
 ) {
-    private fun buildSkillsData(skillRegistry: com.easy.easyai.skills.SkillRegistry?): List<Map<String, Any?>> {
+    /**
+     * Skill view for prompt rendering, keyed by the requesting user and session project.
+     *
+     * [SkillPromptSource] owns the decision (RAG suppression plus catalog `enabled` filtering); the
+     * registry-only fallback exists for contexts where core auto-configuration did not run, and keeps
+     * the previous full-injection behaviour.
+     */
+    private fun skillsForPrompt(
+        promptSource: SkillPromptSource?,
+        skillRegistry: SkillRegistry?
+    ): (String?, Path?) -> List<Map<String, Any?>> =
+        { userId, projectPath -> promptSource?.skillsForPrompt(userId, projectPath) ?: buildSkillsData(skillRegistry, projectPath) }
+
+    private fun buildSkillsData(skillRegistry: SkillRegistry?, projectPath: Path?): List<Map<String, Any?>> {
         return if (easyAiProperties.skills.injectIntoSystemPrompt) {
-            skillRegistry?.all()
+            skillRegistry?.visibleFor(projectPath)
                 ?.filter { !it.description.isNullOrBlank() }
                 ?.map { mapOf<String, Any?>("name" to it.name, "description" to it.description) }
                 ?: emptyList()
@@ -152,9 +176,10 @@ class R2dbcRepositoryAutoConfiguration(
     fun subAgentContextResolver(
         sessionToolResolver: SessionToolResolver,
         agentStore: AsyncAgentStore,
-        @Autowired(required = false) skillRegistry: com.easy.easyai.skills.SkillRegistry? = null
+        @Autowired(required = false) skillRegistry: SkillRegistry? = null,
+        @Autowired(required = false) skillPromptSource: SkillPromptSource? = null
     ): SubAgentContextResolver {
-        val skillsData = buildSkillsData(skillRegistry)
+        val skillsForPrompt = skillsForPrompt(skillPromptSource, skillRegistry)
         return object : SubAgentContextResolver {
             override suspend fun resolve(
                 agentDef: AgentDefinition,
@@ -172,7 +197,8 @@ class R2dbcRepositoryAutoConfiguration(
                     listOf<Map<String, Any?>>() to listOf()  // No whitelist = no skills
                 } else {
                     val allowedSet = effectiveSkillNames.toSet()
-                    skillsData.filter { (it["name"] as? String) in allowedSet } to effectiveSkillNames
+                    // Re-read per call: disablement must take effect without restarting the session pool.
+                    skillsForPrompt(parentContext.userId, parentContext.projectPath).filter { (it["name"] as? String) in allowedSet } to effectiveSkillNames
                 }
                 // Resolve instructions based on sub-agent's own instructionsEnabled flag
                 val instructions = if (agentDef.instructionsEnabled) {
@@ -206,15 +232,16 @@ class R2dbcRepositoryAutoConfiguration(
         agentService: AgentService,
         configStore: ModelProviderConfigStore,
         sessionToolResolver: SessionToolResolver,
-        @Autowired(required = false) skillRegistry: com.easy.easyai.skills.SkillRegistry? = null,
+        @Autowired(required = false) skillRegistry: SkillRegistry? = null,
+        @Autowired(required = false) skillPromptSource: SkillPromptSource? = null,
         @Autowired(required = false) todoStore: AsyncTodoStore? = null,
         @Autowired(required = false) teamExecutionStore: TeamExecutionStore? = null,
     ): SessionManager {
         // Agent lookup function
         val agentLookup: suspend (String, String) -> AgentDefinition? = { id, userId -> agentStore.findById(id, userId) }
 
-        // Build skills data for prompt rendering (list of {name, description} maps)
-        val skillsData = buildSkillsData(skillRegistry)
+        // Skills for prompt rendering (list of {name, description} maps), read per request
+        val skillsForPrompt = skillsForPrompt(skillPromptSource, skillRegistry)
 
         // Create SessionAgentFactory — all tools created via ToolBuilder beans
         val sessionAgentFactory = SessionAgentFactory(
@@ -237,7 +264,7 @@ class R2dbcRepositoryAutoConfiguration(
             configStore = configStore,
             agentLookup = agentLookup,
             todoStore = todoStore,
-            skills = skillsData,
+            skillsSupplier = skillsForPrompt,
             agentStore = agentStore,
             teamExecutionStore = teamExecutionStore
         )
@@ -292,11 +319,25 @@ class R2dbcRepositoryAutoConfiguration(
     }
 
     @Bean
+    @ConditionalOnMissingBean(ShellAiRiskChecker::class)
+    fun shellAiRiskChecker(
+        configStore: ModelProviderConfigStore,
+        modelFactories: List<ChatModelFactory>
+    ): ShellAiRiskChecker {
+        return LlmShellAiRiskChecker(configStore, modelFactories)
+    }
+
+    @Bean
     @ConditionalOnMissingBean(PermissionService::class)
-    fun permissionService(ruleStore: PermissionRuleStore, @Lazy toolFactory: ToolFactory): PermissionService {
+    fun permissionService(
+        ruleStore: PermissionRuleStore,
+        @Lazy toolFactory: ToolFactory,
+        @Autowired(required = false) aiRiskChecker: ShellAiRiskChecker? = null
+    ): PermissionService {
         return PermissionService(
             ruleStore = ruleStore,
-            toolFactory = toolFactory
+            toolFactory = toolFactory,
+            aiRiskChecker = aiRiskChecker
         )
     }
 
@@ -400,6 +441,42 @@ class R2dbcRepositoryAutoConfiguration(
     @ConditionalOnMissingBean(AsyncUserCommandStore::class)
     fun asyncUserCommandStore(initializer: R2dbcDatabaseInitializer): AsyncUserCommandStore {
         return R2dbcAsyncUserCommandStore(initializer.getDatabase())
+    }
+
+    // ─── Skill Catalog Beans ─────────────────────────────────────────────────────
+
+    /**
+     * Skill directory table store. Neutral infrastructure (no RAG dependency), so it is
+     * registered whenever the repository layer is on; only the *write* path is gated by
+     * `easyai.skills.rag.enabled` via the services that consume it.
+     */
+    @Bean
+    @ConditionalOnMissingBean(AsyncSkillCatalogStore::class)
+    fun asyncSkillCatalogStore(initializer: R2dbcDatabaseInitializer): AsyncSkillCatalogStore {
+        return R2dbcAsyncSkillCatalogStore(initializer.getDatabase())
+    }
+
+    /**
+     * Per-user object-storage settings: the only source of storage configuration, read by the
+     * resolver through the core interface. Absent when `easyai.r2dbc.enabled=false`, which is
+     * how the settings endpoint reports that storage cannot be configured at all.
+     */
+    @Bean
+    @ConditionalOnMissingBean(StorageSettingsStore::class)
+    fun storageSettingsStore(initializer: R2dbcDatabaseInitializer): StorageSettingsStore {
+        return R2dbcStorageSettingsStore(initializer.getDatabase())
+    }
+
+    /**
+     * Per-user media-generation provider credentials: the only source of media-provider
+     * configuration, read by the resolver through the core interface. Absent when
+     * `easyai.r2dbc.enabled=false`, which is how the settings endpoint reports that media
+     * providers cannot be configured at all.
+     */
+    @Bean
+    @ConditionalOnMissingBean(MediaProviderStore::class)
+    fun mediaProviderStore(initializer: R2dbcDatabaseInitializer): MediaProviderStore {
+        return R2dbcMediaProviderStore(initializer.getDatabase())
     }
 
     // ─── Swarm Beans ─────────────────────────────────────────────────────────────

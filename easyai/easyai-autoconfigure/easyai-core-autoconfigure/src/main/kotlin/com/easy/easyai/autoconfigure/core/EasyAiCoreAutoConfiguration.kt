@@ -15,6 +15,8 @@ import com.easy.easyai.core.prompt.DefaultProviderPromptLoader
 import com.easy.easyai.core.prompt.PromptTemplateService
 import com.easy.easyai.core.prompt.ProviderPromptLoader
 import com.easy.easyai.core.prompt.SystemPromptBuilder
+import com.easy.easyai.core.skill.AsyncSkillCatalogStore
+import com.easy.easyai.core.skill.SkillStore
 import com.easy.easyai.core.tool.DefaultToolExecutionEngine
 import com.easy.easyai.core.tool.ToolBuilder
 import com.easy.easyai.core.tool.ToolExecutionEngine
@@ -39,6 +41,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.ComponentScan
 import org.springframework.context.annotation.Lazy
+import org.slf4j.LoggerFactory
 import java.nio.file.Path
 
 @AutoConfiguration
@@ -47,6 +50,8 @@ import java.nio.file.Path
 open class EasyAiCoreAutoConfiguration(
     private val properties: EasyAiProperties
 ) {
+
+    private val logger = LoggerFactory.getLogger(javaClass)
 
     /**
      * Propagate the configured domain to [DomainCatalog] so all components
@@ -105,21 +110,136 @@ open class EasyAiCoreAutoConfiguration(
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "easyai.skills", name = ["enabled"], havingValue = "true", matchIfMissing = true)
     open fun skillRegistry(discovery: SkillDiscovery, properties: EasyAiProperties): SkillRegistry {
-        val config = SkillConfig(
-            enabled = properties.skills.enabled,
-            paths = properties.skills.paths,
-            homeSkillDirs = properties.skills.homeSkillDirs,
-            injectIntoSystemPrompt = properties.skills.injectIntoSystemPrompt,
-            systemPromptFormat = properties.skills.systemPromptFormat,
-            workDir = properties.workDir,
-        )
-        return DefaultSkillRegistry(discovery, config)
+        return DefaultSkillRegistry(discovery, skillConfigOf(properties))
     }
+
+    /**
+     * Registry-facing view of `easyai.skills.*` as a bean, so collaborators outside this class
+     * (e.g. [com.easy.easyai.skills.SkillToolBuilder]) resolve granularity the same way the
+     * registry does instead of re-deriving from properties.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    open fun skillConfig(properties: EasyAiProperties): SkillConfig = skillConfigOf(properties)
 
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "easyai.skills", name = ["enabled"], havingValue = "true", matchIfMissing = true)
     open fun agentSkillFactory(): AgentSkillFactory = DefaultAgentSkillFactory()
+
+    // ========== Skill Prompt / RAG Beans ==========
+
+    /**
+     * Not RAG-gated: it also carries the `enabled` filtering that must apply while the full list is
+     * still injected, so both prompt paths (default agent and DB sessions) share one decision.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    open fun skillPromptSource(
+        @Autowired(required = false) skillRegistry: SkillRegistry? = null,
+        @Autowired(required = false) catalog: AsyncSkillCatalogStore? = null,
+        @Autowired(required = false) skillStore: SkillStore? = null,
+        properties: EasyAiProperties
+    ): SkillPromptSource = SkillPromptSource(
+        registry = skillRegistry,
+        catalog = catalog,
+        injectIntoSystemPrompt = properties.skills.injectIntoSystemPrompt,
+        ragEnabled = properties.skills.rag.enabled,
+        // Discovery is only "ready" when the whole chain exists. RagAutoConfiguration hands out a
+        // SkillStore whenever the flag is on, but the write side (SkillIndexStartupRunner → 
+        // SkillCatalogSyncService.backfillAll) needs the R2DBC catalog to have anything to index.
+        // Without this conjunction, `rag on + r2dbc off` would suppress the prompt listing while 
+        // skill_search returns empty forever — the worst of both worlds.
+        ragDiscoveryReady = skillStore != null && catalog != null
+    )
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = SKILL_RAG_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = false)
+    open fun skillCatalogSyncService(
+        @Autowired(required = false) catalog: AsyncSkillCatalogStore? = null,
+        skillConfig: SkillConfig
+    ): SkillCatalogSyncService = SkillCatalogSyncService(catalog, skillConfig)
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = SKILL_RAG_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = false)
+    open fun skillIndexer(
+        skillCatalogSyncService: SkillCatalogSyncService,
+        @Autowired(required = false) skillStore: SkillStore? = null,
+        @Autowired(required = false) catalog: AsyncSkillCatalogStore? = null,
+        properties: EasyAiProperties
+    ): SkillIndexer = SkillIndexer(
+        skillStore = skillStore,
+        catalog = catalog,
+        syncService = skillCatalogSyncService,
+        config = skillConfigOf(properties),
+        indexConcurrency = properties.skills.rag.indexConcurrency
+    )
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = SKILL_RAG_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = false)
+    open fun skillCatalogService(
+        skillIndexer: SkillIndexer,
+        skillPromptSource: SkillPromptSource,
+        @Autowired(required = false) skillStore: SkillStore? = null,
+        @Autowired(required = false) catalog: AsyncSkillCatalogStore? = null,
+        properties: EasyAiProperties
+    ): SkillCatalogService = SkillCatalogService(
+        catalog = catalog,
+        indexer = skillIndexer,
+        skillStore = skillStore,
+        config = skillConfigOf(properties),
+        promptSource = skillPromptSource
+    )
+
+    /**
+     * The one refresh chain — re-read the disk, claim catalog rows, reconcile the index, republish the
+     * prompt view — shared by the startup pass below and by the `refresh_skills` tool.
+     *
+     * Created only when the whole chain is present: a registry with nothing to index into or no table
+     * to read owners from would make the pass a no-op that still costs a listener.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = SKILL_RAG_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = false)
+    open fun skillRefreshService(
+        skillIndexer: SkillIndexer,
+        skillCatalogSyncService: SkillCatalogSyncService,
+        skillPromptSource: SkillPromptSource,
+        skillConfig: SkillConfig,
+        @Autowired(required = false) skillRegistry: SkillRegistry? = null,
+        @Autowired(required = false) catalog: AsyncSkillCatalogStore? = null,
+        @Autowired(required = false) skillStore: SkillStore? = null
+    ): SkillRefreshService? {
+        if (skillRegistry == null || catalog == null || skillStore == null) {
+            logger.warn(
+                "Skill RAG is enabled but registry={}, catalog={}, skillStore={}: skill refresh is off",
+                skillRegistry != null, catalog != null, skillStore != null
+            )
+            return null
+        }
+        return SkillRefreshService(
+            registry = skillRegistry,
+            catalog = catalog,
+            syncService = skillCatalogSyncService,
+            indexer = skillIndexer,
+            promptSource = skillPromptSource,
+            config = skillConfig
+        )
+    }
+
+    /**
+     * Thin event shell over [SkillRefreshService]: without that service there is nothing to run, so the
+     * runner is absent as well and only the application-event wiring is missing.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = SKILL_RAG_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = false)
+    open fun skillIndexStartupRunner(
+        @Autowired(required = false) skillRefreshService: SkillRefreshService? = null
+    ): SkillIndexStartupRunner? = skillRefreshService?.let { SkillIndexStartupRunner(it) }
 
     // ========== Validation Beans ==========
 
@@ -175,6 +295,10 @@ open class EasyAiCoreAutoConfiguration(
         @Autowired(required = false)
         knowledgeStore: KnowledgeStore? = null,
         @Autowired(required = false)
+        mediaProviderResolver: com.easy.easyai.core.media.MediaProviderResolver? = null,
+        @Autowired(required = false)
+        objectStorageResolver: com.easy.easyai.core.storage.ObjectStorageResolver? = null,
+        @Autowired(required = false)
         permissionService: PermissionService? = null,
         @Autowired(required = false)
         eventListeners: List<AgentEventListener>? = emptyList(),
@@ -204,6 +328,8 @@ open class EasyAiCoreAutoConfiguration(
             observationRegistry = registry,
             memoryStore = memoryStore,
             knowledgeStore = knowledgeStore,
+            mediaProviderResolver = mediaProviderResolver,
+            objectStorageResolver = objectStorageResolver,
             waitForUserListener = waitForUserListener,
             outputSchemaValidator = outputSchemaValidator
         )
@@ -214,8 +340,8 @@ open class EasyAiCoreAutoConfiguration(
     open fun agent(
         agentService: AgentService,
         properties: EasyAiProperties,
-        skillRegistry: SkillRegistry?,
-        toolFactory: ToolFactory
+        toolFactory: ToolFactory,
+        skillPromptSource: SkillPromptSource
     ): Agent {
         val context = AgentContext(
             agentId = "default-agent",
@@ -224,14 +350,11 @@ open class EasyAiCoreAutoConfiguration(
         // All tools (including SkillTool) are created uniformly via ToolBuilder pattern
         val allTools = toolFactory.createTools(context, agentService)
 
-        // Build skills data for prompt rendering (not pre-built into a string)
-        val skillsData = if (properties.skills.injectIntoSystemPrompt && skillRegistry != null) {
-            skillRegistry.all()
-                .filter { !it.description.isNullOrBlank() }
-                .map { mapOf<String, Any?>("name" to it.name, "description" to it.description) }
-        } else {
-            emptyList()
-        }
+        // Build skills data for prompt rendering (not pre-built into a string).
+        // Suppressed once skill_search can discover skills, but only when the retrieval store is
+        // actually there: with RAG down the full list is the only thing the agent has to go on.
+        // The server work dir is the default agent's project granularity.
+        val skillsData = skillPromptSource.skillsForPrompt(projectPath = Path.of(properties.workDir))
 
         return Agent(
             context = AgentContext(
@@ -244,5 +367,19 @@ open class EasyAiCoreAutoConfiguration(
             ),
             services = agentService
         )
+    }
+
+    /** Registry-facing view of `easyai.skills.*`; shared by the registry and every RAG service. */
+    private fun skillConfigOf(properties: EasyAiProperties): SkillConfig = SkillConfig(
+        enabled = properties.skills.enabled,
+        paths = properties.skills.paths,
+        homeSkillDirs = properties.skills.homeSkillDirs,
+        injectIntoSystemPrompt = properties.skills.injectIntoSystemPrompt,
+        workDir = properties.workDir,
+    )
+
+    companion object {
+        /** Master switch of the whole skill retrieval chain. */
+        private const val SKILL_RAG_PREFIX = "easyai.skills.rag"
     }
 }
