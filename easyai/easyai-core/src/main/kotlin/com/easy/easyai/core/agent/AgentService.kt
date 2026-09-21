@@ -7,6 +7,8 @@ import com.easy.easyai.core.event.MessageListener
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.message.MessageConverter
 import com.easy.easyai.core.memory.MemoryStore
+import com.easy.easyai.core.media.MediaProviderResolver
+import com.easy.easyai.core.storage.ObjectStorageResolver
 import com.easy.easyai.core.prompt.PromptTemplateService
 import com.easy.easyai.core.tool.ToolExecutionEngine
 import com.easy.easyai.core.validation.OutputSchemaValidator
@@ -145,6 +147,19 @@ interface AgentService {
      * Default: null (knowledge system not configured).
      */
     val knowledgeStore: KnowledgeStore? get() = null
+
+    /**
+     * Per-user media-generation credential resolver, reached by the generation tool builders so a
+     * tool can hide itself when the current user has no enabled provider for its kind.
+     * Default: null (media system not configured).
+     */
+    val mediaProviderResolver: MediaProviderResolver? get() = null
+
+    /**
+     * Per-user object storage resolver, reached by the generation tools to persist produced
+     * binaries. Default: null (storage not configured; a tool with nowhere to put its output hides).
+     */
+    val objectStorageResolver: ObjectStorageResolver? get() = null
 
     /**
      * Callback invoked when the agent loop pauses waiting for user input

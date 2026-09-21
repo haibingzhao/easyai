@@ -93,6 +93,10 @@ export type {
   ModelInfo,
   ModelProviderInfo,
   ModelProviderConfig,
+  StorageConfig,
+  StorageBackendType,
+  StorageEffectiveSource,
+  StorageTestResult,
 } from './types/settings';
 
 export type { NavItem } from './types/layout';

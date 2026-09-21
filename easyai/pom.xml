@@ -81,6 +81,7 @@
         <module>easyai-observability</module>
         <module>easyai-compaction</module>
         <module>easyai-rag</module>
+        <module>easyai-storage</module>
         <module>easyai-auth</module>
         <module>easyai-repository</module>
         <module>easyai-starters</module>
@@ -309,6 +310,18 @@
             <dependency>
                 <groupId>com.easy</groupId>
                 <artifactId>easyai-rag-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <!-- easyai-storage -->
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-storage</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <!-- easyai-storage-autoconfigure -->
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-storage-autoconfigure</artifactId>
                 <version>${revision}</version>
             </dependency>
             <!-- easyai-swarm-autoconfigure -->

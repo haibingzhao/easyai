@@ -7,6 +7,8 @@ import com.easy.easyai.core.event.MessageListener
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.message.MessageConverter
 import com.easy.easyai.core.memory.MemoryStore
+import com.easy.easyai.core.media.MediaProviderResolver
+import com.easy.easyai.core.storage.ObjectStorageResolver
 import com.easy.easyai.core.permission.PermissionService
 import com.easy.easyai.core.permission.PermissionAction
 import com.easy.easyai.core.prompt.PromptTemplateService
@@ -48,6 +50,8 @@ class DefaultAgentService(
     private val observationRegistry: ObservationRegistry = ObservationRegistry.NOOP,
     override val memoryStore: MemoryStore? = null,
     override val knowledgeStore: KnowledgeStore? = null,
+    override val mediaProviderResolver: MediaProviderResolver? = null,
+    override val objectStorageResolver: ObjectStorageResolver? = null,
     override val waitForUserListener: WaitForUserListener? = null,
     override val outputSchemaValidator: OutputSchemaValidator? = null
 ) : AgentService, BeforeToolCallHook, AfterToolCallHook {

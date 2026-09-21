@@ -1,0 +1,2 @@
+com.easy.easyai.autoconfigure.storage.ObjectStorageAutoConfiguration
+com.easy.easyai.autoconfigure.media.MediaProviderAutoConfiguration
