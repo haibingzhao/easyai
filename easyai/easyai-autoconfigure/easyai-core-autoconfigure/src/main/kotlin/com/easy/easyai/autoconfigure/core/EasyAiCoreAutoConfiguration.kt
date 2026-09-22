@@ -44,7 +44,6 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.ComponentScan
 import org.springframework.context.annotation.Lazy
 import org.slf4j.LoggerFactory
-import java.nio.file.Path
 
 @AutoConfiguration
 @ComponentScan(basePackages = ["com.easy.easyai.core", "com.easy.easyai.agent", "com.easy.easyai.tools", "com.easy.easyai.skills", "com.easy.easyai.repository"])
@@ -335,40 +334,6 @@ open class EasyAiCoreAutoConfiguration(
             objectStorageResolver = objectStorageResolver,
             waitForUserListener = waitForUserListener,
             outputSchemaValidator = outputSchemaValidator
-        )
-    }
-
-    @Bean
-    @ConditionalOnMissingBean(Agent::class)
-    open fun agent(
-        agentService: AgentService,
-        properties: EasyAiProperties,
-        toolFactory: ToolFactory,
-        skillPromptSource: SkillPromptSource
-    ): Agent {
-        val context = AgentContext(
-            agentId = "default-agent",
-            projectPath = Path.of(properties.workDir)
-        )
-        // All tools (including SkillTool) are created uniformly via ToolBuilder pattern
-        val allTools = toolFactory.createTools(context, agentService)
-
-        // Build skills data for prompt rendering (not pre-built into a string).
-        // Suppressed once skill_search can discover skills, but only when the retrieval store is
-        // actually there: with RAG down the full list is the only thing the agent has to go on.
-        // The server work dir is the default agent's project granularity.
-        val skillsData = skillPromptSource.skillsForPrompt(projectPath = Path.of(properties.workDir))
-
-        return Agent(
-            context = AgentContext(
-                agentId = "default-agent",
-                customInstructions = properties.systemPrompt,
-                skills = skillsData,
-                tools = allTools,
-                maxIterations = properties.maxIterations,
-                maxRetries = properties.maxRetries
-            ),
-            services = agentService
         )
     }
 
