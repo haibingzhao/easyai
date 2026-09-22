@@ -2,7 +2,7 @@ import { useState, useRef, useCallback } from 'react';
 import type { Attachment } from '@/types/message';
 import { loadAttachment } from '@/utils/attachment-utils';
 import { i18n } from '@/utils/i18n';
-import { authFetch } from '@/services/api-client';
+import { uploadFile, uploadAttachments } from '@/services/attachment-service';
 
 interface UseAttachmentManagerOptions {
   visionSupported: boolean;
@@ -16,21 +16,13 @@ interface UseAttachmentManagerReturn {
   attachments: Attachment[];
   setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
   processingFiles: boolean;
+  isProcessingFiles: () => boolean;
+  uploadPendingAttachments: (sessionId: string) => Promise<Attachment[]>;
   fileInputRef: React.RefObject<HTMLInputElement>;
   handleFiles: (files: File[]) => Promise<void>;
   removeAttachment: (id: string) => void;
   /** Extract image files from a paste event. Returns image files array, or empty if none. */
   getImageFilesFromPaste: (e: React.ClipboardEvent) => File[];
-}
-
-/** Upload a single file to the backend and return the response. */
-async function uploadFile(file: File, sessionId: string): Promise<{ filePath: string; name: string; mimeType: string }> {
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('sessionId', sessionId);
-  const response = await authFetch('/api/files/upload', { method: 'POST', body: formData });
-  if (!response.ok) throw new Error(`Upload failed: ${response.statusText}`);
-  return response.json();
 }
 
 export function useAttachmentManager({
@@ -41,9 +33,15 @@ export function useAttachmentManager({
 }: UseAttachmentManagerOptions): UseAttachmentManagerReturn {
   const [attachments, setAttachments] = useState<Attachment[]>(initialAttachments);
   const [processingFiles, setProcessingFiles] = useState(false);
+  const processingCount = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isProcessingFiles = useCallback(() => processingCount.current > 0, []);
+  const uploadPendingAttachments = useCallback((sid: string) => uploadAttachments(attachments, sid, (uploaded) => {
+    setAttachments((current) => current.map((attachment) => attachment.id === uploaded.id ? uploaded : attachment));
+  }), [attachments]);
 
   const handleFiles = useCallback(async (files: File[]) => {
+    processingCount.current += 1;
     setProcessingFiles(true);
     const newAttachments: Attachment[] = [];
 
@@ -72,6 +70,7 @@ export function useAttachmentManager({
             data: '',
             size: file.size,
             filePath: result.filePath,
+            url: result.url,
           });
         } else {
           // Fallback: read as base64 (will be uploaded at send time)
@@ -80,12 +79,13 @@ export function useAttachmentManager({
         }
       } catch (err) {
         console.error(`Error processing ${file.name}:`, err);
-        // Fallback to base64 on upload failure
+        // Keep a retryable draft, but never present a failed upload as successful.
         try {
           const attachment = await loadAttachment(file);
           newAttachments.push(attachment);
+          onError?.(`Failed to upload ${file.name}. Draft kept; please retry sending.`);
         } catch {
-          console.error(`Fallback also failed for ${file.name}`);
+          onError?.(`Failed to read ${file.name}. Please attach the file again.`);
         }
       }
     }
@@ -100,7 +100,8 @@ export function useAttachmentManager({
       }
       return [...prev, ...toAdd];
     });
-    setProcessingFiles(false);
+    processingCount.current -= 1;
+    setProcessingFiles(processingCount.current > 0);
   }, [visionSupported, onError, sessionId]);
 
   const removeAttachment = useCallback((id: string) => {
@@ -125,6 +126,8 @@ export function useAttachmentManager({
     attachments,
     setAttachments,
     processingFiles,
+    isProcessingFiles,
+    uploadPendingAttachments,
     fileInputRef,
     handleFiles,
     removeAttachment,

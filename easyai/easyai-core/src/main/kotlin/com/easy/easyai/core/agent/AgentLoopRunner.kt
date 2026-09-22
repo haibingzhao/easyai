@@ -392,7 +392,7 @@ internal class AgentLoopRunner(
         transformedMessages: List<EasyAiMessage>,
         tools: List<ToolDefinition>
     ): Prompt {
-        val springAiMessages = services.messageConverter.toSpringAiMessages(transformedMessages)
+        val springAiMessages = services.messageConverter.toSpringAiMessages(transformedMessages, context.userId ?: "system")
         val toolCallbacks = tools.map { EasyAiToolCallback(it) }
 
         // Build ChatOptions at usage time with real toolCallbacks

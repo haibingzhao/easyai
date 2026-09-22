@@ -110,6 +110,7 @@ export function convertSnapshot(msg: MessageSnapshot): Message {
         data: '',
         size: 0,
         filePath: ref.filePath,
+        url: msg.fileUrls?.[ref.filePath],
       });
     });
 

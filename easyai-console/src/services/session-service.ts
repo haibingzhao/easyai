@@ -117,6 +117,8 @@ export interface MessageSnapshot {
   id?: string;
   role: string;
   content: ContentBlock[];
+  /** Stable file reference to temporary display URL, for full and incremental history. */
+  fileUrls?: Record<string, string>;
   timestamp: number;
   /** Stop reason for assistant messages (STOP, TOOL_USE, ABORTED, etc.) */
   stopReason?: string | null;

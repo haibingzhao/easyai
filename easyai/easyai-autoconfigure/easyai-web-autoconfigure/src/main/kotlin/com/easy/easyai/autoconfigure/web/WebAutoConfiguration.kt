@@ -7,45 +7,37 @@ import com.easy.easyai.auth.RefreshTokenStore
 import com.easy.easyai.auth.UserStore
 import com.easy.easyai.auth.jwt.JwtTokenProvider
 import com.easy.easyai.common.textio.template.TemplateRenderer
-import com.easy.easyai.core.agent.AgentService
-import com.easy.easyai.core.agent.AsyncAgentStore
-import com.easy.easyai.core.agent.SessionManager
-import com.easy.easyai.core.agent.TransformContextService
-import com.easy.easyai.core.agent.WaitForUserListener
+import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.goal.GoalStatusNotifier
 import com.easy.easyai.core.goal.GoalStore
-import com.easy.easyai.core.permission.PermissionService
-import com.easy.easyai.core.tool.ScriptEnvProvider
 import com.easy.easyai.core.message.DefaultMessageConverter
 import com.easy.easyai.core.message.MessageConverter
+import com.easy.easyai.core.permission.PermissionService
+import com.easy.easyai.core.storage.ObjectStorageResolver
+import com.easy.easyai.core.team.TeamExecutionStore
+import com.easy.easyai.core.tool.ScriptEnvProvider
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.repository.session.SessionExecutionService
 import com.easy.easyai.skills.SkillRegistry
-import com.easy.easyai.core.team.TeamExecutionStore
+import com.easy.easyai.skills.command.CommandService
 import com.easy.easyai.skills.team.TeamCoordinationStateRegistry
 import com.easy.easyai.snapshot.GitSnapshotService
 import com.easy.easyai.snapshot.RevertService
 import com.easy.easyai.snapshot.SnapshotEventListener
 import com.easy.easyai.snapshot.SnapshotService
-import com.easy.easyai.skills.command.CommandService
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.web.controller.ChatController
 import com.easy.easyai.web.handler.CheckpointCustomEventConverter
 import com.easy.easyai.web.handler.CustomEventConverter
 import com.easy.easyai.web.handler.GoalStatusCustomEventConverter
 import com.easy.easyai.web.security.AuthProperties
-import com.easy.easyai.web.service.ScriptLlmProperties
 import com.easy.easyai.web.security.AuthService
 import com.easy.easyai.web.security.McpPreConnectFilter
-import com.easy.easyai.web.service.ConfigValidator
-import com.easy.easyai.web.service.GoalPauseListener
-import com.easy.easyai.web.service.ChatStreamService
-import com.easy.easyai.web.service.FileStorageService
-import com.easy.easyai.web.service.GoalCommandHandler
-import com.easy.easyai.web.service.SessionService
+import com.easy.easyai.web.service.*
 import com.easy.easyai.web.service.configgen.AgentBasedConfigGenerator
 import org.springframework.ai.chat.model.ChatModel
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.SmartInitializingSingleton
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
@@ -151,9 +143,10 @@ open class WebAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     open fun fileStorageService(
-        @Value("\${easyai.data-dir:\${user.home}/.easyai}") dataDir: String
+        @Value($$"${easyai.data-dir:${user.home}/.easyai}") dataDir: String,
+        objectStorageResolver: ObjectProvider<ObjectStorageResolver>
     ): FileStorageService {
-        return FileStorageService(dataDir)
+        return FileStorageService(dataDir, objectStorageResolver.ifAvailable)
     }
 
     /**

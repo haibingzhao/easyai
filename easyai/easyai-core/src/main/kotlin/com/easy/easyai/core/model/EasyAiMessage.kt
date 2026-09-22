@@ -55,15 +55,15 @@ data class ImageContent(
 }
 
 /**
- * Reference to a file stored on the local filesystem.
- * Replaces [ImageContent] for persistence — only the file path is stored in DB,
- * not the raw bytes. Bytes are read from disk when sending to the LLM.
+ * Reference to a local file or a stored chat image.
+ * Replaces [ImageContent] for persistence — only the stable reference is stored in DB,
+ * never raw bytes or temporary signed URLs. Media is resolved when sending to the LLM.
  *
  * Also used for text file attachments: the path is referenced instead of inlining
  * the full file content into the message text.
  */
 data class FileRefContent(
-    /** Absolute path to the file on the local filesystem. */
+    /** Absolute local path or an owner-scoped storage://chat-images/ reference. */
     val filePath: String,
     /** Display name of the file. */
     val name: String,
@@ -71,7 +71,7 @@ data class FileRefContent(
     val mimeType: String,
     /**
      * Origin of this file reference (persisted for DB round-trips).
-     * - `"attachment"` (default): uploaded via paperclip attachment; path must be within [com.easy.easyai.core.message.DefaultMessageConverter.allowedBaseDir].
+     * - `"attachment"` (default): uploaded attachment; local paths must be within [com.easy.easyai.core.message.DefaultMessageConverter.allowedBaseDir], storage references must belong to the current user.
      * - `"inline"`: extracted from `@` mention in message text by AttachmentProcessor; already validated against project directory.
      */
     val source: String = "attachment",

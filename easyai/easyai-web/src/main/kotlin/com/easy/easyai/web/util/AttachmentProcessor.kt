@@ -4,8 +4,10 @@ import com.easy.easyai.core.model.ContentBlock
 import com.easy.easyai.core.model.FileRefContent
 import com.easy.easyai.core.model.FolderRefContent
 import com.easy.easyai.core.model.TextContent
+import com.easy.easyai.core.storage.StoredFileReference
 import com.easy.easyai.web.model.ChatAttachment
 import com.easy.easyai.web.service.FileStorageService
+import com.easy.easyai.web.util.AttachmentProcessor.extractInlineFileRefs
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
@@ -84,8 +86,8 @@ object AttachmentProcessor {
      * Process attachments into [ContentBlock]s using the new file-reference approach.
      *
      * - Attachments with `filePath` pointing at a directory → [FolderRefContent].
-     * - Attachments with `filePath` (local files) → [FileRefContent] directly.
-     * - Attachments with `data` (clipboard images) → saved to disk via [FileStorageService] → [FileRefContent].
+     * - Attachments with `filePath` (local files or storage references) → [FileRefContent] directly.
+     * - Attachments with `data` (clipboard images) → saved via [FileStorageService] → [FileRefContent].
      *
      * Attachments have no inline position in the message text, so they are anchored at
      * the end of the cleaned text via [anchorOffset] (the caller passes the cleaned text
@@ -97,18 +99,34 @@ object AttachmentProcessor {
      * @return List of [FileRefContent] / [FolderRefContent] blocks.
      * @throws AttachmentValidationException when validation fails.
      */
-    fun processAttachments(
+    suspend fun processAttachments(
         attachments: List<ChatAttachment>?,
         fileStorageService: FileStorageService,
         sessionId: String,
         anchorOffset: Int,
-        projectDir: Path?
+        projectDir: Path?,
+        userId: String = "system"
     ): List<ContentBlock> {
         if (attachments.isNullOrEmpty()) return emptyList()
 
         val blocks = mutableListOf<ContentBlock>()
         for (att in attachments) {
             if (att.filePath != null) {
+                if (StoredFileReference.isStored(att.filePath)) {
+                    try {
+                        StoredFileReference.parse(att.filePath, userId)
+                    } catch (e: IllegalArgumentException) {
+                        throw AttachmentValidationException("Invalid stored image reference for '${att.name}'")
+                    }
+                    if (att.mimeType !in SUPPORTED_IMAGE_MIMES) {
+                        throw AttachmentValidationException("Unsupported stored image type '${att.mimeType}'")
+                    }
+                    blocks.add(FileRefContent(att.filePath, att.name, att.mimeType, displayOffset = anchorOffset))
+                    continue
+                }
+                if (att.filePath.contains("://")) {
+                    throw AttachmentValidationException("Unsupported attachment reference for '${att.name}'")
+                }
                 // Directory attachment (e.g. folder mention restored from history) → FolderRefContent
                 val attPath = try {
                     Path.of(att.filePath).toAbsolutePath().normalize()
@@ -146,7 +164,6 @@ object AttachmentProcessor {
                         "Unsupported base64 attachment type '${att.mimeType}' for '${att.name}'. Only images are supported for inline data."
                     )
                 }
-                // Clipboard image — save to disk first
                 if (att.data.length > MAX_IMAGE_BASE64_BYTES) {
                     throw AttachmentValidationException("Image '${att.name}' exceeds the 8 MB size limit")
                 }
@@ -159,7 +176,7 @@ object AttachmentProcessor {
                     throw AttachmentValidationException("Image '${att.name}' exceeds the 6 MB decoded size limit")
                 }
                 val extension = att.mimeType.substringAfterLast('/', "png")
-                val filePath = fileStorageService.saveImage(sessionId, bytes, extension)
+                val filePath = fileStorageService.saveImage(sessionId, bytes, extension, userId, att.mimeType)
                 blocks.add(FileRefContent(
                     filePath = filePath,
                     name = att.name,
@@ -186,7 +203,7 @@ object AttachmentProcessor {
      * Group 1: name (may start with 📁 for folders)
      * Group 2: absolute file path
      */
-    private val INLINE_REF_REGEX = Regex("""$FILE_REF_CHAR\[([^\]]+)]\(([\s\S]+?)\)$FILE_REF_CHAR""")
+    private val INLINE_REF_REGEX = Regex("""$FILE_REF_CHAR\[([^]]+)]\(([\s\S]+?)\)$FILE_REF_CHAR""")
 
     /** Result of extracting inline file references from message text. */
     data class InlineRefResult(

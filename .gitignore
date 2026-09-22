@@ -16,6 +16,7 @@
 Output
 # Internal docs (not for open-source)
 .doc/
+.docs/
 
 # Environment secrets
 .env

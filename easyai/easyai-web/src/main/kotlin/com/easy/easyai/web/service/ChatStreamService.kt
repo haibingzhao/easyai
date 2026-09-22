@@ -132,7 +132,7 @@ class ChatStreamService(
         // Attach-time context push: the tap has replay=0, so a watch subscriber that
         // connects after buildSseFlow started would otherwise miss the handshake
         // session_context event. Re-emit it from the live session on every attach.
-        executionService?.getActiveSession(sessionId)?.let { session ->
+        executionService.getActiveSession(sessionId)?.let { session ->
             emit(sessionContextSse(session))
         }
         tap.transformWhile { sse ->
@@ -177,6 +177,8 @@ class ChatStreamService(
 
         val config = try {
             configStore.getConfig(configId, userId)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             return flowOf(errorSse(e.message))
         } ?: return flowOf(errorSse("Config not found: $configId"))
@@ -197,6 +199,8 @@ class ChatStreamService(
                 chatOptionsFactory = factory
             )
             chatFlow(agentContext, session, request.message, request.attachments)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             flowOf(errorSse(e.message))
         }
@@ -256,7 +260,7 @@ class ChatStreamService(
             contentBlocks.addAll(
                 AttachmentProcessor.processAttachments(
                     attachments, fileStorageService, sessionId,
-                    anchorOffset = textEnd, projectDir = projectDir
+                    anchorOffset = textEnd, projectDir = projectDir, userId = userId
                 )
             )
         } else {
@@ -414,7 +418,7 @@ class ChatStreamService(
                 contentBlocks.addAll(
                     AttachmentProcessor.processAttachments(
                         attachments, fileStorageService, session.id,
-                        anchorOffset = textEnd, projectDir = projectDir
+                        anchorOffset = textEnd, projectDir = projectDir, userId = agentContext.userId ?: "system"
                     )
                 )
             } catch (e: AttachmentValidationException) {
@@ -964,7 +968,7 @@ class ChatStreamService(
                 goalChannel.close()
                 bridge.close()
                 // End execution: conditional remove + DB status transition (fire-and-forget)
-                handle?.let { executionService?.endExecution(it, endReason) }
+                handle?.let { executionService.endExecution(it, endReason) }
                 logger.debug("Agent execution terminated during {} for session {}", context, session.id)
             }
         }
@@ -1072,7 +1076,7 @@ class ChatStreamService(
         } catch (e: Exception) {
             emit(errorSse(e.message?.removePrefix("Session not found: ") ?: e.message))
         } finally {
-            handle?.let { executionService?.endExecution(it, endReason = null) }
+            handle?.let { executionService.endExecution(it, endReason = null) }
         }
     }
 }

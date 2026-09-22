@@ -7,6 +7,7 @@ import com.easy.easyai.core.event.AgentEvent
 import com.easy.easyai.core.event.AgentStartEvent
 import com.easy.easyai.core.event.AgentEndEvent
 import com.easy.easyai.core.message.DefaultMessageConverter
+import com.easy.easyai.core.message.MessageConverter
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.model.UserMessage
 import com.easy.easyai.core.prompt.PromptTemplateService
@@ -15,11 +16,17 @@ import com.easy.easyai.core.tool.DefaultToolExecutionEngine
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.tool.ToolUpdate
+import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.NullSource
+import org.junit.jupiter.params.provider.ValueSource
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata
 import org.springframework.ai.chat.metadata.ChatResponseMetadata
 import org.springframework.ai.chat.model.ChatModel
@@ -32,6 +39,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import org.springframework.ai.chat.messages.AssistantMessage as SpringAiAssistantMsg
+import org.springframework.ai.chat.messages.UserMessage as SpringAiUserMsg
 
 class AgentTest {
 
@@ -161,6 +169,28 @@ class AgentTest {
             val result = runner.prompt(listOf(UserMessage("Check this"))).result()
             assertTrue(result.isNotEmpty())
             assertEquals("Here is the result", result.last().text())
+        }
+    }
+
+    @Nested
+    inner class `prompt conversion user scope` {
+        @ParameterizedTest
+        @NullSource
+        @ValueSource(strings = ["user-1", "system"])
+        fun `passes context user to the converter with system fallback`(userId: String?) = runTest {
+            val expectedUser = userId ?: "system"
+            val messages = listOf(UserMessage("Look at the image"))
+            val converter = mockk<MessageConverter>()
+            coEvery { converter.toSpringAiMessages(messages, expectedUser) } returns listOf(SpringAiUserMsg("Converted"))
+            val services = mockk<AgentService>(relaxed = true)
+            every { services.messageConverter } returns converter
+            every { services.promptTemplateService.build(any(), any()) } returns ""
+            val runner = AgentLoopRunner(AgentContext(agentId = "test", userId = userId), mockk(), services)
+
+            val prompt = runner.preparePrompt(messages, emptyList())
+
+            assertEquals("Converted", prompt.instructions.single().text)
+            coVerify(exactly = 1) { converter.toSpringAiMessages(messages, expectedUser) }
         }
     }
 

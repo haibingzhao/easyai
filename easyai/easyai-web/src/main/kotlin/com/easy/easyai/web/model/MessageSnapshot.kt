@@ -15,7 +15,8 @@ data class MessageSnapshot(
     val compactedAt: Long? = null,
     val parentMessageId: String? = null,
     val parentToolCallId: String? = null,
-    val references: ChatStreamEvent.ReferencesSnapshot? = null
+    val references: ChatStreamEvent.ReferencesSnapshot? = null,
+    val fileUrls: Map<String, String>? = null
 )
 
 @JsonInclude(JsonInclude.Include.NON_NULL)

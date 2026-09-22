@@ -21,23 +21,7 @@ import { useMention } from '@/hooks/useMention';
 import type { MentionItem } from '@/hooks/useMention';
 import { ResourceMentionPopover } from '@/components/chat/ResourceMentionPopover';
 import { i18n } from '../../utils/i18n';
-import { authFetch } from '@/services/api-client';
-
-/** Upload a base64 attachment to the backend and return filePath. */
-async function uploadBase64Attachment(att: { name: string; mimeType: string; data: string }, sessionId: string): Promise<string> {
-  const binaryStr = atob(att.data);
-  const bytes = new Uint8Array(binaryStr.length);
-  for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-  const blob = new Blob([bytes], { type: att.mimeType });
-  const file = new File([blob], att.name, { type: att.mimeType });
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('sessionId', sessionId);
-  const resp = await authFetch('/api/files/upload', { method: 'POST', body: formData });
-  if (!resp.ok) throw new Error(`Upload failed: ${resp.statusText}`);
-  const result = await resp.json();
-  return result.filePath;
-}
+import type { ErrorEvent } from '@/types/socket-event';
 
 interface InlineEditMessageProps {
   message: Message & { role: 'user' | 'user-with-attachments' };
@@ -50,6 +34,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
   const [editorValue, setEditorValue] = useState('');
   const [selectedCommand, setSelectedCommand] = useState<SlashCommand | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submittingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [currentModelId, setCurrentModelId] = useState('');
   const [currentCapabilities, setCurrentCapabilities] = useState<ModelCapabilities | undefined>();
@@ -355,6 +340,9 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
   const {
     attachments,
     setAttachments,
+    processingFiles,
+    isProcessingFiles,
+    uploadPendingAttachments,
     fileInputRef,
     handleFiles,
     removeAttachment,
@@ -458,6 +446,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (submittingRef.current) return;
         if (showConfirmDialog) {
           setShowConfirmDialog(false);
           setPendingRevertFiles([]);
@@ -495,6 +484,16 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
 
   /** Shared execute logic: call edit-message API, truncate, send new message */
   const executeEdit = useCallback(async (messageText: string, messageId: string) => {
+    if (attachments.some(isImageAttachment) && !visionSupported) {
+      throw new Error(i18n('Current model does not support image input'));
+    }
+    // Validate and persist image uploads before deleting any history or rolling back files.
+    const uploadedAttachments = await uploadPendingAttachments(sessionId!);
+    const textDrafts = uploadedAttachments.filter((a) => !a.filePath && isTextAttachment(a));
+    const finalMessage = buildMessageWithTextAttachments(messageText, textDrafts);
+    const storedAttachments = uploadedAttachments.filter((a) => a.filePath);
+    const chatAttachments = storedAttachments.map(toChatAttachment);
+
     // Call edit-message API (deletes messages + rolls back files)
     const editResult = await editMessage(sessionId!, messageId);
 
@@ -512,39 +511,11 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
       });
     }
 
-    // Upload base64-only attachments first
-    const uploadedAttachments = [...attachments];
-    for (let i = 0; i < uploadedAttachments.length; i++) {
-      const a = uploadedAttachments[i];
-      if (!a.filePath && a.data && isImageAttachment(a)) {
-        try {
-          const filePath = await uploadBase64Attachment(a, sessionId!);
-          uploadedAttachments[i] = { ...a, filePath };
-        } catch (err) {
-          console.warn(`Failed to upload ${a.name}:`, err);
-          setError(`Failed to upload ${a.name}, image will be skipped`);
-        }
-      }
-    }
-
-    // Files with filePath → ChatAttachment (becomes FileRefContent on backend)
-    // Files without filePath → inline in message text (legacy base64)
-    const withFilePath = uploadedAttachments.filter((a) => a.filePath);
-    const inlineTexts = uploadedAttachments.filter((a) => !a.filePath && !isImageAttachment(a) && isTextAttachment(a));
-    const unsupported = uploadedAttachments.filter((a) => !a.filePath && !isImageAttachment(a) && !isTextAttachment(a));
-    if (unsupported.length > 0) {
-      setError(`Unsupported file types: ${unsupported.map((a) => a.name).join(', ')}. Only images and text files are supported.`);
-      setStreaming(false);
-      return;
-    }
-    const finalMessage = buildMessageWithTextAttachments(messageText, inlineTexts);
-    const chatAttachments = withFilePath.map(toChatAttachment);
-
     // Send new message content
     addMessage({
       role: 'user-with-attachments',
-      content: messageText,
-      attachments: attachments.length > 0 ? attachments : undefined,
+      content: finalMessage,
+      attachments: storedAttachments.length > 0 ? storedAttachments : undefined,
       timestamp: Date.now(),
     });
     setStreaming(true);
@@ -574,17 +545,17 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
           );
         }).catch(() => { /* best-effort */ });
       },
-      onError: handleEvent as unknown as (event: import('@/types/socket-event').ErrorEvent) => void,
+      onError: handleEvent as unknown as (event: ErrorEvent) => void,
     });
     setAttachments([]);
-  }, [sessionId, messageIndex, truncateMessagesFrom, setRevertState, addMessage, setStreaming, handleEvent, selectedAgentId, currentModelId, currentProjectId, onSubmit, attachments, setAttachments]);
+  }, [sessionId, messageIndex, truncateMessagesFrom, setRevertState, addMessage, setStreaming, handleEvent, selectedAgentId, currentModelId, currentProjectId, onSubmit, attachments, setAttachments, uploadPendingAttachments, visionSupported]);
 
   /** Phase 1: Validate and show confirm dialog if files will be reverted */
   const handleSubmit = useCallback(async () => {
     const editorText = getEditorText().trim();
-    const messageText = selectedCommand ? `/${selectedCommand.name} ${editorText}`.trim() : editorRef.current?.textContent?.trim() || '';
+    const messageText = selectedCommand ? `/${selectedCommand.name} ${editorText}`.trim() : editorText;
 
-    if (!messageText || isSubmitting || !sessionId) return;
+    if (!messageText || isSubmitting || submittingRef.current || isProcessingFiles() || showConfirmDialog || isAwaitingPermission() || !sessionId) return;
     const messageId = (message as { messageId?: string }).messageId;
     if (!messageId) return;
 
@@ -597,6 +568,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
       return;
     }
 
+    submittingRef.current = true;
     setIsSubmitting(true);
     setError(null);
 
@@ -617,16 +589,18 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
       console.error('Failed to edit message:', err);
       setStreaming(false);
       setError(`Edit failed: ${(err as Error).message}`);
+    } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
-  }, [editorValue, isSubmitting, sessionId, message, isModelLoading, currentModelId, selectedCommand, getEditorText, getRevertFiles, executeEdit]);
+  }, [editorValue, isSubmitting, sessionId, message, isModelLoading, currentModelId, selectedCommand, getEditorText, getRevertFiles, executeEdit, isProcessingFiles, showConfirmDialog, isAwaitingPermission, setStreaming]);
 
   /** Phase 2: User confirmed — execute the actual edit */
   const handleConfirmEdit = useCallback(async () => {
     const editorText = getEditorText().trim();
-    const messageText = selectedCommand ? `/${selectedCommand.name} ${editorText}`.trim() : editorRef.current?.textContent?.trim() || '';
+    const messageText = selectedCommand ? `/${selectedCommand.name} ${editorText}`.trim() : editorText;
     const messageId = (message as { messageId?: string }).messageId;
-    if (!messageText || !messageId || !sessionId) return;
+    if (!messageText || !messageId || !sessionId || submittingRef.current || isProcessingFiles() || isAwaitingPermission()) return;
 
     if (isModelLoading) {
       setError(i18n('Please wait for models to load'));
@@ -643,7 +617,9 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
 
     setShowConfirmDialog(false);
     setPendingRevertFiles([]);
+    submittingRef.current = true;
     setIsSubmitting(true);
+    setError(null);
 
     try {
       await executeEdit(messageText, messageId);
@@ -651,9 +627,11 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
       console.error('Failed to edit message:', err);
       setStreaming(false);
       setError(`Edit failed: ${(err as Error).message}`);
+    } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
-  }, [sessionId, message, selectedCommand, getEditorText, executeEdit, isModelLoading, currentModelId]);
+  }, [sessionId, message, selectedCommand, getEditorText, executeEdit, isModelLoading, currentModelId, isProcessingFiles, isAwaitingPermission, setStreaming]);
 
   const handleCancelDialog = useCallback(() => {
     setShowConfirmDialog(false);
@@ -737,6 +715,10 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
   };
 
   const handleEditorPaste = (e: React.ClipboardEvent) => {
+    if (submittingRef.current || showConfirmDialog) {
+      e.preventDefault();
+      return;
+    }
     // Check for image files first
     const imageFiles = getImageFilesFromPaste(e);
     if (imageFiles.length > 0) {
@@ -817,7 +799,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
         )}
 
         {/* Attachment previews */}
-        <AttachmentPreviewBar attachments={attachments} onRemove={removeAttachment} showImageThumbnails />
+        <AttachmentPreviewBar attachments={attachments} onRemove={removeAttachment} disabled={isSubmitting || showConfirmDialog} showImageThumbnails />
 
         <div
           ref={editorRef}
@@ -828,7 +810,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
           data-placeholder={i18n('Plan, @ for context, / for commands')}
           className="message-editor w-full px-3 py-2 rounded-xl border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring overflow-y-auto whitespace-pre-wrap break-words"
           style={{ minHeight: '3em', maxHeight: '12em' }}
-          contentEditable={!isSubmitting && !isAwaitingPermission()}
+          contentEditable={!isSubmitting && !showConfirmDialog && !isAwaitingPermission()}
         />
         <input
           type="file"
@@ -837,7 +819,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
           multiple
           accept="image/*,.txt,.md,.json,.xml,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.kt,.go,.rs,.rb,.sh,.sql,.toml,.ini,.cfg,.yml,.yaml,.csv"
           onChange={(e) => {
-            if (e.target.files) {
+            if (e.target.files && !submittingRef.current && !showConfirmDialog) {
               handleFiles(Array.from(e.target.files));
               e.target.value = '';
             }
@@ -849,7 +831,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
               onClick={() => fileInputRef.current?.click()}
               className={`p-1.5 transition-colors ${visionSupported ? 'text-muted-foreground hover:text-foreground' : 'text-muted-foreground/70'}`}
               title={visionSupported ? 'Attach files' : i18n('Images not supported; text files only')}
-              disabled={isSubmitting}
+              disabled={isSubmitting || processingFiles || showConfirmDialog}
             >
               <Paperclip className="w-4 h-4" />
             </button>
@@ -876,7 +858,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
             ) : (
               <button
                 className="p-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-                disabled={!hasContent || isModelLoading || isAwaitingPermission()}
+                disabled={!hasContent || processingFiles || showConfirmDialog || isModelLoading || isAwaitingPermission()}
                 onClick={handleSubmit}
                 title={i18n('Submit')}
               >
@@ -924,6 +906,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
               <button
                 className="px-4 py-2 text-sm font-medium rounded-md bg-foreground text-background hover:bg-foreground/90 transition-colors"
                 onClick={handleConfirmEdit}
+                disabled={isSubmitting || processingFiles}
               >
                 Continue
               </button>

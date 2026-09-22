@@ -5,8 +5,10 @@ export interface Attachment {
   /** Base64-encoded content. Present for clipboard images and legacy attachments. */
   data: string;
   size: number;
-  /** Absolute local file path. Present for uploaded/local files. */
+  /** Stable storage reference or absolute local file path. */
   filePath?: string;
+  /** Temporary display URL; not part of the chat request. */
+  url?: string;
 }
 
 /** Checkpoint data attached to an assistant message after file changes are committed */

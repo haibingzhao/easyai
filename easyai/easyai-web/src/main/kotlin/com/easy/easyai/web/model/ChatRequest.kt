@@ -65,7 +65,7 @@ data class ChatAttachment(
     val mimeType: String,
     /** Base64-encoded content (no data URL prefix). Null when [filePath] is provided. */
     val data: String? = null,
-    /** Absolute path to a local file. Null when [data] is provided. */
+    /** Local file path or stable storage reference. Null when [data] is provided. */
     val filePath: String? = null
 )
 

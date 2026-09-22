@@ -1,6 +1,41 @@
 {
   "properties": [
     {
+      "name": "easyai.system-prompt",
+      "type": "java.lang.String",
+      "description": "Custom instructions carried by the default agent's system prompt.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": "You are a helpful AI assistant."
+    },
+    {
+      "name": "easyai.max-iterations",
+      "type": "java.lang.Integer",
+      "description": "Maximum ReAct loop iterations for the default agent.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": 50
+    },
+    {
+      "name": "easyai.max-retries",
+      "type": "java.lang.Integer",
+      "description": "Maximum retries for the default agent's failed model calls.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": 3
+    },
+    {
+      "name": "easyai.work-dir",
+      "type": "java.lang.String",
+      "description": "Working directory used as the default agent's project path for skills, tools and snapshots.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": "."
+    },
+    {
+      "name": "easyai.domain",
+      "type": "java.lang.String",
+      "description": "Active domain catalog that drives domain-scoped memory, knowledge and instructions.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": "coding"
+    },
+    {
       "name": "easyai.memory.enabled",
       "type": "java.lang.Boolean",
       "description": "Whether the memory system is enabled (requires EasyRAG to be configured).",
@@ -36,11 +71,25 @@
       "defaultValue": true
     },
     {
-      "name": "easyai.skills.system-prompt-format",
-      "type": "com.easy.easyai.skills.SkillPromptFormat",
-      "description": "Format for skill descriptions in system prompt (CONCISE or FULL).",
+      "name": "easyai.skills.rag.enabled",
+      "type": "java.lang.Boolean",
+      "description": "On-demand skill discovery through EasyRAG. Also requires easyai.rag.enabled=true and easyai.r2dbc.enabled=true.",
       "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
-      "defaultValue": "CONCISE"
+      "defaultValue": false
+    },
+    {
+      "name": "easyai.skills.rag.search-top-k",
+      "type": "java.lang.Integer",
+      "description": "Skills returned per skill_search call.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": 5
+    },
+    {
+      "name": "easyai.skills.rag.index-concurrency",
+      "type": "java.lang.Integer",
+      "description": "Maximum in-flight index writes during the startup skill reconciliation pass.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": 4
     },
     {
       "name": "easyai.system.otel.resource.attributes",

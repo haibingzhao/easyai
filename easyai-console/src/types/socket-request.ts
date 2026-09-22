@@ -1,10 +1,8 @@
 export interface ChatAttachment {
   name: string;
   mimeType: string;
-  /** Base64-encoded content. Present for clipboard images, absent for local files. */
-  data?: string;
-  /** Absolute local file path. Present for uploaded files, absent for clipboard images. */
-  filePath?: string;
+  /** Stable storage reference or absolute local file path after upload. */
+  filePath: string;
 }
 
 export interface ChatRequest {

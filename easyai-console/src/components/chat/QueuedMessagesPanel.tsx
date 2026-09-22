@@ -21,6 +21,7 @@ import { useChatStore } from '@/services/stores/chat-store';
 import { removeQueueMessage, updateQueueMessage, reorderQueueMessages, addQueueMessage } from '@/services/chat-service';
 import type { QueuedMessage } from '@/types/message';
 import { isImageAttachment, toChatAttachment } from '@/utils/attachment-utils';
+import { AttachmentImage } from './AttachmentImage';
 
 // ===================== Sortable Item =====================
 
@@ -90,12 +91,9 @@ const SortableQueuedMessage: React.FC<SortableQueuedMessageProps> = ({ msg, onEd
       {msg.attachments && msg.attachments.length > 0 && (
         <div className="flex items-center gap-1 shrink-0">
           {msg.attachments.filter(isImageAttachment).map((a) => (
-            <img
+            <AttachmentImage
               key={a.id}
-              src={a.filePath
-                ? `/api/files/serve?path=${encodeURIComponent(a.filePath)}`
-                : `data:${a.mimeType};base64,${a.data}`}
-              alt={a.name}
+              attachment={a}
               className="w-5 h-5 object-cover rounded"
             />
           ))}

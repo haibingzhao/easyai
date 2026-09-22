@@ -17,6 +17,7 @@ import com.easy.easyai.core.prompt.ProviderPromptLoader
 import com.easy.easyai.core.prompt.SystemPromptBuilder
 import com.easy.easyai.core.skill.AsyncSkillCatalogStore
 import com.easy.easyai.core.skill.SkillStore
+import com.easy.easyai.core.storage.ObjectStorageResolver
 import com.easy.easyai.core.tool.DefaultToolExecutionEngine
 import com.easy.easyai.core.tool.ToolBuilder
 import com.easy.easyai.core.tool.ToolExecutionEngine
@@ -32,6 +33,7 @@ import com.easy.easyai.tools.SpringToolFactory
 import io.micrometer.observation.ObservationRegistry
 import jakarta.annotation.PostConstruct
 import org.springframework.ai.chat.model.ChatModel
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.AutoConfiguration
@@ -65,7 +67,8 @@ open class EasyAiCoreAutoConfiguration(
 
     @Bean
     @ConditionalOnMissingBean
-    open fun messageConverter(): MessageConverter = DefaultMessageConverter()
+    open fun messageConverter(objectStorageResolver: ObjectProvider<ObjectStorageResolver>): MessageConverter =
+        DefaultMessageConverter(objectStorageResolver = objectStorageResolver.getIfAvailable())
 
     @Bean
     @ConditionalOnMissingBean
