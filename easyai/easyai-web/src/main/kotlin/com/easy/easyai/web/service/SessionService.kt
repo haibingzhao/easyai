@@ -11,6 +11,7 @@ import com.easy.easyai.skills.team.TeamCoordinationStateRegistry
 import com.easy.easyai.snapshot.SnapshotService
 import com.easy.easyai.snapshot.model.FileDiff
 import com.easy.easyai.web.model.*
+import kotlinx.coroutines.CancellationException
 import org.slf4j.LoggerFactory
 import tools.jackson.core.type.TypeReference
 
@@ -86,7 +87,7 @@ class SessionService(
             createdAt = session.createdAt.toEpochMilli(),
             updatedAt = session.updatedAt.toEpochMilli(),
             messageCount = session.messages.size,
-            messages = messagesWithTimestamps.map { toMessageSnapshot(it) },
+            messages = toMessageSnapshots(messagesWithTimestamps, userId),
             pendingPermission = pendingPermission,
             endReason = endReason?.takeIf { it != "normal" },
             lastAgentId = lastConfig?.agentId,
@@ -138,7 +139,7 @@ class SessionService(
 
         return SessionMessagesAfterResponse(
             sessionId = id,
-            messages = messagesWithTimestamps.map { toMessageSnapshot(it) },
+            messages = toMessageSnapshots(messagesWithTimestamps, userId),
             compactionOccurredAfter = compactionAt != null,
             contentUpdatedAt = contentUpdatedAt,
             streaming = sessionStatus == "streaming",
@@ -572,10 +573,30 @@ class SessionService(
         return if (text.isNullOrBlank()) null else text.take(50)
     }
 
-    /**
-     * Convert a [MessageWithTimestamp] to a [MessageSnapshot] DTO.
-     * Shared between [getSessionDetail] and [getSessionMessagesAfter].
-     */
+    private suspend fun toMessageSnapshots(messages: List<MessageWithTimestamp>, userId: String): List<MessageSnapshot> {
+        val urls = mutableMapOf<String, String?>()
+        return messages.map { message ->
+            val fileUrls = mutableMapOf<String, String>()
+            if (fileStorageService != null) {
+                for (ref in message.message.content.filterIsInstance<FileRefContent>()) {
+                    if (!ref.mimeType.startsWith("image/")) continue
+                    if (!urls.containsKey(ref.filePath)) {
+                        urls[ref.filePath] = try {
+                            fileStorageService.resolveImageUrl(ref.filePath, userId)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            logger.warn("Failed to resolve session image {}: {}", ref.name, e.message)
+                            null
+                        }
+                    }
+                    urls[ref.filePath]?.let { fileUrls[ref.filePath] = it }
+                }
+            }
+            toMessageSnapshot(message).copy(fileUrls = fileUrls.takeIf { it.isNotEmpty() })
+        }
+    }
+
     private fun toMessageSnapshot(msgWithTs: MessageWithTimestamp): MessageSnapshot {
         val msg = msgWithTs.message
         val assistantMsg = msg as? AssistantMessage

@@ -17,34 +17,20 @@ import { useSlashCommand } from '@/hooks/useSlashCommand';
 import { useAttachmentManager } from '@/hooks/useAttachmentManager';
 import { AttachmentPreviewBar } from './AttachmentPreviewBar';
 import type { SlashCommand } from '@/types/command';
-import type { QueuedMessage } from '../../types/message';
+import type { Attachment, QueuedMessage } from '../../types/message';
 import type { ModelCapabilities } from '@/types/settings';
 import { i18n } from '../../utils/i18n';
 import { addQueueMessage, removeQueueMessage } from '../../services/chat-service';
 import { QueuedMessagesPanel } from './QueuedMessagesPanel';
-import { authFetch } from '@/services/api-client';
 import { getCheckpoints } from '@/services/checkpoint-service';
 import type { CheckpointInfo } from '@/types/checkpoint';
-
-/** Upload a base64 attachment to the backend and return filePath. */
-async function uploadBase64Attachment(att: { name: string; mimeType: string; data: string }, sessionId: string): Promise<string> {
-  const binaryStr = atob(att.data);
-  const bytes = new Uint8Array(binaryStr.length);
-  for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-  const blob = new Blob([bytes], { type: att.mimeType });
-  const file = new File([blob], att.name, { type: att.mimeType });
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('sessionId', sessionId);
-  const resp = await authFetch('/api/files/upload', { method: 'POST', body: formData });
-  if (!resp.ok) throw new Error(`Upload failed: ${resp.statusText}`);
-  const result = await resp.json();
-  return result.filePath;
-}
+import type { ErrorEvent } from '@/types/socket-event';
 
 export const MessageEditor: React.FC = () => {
   const [editorValue, setEditorValue] = useState('');
   const [selectedCommand, setSelectedCommand] = useState<SlashCommand | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const submittingRef = useRef(false);
   const editorRef = useRef<HTMLDivElement>(null);
   const [currentModelId, setCurrentModelId] = useState('');
   const [currentCapabilities, setCurrentCapabilities] = useState<ModelCapabilities | undefined>();
@@ -322,6 +308,8 @@ export const MessageEditor: React.FC = () => {
     attachments,
     setAttachments,
     processingFiles,
+    isProcessingFiles,
+    uploadPendingAttachments,
     fileInputRef,
     handleFiles,
     removeAttachment,
@@ -336,7 +324,7 @@ export const MessageEditor: React.FC = () => {
     const editorText = getEditorText().trim();
     const messageText = selectedCommand ? `/${selectedCommand.name} ${editorText}`.trim() : editorText;
 
-    if (!messageText || isStreaming || isAwaitingAskQuestion() || isAwaitingPermission()) return;
+    if (!messageText || isStreaming || submittingRef.current || isProcessingFiles() || isAwaitingAskQuestion() || isAwaitingPermission()) return;
     // Prevent sending while model configs are still loading
     if (isModelLoading) {
       addMessage({
@@ -369,97 +357,101 @@ export const MessageEditor: React.FC = () => {
       return;
     }
 
-    // Determine or create session ID first (needed for uploading base64 attachments)
-    let sid = currentSessionId;
-    if (!sid) {
-      const sessionService = new SessionService();
-      sid = await sessionService.createSession();
-      setSessionId(sid);
+    if (attachments.some(isImageAttachment) && !visionSupported) {
+      addMessage({ role: 'error', content: i18n('Current model does not support image input'), timestamp: Date.now() });
+      return;
     }
 
-    // Upload any base64-only attachments (no filePath) to get filePath
-    const uploadedAttachments = [...attachments];
-    for (let i = 0; i < uploadedAttachments.length; i++) {
-      const a = uploadedAttachments[i];
-      if (!a.filePath && a.data) {
-        try {
-          const filePath = await uploadBase64Attachment(a, sid);
-          uploadedAttachments[i] = { ...a, filePath };
-        } catch (err) {
-          console.warn(`Failed to upload attachment ${a.name}:`, err);
-          addMessage({
-            role: 'error',
-            content: `Failed to upload ${a.name}, it will be sent using base64 encoding`,
-            timestamp: Date.now(),
-          });
+    submittingRef.current = true;
+    setIsSubmitting(true);
+    let releasedForStreaming = false;
+    try {
+      let sid = currentSessionId;
+      let uploadedAttachments: Attachment[];
+      try {
+        // A new session is required before uploading clipboard drafts.
+        if (!sid) {
+          const sessionService = new SessionService();
+          sid = await sessionService.createSession();
+          setSessionId(sid);
         }
+        uploadedAttachments = await uploadPendingAttachments(sid);
+      } catch (error) {
+        addMessage({ role: 'error', content: (error as Error).message, timestamp: Date.now() });
+        return;
+      }
+
+      const textDrafts = uploadedAttachments.filter((a) => !a.filePath && isTextAttachment(a));
+      const finalMessage = buildMessageWithTextAttachments(messageText, textDrafts);
+      const storedAttachments = uploadedAttachments.filter((a) => a.filePath);
+      const chatAttachments = storedAttachments.map(toChatAttachment);
+      try {
+        addMessage({
+          role: 'user-with-attachments',
+          content: finalMessage,
+          attachments: storedAttachments.length > 0 ? storedAttachments : undefined,
+          timestamp: Date.now(),
+        });
+
+        // Only clear the draft once every attachment is ready.
+        if (editorRef.current) editorRef.current.innerHTML = '';
+        setSelectedCommand(null);
+        setEditorValue('');
+        setAttachments([]);
+        setStreaming(true);
+        // SSE lasts for the whole response; allow composing follow-ups once uploads are done.
+        releasedForStreaming = true;
+        submittingRef.current = false;
+        setIsSubmitting(false);
+
+        chatServiceRef.current = await sendMessageToBackend({
+          message: finalMessage,
+          sessionId: sid,
+          agentId: selectedAgentId,
+          modelId: currentModelId,
+          projectId: currentProjectId,
+          attachments: chatAttachments.length > 0 ? chatAttachments : undefined,
+          onEvent: handleEvent,
+          onDone: (event) => {
+            handleEvent(event);
+            // Full reconciliation after stream ends: recover any SSE events that may
+            // have been lost (e.g., compaction indicators). Mirrors the watch path's
+            // finalReconciliation in ChatPanel.
+            if (sid) {
+              Promise.all([
+                sessionService.getSessionDetail(sid),
+                getCheckpoints(sid).catch(() => [] as CheckpointInfo[]),
+              ]).then(([detail, checkpoints]) => {
+                useChatStore.getState().loadSessionMessages(
+                  detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength
+                );
+              }).catch(() => { /* best-effort */ });
+            }
+          },
+          onError: handleEvent as unknown as (event: ErrorEvent) => void,
+        });
+      } catch (error) {
+        console.error('Failed to send message:', error);
+        // Defensive: commit any partial streaming content to preserve it.
+        // The store's error handler may have already committed, but this is safe
+        // (commitStreamingMessage is a no-op when streamingBlocks is empty).
+        commitStreamingMessage();
+        // Abort any active SSE streams (retry, resume, question, permission)
+        abortAllActiveStreams();
+        setStreaming(false);
+        addMessage({
+          role: 'error',
+          content: `发送失败: ${(error as Error).message}`,
+          timestamp: Date.now(),
+        });
+      }
+    } finally {
+      if (!releasedForStreaming) {
+        submittingRef.current = false;
+        setIsSubmitting(false);
       }
     }
-
-    // Files with filePath → ChatAttachment (becomes FileRefContent on backend)
-    // Files without filePath (base64, upload failed) → inline in message text (legacy)
-    const withFilePath = uploadedAttachments.filter((a) => a.filePath);
-    const inlineTexts = uploadedAttachments.filter((a) => !a.filePath && isTextAttachment(a));
-    const finalMessage = buildMessageWithTextAttachments(messageText, inlineTexts);
-    const chatAttachments = withFilePath.map(toChatAttachment);
-
-    addMessage({
-      role: 'user-with-attachments',
-      content: messageText,
-      attachments: attachments.length > 0 ? attachments : undefined,
-      timestamp: Date.now(),
-    });
-
-    // Clear editor
-    if (editorRef.current) editorRef.current.innerHTML = '';
-    setSelectedCommand(null);
-    setEditorValue('');
-    setAttachments([]);
-    setStreaming(true);
-
-    try {
-      chatServiceRef.current = await sendMessageToBackend({
-        message: finalMessage,
-        sessionId: sid,
-        agentId: selectedAgentId,
-        modelId: currentModelId,
-        projectId: currentProjectId,
-        attachments: chatAttachments.length > 0 ? chatAttachments : undefined,
-        onEvent: handleEvent,
-        onDone: (event) => {
-          handleEvent(event);
-          // Full reconciliation after stream ends: recover any SSE events that may
-          // have been lost (e.g., compaction indicators). Mirrors the watch path's
-          // finalReconciliation in ChatPanel.
-          if (sid) {
-            Promise.all([
-              sessionService.getSessionDetail(sid),
-              getCheckpoints(sid).catch(() => [] as CheckpointInfo[]),
-            ]).then(([detail, checkpoints]) => {
-              useChatStore.getState().loadSessionMessages(
-                detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength
-              );
-            }).catch(() => { /* best-effort */ });
-          }
-        },
-        onError: handleEvent as unknown as (event: import('@/types/socket-event').ErrorEvent) => void,
-      });
-    } catch (error) {
-      console.error('Failed to send message:', error);
-      // Defensive: commit any partial streaming content to preserve it.
-      // The store's error handler may have already committed, but this is safe
-      // (commitStreamingMessage is a no-op when streamingBlocks is empty).
-      commitStreamingMessage();
-      // Abort any active SSE streams (retry, resume, question, permission)
-      abortAllActiveStreams();
-      setStreaming(false);
-      addMessage({
-        role: 'error',
-        content: `发送失败: ${(error as Error).message}`,
-        timestamp: Date.now(),
-      });
-    }
-  }, [editorValue, isStreaming, sessionId, attachments, addMessage, setStreaming, handleEvent, setSessionId, currentModelId, selectedAgentId, currentProjectId, isModelLoading, isAwaitingAskQuestion, isAwaitingPermission, selectedCommand]);
+  }, [editorValue, isStreaming, sessionId, attachments, addMessage, setStreaming, handleEvent, setSessionId, currentModelId, selectedAgentId, currentProjectId, isModelLoading, isAwaitingAskQuestion, isAwaitingPermission, selectedCommand, isProcessingFiles, uploadPendingAttachments, setAttachments, visionSupported, commitStreamingMessage]);
 
   /** Extract text content, excluding command chip text and replacing mention chips with encoded refs */
   const getEditorText = useCallback((): string => {
@@ -521,7 +513,7 @@ export const MessageEditor: React.FC = () => {
   const handleFollowUpSend = useCallback(async () => {
     const editorText = getEditorText().trim();
     const messageText = selectedCommand ? `/${selectedCommand.name} ${editorText}`.trim() : editorText;
-    if (!messageText || !sessionId) return;
+    if (!messageText || !sessionId || submittingRef.current || isProcessingFiles()) return;
 
     // Classify attachments for validation
     const unsupported = attachments.filter((a) => !a.filePath && !isImageAttachment(a) && !isTextAttachment(a));
@@ -534,65 +526,65 @@ export const MessageEditor: React.FC = () => {
       return;
     }
 
-    // Upload any base64-only attachments to get filePath
-    const uploadedAttachments = [...attachments];
-    for (let i = 0; i < uploadedAttachments.length; i++) {
-      const a = uploadedAttachments[i];
-      if (!a.filePath && a.data) {
-        try {
-          const filePath = await uploadBase64Attachment(a, sessionId);
-          uploadedAttachments[i] = { ...a, filePath };
-        } catch (err) {
-          console.warn(`Failed to upload attachment ${a.name}:`, err);
-          addMessage({
-            role: 'error',
-            content: `Failed to upload ${a.name}, it will be sent using base64 encoding`,
-            timestamp: Date.now(),
-          });
-        }
-      }
+    if (attachments.some(isImageAttachment) && !visionSupported) {
+      addMessage({ role: 'error', content: i18n('Current model does not support image input'), timestamp: Date.now() });
+      return;
     }
 
-    // Files with filePath → ChatAttachment, files without → inline in text
-    const withFilePath = uploadedAttachments.filter((a) => a.filePath);
-    const inlineTexts = uploadedAttachments.filter((a) => !a.filePath && isTextAttachment(a));
-    const finalMessage = buildMessageWithTextAttachments(messageText, inlineTexts);
-    const chatAttachments = withFilePath.map(toChatAttachment);
-
-    // Add to local queue — store finalMessage to match backend UserMessageAddedEvent.content
-    const localMsg: QueuedMessage = {
-      id: `queued-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      content: finalMessage,
-      type: 'followUp',
-      status: 'syncing',
-      attachments: withFilePath.length > 0 ? withFilePath : undefined,
-    };
-    addQueuedMessage(localMsg);
-
-    // Clear editor and attachments
-    if (editorRef.current) editorRef.current.innerHTML = '';
-    setEditorValue('');
-    setAttachments([]);
-
-    // Sync to backend
+    submittingRef.current = true;
+    setIsSubmitting(true);
     try {
-      const resp = await addQueueMessage(sessionId, finalMessage, 'followUp', chatAttachments.length > 0 ? chatAttachments : undefined);
-      // Update local message with backend ID
-      useChatStore.setState((state) => ({
-        queuedMessages: state.queuedMessages.map((m) =>
-          m.id === localMsg.id ? { ...m, backendQueueId: resp.id, status: 'synced' as const } : m
-        ),
-      }));
-    } catch (error) {
-      console.error('Failed to queue followUp message:', error);
-      // Mark message as failed so user can see the sync issue
-      useChatStore.setState((state) => ({
-        queuedMessages: state.queuedMessages.map((m) =>
-          m.id === localMsg.id ? { ...m, status: 'failed' as const } : m
-        ),
-      }));
+      let uploadedAttachments: Attachment[];
+      try {
+        uploadedAttachments = await uploadPendingAttachments(sessionId);
+      } catch (error) {
+        addMessage({ role: 'error', content: (error as Error).message, timestamp: Date.now() });
+        return;
+      }
+      const textDrafts = uploadedAttachments.filter((a) => !a.filePath && isTextAttachment(a));
+      const finalMessage = buildMessageWithTextAttachments(messageText, textDrafts);
+      const storedAttachments = uploadedAttachments.filter((a) => a.filePath);
+      const chatAttachments = storedAttachments.map(toChatAttachment);
+
+      // Add to local queue — store finalMessage to match backend UserMessageAddedEvent.content
+      const localMsg: QueuedMessage = {
+        id: `queued-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        content: finalMessage,
+        type: 'followUp',
+        status: 'syncing',
+        attachments: storedAttachments.length > 0 ? storedAttachments : undefined,
+      };
+      addQueuedMessage(localMsg);
+
+      // Clear editor and attachments
+      if (editorRef.current) editorRef.current.innerHTML = '';
+      setSelectedCommand(null);
+      setEditorValue('');
+      setAttachments([]);
+
+      // Sync to backend
+      try {
+        const resp = await addQueueMessage(sessionId, finalMessage, 'followUp', chatAttachments.length > 0 ? chatAttachments : undefined);
+        // Update local message with backend ID
+        useChatStore.setState((state) => ({
+          queuedMessages: state.queuedMessages.map((m) =>
+            m.id === localMsg.id ? { ...m, backendQueueId: resp.id, status: 'synced' as const } : m
+          ),
+        }));
+      } catch (error) {
+        console.error('Failed to queue followUp message:', error);
+        // Mark message as failed so user can see the sync issue
+        useChatStore.setState((state) => ({
+          queuedMessages: state.queuedMessages.map((m) =>
+            m.id === localMsg.id ? { ...m, status: 'failed' as const } : m
+          ),
+        }));
+      }
+    } finally {
+      submittingRef.current = false;
+      setIsSubmitting(false);
     }
-  }, [sessionId, addQueuedMessage, getEditorText, selectedCommand, attachments, setAttachments]);
+  }, [sessionId, addQueuedMessage, getEditorText, selectedCommand, attachments, setAttachments, addMessage, isProcessingFiles, uploadPendingAttachments, visionSupported]);
 
   // --- Editor event handlers ---
 
@@ -676,6 +668,10 @@ export const MessageEditor: React.FC = () => {
   };
 
   const handleEditorPaste = (e: React.ClipboardEvent) => {
+    if (submittingRef.current) {
+      e.preventDefault();
+      return;
+    }
     // Check for image files first
     const imageFiles = getImageFilesFromPaste(e);
     if (imageFiles.length > 0) {
@@ -773,7 +769,7 @@ export const MessageEditor: React.FC = () => {
       <QueuedMessagesPanel />
 
       {attachments.length > 0 && (
-        <AttachmentPreviewBar attachments={attachments} onRemove={removeAttachment} showImageThumbnails />
+        <AttachmentPreviewBar attachments={attachments} onRemove={removeAttachment} disabled={isSubmitting} showImageThumbnails />
       )}
 
       {/* Slash command popover */}
@@ -815,7 +811,7 @@ export const MessageEditor: React.FC = () => {
           multiple
           accept="image/*,.txt,.md,.json,.xml,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.kt,.go,.rs,.rb,.sh,.sql,.toml,.ini,.cfg,.yml,.yaml,.csv"
           onChange={(e) => {
-            if (e.target.files) {
+            if (e.target.files && !submittingRef.current) {
               handleFiles(Array.from(e.target.files));
               e.target.value = '';
             }
@@ -834,7 +830,7 @@ export const MessageEditor: React.FC = () => {
             minHeight: 'calc(3 * 1.5em + 1rem)',
             maxHeight: 'calc(7 * 1.5em + 1rem)',
           }}
-          contentEditable={!isAwaitingAskQuestion() && !isAwaitingPermission()}
+          contentEditable={!isSubmitting && !isAwaitingAskQuestion() && !isAwaitingPermission()}
         />
       </div>
 
@@ -842,6 +838,7 @@ export const MessageEditor: React.FC = () => {
         <div className="flex items-center gap-2">
           <button
             onClick={() => fileInputRef.current?.click()}
+            disabled={isSubmitting || processingFiles}
             className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
             title={visionSupported ? 'Attach files' : i18n('Images not supported; text files only')}
           >
@@ -898,11 +895,11 @@ export const MessageEditor: React.FC = () => {
           ) : (
             <button
               className="p-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-              disabled={!hasContent || processingFiles || isAwaitingAskQuestion() || isAwaitingPermission() || isModelLoading}
+              disabled={!hasContent || processingFiles || isSubmitting || isAwaitingAskQuestion() || isAwaitingPermission() || isModelLoading}
               onClick={handleSend}
               title={isModelLoading ? i18n('Loading models...') : isAwaitingAskQuestion() ? i18n('Answer the question first') : i18n('Send')}
             >
-              {processingFiles ? (
+              {processingFiles || isSubmitting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <Send className="w-4 h-4" />

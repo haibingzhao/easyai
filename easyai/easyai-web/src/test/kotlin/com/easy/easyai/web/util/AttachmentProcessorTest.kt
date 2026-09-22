@@ -5,7 +5,11 @@ import com.easy.easyai.core.model.FolderRefContent
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.web.model.ChatAttachment
 import com.easy.easyai.web.service.FileStorageService
+import com.easy.easyai.core.storage.StoredFileReference
+import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -135,7 +139,42 @@ class AttachmentProcessorTest {
     inner class `processAttachments` {
 
         @Test
-        fun `directory attachment becomes FolderRefContent`(@TempDir tempDir: Path) {
+        fun `keeps stable stored image references without uploading again`() = runTest {
+            val reference = StoredFileReference.create("alice", "session-1", "png")
+            val result = AttachmentProcessor.processAttachments(
+                listOf(ChatAttachment("shot.png", "image/png", filePath = reference)),
+                fileStorageService, "session-1", 12, null, "alice"
+            )
+            assertEquals(FileRefContent(reference, "shot.png", "image/png", displayOffset = 12), result.single())
+            coVerify(exactly = 0) { fileStorageService.saveImage(any(), any(), any(), any(), any()) }
+        }
+
+        @Test
+        fun `rejects other users stored references and arbitrary URLs`() = runTest {
+            for (reference in listOf(StoredFileReference.create("bob", "session-1", "png"), "https://example.test/image.png")) {
+                assertFailsWith<AttachmentValidationException> {
+                    AttachmentProcessor.processAttachments(
+                        listOf(ChatAttachment("shot.png", "image/png", filePath = reference)),
+                        fileStorageService, "session-1", 0, null, "alice"
+                    )
+                }
+            }
+        }
+
+        @Test
+        fun `base64 images use the same user scoped storage path`() = runTest {
+            val reference = StoredFileReference.create("alice", "session-1", "png")
+            coEvery { fileStorageService.saveImage("session-1", any(), "png", "alice", "image/png") } returns reference
+            val result = AttachmentProcessor.processAttachments(
+                listOf(ChatAttachment("shot.png", "image/png", data = "AQID")),
+                fileStorageService, "session-1", 0, null, "alice"
+            )
+            assertEquals(reference, (result.single() as FileRefContent).filePath)
+            coVerify(exactly = 1) { fileStorageService.saveImage("session-1", byteArrayOf(1, 2, 3), "png", "alice", "image/png") }
+        }
+
+        @Test
+        fun `directory attachment becomes FolderRefContent`(@TempDir tempDir: Path) = runTest {
             val dir = Files.createDirectories(tempDir.resolve("docs"))
 
             val blocks = AttachmentProcessor.processAttachments(
@@ -156,7 +195,7 @@ class AttachmentProcessorTest {
         fun `rejects directory attachment outside project directory`(
             @TempDir projectDir: Path,
             @TempDir otherDir: Path
-        ) {
+        ) = runTest {
             val dir = Files.createDirectories(otherDir.resolve("secret"))
 
             val e = assertFailsWith<AttachmentValidationException> {
@@ -172,7 +211,7 @@ class AttachmentProcessorTest {
         }
 
         @Test
-        fun `rejects directory attachment when no project directory is configured`(@TempDir tempDir: Path) {
+        fun `rejects directory attachment when no project directory is configured`(@TempDir tempDir: Path) = runTest {
             val dir = Files.createDirectories(tempDir.resolve("docs"))
 
             assertFailsWith<AttachmentValidationException> {
@@ -187,7 +226,7 @@ class AttachmentProcessorTest {
         }
 
         @Test
-        fun `file attachment still becomes FileRefContent`(@TempDir tempDir: Path) {
+        fun `file attachment still becomes FileRefContent`(@TempDir tempDir: Path) = runTest {
             val file = tempDir.resolve("a.txt")
             Files.writeString(file, "x")
 

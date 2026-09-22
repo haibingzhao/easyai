@@ -24,8 +24,7 @@ import reactor.core.publisher.Mono
  * from the caller's *current* storage. Serving through the server also sidesteps the local backend's
  * browser-unusable `file://` presigned URLs.
  *
- * The key is scoped to the requesting user's resolved storage, so one user cannot read another's
- * object by guessing a key — the lookup happens inside their own bucket/directory.
+ * Chat image keys are reserved for the session-authorized file endpoint.
  */
 @RestController
 @RequestMapping("/api/media")
@@ -36,6 +35,9 @@ class MediaFileController(
 
     @GetMapping("/file")
     fun serve(@RequestParam key: String): Mono<ResponseEntity<ByteArrayResource>> = mono {
+        if (key.split('/', '\\').any { it.equals("chat-images", ignoreCase = true) }) {
+            throw ResponseStatusException(HttpStatus.NOT_FOUND, "Media object not found")
+        }
         val resolver = objectStorageResolver
             ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Object storage is not configured")
         val userId = getCurrentUserId()

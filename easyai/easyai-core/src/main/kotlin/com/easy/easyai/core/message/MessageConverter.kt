@@ -1,11 +1,17 @@
 package com.easy.easyai.core.message
 
 import com.easy.easyai.core.model.*
+import com.easy.easyai.core.storage.ObjectStorageException
+import com.easy.easyai.core.storage.ObjectStorageResolver
+import com.easy.easyai.core.storage.StoredFileReference
+import kotlinx.coroutines.CancellationException
 import org.slf4j.LoggerFactory
+import org.springframework.ai.chat.messages.Message
 import org.springframework.ai.chat.messages.ToolResponseMessage
 import org.springframework.ai.chat.model.ChatResponse
 import org.springframework.ai.content.Media
 import org.springframework.util.MimeType
+import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import org.springframework.ai.chat.messages.AssistantMessage as SpringAiAssistantMessage
@@ -13,7 +19,7 @@ import org.springframework.ai.chat.messages.SystemMessage as SpringAiSystemMessa
 import org.springframework.ai.chat.messages.UserMessage as SpringAiUserMessage
 
 interface MessageConverter {
-    fun toSpringAiMessages(messages: List<EasyAiMessage>): List<org.springframework.ai.chat.messages.Message>
+    suspend fun toSpringAiMessages(messages: List<EasyAiMessage>, userId: String = "system"): List<Message>
     fun fromSpringAiResponse(response: ChatResponse): AssistantMessage
 }
 
@@ -29,15 +35,17 @@ class DefaultMessageConverter(
      * When total exceeds this limit, all text file refs are converted to path-only references
      * (the LLM can then read them on demand via tools). Images are still inlined as Media.
      */
-    var maxTotalInlineFileBytes: Long = DEFAULT_MAX_TOTAL_INLINE_FILE_BYTES
+    var maxTotalInlineFileBytes: Long = DEFAULT_MAX_TOTAL_INLINE_FILE_BYTES,
+    private val objectStorageResolver: ObjectStorageResolver? = null
 ) : MessageConverter {
     companion object {
         const val DEFAULT_MAX_TOTAL_INLINE_FILE_BYTES: Long = 10L * 1024 * 1024 // 10 MB
+        private val STORED_IMAGE_MIME_TYPES = setOf("image/png", "image/jpeg", "image/gif", "image/webp")
     }
 
     private val logger = LoggerFactory.getLogger(javaClass)
 
-    override fun toSpringAiMessages(messages: List<EasyAiMessage>): List<org.springframework.ai.chat.messages.Message> =
+    override suspend fun toSpringAiMessages(messages: List<EasyAiMessage>, userId: String): List<Message> =
         messages.flatMap { msg ->
             when (msg) {
                 is UserMessage -> {
@@ -61,6 +69,10 @@ class DefaultMessageConverter(
                         )
                     }
                     for (ref in fileRefs) {
+                        if (StoredFileReference.isStored(ref.filePath)) {
+                            mediaList.add(resolveStoredImage(ref, userId))
+                            continue
+                        }
                         val resolvedPath = try {
                             Path.of(ref.filePath).toAbsolutePath().normalize()
                         } catch (_: Exception) {
@@ -225,6 +237,40 @@ class DefaultMessageConverter(
                 else -> emptyList()
             }
         }
+
+    private suspend fun resolveStoredImage(ref: FileRefContent, userId: String): Media {
+        val stored = StoredFileReference.parse(ref.filePath, userId)
+        require(ref.mimeType in STORED_IMAGE_MIME_TYPES) { "Unsupported stored chat image MIME type" }
+        val storage = objectStorageResolver?.resolve(userId)
+            ?: throw ObjectStorageException("Object storage is unavailable for the stored chat image")
+        val meta = storage.head(stored.key)
+            ?: throw ObjectStorageException("Stored chat image does not exist: ${stored.key}")
+        validateStoredImageSize(meta.size)
+        val signedUri = try {
+            storage.presignedGetUrl(stored.key, StoredFileReference.URL_TTL_SECONDS)?.let { URI(it) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("Failed to sign stored chat image; reading object instead: {}", stored.key, e)
+            null
+        }
+        val mimeType = MimeType.valueOf(ref.mimeType)
+        // Anthropic only accepts HTTPS URL media. Do not rewrite a signature's scheme.
+        if (signedUri?.scheme == "https" && !signedUri.host.isNullOrBlank()) {
+            return Media.builder().mimeType(mimeType).data(signedUri).build()
+        }
+        val content = storage.get(stored.key)
+            ?: throw ObjectStorageException("Stored chat image could not be read: ${stored.key}")
+        validateStoredImageSize(content.meta.size)
+        validateStoredImageSize(content.bytes.size.toLong())
+        return Media.builder().mimeType(mimeType).data(content.bytes).build()
+    }
+
+    private fun validateStoredImageSize(size: Long) {
+        if (size < 0 || size > StoredFileReference.MAX_IMAGE_BYTES) {
+            throw ObjectStorageException("Stored chat image exceeds the 6 MB limit or has an invalid size")
+        }
+    }
 
     /** Escape XML special characters for safe use in attribute values. */
     private fun escapeXmlAttr(value: String): String = value

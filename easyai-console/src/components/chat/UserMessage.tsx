@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React from 'react';
 import type { Message, Attachment } from '../../types/message';
 import { getAttachmentIcon, isImageAttachment, splitByFileRefs } from '../../utils/attachment-utils';
-import { RotateCw, X } from 'lucide-react';
+import { RotateCw } from 'lucide-react';
+import { AttachmentImage } from './AttachmentImage';
 
 /** Parse message content and render command prefix (e.g. /goal) as a styled chip, plus file/folder references */
 function renderContent(content: string) {
@@ -57,17 +58,8 @@ interface UserMessageProps {
   onDoubleClick?: (e: React.MouseEvent) => void;
 }
 
-/** Get the image src for an attachment (filePath URL or base64 data URL) */
-function getAttachmentSrc(att: { mimeType: string; data: string; filePath?: string }): string {
-  if (att.filePath) {
-    return `/api/files/serve?path=${encodeURIComponent(att.filePath)}`;
-  }
-  return `data:${att.mimeType};base64,${att.data}`;
-}
-
 /** Render image thumbnails and file chips for attachments */
 function AttachmentPreview({ attachments }: { attachments: Attachment[] }) {
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const images = attachments.filter(isImageAttachment);
   const files = attachments.filter((a) => !isImageAttachment(a));
 
@@ -76,21 +68,13 @@ function AttachmentPreview({ attachments }: { attachments: Attachment[] }) {
       {/* Image thumbnails */}
       {images.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
-          {images.map((img) => {
-            const src = getAttachmentSrc(img);
-            return (
-              <img
-                key={img.id}
-                src={src}
-                alt={img.name}
-                className="w-20 h-20 object-cover rounded-md border border-border cursor-pointer hover:opacity-80 transition-opacity"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setLightboxSrc(src);
-                }}
-              />
-            );
-          })}
+          {images.map((img) => (
+            <AttachmentImage
+              key={img.id}
+              attachment={img}
+              className="w-20 h-20 object-cover rounded-md border border-border cursor-pointer hover:opacity-80 transition-opacity"
+            />
+          ))}
         </div>
       )}
       {/* File chips */}
@@ -105,26 +89,6 @@ function AttachmentPreview({ attachments }: { attachments: Attachment[] }) {
               <span className="truncate max-w-[150px]">{attachment.name}</span>
             </div>
           ))}
-        </div>
-      )}
-      {/* Lightbox overlay */}
-      {lightboxSrc && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
-          onClick={() => setLightboxSrc(null)}
-        >
-          <button
-            className="absolute top-4 right-4 p-2 text-white hover:text-gray-300 transition-colors"
-            onClick={() => setLightboxSrc(null)}
-          >
-            <X className="w-6 h-6" />
-          </button>
-          <img
-            src={lightboxSrc}
-            alt="Full size"
-            className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg"
-            onClick={(e) => e.stopPropagation()}
-          />
         </div>
       )}
     </>

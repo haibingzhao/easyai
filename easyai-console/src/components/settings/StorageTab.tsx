@@ -42,7 +42,7 @@ export const StorageTab: React.FC = () => {
       setLoadError('');
     } catch (e) {
       // 503 when persistence is off, 401/403 otherwise — the message comes from the server
-      setLoadError(e instanceof Error ? e.message : 'Failed to load storage settings');
+      setLoadError(e instanceof Error ? e.message : i18n('Failed to load storage settings'));
     } finally {
       setLoading(false);
     }
@@ -71,7 +71,7 @@ export const StorageTab: React.FC = () => {
       const result = await storageConfigService.testConfig(buildRequest());
       setTestResult(result);
     } catch (e) {
-      setTestResult({ success: false, message: e instanceof Error ? e.message : 'Test failed' });
+      setTestResult({ success: false, message: e instanceof Error ? e.message : i18n('Test failed') });
     } finally {
       setTesting(false);
     }
@@ -87,7 +87,7 @@ export const StorageTab: React.FC = () => {
       // Re-read so the badge and the masked field reflect what is now live — no restart needed
       await loadConfig();
     } catch (e) {
-      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to save' });
+      setMessage({ type: 'error', text: e instanceof Error ? e.message : i18n('Failed to save') });
     } finally {
       setSaving(false);
     }
@@ -119,12 +119,12 @@ export const StorageTab: React.FC = () => {
           <HardDrive className="w-5 h-5 text-muted-foreground" />
           <h2 className="text-lg font-medium">{i18n('Object Storage')}</h2>
           <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded ${badge.tone}`}>
-            {badge.label}
+            {i18n(badge.label)}
           </span>
         </div>
 
         <p className="text-sm text-muted-foreground mb-4">
-          {i18n('Store for published skill packages, configured per account in the database. Saved settings take effect immediately; type=local keeps everything on this machine.')}
+          {i18n('Configure object storage for resources such as skill packages, chat images, and generated media. Settings are stored per account and take effect immediately after saving. Choose Local Directory to store resources on the server.')}
         </p>
 
         <div className="space-y-4">
@@ -206,7 +206,7 @@ export const StorageTab: React.FC = () => {
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm font-mono"
               />
               <p className="text-xs text-muted-foreground mt-1">
-                {i18n('Leave empty to use the default ~/.easyai/storage')}
+                {i18n('Leave empty to store resources in ~/.easyai/storage on the server.')}
               </p>
             </div>
           )}

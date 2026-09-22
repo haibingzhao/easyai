@@ -88,15 +88,10 @@ export function isTextAttachment(a: Attachment): boolean {
   return ext >= 0 && TEXT_EXTENSIONS.has(a.name.slice(ext).toLowerCase());
 }
 
-/** Convert image Attachment to ChatAttachment for backend */
+/** Only stable references belong in chat requests, never display URLs or uploaded bytes. */
 export function toChatAttachment(a: Attachment): ChatAttachment {
-  const result: ChatAttachment = { name: a.name, mimeType: a.mimeType };
-  if (a.filePath) {
-    result.filePath = a.filePath;
-  } else {
-    result.data = a.data;
-  }
-  return result;
+  if (!a.filePath) throw new Error(`Attachment must be uploaded before sending: ${a.name}`);
+  return { name: a.name, mimeType: a.mimeType, filePath: a.filePath };
 }
 
 /** Decode base64 text attachment content using UTF-8 (truncated to maxBytes) */
