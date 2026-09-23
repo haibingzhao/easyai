@@ -14,8 +14,8 @@
         <java.encoding>UTF-8</java.encoding>
         <project.build.sourceEncoding>${java.encoding}</project.build.sourceEncoding>
         <easyai-version>${revision}</easyai-version>
-        <spring-boot.version>4.1.0</spring-boot.version>
-        <spring-ai.version>2.0.0</spring-ai.version>
+        <spring-boot.version>4.1.1</spring-boot.version>
+        <spring-ai.version>2.0.1</spring-ai.version>
 
         <kotlin.co.version>1.11.0</kotlin.co.version>
         <kotlin.version>2.3.10</kotlin.version>

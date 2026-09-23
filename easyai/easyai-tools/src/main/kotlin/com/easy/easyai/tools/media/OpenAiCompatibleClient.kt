@@ -9,8 +9,6 @@ import org.springframework.http.client.reactive.ReactorClientHttpConnector
 import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.bodyToMono
 import reactor.netty.http.client.HttpClient
-import java.net.InetAddress
-import java.net.URI
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -101,7 +99,7 @@ class OpenAiCompatibleClient(private val settings: MediaProviderSettings) {
 
     /** Download a provider-returned artifact URL, refusing internal hosts and oversized bodies. */
     private suspend fun download(url: String): ByteArray {
-        validateNotInternal(url)
+        MediaFetch.validateNotInternal(url)
         return withTimeout(timeout) {
             client.get()
                 .uri(url)
@@ -115,14 +113,6 @@ class OpenAiCompatibleClient(private val settings: MediaProviderSettings) {
         if (settings.apiKey.isNotBlank()) headers.setBearerAuth(settings.apiKey)
         settings.accessKeyId.takeIf { it.isNotBlank() }?.let { headers.set("X-Access-Key-Id", it) }
         settings.accessKeySecret.takeIf { it.isNotBlank() }?.let { headers.set("X-Access-Key-Secret", it) }
-    }
-
-    private fun validateNotInternal(url: String) {
-        val host = URI(url).host ?: throw IllegalArgumentException("invalid provider artifact URL")
-        val addr = InetAddress.getByName(host)
-        if (addr.isLoopbackAddress || addr.isLinkLocalAddress || addr.isSiteLocalAddress || addr.isAnyLocalAddress) {
-            throw IllegalArgumentException("provider artifact URL resolves to an internal address")
-        }
     }
 
     companion object {
