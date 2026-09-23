@@ -64,7 +64,10 @@ class ObjectStorageAutoConfigurationTest {
             contextRunner.run { context ->
                 val resolver = context.getBean(ObjectStorageResolver::class.java)
 
-                assertEquals(0, context.getBeanNamesForType(ObjectStorage::class.java).size)
+                // The only ObjectStorage bean is the local media-directory fallback, which the
+                // resolver deliberately does not expose: per-user resolution stays row-driven.
+                assertEquals(listOf("localMediaObjectStorage"), context.getBeanNamesForType(ObjectStorage::class.java).toList())
+                assertIs<LocalDirObjectStorage>(context.getBean(ObjectStorage::class.java))
                 assertEquals(null, runBlocking { resolver.resolve("alice") })
                 assertEquals(StorageSource.NONE, runBlocking { resolver.sourceOf("alice") })
             }

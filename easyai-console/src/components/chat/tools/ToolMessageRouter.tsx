@@ -55,6 +55,7 @@ const TOOL_RENDERERS: Record<string, React.ComponentType<ToolMessageProps>> = {
   generate_image: MediaResultCard,
   generate_speech: MediaResultCard,
   generate_video: MediaResultCard,
+  fetch_media: MediaResultCard,
 };
 
 export function ToolMessageRouter(props: ToolMessageProps) {

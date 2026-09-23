@@ -138,6 +138,7 @@ function titleFor(toolName: string): string {
     case 'generate_image': return i18n('Image');
     case 'generate_speech': return i18n('Speech');
     case 'generate_video': return i18n('Video');
+    case 'fetch_media': return i18n('Media');
     default: return toolName;
   }
 }
