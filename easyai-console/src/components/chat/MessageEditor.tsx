@@ -17,6 +17,9 @@ import { useSlashCommand } from '@/hooks/useSlashCommand';
 import { useAttachmentManager } from '@/hooks/useAttachmentManager';
 import { AttachmentPreviewBar } from './AttachmentPreviewBar';
 import type { SlashCommand } from '@/types/command';
+import type { CommandIdentity } from '@/utils/command-utils';
+import { parseCommand, serializeCommand } from '@/utils/command-utils';
+import { createCommandChip, populateMessageEditor, readMessageEditorText, copyMessageSelection } from '@/utils/attachment-utils';
 import type { Attachment, QueuedMessage } from '../../types/message';
 import type { ModelCapabilities } from '@/types/settings';
 import { i18n } from '../../utils/i18n';
@@ -28,7 +31,7 @@ import type { ErrorEvent } from '@/types/socket-event';
 
 export const MessageEditor: React.FC = () => {
   const [editorValue, setEditorValue] = useState('');
-  const [selectedCommand, setSelectedCommand] = useState<SlashCommand | null>(null);
+  const [selectedCommand, setSelectedCommand] = useState<CommandIdentity | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
   const editorRef = useRef<HTMLDivElement>(null);
@@ -80,7 +83,9 @@ export const MessageEditor: React.FC = () => {
   const currentProjectId = useProjectStore((state) => state.currentProject?.id);
 
   // Slash command autocomplete (must be after selectedAgentId is defined)
-  const slashCommand = useSlashCommand(selectedAgentId);
+  const slashCommand = useSlashCommand(selectedAgentId, currentProjectId);
+  const { validateCommand, isCurrentContext } = slashCommand;
+  const commandError = slashCommand.selectionError(selectedCommand);
 
   // @ mention autocomplete
   const mention = useMention();
@@ -94,10 +99,7 @@ export const MessageEditor: React.FC = () => {
     if (!editor) return;
 
     // Create chip element
-    const chip = document.createElement('span');
-    chip.className = 'command-chip';
-    chip.contentEditable = 'false';
-    chip.textContent = `/${cmd.name}`;
+    const chip = createCommandChip(cmd);
 
     // Remove existing chip if any
     const existing = editor.querySelector('.command-chip');
@@ -322,7 +324,8 @@ export const MessageEditor: React.FC = () => {
 
   const handleSend = useCallback(async () => {
     const editorText = getEditorText().trim();
-    const messageText = selectedCommand ? `/${selectedCommand.name} ${editorText}`.trim() : editorText;
+    const command = editorRef.current?.querySelector('.command-chip') ? selectedCommand : null;
+    const messageText = serializeCommand(command, editorText);
 
     if (!messageText || isStreaming || submittingRef.current || isProcessingFiles() || isAwaitingAskQuestion() || isAwaitingPermission()) return;
     // Prevent sending while model configs are still loading
@@ -366,6 +369,11 @@ export const MessageEditor: React.FC = () => {
     setIsSubmitting(true);
     let releasedForStreaming = false;
     try {
+      const validationError = await validateCommand(command ?? parseCommand(messageText)?.command);
+      if (validationError) {
+        addMessage({ role: 'error', content: validationError, timestamp: Date.now() });
+        return;
+      }
       let sid = currentSessionId;
       let uploadedAttachments: Attachment[];
       try {
@@ -381,6 +389,10 @@ export const MessageEditor: React.FC = () => {
         return;
       }
 
+      if (!isCurrentContext()) {
+        addMessage({ role: 'error', content: i18n('Project or user changed. Please try again.'), timestamp: Date.now() });
+        return;
+      }
       const textDrafts = uploadedAttachments.filter((a) => !a.filePath && isTextAttachment(a));
       const finalMessage = buildMessageWithTextAttachments(messageText, textDrafts);
       const storedAttachments = uploadedAttachments.filter((a) => a.filePath);
@@ -451,33 +463,12 @@ export const MessageEditor: React.FC = () => {
         setIsSubmitting(false);
       }
     }
-  }, [editorValue, isStreaming, sessionId, attachments, addMessage, setStreaming, handleEvent, setSessionId, currentModelId, selectedAgentId, currentProjectId, isModelLoading, isAwaitingAskQuestion, isAwaitingPermission, selectedCommand, isProcessingFiles, uploadPendingAttachments, setAttachments, visionSupported, commitStreamingMessage]);
+  }, [editorValue, isStreaming, sessionId, attachments, addMessage, setStreaming, handleEvent, setSessionId, currentModelId, selectedAgentId, currentProjectId, isModelLoading, isAwaitingAskQuestion, isAwaitingPermission, selectedCommand, isProcessingFiles, uploadPendingAttachments, setAttachments, visionSupported, commitStreamingMessage, validateCommand, isCurrentContext]);
 
   /** Extract text content, excluding command chip text and replacing mention chips with encoded refs */
   const getEditorText = useCallback((): string => {
     const editor = editorRef.current;
-    if (!editor) return '';
-    const parts: string[] = [];
-    const walk = (node: Node) => {
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        const el = node as HTMLElement;
-        if (el.classList.contains('command-chip')) return;
-        if (el.classList.contains('mention-chip')) {
-          const path = el.dataset.path || '';
-          const type = el.dataset.type || 'file';
-          const name = type === 'directory'
-            ? (el.textContent || '').replace(/^[📄📁]\s*/, '')
-            : (el.textContent || '').replace(/^[📄📁]\s*/, '');
-          parts.push(type === 'directory' ? buildFolderRef(name, path) : buildFileRef(name, path));
-          return;
-        }
-        el.childNodes.forEach(walk);
-      } else if (node.nodeType === Node.TEXT_NODE) {
-        parts.push(node.textContent || '');
-      }
-    };
-    editor.childNodes.forEach(walk);
-    return parts.join('');
+    return editor ? readMessageEditorText(editor) : '';
   }, []);
 
   /** Insert a mention chip at the cursor position, removing the @ trigger text */
@@ -512,7 +503,8 @@ export const MessageEditor: React.FC = () => {
   // --- FollowUp send handler (clock button during streaming) ---
   const handleFollowUpSend = useCallback(async () => {
     const editorText = getEditorText().trim();
-    const messageText = selectedCommand ? `/${selectedCommand.name} ${editorText}`.trim() : editorText;
+    const command = editorRef.current?.querySelector('.command-chip') ? selectedCommand : null;
+    const messageText = serializeCommand(command, editorText);
     if (!messageText || !sessionId || submittingRef.current || isProcessingFiles()) return;
 
     // Classify attachments for validation
@@ -534,11 +526,20 @@ export const MessageEditor: React.FC = () => {
     submittingRef.current = true;
     setIsSubmitting(true);
     try {
+      const validationError = await validateCommand(command ?? parseCommand(messageText)?.command);
+      if (validationError) {
+        addMessage({ role: 'error', content: validationError, timestamp: Date.now() });
+        return;
+      }
       let uploadedAttachments: Attachment[];
       try {
         uploadedAttachments = await uploadPendingAttachments(sessionId);
       } catch (error) {
         addMessage({ role: 'error', content: (error as Error).message, timestamp: Date.now() });
+        return;
+      }
+      if (!isCurrentContext()) {
+        addMessage({ role: 'error', content: i18n('Project or user changed. Please try again.'), timestamp: Date.now() });
         return;
       }
       const textDrafts = uploadedAttachments.filter((a) => !a.filePath && isTextAttachment(a));
@@ -550,6 +551,7 @@ export const MessageEditor: React.FC = () => {
       const localMsg: QueuedMessage = {
         id: `queued-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         content: finalMessage,
+        commandCategory: command?.category,
         type: 'followUp',
         status: 'syncing',
         attachments: storedAttachments.length > 0 ? storedAttachments : undefined,
@@ -584,16 +586,30 @@ export const MessageEditor: React.FC = () => {
       submittingRef.current = false;
       setIsSubmitting(false);
     }
-  }, [sessionId, addQueuedMessage, getEditorText, selectedCommand, attachments, setAttachments, addMessage, isProcessingFiles, uploadPendingAttachments, visionSupported]);
+  }, [sessionId, addQueuedMessage, getEditorText, selectedCommand, attachments, setAttachments, addMessage, isProcessingFiles, uploadPendingAttachments, visionSupported, validateCommand, isCurrentContext]);
 
   // --- Editor event handlers ---
 
   const handleEditorInput = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const chip = editor.querySelector<HTMLElement>('.command-chip');
+    let command = chip ? (serializeCommand(selectedCommand, '') === chip.dataset.commandToken
+      ? selectedCommand : parseCommand(chip.dataset.commandToken ?? '')?.command ?? null) : null;
+    if (!chip && parseCommand(getEditorText())?.command.source) {
+      command = populateMessageEditor(editor, getEditorText());
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+    setSelectedCommand(command);
     const text = getEditorText();
-    const cursorPosition = getCursorPosition();
     setEditorValue(text);
-    slashCommand.onInput(text, selectedCommand !== null);
-    mention.onInput(text, cursorPosition);
+    slashCommand.onInput(text, command !== null);
+    mention.onInput(text, getCursorPosition());
   }, [slashCommand, selectedCommand, getEditorText, getCursorPosition, mention]);
 
   const handleEditorKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -692,6 +708,15 @@ export const MessageEditor: React.FC = () => {
     e.preventDefault();
     const text = e.clipboardData?.getData('text/plain') || '';
     document.execCommand('insertText', false, text);
+    handleEditorInput();
+  };
+
+  const handleClipboard = (e: React.ClipboardEvent<HTMLDivElement>, cut = false) => {
+    if (cut && submittingRef.current) { e.preventDefault(); return; }
+    if (copyMessageSelection(e.currentTarget, e.clipboardData, cut)) {
+      e.preventDefault();
+      if (cut) handleEditorInput();
+    }
   };
 
   const handleEditorClick = useCallback(() => {
@@ -765,6 +790,7 @@ export const MessageEditor: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-2 relative">
+      {commandError && <div role="alert" className="text-xs text-destructive">{commandError}</div>}
       {/* Queued messages panel */}
       <QueuedMessagesPanel />
 
@@ -823,6 +849,8 @@ export const MessageEditor: React.FC = () => {
           onInput={handleEditorInput}
           onKeyDown={handleEditorKeyDown}
           onPaste={handleEditorPaste}
+          onCopy={(e) => handleClipboard(e)}
+          onCut={(e) => handleClipboard(e, true)}
           onClick={handleEditorClick}
           data-placeholder={i18n('Plan, @ for context, / for commands')}
           className="message-editor flex-1 w-full px-3 pt-0 pb-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring overflow-y-auto whitespace-pre-wrap break-words"

@@ -9,6 +9,7 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicInteger
@@ -131,16 +132,48 @@ class EasyRagClientTest {
     }
 
     @Test
-    fun `upsert skips indexing when content unchanged`() = runTest {
+    fun `unchanged skips indexing only after actual processed status is checked`() = runTest {
         enqueueAuthStatus()
         server.enqueue(MockResponse().setBody("""{"status":"ok","docId":"doc-1","message":"content unchanged, skipped"}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"processed","doc_id":"doc-1"}"""))
 
         val result = client.upsert(sampleDocument())
 
         assertTrue(result.unchanged)
-        server.takeRequest() // auth-status
-        server.takeRequest() // insert
-        assertEquals(0, server.requestCount - 2)
+        assertTrue(result.indexed)
+        server.takeRequest()
+        server.takeRequest()
+        assertTrue(server.takeRequest().path!!.startsWith("/api/documents/status"))
+        assertEquals(3, server.requestCount)
+    }
+
+    @Nested
+    inner class RecoverableSkillSync {
+        @Test
+        fun `unchanged pending document gets an index request without pretending it is ready`() = runTest {
+            enqueueAuthStatus()
+            server.enqueue(MockResponse().setBody("""{"docId":"doc-1","message":"unchanged"}"""))
+            server.enqueue(MockResponse().setBody("""{"status":"pending"}"""))
+            server.enqueue(MockResponse().setBody("""{"status":"pending"}"""))
+            val result = client.upsert(sampleDocument(), bizId = "u_alice_s", awaitIndexing = false)
+            assertFalse(result.indexed)
+            server.takeRequest()
+            server.takeRequest()
+            assertTrue(server.takeRequest().path!!.contains("bizId=u_alice_s"))
+            assertTrue(server.takeRequest().path!!.startsWith("/api/documents/doc-1/index"))
+        }
+
+        @Test
+        fun `strict inspection exposes source checksum and distinguishes failure from absence`() = runTest {
+            enqueueAuthStatus()
+            server.enqueue(MockResponse().setBody("""{"doc_id":"doc-1","status":"processed","metadata":{"checksum":"sha"}}"""))
+            val detail = client.inspectByExternalId("easyai:skills/pdf.md", "u_alice_s")
+            assertEquals("sha", detail?.metadata?.get("checksum"))
+            server.enqueue(MockResponse().setResponseCode(404))
+            assertNull(client.inspectByExternalId("easyai:skills/pdf.md", "u_alice_s"))
+            server.enqueue(MockResponse().setResponseCode(503))
+            assertFailsWith<RagException> { client.inspectByExternalId("easyai:skills/pdf.md", "u_alice_s") }
+        }
     }
 
     @Test
@@ -247,6 +280,7 @@ class EasyRagClientTest {
         assertEquals(null, disabledClient.readByExternalId("easyai:x"))
         assertEquals(emptyList(), disabledClient.search("q"))
         assertEquals(false, disabledClient.healthCheck())
+        assertFailsWith<RagException> { disabledClient.inspectByExternalId("easyai:x") }
     }
 
     @Test

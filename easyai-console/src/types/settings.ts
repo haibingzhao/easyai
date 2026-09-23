@@ -42,8 +42,12 @@ export interface ModelOptions {
   contextToken?: number;
 }
 
+export type StructuredOutputSupport = 'JSON_SCHEMA' | 'JSON_OBJECT' | 'NONE';
+
 export interface ModelCapabilities {
   vision?: boolean;
+  /** API-level structured output support. Undefined = undeclared (treated as JSON_SCHEMA). */
+  structuredOutput?: StructuredOutputSupport;
 }
 
 export interface ModelProviderConfig {

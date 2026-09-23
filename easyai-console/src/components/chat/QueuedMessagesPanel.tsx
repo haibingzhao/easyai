@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -20,8 +20,17 @@ import { GripVertical, Pencil, Trash2, ArrowRightLeft, Check, X, ChevronDown, Ch
 import { useChatStore } from '@/services/stores/chat-store';
 import { removeQueueMessage, updateQueueMessage, reorderQueueMessages, addQueueMessage } from '@/services/chat-service';
 import type { QueuedMessage } from '@/types/message';
-import { isImageAttachment, toChatAttachment } from '@/utils/attachment-utils';
+import { isImageAttachment, toChatAttachment, populateMessageEditor, readMessageEditorText, copyMessageSelection } from '@/utils/attachment-utils';
+import { isSideEffectCommand, parseCommand, serializeCommand } from '@/utils/command-utils';
+import type { CommandIdentity } from '@/utils/command-utils';
+import { useSlashCommand } from '@/hooks/useSlashCommand';
+import { useAgentStore } from '@/services/stores/agent-store';
+import { useProjectStore } from '@/services/stores/project-store';
+import { i18n } from '@/utils/i18n';
+import { UserMessageContent } from './UserMessage';
 import { AttachmentImage } from './AttachmentImage';
+
+const QUEUE_COMMAND_WARNING = 'Queued commands with side effects cannot be edited or converted. Delete and send a new command instead.';
 
 // ===================== Sortable Item =====================
 
@@ -49,6 +58,7 @@ const SortableQueuedMessage: React.FC<SortableQueuedMessageProps> = ({ msg, onEd
   };
 
   const isSteer = msg.type === 'steer';
+  const editBlocked = isSideEffectCommand(msg.content, msg.commandCategory);
   const isFailed = msg.status === 'failed';
   const statusLabel = isFailed ? 'Failed' : isSteer ? 'Steer' : 'Waiting';
   const statusColor = isFailed
@@ -83,8 +93,11 @@ const SortableQueuedMessage: React.FC<SortableQueuedMessageProps> = ({ msg, onEd
       </span>
 
       {/* Content */}
-      <span className="flex-1 truncate text-foreground/90 min-w-0">
-        {msg.content}
+      <span
+        className="flex-1 truncate text-foreground/90 min-w-0"
+        onCopy={(e) => { if (copyMessageSelection(e.currentTarget, e.clipboardData)) e.preventDefault(); }}
+      >
+        <UserMessageContent content={msg.content} />
       </span>
 
       {/* Attachment previews */}
@@ -114,14 +127,16 @@ const SortableQueuedMessage: React.FC<SortableQueuedMessageProps> = ({ msg, onEd
       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
         <button
           className="p-1 rounded hover:bg-background/80 text-muted-foreground hover:text-blue-500 transition-colors"
-          title={isSteer ? 'Convert to FollowUp' : 'Convert to Steer'}
+          title={editBlocked ? i18n(QUEUE_COMMAND_WARNING) : isSteer ? 'Convert to FollowUp' : 'Convert to Steer'}
+          aria-disabled={editBlocked || msg.status === 'syncing'}
           onClick={() => onToggleType(msg.id)}
         >
           <ArrowRightLeft className="w-3.5 h-3.5" />
         </button>
         <button
           className="p-1 rounded hover:bg-background/80 text-muted-foreground hover:text-foreground transition-colors"
-          title="Edit"
+          title={editBlocked ? i18n(QUEUE_COMMAND_WARNING) : 'Edit'}
+          aria-disabled={editBlocked || msg.status === 'syncing'}
           onClick={() => onEdit(msg.id)}
         >
           <Pencil className="w-3.5 h-3.5" />
@@ -142,37 +157,77 @@ const SortableQueuedMessage: React.FC<SortableQueuedMessageProps> = ({ msg, onEd
 
 interface InlineEditProps {
   msg: QueuedMessage;
-  onSave: (id: string, content: string) => void;
+  onSave: (id: string, content: string) => Promise<void>;
   onCancel: () => void;
 }
 
 const InlineEdit: React.FC<InlineEditProps> = ({ msg, onSave, onCancel }) => {
-  const [value, setValue] = useState(msg.content);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const commandRef = useRef<CommandIdentity | null>(null);
+  const savingRef = useRef(false);
+  const [saving, setSaving] = useState(false);
 
-  const handleSave = () => {
-    const trimmed = value.trim();
-    if (trimmed && trimmed !== msg.content) {
-      onSave(msg.id, trimmed);
-    } else {
-      onCancel();
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    commandRef.current = populateMessageEditor(editor, msg.content);
+    editor.focus();
+  }, [msg.content]);
+
+  const syncCommand = () => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const chip = editor.querySelector<HTMLElement>('.command-chip');
+    commandRef.current = chip ? parseCommand(chip.dataset.commandToken ?? '')?.command ?? null : null;
+    if (!chip && parseCommand(readMessageEditorText(editor))?.command.source) {
+      commandRef.current = populateMessageEditor(editor, readMessageEditorText(editor));
+    }
+  };
+
+  const handleSave = async () => {
+    if (!editorRef.current || savingRef.current) return;
+    syncCommand();
+    const content = serializeCommand(commandRef.current, readMessageEditorText(editorRef.current));
+    if (!content || content === msg.content) { onCancel(); return; }
+    savingRef.current = true;
+    setSaving(true);
+    try { await onSave(msg.id, content); }
+    finally { savingRef.current = false; setSaving(false); }
+  };
+
+  const handleClipboard = (e: React.ClipboardEvent<HTMLDivElement>, cut = false) => {
+    if (cut && savingRef.current) { e.preventDefault(); return; }
+    if (copyMessageSelection(e.currentTarget, e.clipboardData, cut)) {
+      e.preventDefault();
+      if (cut) syncCommand();
     }
   };
 
   return (
     <div className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-muted/50 border-l-3 border-l-green-400 text-sm">
-      <input
-        className="flex-1 bg-background border border-input rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring min-w-0"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') handleSave();
-          if (e.key === 'Escape') onCancel();
+      <div
+        ref={editorRef}
+        className="message-editor flex-1 bg-background border border-input rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring min-w-0 whitespace-pre-wrap"
+        contentEditable={!saving}
+        onInput={syncCommand}
+        onCopy={(e) => handleClipboard(e)}
+        onCut={(e) => handleClipboard(e, true)}
+        onPaste={(e) => {
+          e.preventDefault();
+          if (savingRef.current) return;
+          document.execCommand('insertText', false, e.clipboardData.getData('text/plain'));
+          syncCommand();
         }}
-        autoFocus
+        onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing) return;
+          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void handleSave(); }
+          if (e.key === 'Escape' && !savingRef.current) onCancel();
+        }}
       />
       <button
         className="p-1 rounded hover:bg-background/80 text-green-600 hover:text-green-700 shrink-0"
         onClick={handleSave}
+        disabled={saving}
         title="Save"
       >
         <Check className="w-3.5 h-3.5" />
@@ -180,6 +235,7 @@ const InlineEdit: React.FC<InlineEditProps> = ({ msg, onSave, onCancel }) => {
       <button
         className="p-1 rounded hover:bg-background/80 text-muted-foreground hover:text-foreground shrink-0"
         onClick={onCancel}
+        disabled={saving}
         title="Cancel"
       >
         <X className="w-3.5 h-3.5" />
@@ -193,6 +249,11 @@ const InlineEdit: React.FC<InlineEditProps> = ({ msg, onSave, onCancel }) => {
 export const QueuedMessagesPanel: React.FC = () => {
   const [collapsed, setCollapsed] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const agentId = useAgentStore((state) => state.selectedAgentId);
+  const projectId = useProjectStore((state) => state.currentProject?.id);
+  const { validateCommand, isCurrentContext } = useSlashCommand(agentId, projectId);
+  const busyIds = useRef(new Set<string>());
 
   const {
     sessionId,
@@ -251,67 +312,93 @@ export const QueuedMessagesPanel: React.FC = () => {
     }
   }, [queuedMessages, removeQueuedMessage, sessionId]);
 
-  const handleEditSave = useCallback((id: string, content: string) => {
-    const msg = queuedMessages.find((m) => m.id === id);
-    updateQueuedMessage(id, content);
-    if (msg?.backendQueueId && sessionId) {
-      updateQueueMessage(sessionId, msg.backendQueueId, content).catch(console.error);
+  const handleEdit = useCallback((id: string) => {
+    const msg = queuedMessages.find((item) => item.id === id);
+    if (!msg || busyIds.current.has(id)) return;
+    if (isSideEffectCommand(msg.content, msg.commandCategory)) { setError(i18n(QUEUE_COMMAND_WARNING)); return; }
+    if (msg.status === 'syncing') { setError(i18n('Wait for the queued message to finish syncing.')); return; }
+    setError(null);
+    setEditingId(id);
+  }, [queuedMessages]);
+
+  const handleEditSave = useCallback(async (id: string, content: string) => {
+    const msg = queuedMessages.find((item) => item.id === id);
+    if (!msg || busyIds.current.has(id)) return;
+    const parsed = parseCommand(content);
+    const category = parsed?.command.source ? 'SKILL'
+      : parseCommand(msg.content)?.command.name === parsed?.command.name ? msg.commandCategory : undefined;
+    if (isSideEffectCommand(msg.content, msg.commandCategory) || isSideEffectCommand(content, category)) {
+      setError(i18n(QUEUE_COMMAND_WARNING));
+      return;
     }
-    setEditingId(null);
-  }, [queuedMessages, updateQueuedMessage, sessionId]);
-
-  const handleToggleType = useCallback((id: string) => {
-    const msg = queuedMessages.find((m) => m.id === id);
-    if (!msg) return;
-
-    const newType = msg.type === 'steer' ? 'followUp' : 'steer';
-
-    // If synced to backend, we need to remove old and add new
-    if (msg.backendQueueId && sessionId) {
-      // Optimistic local update: remove old, add new
-      removeQueuedMessage(id);
-      const newMsg: QueuedMessage = {
-        id: `queued-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        content: msg.content,
-        type: newType as 'steer' | 'followUp',
-        status: 'syncing',
-        attachments: msg.attachments,
-      };
-      addQueuedMessage(newMsg);
-
-      // Backend: remove old, add new (with attachments)
-      const chatAttachments = msg.attachments?.filter((a) => !!a.filePath).map(toChatAttachment);
-      removeQueueMessage(sessionId, msg.backendQueueId)
-        .then(() => addQueueMessage(
-          sessionId,
-          msg.content,
-          newType as 'steer' | 'followUp',
-          chatAttachments && chatAttachments.length > 0 ? chatAttachments : undefined
-        ))
-        .then((resp) => {
-          // Update the new message's backend ID
-          useChatStore.setState((state) => ({
-            queuedMessages: state.queuedMessages.map((m) =>
-              m.id === newMsg.id ? { ...m, backendQueueId: resp.id, status: 'synced' as const } : m
-            ),
-          }));
-        })
-        .catch(console.error);
-    } else {
-      // Not synced yet, just update locally
-      updateQueuedMessage(id, msg.content);
+    busyIds.current.add(id);
+    try {
+      const validationError = await validateCommand(parsed?.command);
+      if (validationError) { setError(validationError); return; }
+      if (!useChatStore.getState().queuedMessages.some((item) => item.id === id) || useChatStore.getState().sessionId !== sessionId) return;
+      if (msg.backendQueueId && sessionId) await updateQueueMessage(sessionId, msg.backendQueueId, content);
+      if (!isCurrentContext() || useChatStore.getState().sessionId !== sessionId) return;
+      updateQueuedMessage(id, content);
       useChatStore.setState((state) => ({
-        queuedMessages: state.queuedMessages.map((m) =>
-          m.id === id ? { ...m, type: newType as 'steer' | 'followUp' } : m
-        ),
+        queuedMessages: state.queuedMessages.map((item) => item.id === id ? { ...item, commandCategory: category } : item),
       }));
+      setError(null);
+      setEditingId(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      busyIds.current.delete(id);
     }
-  }, [queuedMessages, removeQueuedMessage, addQueuedMessage, updateQueuedMessage, sessionId]);
+  }, [queuedMessages, updateQueuedMessage, sessionId, validateCommand, isCurrentContext]);
+
+  const handleToggleType = useCallback(async (id: string) => {
+    const msg = queuedMessages.find((item) => item.id === id);
+    if (!msg || busyIds.current.has(id)) return;
+    if (isSideEffectCommand(msg.content, msg.commandCategory)) { setError(i18n(QUEUE_COMMAND_WARNING)); return; }
+    if (msg.status === 'syncing') { setError(i18n('Wait for the queued message to finish syncing.')); return; }
+    busyIds.current.add(id);
+    const newType = msg.type === 'steer' ? 'followUp' : 'steer';
+    let replacementId: string | undefined;
+    try {
+      const parsed = parseCommand(msg.content);
+      const validationError = await validateCommand(parsed?.command);
+      if (validationError) { setError(validationError); return; }
+      if (!useChatStore.getState().queuedMessages.some((item) => item.id === id) || useChatStore.getState().sessionId !== sessionId) return;
+      // Both steer and followUp use the same codec; attachments remain storage references.
+      const content = parsed ? serializeCommand(parsed.command, parsed.args) : msg.content;
+      if (msg.backendQueueId && sessionId) {
+        await removeQueueMessage(sessionId, msg.backendQueueId);
+        if (!isCurrentContext() || useChatStore.getState().sessionId !== sessionId) return;
+        removeQueuedMessage(id);
+        replacementId = `queued-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        addQueuedMessage({ ...msg, id: replacementId, backendQueueId: undefined, content, type: newType, status: 'syncing' });
+        const chatAttachments = msg.attachments?.filter((attachment) => !!attachment.filePath).map(toChatAttachment);
+        const response = await addQueueMessage(sessionId, content, newType, chatAttachments?.length ? chatAttachments : undefined);
+        useChatStore.setState((state) => ({
+          queuedMessages: state.queuedMessages.map((item) => item.id === replacementId
+            ? { ...item, backendQueueId: response.id, status: 'synced' as const } : item),
+        }));
+      } else {
+        useChatStore.setState((state) => ({
+          queuedMessages: state.queuedMessages.map((item) => item.id === id ? { ...item, content, type: newType } : item),
+        }));
+      }
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+      if (replacementId) useChatStore.setState((state) => ({
+        queuedMessages: state.queuedMessages.map((item) => item.id === replacementId ? { ...item, status: 'failed' as const } : item),
+      }));
+    } finally {
+      busyIds.current.delete(id);
+    }
+  }, [queuedMessages, sessionId, validateCommand, isCurrentContext, removeQueuedMessage, addQueuedMessage]);
 
   if (queuedMessages.length === 0) return null;
 
   return (
     <div className="rounded-md border border-border/60 bg-muted/20 overflow-hidden">
+      {error && <div role="alert" className="px-3 py-1 text-xs text-destructive">{error}</div>}
       {/* Header */}
       <button
         className="flex items-center gap-2 w-full px-3 py-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
@@ -346,7 +433,7 @@ export const QueuedMessagesPanel: React.FC = () => {
                   <SortableQueuedMessage
                     key={msg.id}
                     msg={msg}
-                    onEdit={(id) => setEditingId(id)}
+                    onEdit={handleEdit}
                     onDelete={handleDelete}
                     onToggleType={handleToggleType}
                   />

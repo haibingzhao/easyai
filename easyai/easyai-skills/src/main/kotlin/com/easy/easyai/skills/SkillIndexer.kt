@@ -2,52 +2,36 @@ package com.easy.easyai.skills
 
 import com.easy.easyai.core.skill.AsyncSkillCatalogStore
 import com.easy.easyai.core.skill.SkillCatalogEntry
+import com.easy.easyai.core.skill.SkillDeleteResult
+import com.easy.easyai.core.skill.SkillDocumentState
 import com.easy.easyai.core.skill.SkillEntry
 import com.easy.easyai.core.skill.SkillOwnerContext
 import com.easy.easyai.core.skill.SkillScope
 import com.easy.easyai.core.skill.SkillStore
+import com.easy.easyai.core.skill.SkillSyncState
+import com.easy.easyai.core.skill.SkillSyncUpdate
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
 
-/**
- * Result of one drift-reconciliation pass, for logs and for the startup health check.
- *
- * [backendWrites] is the number this design is trying to keep at zero: a steady-state boot should
- * produce no HTTP traffic at all.
- */
 data class ReconcileSummary(
     val owners: Int = 0,
     val rows: Int = 0,
     val unchanged: Int = 0,
-    val reindexed: Int = 0,
     val delisted: Int = 0,
-    val failed: Int = 0
+    val failed: Int = 0,
+    val submitted: Int = 0,
+    val confirmed: Int = 0,
+    val pending: Int = 0,
+    val updated: Int = 0
 ) {
-    /** Documents pushed to or removed from the retrieval backend. */
-    val backendWrites: Int
-        get() = reindexed + delisted
+    val backendWrites: Int get() = submitted + delisted
 }
 
-/**
- * Keeps the RAG skill index aligned with the `skill` catalog table and the files on disk.
- *
- * Reconciliation is **checksum-drift driven**: [reconcileByDrift] compares each row's persisted
- * fingerprint with the SKILL.md on disk and only talks to the backend for rows that actually
- * moved. The previous design held that hash map in process memory, so it was empty after every
- * restart and re-pushed every skill on every boot; the fingerprint now lives in the database, so
- * a stable installation costs `N` stat calls and zero requests.
- *
- * Write ordering is the invariant that keeps the three sources from drifting apart:
- * **disk → catalog row → index**. [indexOne] therefore refreshes the row before touching the
- * index and lets row-write failures propagate, so callers roll back the file they just wrote;
- * an index failure alone is only logged, because the next reconciliation will re-apply it.
- */
+/** Single-process recoverable projection; all remote operations share installation locks. */
 class SkillIndexer(
     private val skillStore: SkillStore?,
     private val catalog: AsyncSkillCatalogStore?,
@@ -55,270 +39,215 @@ class SkillIndexer(
     private val config: SkillConfig,
     private val indexConcurrency: Int = DEFAULT_INDEX_CONCURRENCY
 ) {
-
     private val logger = LoggerFactory.getLogger(javaClass)
 
-    /**
-     * Reconcile every catalog row of every owner in [userIds].
-     *
-     * Owners come from the table, not from a request context — that is what makes per-user slices
-     * addressable at startup. Each row is handled independently and failures are logged, never
-     * propagated: one broken skill must not hold up application readiness.
-     */
     suspend fun reconcileByDrift(userIds: List<String>): ReconcileSummary {
-        if (skillStore == null && catalog == null) {
-            logger.debug("Skill reconciliation skipped: neither index store nor catalog is available")
-            return ReconcileSummary()
+        val store = catalog ?: return ReconcileSummary()
+        // A failed list is not an empty catalog. No claims or visibility publication may follow it.
+        val rows = userIds.distinct().flatMap { store.listByUser(it) }
+        return reconcileRows(rows, force = true).copy(owners = userIds.distinct().size)
+    }
+
+    /** Lifecycle owner supplies the cancellable loop. Bounded due-row inspection also heals remote loss. */
+    suspend fun reconcilePending(limit: Int = 64): ReconcileSummary {
+        val store = catalog ?: return ReconcileSummary()
+        val now = System.currentTimeMillis()
+        val rows = store.listAll().filter { (it.nextAttemptAt ?: 0L) <= now }
+            .sortedWith(compareBy({ it.nextAttemptAt ?: 0L }, { it.id })).take(limit.coerceIn(1, 1024))
+        return reconcileRows(rows, force = false).copy(owners = rows.map { it.userId }.distinct().size)
+    }
+
+    private suspend fun reconcileRows(rows: List<SkillCatalogEntry>, force: Boolean): ReconcileSummary = coroutineScope {
+        val results = rows.chunked(indexConcurrency.coerceIn(1, 32)).flatMap { batch ->
+            batch.map { row -> async { reconcile(row, force) } }.awaitAll()
         }
-        // Plain counters instead of `summary.copy(...)` per row: on a large catalog the copy chain
-        // allocated one intermediate `ReconcileSummary` per row for no benefit.
-        var rows = 0
-        var unchanged = 0
-        var reindexed = 0
-        var delisted = 0
-        var failed = 0
-        for (userId in userIds) {
-            val ownerRows = try {
-                catalog?.listByUser(userId) ?: emptyList()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                logger.warn("Failed to list skill catalog rows for user '{}': {}", userId, e.message)
-                failed++
-                continue
+        ReconcileSummary(
+            rows = rows.size, unchanged = results.sumOf { it.unchanged },
+            confirmed = results.sumOf { it.confirmed },
+            submitted = results.sumOf { it.submitted }, delisted = results.sumOf { it.delisted },
+            failed = results.sumOf { it.failed }, pending = results.sumOf { it.pending }, updated = results.sumOf { it.updated }
+        )
+    }
+
+    /** Parse and publish before atomically enabling the exact bytes; a concurrent disable wins the CAS. */
+    suspend fun prepareEnable(entry: SkillCatalogEntry): Boolean = syncService.withInstallation(entry.installPath) {
+        val store = catalog ?: return@withInstallation false
+        val row = store.findById(entry.id) ?: return@withInstallation false
+        if (row.revision != entry.revision) return@withInstallation false
+        SkillScopeResolver.resolve(row, config)
+        val snapshot = syncService.snapshotOf(row) ?: return@withInstallation false
+        require(snapshot.info.name == row.name) { "Skill name differs from its catalog identity" }
+        syncService.publish(snapshot)
+        store.updateContent(row.id, row.revision, snapshot.checksum, snapshot.version, enable = true)
+    }
+
+    suspend fun synchronize(entry: SkillCatalogEntry, await: Boolean = false): ReconcileSummary =
+        reconcile(entry, force = true, await = await)
+
+    private suspend fun reconcile(entry: SkillCatalogEntry, force: Boolean, await: Boolean = false): ReconcileSummary =
+        syncService.withInstallation(entry.installPath) {
+            val store = catalog ?: return@withInstallation ReconcileSummary()
+            var row = store.findById(entry.id) ?: return@withInstallation ReconcileSummary()
+            if (!force && (row.nextAttemptAt ?: 0L) > System.currentTimeMillis()) {
+                return@withInstallation ReconcileSummary(pending = if (isPending(row)) 1 else 0)
             }
-            rows += ownerRows.size
-            for ((row, outcome) in reconcileRows(ownerRows)) {
-                when (outcome) {
-                    RowOutcome.UNCHANGED -> unchanged++
-                    RowOutcome.REINDEXED -> reindexed++
-                    RowOutcome.DELISTED -> delisted++
-                    RowOutcome.FAILED -> {
-                        logger.warn("Skill reconciliation failed for '{}' of user '{}'", row.name, userId)
-                        failed++
+            var updated = 0
+            try {
+                val duplicate = store.listAll().any {
+                    it.id != row.id && SkillPaths.canonicalizeOrNull(it.installPath) == SkillPaths.canonicalizeOrNull(row.installPath)
+                }
+                check(!duplicate) { "Installation claimed by multiple identities; manual resolution required" }
+                validateIdentity(row)
+                val snapshot = if (row.enabled) syncService.snapshotOf(row) else try {
+                    syncService.snapshotOf(row)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Broken disabled content must not prevent remote cleanup.
+                    null
+                }
+                if (snapshot == null && row.enabled) {
+                    store.setEnabled(row.id, false)
+                    row = store.findById(row.id) ?: return@withInstallation ReconcileSummary()
+                }
+                if (snapshot != null) {
+                    require(snapshot.info.name == row.name) { "Skill name differs from its catalog identity" }
+                    if (snapshot.checksum != row.checksum) {
+                        syncService.publish(snapshot)
+                        if (!store.updateContent(row.id, row.revision, snapshot.checksum, snapshot.version)) {
+                            return@withInstallation ReconcileSummary(pending = 1)
+                        }
+                        row = requireNotNull(store.findById(row.id))
+                        updated = 1
+                    } else if (row.enabled) {
+                        syncService.publish(snapshot)
                     }
                 }
-            }
-        }
-        val summary = ReconcileSummary(
-            owners = userIds.size,
-            rows = rows,
-            unchanged = unchanged,
-            reindexed = reindexed,
-            delisted = delisted,
-            failed = failed
-        )
-        logger.info(
-            "Skill reconciliation: {} owners, {} rows, unchanged={}, reindexed={}, " +
-                "delisted={}, failed={} (backend writes={})",
-            summary.owners, summary.rows, summary.unchanged, summary.reindexed,
-            summary.delisted, summary.failed, summary.backendWrites
-        )
-        return summary
-    }
-
-    /**
-     * Index one skill and record it in the catalog, in that enforced order.
-     *
-     * The row is refreshed from disk first (checksum + declared version), so the table can never
-     * describe content the index does not hold. A catalog write failure propagates on purpose:
-     * install and create paths must roll back the files they already wrote.
-     *
-     * @param entry catalog row as the caller wants it persisted (owner/source/enabled included)
-     * @param await true waits for the backend to finish indexing, so a just-installed skill is
-     *   immediately findable by `skill_search`
-     * @return true when the document reached the index backend
-     */
-    suspend fun indexOne(
-        entry: SkillCatalogEntry,
-        scope: SkillScope,
-        owner: SkillOwnerContext,
-        await: Boolean = false
-    ): Boolean {
-        val store = skillStore ?: return false
-        val checksum = syncService.checksumOf(entry)
-        if (checksum == null) {
-            logger.warn("Cannot index skill '{}': SKILL.md is missing or unreadable at {}", entry.name, entry.installPath)
-            return false
-        }
-        val refreshed = entry.copy(checksum = checksum, version = syncService.declaredVersionOf(entry))
-        val persisted = catalog?.upsert(refreshed) ?: refreshed
-        val document = entryOf(persisted) ?: return false
-        val indexed = try {
-            store.index(listOf(document), scope, owner, awaitIndexing = await)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            // Index loss is recoverable on the next reconciliation; the row and the file are what matter.
-            logger.warn("Skill index write failed for '{}': {}", persisted.name, e.message)
-            0
-        }
-        return indexed > 0
-    }
-
-    /**
-     * Remove one skill from the index and take it out of the catalog.
-     *
-     * Addressed by the row itself, not by name: under (owner, name, project_hash) identity a name
-     * alone can match several rows, and an uninstall must never touch a same-named skill of another
-     * project. Scope and slice owner are derived from the row's install path.
-     *
-     * @param removeCatalogRow false for a temporary disable (the row survives with
-     *   `enabled=false` and keeps its provenance), true for an uninstall
-     * @return true when the index no longer serves the document (or no index is configured)
-     */
-    suspend fun removeOne(
-        entry: SkillCatalogEntry,
-        removeCatalogRow: Boolean = true
-    ): Boolean {
-        val store = skillStore
-        val rowHandled = try {
-            if (removeCatalogRow) {
-                catalog?.delete(entry.id) ?: true
-            } else {
-                catalog?.setEnabled(entry.id, false) ?: true
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger.warn("Failed to update the catalog row of '{}': {}", entry.name, e.message)
-            false
-        }
-        // The row is gone or disabled: any memoised mtime for it is stale and must not survive,
-        // otherwise a re-install with the same id could short-circuit `driftOf` to None.
-        syncService.invalidate(entry.id)
-        if (store == null) return rowHandled
-        val indexRemoved = try {
-            store.delete(entry.name, scopeOf(entry), ownerOf(entry))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger.warn("Failed to delete the index of '{}': {}", entry.name, e.message)
-            false
-        }
-        return rowHandled && indexRemoved
-    }
-
-    /** Build the index document for one catalog row, read from the SKILL.md on disk. */
-    suspend fun entryOf(entry: SkillCatalogEntry): SkillEntry? = withContext(Dispatchers.IO) {
-        val skillFile = Path.of(entry.installPath).resolve(SkillCatalogSyncService.SKILL_FILE_NAME)
-        runCatching { SkillLoader.parse(skillFile) }
-            .onFailure { logger.warn("Failed to parse {}: {}", skillFile, it.message) }
-            .getOrNull()
-            ?.let { info ->
-                SkillEntry(
-                    key = SkillEntry.keyFor(info.name),
-                    name = info.name,
-                    description = info.description ?: "",
-                    tags = info.tags.toList(),
-                    examples = info.examples.toList(),
-                    // The body is indexed alongside the frontmatter: descriptions alone recall poorly.
-                    content = info.content,
-                    location = info.location.toAbsolutePath().toString(),
-                    origin = entry.origin
-                )
-            }
-    }
-
-    /** Slice owner of a catalog row: the row's own user plus the project it belongs to. */
-    fun ownerOf(entry: SkillCatalogEntry): SkillOwnerContext {
-        val (scope, projectPath) = SkillScopeResolver.resolve(entry, config)
-        return SkillOwnerContext(entry.userId, if (scope == SkillScope.PROJECT) projectPath else null)
-    }
-
-    /** Catalog granularity of a catalog row, derived from its install path. */
-    fun scopeOf(entry: SkillCatalogEntry): SkillScope = SkillScopeResolver.resolve(entry, config).first
-
-    private enum class RowOutcome { UNCHANGED, REINDEXED, DELISTED, FAILED }
-
-    /**
-     * Reconcile the rows of one owner with at most [indexConcurrency] backend writes in flight.
-     *
-     * Bounded rather than unbounded because every drifted row is an `upsert` against a shared
-     * EasyRAG pipeline: a first boot after `backfillAll` can otherwise push hundreds of documents at
-     * once and turn a slow start into a 409 storm. Results stay in row order.
-     */
-    private suspend fun reconcileRows(rows: List<SkillCatalogEntry>): List<Pair<SkillCatalogEntry, RowOutcome>> {
-        val width = indexConcurrency.coerceIn(1, MAX_INDEX_CONCURRENCY)
-        return coroutineScope {
-            // Await each window before opening the next one; launching every coroutine up front
-            // would leave the configured width with no effect at all.
-            rows.chunked(width)
-                .flatMap { window -> window.map { row -> async { row to reconcileRow(row) } }.awaitAll() }
-        }
-    }
-
-    private suspend fun reconcileRow(entry: SkillCatalogEntry): RowOutcome = try {
-        when (val drift = syncService.driftOf(entry)) {
-            SkillDrift.None -> RowOutcome.UNCHANGED
-            is SkillDrift.Content -> applyContentDrift(entry, drift)
-            // Disk is the source of truth for a local skill: a row whose SKILL.md is gone is
-            // delisted, and a later scan re-claims it under the new path if the files come back.
-            SkillDrift.Missing -> {
-                delist(entry)
-                RowOutcome.DELISTED
-            }
-        }
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        logger.debug("Skill reconciliation error for '{}'", entry.name, e)
-        RowOutcome.FAILED
-    }
-
-    private suspend fun applyContentDrift(
-        entry: SkillCatalogEntry,
-        drift: SkillDrift.Content
-    ): RowOutcome {
-        // A disabled row is not in the index; recording a fresh checksum here would make the next
-        // reconcile see `None` and skip the re-index that a re-enable actually needs. Leave the
-        // stored checksum behind so enabling picks up the drift and pushes the current bytes.
-        if (!entry.enabled) {
-            syncService.invalidate(entry.id)
-            return RowOutcome.UNCHANGED
-        }
-        catalog?.updateChecksum(entry.id, drift.newChecksum, drift.newVersion)
-        val store = skillStore ?: return RowOutcome.UNCHANGED
-        val document = entryOf(entry.copy(checksum = drift.newChecksum, version = drift.newVersion))
-            ?: return RowOutcome.FAILED
-        val indexed = try {
-            store.index(listOf(document), scopeOf(entry), ownerOf(entry))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger.warn("Skill re-index failed for '{}': {}", entry.name, e.message)
-            0
-        }
-        return if (indexed > 0) RowOutcome.REINDEXED else RowOutcome.FAILED
-    }
-
-    /** Take a row out of the index and mark it disabled, keeping the row for provenance. */
-    private suspend fun delist(entry: SkillCatalogEntry) {
-        val store = skillStore
-        if (store != null) {
-            try {
-                store.delete(entry.name, scopeOf(entry), ownerOf(entry))
+                validateIdentity(row)
+                val remote = skillStore ?: return@withInstallation ReconcileSummary(pending = if (isPending(row)) 1 else 0, updated = updated)
+                if (!row.enabled || snapshot == null) {
+                    return@withInstallation deleteCurrent(row, remote).copy(updated = updated)
+                }
+                val state = remote.inspect(row.name, addressScope(row.projectHash), addressOwner(row))
+                if (state is SkillDocumentState.Processed && state.checksum == row.checksum) {
+                    val already = row.syncState == SkillSyncState.SYNCED && row.indexedChecksum == row.checksum
+                    if (!complete(row, SkillSyncState.SYNCED, row.checksum, VERIFY_MS)) {
+                        return@withInstallation compensate(row, remote).copy(updated = updated)
+                    }
+                    return@withInstallation ReconcileSummary(
+                        unchanged = if (already) 1 else 0, confirmed = if (already) 0 else 1, updated = updated
+                    )
+                }
+                // Re-submit pending/failed/missing documents with the same deterministic identity.
+                // This also advances an unchanged upload whose original indexing request was lost.
+                val result = remote.submit(listOf(document(row, snapshot)), addressScope(row.projectHash), addressOwner(row), await)
+                    .singleOrNull()?.state ?: SkillDocumentState.Failed("Missing per-document submission result")
+                if (store.findById(row.id)?.revision != row.revision) {
+                    return@withInstallation compensate(row, remote).copy(updated = updated)
+                }
+                when (result) {
+                    is SkillDocumentState.Processed -> {
+                        if (result.checksum != row.checksum) {
+                            failure(row, "Remote processed a different or unreported checksum").copy(submitted = 1, updated = updated)
+                        } else if (complete(row, SkillSyncState.SYNCED, row.checksum, VERIFY_MS)) {
+                            ReconcileSummary(submitted = 1, confirmed = 1, updated = updated)
+                        } else compensate(row, remote).copy(submitted = 1, updated = updated)
+                    }
+                    is SkillDocumentState.Submitted -> {
+                        if (complete(row, SkillSyncState.SUBMITTED, row.indexedChecksum, RETRY_MS)) {
+                            ReconcileSummary(submitted = 1, pending = 1, updated = updated)
+                        } else compensate(row, remote).copy(submitted = 1, updated = updated)
+                    }
+                    is SkillDocumentState.Failed -> failure(row, result.error).copy(updated = updated)
+                    SkillDocumentState.Absent -> failure(row, "Submitted document is absent").copy(updated = updated)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                logger.warn("Failed to delete the index of '{}': {}", entry.name, e.message)
+                logger.warn("Skill reconciliation failed for '{}': {}", row.name, e.message)
+                failure(row, e.message ?: "Skill reconciliation failed").copy(updated = updated)
             }
         }
+
+    private suspend fun validateIdentity(row: SkillCatalogEntry) {
         try {
-            catalog?.setEnabled(entry.id, false)
+            SkillScopeResolver.resolve(row, config)
+        } catch (e: IllegalArgumentException) {
+            // Configuration/source changes do not authorize a move. Only the persisted, verifiable
+            // address may be cleaned; the newly classified slice must remain untouched.
+            skillStore?.let { remote ->
+                val result = remote.ensureAbsent(row.name, addressScope(row.projectHash), addressOwner(row))
+                check(result is SkillDeleteResult.Absent) { "Invalid identity slice cleanup is pending" }
+            }
+            throw e
+        }
+    }
+
+    private suspend fun deleteCurrent(row: SkillCatalogEntry, remote: SkillStore): ReconcileSummary {
+        return when (val result = remote.ensureAbsent(row.name, addressScope(row.projectHash), addressOwner(row))) {
+            SkillDeleteResult.Absent -> {
+                if (!complete(row, SkillSyncState.ABSENT, null, VERIFY_MS)) return ReconcileSummary(pending = 1)
+                if (row.syncState == SkillSyncState.ABSENT) ReconcileSummary(unchanged = 1)
+                else ReconcileSummary(delisted = 1)
+            }
+            is SkillDeleteResult.Failed -> failure(row, result.error)
+        }
+    }
+
+    /** A CAS alone cannot undo a remote request that finished after disable. */
+    private suspend fun compensate(submitted: SkillCatalogEntry, remote: SkillStore): ReconcileSummary {
+        val store = requireNotNull(catalog)
+        val latest = store.findById(submitted.id) ?: return ReconcileSummary(failed = 1, pending = 1)
+        val result = remote.ensureAbsent(submitted.name, addressScope(submitted.projectHash), addressOwner(submitted))
+        if (result is SkillDeleteResult.Failed) return failure(latest, result.error)
+        val state = if (latest.enabled) SkillSyncState.PENDING_INDEX else SkillSyncState.ABSENT
+        if (!complete(latest, state, null, if (latest.enabled) RETRY_MS else VERIFY_MS)) return ReconcileSummary(pending = 1)
+        return if (latest.enabled) ReconcileSummary(pending = 1) else ReconcileSummary(delisted = 1)
+    }
+
+    private suspend fun complete(row: SkillCatalogEntry, state: SkillSyncState, checksum: String?, delay: Long): Boolean =
+        requireNotNull(catalog).updateSync(row.id, row.revision,
+            SkillSyncUpdate(state, checksum, System.currentTimeMillis() + delay))
+
+    private suspend fun failure(row: SkillCatalogEntry, error: String): ReconcileSummary {
+        try {
+            val state = if (!row.enabled) SkillSyncState.PENDING_DELETE
+            else if (row.syncState == SkillSyncState.SUBMITTED) SkillSyncState.SUBMITTED else SkillSyncState.PENDING_INDEX
+            val delay = if (row.lastError == null) RETRY_MS else MAX_RETRY_MS
+            catalog?.updateSync(row.id, row.revision,
+                SkillSyncUpdate(state, row.indexedChecksum, System.currentTimeMillis() + delay, error))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("Failed to disable the catalog row of '{}': {}", entry.name, e.message)
+            logger.warn("Could not persist skill retry for '{}': {}", row.name, e.message)
         }
-        syncService.invalidate(entry.id)
-        logger.warn("Skill '{}' has no SKILL.md at {}; delisted", entry.name, entry.installPath)
+        return ReconcileSummary(failed = 1, pending = 1)
     }
 
-    companion object {
-        /** Matches the concurrency the RAG store itself uses for document writes. */
-        const val DEFAULT_INDEX_CONCURRENCY = 4
+    private fun document(row: SkillCatalogEntry, snapshot: SkillSnapshot) = SkillEntry(
+        key = SkillEntry.keyFor(row.name), name = row.name, description = snapshot.info.description.orEmpty(),
+        tags = snapshot.info.tags.toList(), examples = snapshot.info.examples.toList(), content = snapshot.info.content,
+        location = snapshot.info.location.toString(), origin = row.origin, checksum = snapshot.checksum
+    )
 
-        private const val MAX_INDEX_CONCURRENCY = 32
+    private fun addressScope(hash: String): SkillScope = if (hash.isEmpty()) SkillScope.GLOBAL else SkillScope.PROJECT
+
+    private fun addressOwner(row: SkillCatalogEntry): SkillOwnerContext {
+        val path = row.indexProjectPath?.let { Path.of(it) }
+        check(if (row.projectHash.isEmpty()) path == null else
+            path != null && SkillPaths.canonicalize(path) == row.indexProjectPath &&
+                SkillScopeResolver.projectHashOf(path) == row.projectHash) {
+            "Unrecoverable skill slice address"
+        }
+        return SkillOwnerContext(row.userId, path)
+    }
+
+    private fun isPending(row: SkillCatalogEntry): Boolean = row.syncState != SkillSyncState.SYNCED && row.syncState != SkillSyncState.ABSENT
+
+    companion object {
+        const val DEFAULT_INDEX_CONCURRENCY = 4
+        private const val RETRY_MS = 5_000L
+        private const val MAX_RETRY_MS = 60_000L
+        private const val VERIFY_MS = 300_000L
     }
 }

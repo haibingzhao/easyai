@@ -1,6 +1,8 @@
 package com.easy.easyai.repository.skill
 
 import com.easy.easyai.core.skill.SkillCatalogEntry
+import com.easy.easyai.core.skill.SkillSyncState
+import com.easy.easyai.core.skill.SkillSyncUpdate
 import com.easy.easyai.repository.database.DatabaseMigration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -9,9 +11,12 @@ import kotlinx.coroutines.test.runTest
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
 import org.jetbrains.exposed.v1.r2dbc.transactions.TransactionManager
 import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
+import java.security.MessageDigest
+import java.util.HexFormat
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -48,49 +53,60 @@ class R2dbcAsyncSkillCatalogStoreTest {
         checksum: String = "a".repeat(64),
         enabled: Boolean = true,
         source: String = SkillCatalogEntry.SOURCE_LOCAL,
-        projectHash: String = SkillCatalogEntry.GLOBAL_HASH
+        projectPath: String? = null
     ) = SkillCatalogEntry(
         name = name,
         source = source,
         version = "1.2.3",
         checksum = checksum,
         enabled = enabled,
-        installPath = "/home/$userId/.easyai/skills/$name",
+        installPath = "${projectPath ?: "/home/$userId"}/.easyai/skills/$name",
         origin = null,
         userId = userId,
-        projectHash = projectHash
+        projectHash = projectPath?.let {
+            HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(it.toByteArray(Charsets.UTF_8))).take(16)
+        } ?: SkillCatalogEntry.GLOBAL_HASH,
+        indexProjectPath = projectPath
     )
 
     private fun uniqueUser(prefix: String) = "$prefix-${UUID.randomUUID().toString().take(8)}"
 
     @Nested
-    inner class `upsert semantics` {
+    inner class `claim and content update semantics` {
 
         @Test
-        fun `a second write of the same triple updates instead of inserting`() = runTest {
+        fun `a second claim of the same triple leaves the existing row untouched`() = runTest {
             val store = createStore()
-            val user = uniqueUser("upsert")
+            val user = uniqueUser("claim")
+            val original = entry("pdf-report", user, enabled = false, projectPath = "/projects/report")
+                .copy(origin = "https://example.org/original")
+            val first = store.claim(original)
+            val second = store.claim(original.copy(
+                checksum = "c".repeat(64), version = "2.0.0", source = "EXTERNAL", enabled = true,
+                installPath = "/projects/report/.agents/skills/pdf-report", origin = "https://example.org/other"
+            ))
 
-            val first = store.upsert(entry("pdf-report", user, checksum = "b".repeat(64)))
-            val second = store.upsert(entry("pdf-report", user, checksum = "c".repeat(64), source = "EXTERNAL"))
-
-            assertEquals(first.id, second.id, "the row identity must survive an update")
-            assertEquals(1, store.listByUser(user).size)
-            assertEquals("c".repeat(64), store.listByName("pdf-report", user).single().checksum)
-            assertEquals("EXTERNAL", store.listByName("pdf-report", user).single().source)
+            assertEquals(first, second, "claim must not overwrite content, ownership, path or enablement")
+            assertEquals(first, store.listByUser(user).single())
+            assertEquals(original.userId, second.userId)
+            assertEquals(original.installPath, second.installPath)
+            assertEquals(original.indexProjectPath, second.indexProjectPath)
+            assertFalse(second.enabled)
         }
 
         @Test
-        fun `createdAt is kept and updatedAt moves on the second write`() = runTest {
+        fun `createdAt is kept and updatedAt moves on a content update`() = runTest {
             val store = createStore()
             val user = uniqueUser("stamps")
 
-            val created = store.upsert(entry("timed", user))
-            val updated = store.upsert(entry("timed", user, checksum = "d".repeat(64)))
+            val created = store.claim(entry("timed", user))
+            assertTrue(store.updateContent(created.id, created.revision, "d".repeat(64), "2.0.0"))
+            val updated = assertNotNull(store.findById(created.id))
 
             assertTrue(created.createdAt > 0)
             assertEquals(created.createdAt, updated.createdAt)
             assertTrue(updated.updatedAt >= created.updatedAt)
+            assertEquals(created.revision + 1, updated.revision)
         }
 
         @Test
@@ -99,8 +115,8 @@ class R2dbcAsyncSkillCatalogStoreTest {
             val alice = uniqueUser("alice")
             val bob = uniqueUser("bob")
 
-            store.upsert(entry("foo", alice, checksum = "e".repeat(64)))
-            store.upsert(entry("foo", bob, checksum = "f".repeat(64)))
+            store.claim(entry("foo", alice, checksum = "e".repeat(64)))
+            store.claim(entry("foo", bob, checksum = "f".repeat(64)))
 
             assertEquals("e".repeat(64), store.listByName("foo", alice).single().checksum)
             assertEquals("f".repeat(64), store.listByName("foo", bob).single().checksum)
@@ -113,38 +129,130 @@ class R2dbcAsyncSkillCatalogStoreTest {
             val store = createStore()
             val user = uniqueUser("tri")
 
-            store.upsert(entry("pdf", user, checksum = "a".repeat(64), projectHash = "hash-a"))
-            store.upsert(entry("pdf", user, checksum = "b".repeat(64), projectHash = "hash-b"))
-            // Third write hits the first triple again: it must update hash-a's row, not insert a fourth.
-            store.upsert(entry("pdf", user, checksum = "c".repeat(64), projectHash = "hash-a"))
+            val first = store.claim(entry("pdf", user, checksum = "a".repeat(64), projectPath = "/projects/a"))
+            val second = store.claim(entry("pdf", user, checksum = "b".repeat(64), projectPath = "/projects/b"))
+            assertTrue(store.updateContent(first.id, first.revision, "c".repeat(64), "2.0.0"))
 
             val rows = store.listByName("pdf", user)
             assertEquals(2, rows.size, "the unique index is (user, name, project_hash) — two granularities, two rows")
-            assertEquals("c".repeat(64), rows.first { it.projectHash == "hash-a" }.checksum)
-            assertEquals("b".repeat(64), rows.first { it.projectHash == "hash-b" }.checksum)
+            val updated = rows.first { it.id == first.id }
+            assertEquals("c".repeat(64), updated.checksum)
+            assertEquals(first.projectHash, updated.projectHash)
+            assertEquals(first.indexProjectPath, updated.indexProjectPath)
+            assertEquals(second, rows.first { it.id == second.id })
         }
 
-        // H2: the store's SELECT-then-INSERT is not atomic. Two concurrent upserts of the same triple
-        // can both read "no row" and both attempt INSERT; the V6 unique index rejects one of them. The
-        // store catches that unique violation and retries as an UPDATE — otherwise `backfillAll` at
-        // startup silently loses rows whenever two owner enumerations race.
+        // A unique violation must retry in a fresh transaction without changing the winning claim.
         @Test
-        fun `concurrent upserts of the same triple converge on one row, not a unique-violation error`() = runTest {
+        fun `concurrent claims of the same triple converge without overwriting the winner`() = runTest {
             val store = createStore()
             val user = uniqueUser("race")
             val results = coroutineScope {
                 (1..8).map { i ->
                     async(Dispatchers.IO) {
-                        store.upsert(entry("race", user, checksum = "$i".repeat(64)))
+                        store.claim(entry("race", user, checksum = "$i".repeat(64)))
                     }
                 }.map { it.await() }
             }
 
             val rows = store.listByName("race", user)
-            assertEquals(1, rows.size, "a unique-index collision must degrade to an UPDATE, not to a lost row")
+            assertEquals(1, rows.size, "a unique-index collision must return the existing row")
             assertTrue(results.all { it.name == "race" && it.userId == user })
-            assertEquals(rows.single().id, results.map { it.id }.distinct().single(),
-                "every racer must converge on the same row identity")
+            assertTrue(results.all { it == rows.single() }, "every racer must observe the unchanged winning claim")
+        }
+    }
+
+    @Nested
+    inner class `recoverable synchronization CAS` {
+        @Test
+        fun `claims are pending and a conflicting claim never resets disabled ownership`() = runTest {
+            val store = createStore()
+            val user = uniqueUser("claim")
+            val row = store.claim(entry("pdf", user, enabled = false))
+            assertEquals(SkillSyncState.PENDING_DELETE, row.syncState)
+            assertEquals(null, row.indexedChecksum)
+            val claimed = store.claim(entry("pdf", user, enabled = true, checksum = "b".repeat(64)))
+            assertEquals(row, claimed)
+            val pending = store.claim(entry("other", user))
+            assertEquals(SkillSyncState.PENDING_INDEX, pending.syncState)
+        }
+
+        @Test
+        fun `late completion and stale content CAS cannot overwrite concurrent disable`() = runTest {
+            val store = createStore()
+            val row = store.claim(entry("pdf", uniqueUser("cas")))
+            assertTrue(store.setEnabled(row.id, false))
+            assertFalse(store.updateContent(row.id, row.revision, "b".repeat(64), "2.0.0"))
+            assertFalse(store.updateSync(row.id, row.revision, SkillSyncUpdate(SkillSyncState.SYNCED, row.checksum)))
+            val current = store.findById(row.id)!!
+            assertFalse(current.enabled)
+            assertEquals(row.userId, current.userId)
+            assertEquals(row.checksum, current.checksum)
+            assertEquals(SkillSyncState.PENDING_DELETE, current.syncState)
+            assertTrue(store.updateSync(current.id, current.revision,
+                SkillSyncUpdate(SkillSyncState.PENDING_DELETE, null, 123L, "offline")))
+            val failed = store.findById(row.id)!!
+            assertEquals(123L, failed.nextAttemptAt)
+            assertEquals("offline", failed.lastError)
+            assertTrue(store.updateSync(failed.id, failed.revision, SkillSyncUpdate(SkillSyncState.ABSENT, null)))
+        }
+
+        @Test
+        fun `observed checksum is separate from confirmed checksum and wrong target is refused`() = runTest {
+            val store = createStore()
+            val row = store.claim(entry("pdf", uniqueUser("observed")))
+            assertFalse(store.updateSync(row.id, row.revision, SkillSyncUpdate(SkillSyncState.SYNCED, "wrong")))
+            assertTrue(store.updateSync(row.id, row.revision, SkillSyncUpdate(SkillSyncState.SYNCED, row.checksum)))
+            val indexed = store.findById(row.id)!!
+            assertTrue(store.updateContent(indexed.id, indexed.revision, "b".repeat(64), "2.0.0"))
+            val changed = store.findById(row.id)!!
+            assertEquals(row.checksum, changed.indexedChecksum)
+            assertEquals("b".repeat(64), changed.checksum)
+            assertEquals(SkillSyncState.PENDING_INDEX, changed.syncState)
+        }
+
+        @Test
+        fun `content and sync updates preserve disabled ownership and project addressing`() = runTest {
+            val store = createStore()
+            val row = store.claim(entry("pdf", uniqueUser("disabled"), enabled = false, projectPath = "/projects/disabled"))
+            assertTrue(store.updateContent(row.id, row.revision, "b".repeat(64), "2.0.0"))
+            val updated = assertNotNull(store.findById(row.id))
+            assertEquals(row.copy(
+                checksum = "b".repeat(64), version = "2.0.0", revision = row.revision + 1, updatedAt = updated.updatedAt
+            ), updated, "content updates must preserve owner, install path, enablement and slice address")
+            assertFalse(store.updateSync(updated.id, updated.revision,
+                SkillSyncUpdate(SkillSyncState.SYNCED, updated.checksum)))
+            assertFalse(store.updateSync(updated.id, updated.revision,
+                SkillSyncUpdate(SkillSyncState.SUBMITTED, updated.checksum)))
+            assertTrue(store.updateSync(updated.id, updated.revision, SkillSyncUpdate(SkillSyncState.ABSENT, null)))
+            val completed = assertNotNull(store.findById(row.id))
+            assertEquals(updated.copy(
+                syncState = SkillSyncState.ABSENT, revision = updated.revision + 1, updatedAt = completed.updatedAt
+            ), completed, "sync completion must only change projection fields")
+        }
+    }
+
+    @Nested
+    inner class `PostgreSQL transaction recovery` {
+        @Test
+        fun `concurrent PostgreSQL claims retry whole transactions after unique violations`() = runTest {
+            val url = System.getenv("EASYAI_TEST_POSTGRES_R2DBC_URL")
+            assumeTrue(!url.isNullOrBlank(), "Requires a dedicated external PostgreSQL test database")
+            val postgres = R2dbcDatabase.connect(requireNotNull(url), manager = { TransactionManager(it) })
+            DatabaseMigration.defaultTables().execute(postgres)
+            val store = R2dbcAsyncSkillCatalogStore(postgres)
+            val user = uniqueUser("pg-claim")
+            try {
+                val results = coroutineScope {
+                    (1..8).map { async(Dispatchers.IO) { store.claim(entry("race", user)) } }.map { it.await() }
+                }
+                assertEquals(1, results.map { it.id }.distinct().size)
+                val row = store.listByUser(user).single()
+                assertTrue(store.setEnabled(row.id, false))
+                assertFalse(store.updateSync(row.id, row.revision, SkillSyncUpdate(SkillSyncState.SYNCED, row.checksum)))
+            } finally {
+                store.listByUser(user).forEach { store.delete(it.id) }
+            }
         }
     }
 
@@ -156,8 +264,8 @@ class R2dbcAsyncSkillCatalogStoreTest {
             val store = createStore()
             val user = uniqueUser("multi")
 
-            store.upsert(entry("one", user))
-            store.upsert(entry("two", user))
+            store.claim(entry("one", user))
+            store.claim(entry("two", user))
 
             val owners = store.listDistinctUserIds()
             assertEquals(owners.distinct().size, owners.size, "owners must be deduplicated")
@@ -172,7 +280,7 @@ class R2dbcAsyncSkillCatalogStoreTest {
         fun `setEnabled cannot touch a row the caller does not hold the id of`() = runTest {
             val store = createStore()
             val owner = uniqueUser("owner")
-            store.upsert(entry("locked", owner))
+            store.claim(entry("locked", owner))
 
             assertFalse(store.setEnabled("no-such-row-${UUID.randomUUID()}", false))
             assertTrue(store.listByName("locked", owner).single().enabled, "an unknown id must leave every row untouched")
@@ -182,8 +290,8 @@ class R2dbcAsyncSkillCatalogStoreTest {
         fun `setEnabled flips exactly the addressed row`() = runTest {
             val store = createStore()
             val user = uniqueUser("toggle")
-            val row = store.upsert(entry("switch", user))
-            val sibling = store.upsert(entry("switch", user, projectHash = "other-project"))
+            val row = store.claim(entry("switch", user))
+            val sibling = store.claim(entry("switch", user, projectPath = "/projects/other"))
 
             assertTrue(store.setEnabled(row.id, false))
             assertFalse(store.listByName("switch", user).first { it.id == row.id }.enabled)
@@ -198,8 +306,8 @@ class R2dbcAsyncSkillCatalogStoreTest {
             val store = createStore()
             val alice = uniqueUser("del-alice")
             val bob = uniqueUser("del-bob")
-            val aliceRow = store.upsert(entry("shared", alice))
-            store.upsert(entry("shared", bob))
+            val aliceRow = store.claim(entry("shared", alice))
+            store.claim(entry("shared", bob))
 
             assertTrue(store.delete(aliceRow.id))
             assertTrue(store.listByName("shared", alice).isEmpty())
@@ -208,16 +316,24 @@ class R2dbcAsyncSkillCatalogStoreTest {
         }
 
         @Test
-        fun `updateChecksum targets the row by id`() = runTest {
+        fun `updateContent targets the row by id and rejects stale revisions`() = runTest {
             val store = createStore()
             val user = uniqueUser("checksum")
-            val row = store.upsert(entry("drifty", user))
+            val row = store.claim(entry("drifty", user))
+            val otherOwner = store.claim(entry("drifty", uniqueUser("other-owner")))
 
-            assertTrue(store.updateChecksum(row.id, "9".repeat(64), "2.0.0"))
+            assertTrue(store.updateContent(row.id, row.revision, "9".repeat(64), "2.0.0"))
             val reloaded = store.listByName("drifty", user).single()
             assertEquals("9".repeat(64), reloaded.checksum)
             assertEquals("2.0.0", reloaded.version)
-            assertFalse(store.updateChecksum(UUID.randomUUID().toString(), "1".repeat(64), "0.0.1"))
+            assertEquals(row.revision + 1, reloaded.revision)
+            assertEquals(row.userId, reloaded.userId)
+            assertEquals(row.installPath, reloaded.installPath)
+            assertEquals(row.enabled, reloaded.enabled)
+            assertFalse(store.updateContent(row.id, row.revision, "1".repeat(64), "0.0.1"))
+            assertFalse(store.updateContent(UUID.randomUUID().toString(), 0L, "1".repeat(64), "0.0.1"))
+            assertEquals(reloaded, store.findById(row.id))
+            assertEquals(otherOwner, store.findById(otherOwner.id))
         }
     }
 }

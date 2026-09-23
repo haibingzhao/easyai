@@ -89,11 +89,15 @@ interface AgentService {
      *
      * @param config model provider configuration
      * @param toolCallbacks tool callback list
+     * @param outputSchema JSON schema to enforce at the API level this turn; the protocol
+     *   factory applies it only when the model's declared capabilities support it, otherwise
+     *   the run falls back to prompt-based schema enforcement.
      * @return ChatOptions instance
      */
     fun buildChatOptions(
         config: ModelProviderConfig,
-        toolCallbacks: List<ToolCallback> = emptyList()
+        toolCallbacks: List<ToolCallback> = emptyList(),
+        outputSchema: String? = null
     ): ChatOptions
 
     /**

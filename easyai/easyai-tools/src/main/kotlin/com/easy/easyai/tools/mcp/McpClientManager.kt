@@ -17,6 +17,7 @@ import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.DisposableBean
 import org.springframework.beans.factory.SmartInitializingSingleton
+import java.net.URI
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 
@@ -151,8 +152,14 @@ class McpClientManager(
             logger.info("Connected to MCP server '{}' (user={}) with {} tools", config.name, userId, tools.size)
             return McpServerStatus.Connected
         } catch (e: Exception) {
-            val msg = e.message ?: "Unknown error"
-            logger.error("Failed to connect to MCP server '{}' (user={}): {}", config.name, userId, msg)
+            val msg = buildString {
+                append(e.message ?: "Unknown error")
+                generateSequence(e.cause) { it.cause }.forEachIndexed { i, cause ->
+                    append(" <- [cause ").append(i + 1).append("] ")
+                        .append(cause.javaClass.simpleName).append(": ").append(cause.message)
+                }
+            }
+            logger.error("Failed to connect to MCP server '{}' (user={}): {}", config.name, userId, msg, e)
             val status = McpServerStatus.Failed(msg)
             statuses[k] = status
             clients.remove(k)
@@ -357,7 +364,11 @@ class McpClientManager(
             "remote" -> {
                 val url = config.url
                     ?: throw IllegalArgumentException("Remote MCP server '${config.name}' must have a URL")
-                val builder = HttpClientStreamableHttpTransport.builder(url)
+                // Split origin + path so the transport's default "/mcp" endpoint can't clobber a deep configured path.
+                val uri = URI(url)
+                val origin = "${uri.scheme}://${uri.authority}"
+                val endpoint = url.removePrefix(origin).ifBlank { "/mcp" }
+                val builder = HttpClientStreamableHttpTransport.builder(origin).endpoint(endpoint)
                 if (config.headers.isNotEmpty()) {
                     builder.httpRequestCustomizer { requestBuilder, _, _, _, _ ->
                         config.headers.forEach { (k, v) -> requestBuilder.header(k, v) }

@@ -1,283 +1,284 @@
 package com.easy.easyai.skills
 
-import com.easy.easyai.core.skill.AsyncSkillCatalogStore
 import com.easy.easyai.core.skill.SkillCatalogEntry
-import com.easy.easyai.core.skill.SkillEntry
+import com.easy.easyai.core.skill.SkillDocumentState
 import com.easy.easyai.core.skill.SkillOwnerContext
 import com.easy.easyai.core.skill.SkillScope
-import com.easy.easyai.core.skill.SkillStore
-import io.mockk.coEvery
-import io.mockk.coVerify
-import io.mockk.every
-import io.mockk.mockk
-import io.mockk.slot
-import kotlinx.coroutines.delay
+import com.easy.easyai.core.skill.SkillSyncState
+import com.easy.easyai.core.skill.SkillSyncUpdate
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.concurrent.atomic.AtomicInteger
+import kotlin.io.path.writeText
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/**
- * Tests for [SkillIndexer], whose whole purpose is the reconciliation economics: a stable
- * installation must produce **zero** backend traffic at startup, and only real content drift may
- * cost an upsert. The `unchanged` case is therefore the most important assertion in this file.
- */
 class SkillIndexerTest {
-
-    @TempDir
-    lateinit var tempDir: Path
-
-    private val store = mockk<SkillStore>(relaxed = true)
-    private val catalog = mockk<AsyncSkillCatalogStore>(relaxed = true)
-    private val config = SkillConfig()
-    private val sync = SkillCatalogSyncService(catalog)
-
-    private fun dir(name: String, body: String = "---\nname: $name\ndescription: d\n---\n\nbody\n"): Path {
-        val skillDir = tempDir.resolve(name)
-        Files.createDirectories(skillDir)
-        Files.writeString(skillDir.resolve("SKILL.md"), body)
-        return skillDir
-    }
-
-    private fun row(
-        skillDir: Path,
-        name: String = skillDir.fileName.toString(),
-        userId: String = "alice",
-        enabled: Boolean = true,
-        source: String = SkillCatalogEntry.SOURCE_LOCAL,
-        origin: String? = null,
-        checksum: String = SkillChecksums.sha256Hex(Files.readAllBytes(skillDir.resolve("SKILL.md")))
-    ) = SkillCatalogEntry(
-        id = "$userId-$name",
-        name = name,
-        source = source,
-        checksum = checksum,
-        enabled = enabled,
-        installPath = skillDir.toString(),
-        origin = origin,
-        userId = userId
-    )
-
-    private fun indexer(
-        indexConcurrency: Int = SkillIndexer.DEFAULT_INDEX_CONCURRENCY
-    ) = SkillIndexer(store, catalog, sync, config, indexConcurrency)
+    @TempDir lateinit var temp: Path
 
     @Nested
-    inner class `driven reconciliation` {
-
+    inner class Recovery {
         @Test
-        fun `unchanged skills cost zero backend writes`() = runTest {
-            val stable = row(dir("stable"))
-            val other = row(dir("other"))
-            coEvery { catalog.listByUser("alice") } returns listOf(stable, other)
-
-            val summary = indexer().reconcileByDrift(listOf("alice"))
-
-            coVerify(exactly = 0) { store.index(any(), any(), any(), any()) }
-            coVerify(exactly = 0) { store.delete(any(), any(), any()) }
-            coVerify(exactly = 0) { catalog.updateChecksum(any(), any(), any()) }
-            assertEquals(2, summary.unchanged)
-            assertEquals(0, summary.backendWrites, "a steady-state boot must not talk to EasyRAG at all")
+        fun `same observed checksum retries after failed submission`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            chain.write("draft")
+            chain.remote.failSubmit = true
+            val first = chain.refresher.refreshFor("alice", chain.project)
+            val failedRow = chain.catalog.listAll().single()
+            assertEquals(1, first.summary?.failed)
+            assertEquals(SkillSyncState.PENDING_INDEX, failedRow.syncState)
+            assertNull(failedRow.indexedChecksum)
+            assertNotNull(failedRow.nextAttemptAt)
+            assertNotNull(failedRow.lastError)
+            chain.remote.failSubmit = false
+            val second = chain.refresher.refreshFor("alice", chain.project)
+            val final = chain.catalog.listAll().single()
+            assertEquals(failedRow.checksum, final.checksum)
+            assertEquals(final.checksum, final.indexedChecksum)
+            assertEquals(1, second.summary?.confirmed)
+            assertEquals(2, chain.remote.submitted.size)
         }
 
         @Test
-        fun `content drift re-indexes and persists the new fingerprint`() = runTest {
-            val skillDir = dir("edited")
-            val stale = row(skillDir, checksum = "0".repeat(64))
-            val expected = SkillChecksums.sha256Hex(Files.readAllBytes(skillDir.resolve("SKILL.md")))
-            coEvery { catalog.listByUser("alice") } returns listOf(stale)
-            coEvery { store.index(any(), any(), any(), any()) } returns 1
-
-            val summary = indexer().reconcileByDrift(listOf("alice"))
-
-            coVerify(exactly = 1) { catalog.updateChecksum(stale.id, expected, "0.0.0") }
-            val documents = slot<List<SkillEntry>>()
-            coVerify(exactly = 1) {
-                store.index(capture(documents), SkillScope.GLOBAL, SkillOwnerContext("alice", null), false)
-            }
-            assertEquals(listOf("edited"), documents.captured.map { it.name })
-            assertEquals(1, summary.reindexed)
+        fun `asynchronous acceptance stays submitted through restart until exact checksum is processed`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            chain.write("draft")
+            chain.remote.asynchronous = true
+            val first = chain.refresher.refreshFor("alice", chain.project)
+            val row = chain.catalog.listAll().single()
+            assertEquals(1, first.summary?.submitted)
+            assertEquals(0, first.summary?.confirmed)
+            assertEquals(SkillSyncState.SUBMITTED, row.syncState)
+            assertNull(row.indexedChecksum)
+            val indexer = SkillIndexer(chain.remote, chain.catalog, SkillCatalogSyncService(chain.catalog, chain.config, chain.registry), chain.config)
+            val address = chain.remote.states.keys.single()
+            chain.remote.states[address] = SkillDocumentState.Processed("wrong-checksum")
+            indexer.reconcileByDrift(listOf("alice"))
+            assertEquals(SkillSyncState.SUBMITTED, chain.catalog.listAll().single().syncState)
+            chain.remote.states[address] = SkillDocumentState.Processed(row.checksum)
+            val final = indexer.reconcileByDrift(listOf("alice"))
+            assertEquals(1, final.confirmed)
+            assertEquals(row.checksum, chain.catalog.listAll().single().indexedChecksum)
         }
 
         @Test
-        fun `a vanished skill tree is delisted, keeping the row for provenance`() = runTest {
-            val skillDir = dir("deleted")
-            val entry = row(skillDir)
-            Files.delete(skillDir.resolve("SKILL.md"))
-            coEvery { catalog.listByUser("alice") } returns listOf(entry)
-            coEvery { store.delete(any(), any(), any()) } returns true
-
-            val summary = indexer().reconcileByDrift(listOf("alice"))
-
-            coVerify(exactly = 1) { store.delete("deleted", SkillScope.GLOBAL, SkillOwnerContext("alice", null)) }
-            coVerify(exactly = 1) { catalog.setEnabled(entry.id, false) }
-            coVerify(exactly = 0) { catalog.delete(any()) }
-            assertEquals(1, summary.delisted)
+        fun `due synced rows are inspected and remote loss is repaired without disk drift`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            chain.write("draft")
+            chain.refresher.refreshFor("alice", chain.project)
+            val row = chain.catalog.listAll().single()
+            chain.catalog.updateSync(row.id, row.revision, SkillSyncUpdate(SkillSyncState.SYNCED, row.checksum, 0L))
+            chain.remote.states.clear()
+            chain.remote.documents.clear()
+            val result = chain.indexer.reconcilePending(limit = 1)
+            assertEquals(1, result.rows)
+            assertEquals(1, result.submitted)
+            assertEquals(1, result.confirmed)
         }
 
         @Test
-        fun `a disabled skill is not pushed back into the index because its file changed`() = runTest {
-            val skillDir = dir("switched-off")
-            val entry = row(skillDir, enabled = false, checksum = "0".repeat(64))
-            coEvery { catalog.listByUser("alice") } returns listOf(entry)
-
-            indexer().reconcileByDrift(listOf("alice"))
-
-            coVerify(exactly = 0) { store.index(any(), any(), any(), any()) }
-            // M11: a disabled row's checksum must NOT be updated on drift, otherwise the next
-            // enable would see `driftOf == None` and skip the reindex, leaving the index serving
-            // the pre-disable content. The row stays stale until it is enabled again.
-            coVerify(exactly = 0) { catalog.updateChecksum(any(), any(), any()) }
+        fun `delete failures remain pending and only confirmed absence counts`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            val file = chain.write("draft")
+            chain.refresher.refreshFor("alice", chain.project)
+            Files.delete(file)
+            chain.remote.failDelete = true
+            val first = chain.refresher.refreshFor("alice", chain.project)
+            assertEquals(0, first.summary?.delisted)
+            assertEquals(1, first.summary?.failed)
+            assertFalse(chain.catalog.listAll().single().enabled)
+            assertEquals(SkillSyncState.PENDING_DELETE, chain.catalog.listAll().single().syncState)
+            chain.remote.failDelete = false
+            val second = chain.refresher.refreshFor("alice", chain.project)
+            assertEquals(1, second.summary?.delisted)
+            assertEquals(SkillSyncState.ABSENT, chain.catalog.listAll().single().syncState)
+            assertTrue(chain.remote.documents.isEmpty())
+            assertEquals(0, chain.refresher.refreshFor("alice", chain.project).summary?.delisted)
         }
 
         @Test
-        fun `one owner whose rows cannot be listed does not block the others`() = runTest {
-            val skillDir = dir("reachable")
-            coEvery { catalog.listByUser("broken") } throws IllegalStateException("db down")
-            coEvery { catalog.listByUser("alice") } returns listOf(row(skillDir))
-
-            val summary = indexer().reconcileByDrift(listOf("broken", "alice"))
-
-            assertEquals(1, summary.failed)
-            assertEquals(1, summary.unchanged)
-        }
-
-        @Test
-        fun `reconciliation stays within the configured concurrency window`() = runTest {
-            val rows = (1..6).map { row(dir("burst-$it", body = "---\nname: burst-$it\n---\n\nb\n"), checksum = "0".repeat(64)) }
-            coEvery { catalog.listByUser("alice") } returns rows
-            val inFlight = AtomicInteger()
-            val peak = AtomicInteger()
-            coEvery { store.index(any(), any(), any(), any()) } coAnswers {
-                val now = inFlight.incrementAndGet()
-                peak.updateAndGet { if (it < now) now else it }
-                delay(5)
-                inFlight.decrementAndGet()
-                1
-            }
-
-            indexer(indexConcurrency = 2).reconcileByDrift(listOf("alice"))
-
-            assertTrue(peak.get() <= 2, "observed concurrency ${peak.get()} exceeded the limit of 2")
-            coVerify(exactly = 6) { store.index(any(), any(), any(), any()) }
+        fun `same mtime content edit updates registry and indexed checksum from identical bytes`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            val file = chain.write("draft", "old")
+            chain.refresher.refreshFor("alice", chain.project)
+            val stamp = Files.getLastModifiedTime(file)
+            file.writeText("---\nname: draft\ndescription: d\n---\nnew body")
+            Files.setLastModifiedTime(file, stamp)
+            val outcome = chain.refresher.refreshFor("alice", chain.project)
+            val row = chain.catalog.listAll().single()
+            assertEquals(1, outcome.summary?.updated)
+            assertEquals("new body", chain.registry.get("draft", chain.project)?.content)
+            assertEquals("new body", chain.remote.submitted.last().content)
+            assertEquals(row.checksum, chain.remote.submitted.last().checksum)
+            assertEquals(SkillChecksums.sha256Hex(Files.readAllBytes(file)), row.checksum)
         }
     }
 
     @Nested
-    inner class `single-skill writes` {
-
+    inner class Concurrency {
         @Test
-        fun `indexOne persists the catalog row before touching the index`() = runTest {
-            val skillDir = dir("ordered")
-            val entry = row(skillDir)
-            val order = mutableListOf<String>()
-            coEvery { catalog.upsert(any()) } answers { order.add("catalog"); firstArg() }
-            val awaitSlot = slot<Boolean>()
-            coEvery { store.index(any(), any(), any(), capture(awaitSlot)) } answers { order.add("index"); 1 }
-
-            assertTrue(indexer().indexOne(entry, SkillScope.GLOBAL, SkillOwnerContext("alice"), await = true))
-
-            assertEquals(listOf("catalog", "index"), order)
-            assertTrue(awaitSlot.captured, "an install must be searchable the instant it returns")
+        fun `disable is local immediately and late indexing is compensated`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            chain.write("draft")
+            val started = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            chain.remote.onSubmit = { started.complete(Unit); release.await() }
+            val refreshing = async { chain.refresher.refreshFor("alice", chain.project) }
+            started.await()
+            val row = chain.catalog.listAll().single()
+            val disabling = async { chain.management.setEnabled("draft", SkillOwnerContext("alice", chain.project), false) }
+            runCurrent()
+            assertFalse(chain.catalog.findById(row.id)!!.enabled)
+            release.complete(Unit)
+            refreshing.await()
+            disabling.await()
+            val final = chain.catalog.findById(row.id)!!
+            assertFalse(final.enabled)
+            assertEquals("alice", final.userId)
+            assertEquals(SkillSyncState.ABSENT, final.syncState)
+            assertTrue(chain.remote.documents.isEmpty())
         }
 
         @Test
-        fun `indexOne refreshes the fingerprint from disk rather than trusting the caller`() = runTest {
-            val skillDir = dir("refreshed")
-            val expected = SkillChecksums.sha256Hex(Files.readAllBytes(skillDir.resolve("SKILL.md")))
-            val captured = slot<SkillCatalogEntry>()
-            coEvery { catalog.upsert(capture(captured)) } answers { firstArg() }
-
-            indexer().indexOne(row(skillDir, checksum = "0".repeat(64)), SkillScope.GLOBAL, SkillOwnerContext("alice"))
-
-            assertEquals(expected, captured.captured.checksum)
-        }
-
-        @Test
-        fun `a catalog write failure propagates so the caller can roll the files back`() = runTest {
-            val skillDir = dir("no-row")
-            coEvery { catalog.upsert(any()) } throws IllegalStateException("db is read-only")
-
-            assertFailsWith<IllegalStateException> {
-                indexer().indexOne(row(skillDir), SkillScope.GLOBAL, SkillOwnerContext("alice"))
-            }
-            coVerify(exactly = 0) { store.index(any(), any(), any(), any()) }
-        }
-
-        @Test
-        fun `an index failure alone is tolerated and retried on the next pass`() = runTest {
-            val skillDir = dir("index-off")
-            coEvery { store.index(any(), any(), any(), any()) } throws IllegalStateException("rag down")
-
-            assertFalse(indexer().indexOne(row(skillDir), SkillScope.GLOBAL, SkillOwnerContext("alice")))
-            coVerify(exactly = 1) { catalog.upsert(any()) }
-        }
-
-        @Test
-        fun `a skill with no file on disk is never indexed`() = runTest {
-            val missing = row(tempDir.resolve("absent"), checksum = "0".repeat(64))
-
-            assertFalse(indexer().indexOne(missing, SkillScope.GLOBAL, SkillOwnerContext("alice")))
-            coVerify(exactly = 0) { catalog.upsert(any()) }
-            coVerify(exactly = 0) { store.index(any(), any(), any(), any()) }
-        }
-
-        @Test
-        fun `disable removes the document but keeps the row`() = runTest {
-            val entry = row(dir("pdf-report"))
-            coEvery { store.delete(any(), any(), any()) } returns true
-            coEvery { catalog.setEnabled(any(), any()) } returns true
-
-            assertTrue(indexer().removeOne(entry, removeCatalogRow = false))
-
-            coVerify(exactly = 1) { catalog.setEnabled(entry.id, false) }
-            coVerify(exactly = 0) { catalog.delete(any()) }
-        }
-
-        @Test
-        fun `uninstall drops both the row and the document`() = runTest {
-            val entry = row(dir("pdf-report"))
-            coEvery { store.delete(any(), any(), any()) } returns true
-            coEvery { catalog.delete(any()) } returns true
-
-            assertTrue(indexer().removeOne(entry))
-
-            coVerify(exactly = 1) { catalog.delete(entry.id) }
+        fun `cancellation is not converted into a successful or failed synchronization`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            chain.write("draft")
+            chain.remote.onSubmit = { throw CancellationException("closing") }
+            assertFailsWith<CancellationException> { chain.refresher.refreshFor("alice", chain.project) }
+            assertEquals(SkillSyncState.PENDING_INDEX, chain.catalog.listAll().single().syncState)
         }
     }
 
     @Nested
-    inner class `slice addressing` {
-
+    inner class CurrentIdentity {
         @Test
-        fun `a project-installed row is addressed to the project slice`() = runTest {
-            val project = tempDir.resolve("repo")
-            val skillDir = project.resolve(".easyai/skills/in-project")
-            Files.createDirectories(skillDir)
-            Files.writeString(skillDir.resolve("SKILL.md"), "---\nname: in-project\n---\n\nbody\n")
-            val entry = row(skillDir)
+        fun `project source with global identity only cleans its persisted slice and is never moved`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            val file = chain.write("draft")
+            val snapshot = chain.sync.snapshotOf(file.parent)!!
+            val invalid = chain.catalog.claim(SkillCatalogEntry(name = "draft", checksum = "unchanged",
+                installPath = file.parent.toString(), userId = "alice"))
+            val targetRow = chain.catalog.claim(SkillCatalogEntry(name = "draft", checksum = "reserved",
+                installPath = file.parent.resolveSibling("reserved").toString(), userId = "alice", enabled = false,
+                projectHash = SkillScopeResolver.projectHashOf(chain.project),
+                indexProjectPath = SkillPaths.canonicalize(chain.project)))
+            val oldAddress = chain.remote.address("draft", SkillScope.GLOBAL, SkillOwnerContext("alice"))
+            val target = chain.remote.address("draft", SkillScope.PROJECT, SkillOwnerContext("alice", chain.project))
+            val reserved = SkillDocumentState.Processed("reserved")
+            chain.remote.states[oldAddress] = SkillDocumentState.Processed(snapshot.checksum)
+            chain.remote.states[target] = reserved
 
-            val indexer = indexer()
-
-            assertEquals(SkillScope.PROJECT, indexer.scopeOf(entry))
-            assertEquals(project.toAbsolutePath().normalize(), indexer.ownerOf(entry).projectPath)
+            val result = chain.indexer.synchronize(invalid)
+            val row = chain.catalog.findById(invalid.id)!!
+            assertEquals(1, result.failed)
+            assertEquals("", row.projectHash)
+            assertNull(row.indexProjectPath)
+            assertEquals(invalid.checksum, row.checksum)
+            assertEquals(targetRow, chain.catalog.findById(targetRow.id))
+            assertEquals(listOf(oldAddress), chain.remote.deleted)
+            assertEquals(reserved, chain.remote.states[target])
+            assertTrue(chain.remote.submitted.isEmpty())
+            assertTrue(chain.registry.all().isEmpty(), "invalid identity must not publish even local content")
+            assertNotNull(row.nextAttemptAt)
+            assertNotNull(row.lastError)
         }
 
         @Test
-        fun `the index document is read from disk, not invented from the row`() = runTest {
-            val skillDir = dir("document")
+        fun `shared source with project identity never writes into the global slice`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            val file = chain.write("draft", global = true)
+            val invalid = chain.catalog.claim(SkillCatalogEntry(name = "draft", checksum = "unchanged",
+                installPath = file.parent.toString(), userId = "alice",
+                projectHash = SkillScopeResolver.projectHashOf(chain.project),
+                indexProjectPath = SkillPaths.canonicalize(chain.project)))
+            val oldAddress = chain.remote.address("draft", SkillScope.PROJECT, SkillOwnerContext("alice", chain.project))
+            val target = chain.remote.address("draft", SkillScope.GLOBAL, SkillOwnerContext("alice"))
+            val reserved = SkillDocumentState.Processed("reserved")
+            chain.remote.states[oldAddress] = SkillDocumentState.Processed("old")
+            chain.remote.states[target] = reserved
 
-            val document = indexer().entryOf(row(skillDir))
+            assertEquals(1, chain.indexer.synchronize(invalid).failed)
+            assertEquals(listOf(oldAddress), chain.remote.deleted)
+            assertEquals(reserved, chain.remote.states[target])
+            assertTrue(chain.remote.submitted.isEmpty())
+            assertEquals(invalid.projectHash, chain.catalog.findById(invalid.id)?.projectHash)
+        }
 
-            assertEquals("document", document?.name)
-            assertEquals(skillDir.resolve("SKILL.md").toAbsolutePath().toString(), document?.location)
+        @Test
+        fun `missing project address is rejected rather than filled from the install path`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            val file = chain.write("draft")
+            val invalid = chain.catalog.claim(SkillCatalogEntry(name = "draft", checksum = "unchanged",
+                installPath = file.parent.toString(), userId = "alice",
+                projectHash = SkillScopeResolver.projectHashOf(chain.project)))
+
+            assertEquals(1, chain.indexer.synchronize(invalid).failed)
+            assertNull(chain.catalog.findById(invalid.id)?.indexProjectPath)
+            assertTrue(chain.remote.submitted.isEmpty())
+            assertTrue(chain.remote.deleted.isEmpty(), "a hash is not a recoverable slice address")
+        }
+
+        @Test
+        fun `mismatched stored project address cannot be used even for cleanup`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            val file = chain.write("draft")
+            val invalid = chain.catalog.claim(SkillCatalogEntry(name = "draft", checksum = "unchanged",
+                installPath = file.parent.toString(), userId = "alice",
+                projectHash = SkillScopeResolver.projectHashOf(chain.project),
+                indexProjectPath = temp.resolve("other").toString()))
+
+            assertEquals(1, chain.indexer.synchronize(invalid).failed)
+            assertTrue(chain.remote.submitted.isEmpty())
+            assertTrue(chain.remote.deleted.isEmpty())
+            assertEquals(invalid.indexProjectPath, chain.catalog.findById(invalid.id)?.indexProjectPath)
+        }
+
+        @Test
+        fun `unknown source after configuration change cleans only the verifiable persisted address`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            chain.write("draft")
+            chain.refresher.refreshFor("alice", chain.project)
+            val row = chain.catalog.listAll().single()
+            val address = chain.remote.states.keys.single()
+            val changedConfig = chain.config.copy(homeSkillDirs = emptyList(), paths = emptyList())
+            val sync = SkillCatalogSyncService(chain.catalog, changedConfig, chain.registry)
+            val indexer = SkillIndexer(chain.remote, chain.catalog, sync, changedConfig)
+            chain.remote.submitted.clear()
+            chain.remote.failDelete = true
+            assertEquals(1, indexer.synchronize(row).failed)
+            assertTrue(address in chain.remote.states)
+            chain.remote.failDelete = false
+
+            assertEquals(1, indexer.synchronize(row).failed)
+            assertEquals(listOf(address), chain.remote.deleted)
+            assertTrue(chain.remote.submitted.isEmpty())
+            assertEquals(row.projectHash, chain.catalog.findById(row.id)?.projectHash)
+            assertEquals(row.indexProjectPath, chain.catalog.findById(row.id)?.indexProjectPath)
+        }
+
+        @Test
+        fun `prepareEnable rejects inconsistent identity without publishing or changing the row`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            val file = chain.write("draft")
+            val invalid = chain.catalog.claim(SkillCatalogEntry(name = "draft", checksum = "unchanged",
+                installPath = file.parent.toString(), userId = "alice", enabled = false))
+
+            assertFailsWith<IllegalArgumentException> { chain.indexer.prepareEnable(invalid) }
+            assertEquals(invalid, chain.catalog.findById(invalid.id))
+            assertTrue(chain.registry.all().isEmpty())
+            assertTrue(chain.remote.submitted.isEmpty())
+            assertTrue(chain.remote.deleted.isEmpty())
         }
     }
 }

@@ -54,6 +54,9 @@ interface RagClient {
     /** Read full document by [externalId]; returns null when not found. */
     suspend fun readByExternalId(externalId: String, bizId: String? = null): RagDocumentDetail?
 
+    /** Strict sync lookup: null means confirmed 404, not disabled configuration or a failed read. */
+    suspend fun inspectByExternalId(externalId: String, bizId: String? = null): RagDocumentDetail?
+
     /**
      * List documents whose logical file path starts with [pathPrefix].
      * Fetches all pages transparently.

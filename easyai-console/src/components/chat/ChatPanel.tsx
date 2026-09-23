@@ -114,7 +114,7 @@ export const ChatPanel: React.FC = () => {
       const elRect = el.getBoundingClientRect();
       if (elRect.top <= viewportTop) {
         const contentDiv = el.querySelector('.whitespace-pre-wrap');
-        const text = contentDiv?.textContent?.trim() ?? '';
+        const text = contentDiv?.getAttribute('data-message-content') ?? contentDiv?.textContent?.trim() ?? '';
         if (text) foundText = text;
       } else {
         // Elements are in DOM order; once we pass the viewport top, stop
@@ -127,7 +127,7 @@ export const ChatPanel: React.FC = () => {
     if (!foundText) {
       const first = userMsgElements[0];
       const contentDiv = first.querySelector('.whitespace-pre-wrap');
-      foundText = contentDiv?.textContent?.trim() ?? null;
+      foundText = contentDiv?.getAttribute('data-message-content') ?? contentDiv?.textContent?.trim() ?? null;
     }
 
     setActiveUserMessage((prev) => (prev === foundText ? prev : foundText));

@@ -21,8 +21,8 @@ class SkillRegistryTest {
 
         @BeforeEach
         fun setUp() {
-            // Use a config that doesn't auto-discover to have a clean state
-            val config = SkillConfig(enabled = false)
+            // Explicit shared sources, with scanning disabled for manual registration tests.
+            val config = SkillConfig(enabled = false, paths = listOf("/test", "/a", "/b", "/some/path"))
             registry = DefaultSkillRegistry(discovery, config)
         }
 
@@ -57,6 +57,59 @@ class SkillRegistryTest {
             assertEquals("Beta", reg.get("pdf", Path.of("/projects/beta"))?.description)
             assertNull(reg.get("pdf", null), "a project-granularity skill must not answer a GLOBAL request")
             assertEquals(2, reg.all().size, "the composite key keeps both rows in the snapshot")
+        }
+
+        @Test
+        fun `parent child and prefix sibling projects do not inherit skills`() {
+            val root = Path.of("/projects/repo")
+            val child = root.resolve("module")
+            val global = SkillInfo("shared", "Global", Path.of("/test/SKILL.md"), "global")
+            val parentSkill = SkillInfo("parent", "Parent", root.resolve(".easyai/skills/group/folder/SKILL.md"), "parent")
+            val childSkill = SkillInfo("child", "Child", child.resolve(".easyai/skills/other-folder/SKILL.md"), "child")
+            registry.register(global)
+            registry.register(parentSkill)
+            registry.register(childSkill)
+
+            assertEquals(setOf("parent", "shared"), registry.visibleFor(root).map { it.name }.toSet())
+            assertEquals(setOf("child", "shared"), registry.visibleFor(child).map { it.name }.toSet())
+            assertEquals(listOf(global), registry.visibleFor(Path.of("/projects/repo-other")))
+            assertEquals(listOf(global), registry.visibleFor(null))
+            assertNull(registry.get("parent", child))
+            assertNull(registry.get("child", root))
+        }
+
+        @Test
+        fun `same name PROJECT wins over GLOBAL only in the exact project`() {
+            val root = Path.of("/projects/repo")
+            val global = SkillInfo("pdf", "Global", Path.of("/test/SKILL.md"), "global")
+            val project = SkillInfo("pdf", "Project", root.resolve(".easyai/skills/folder/SKILL.md"), "project")
+            registry.register(global)
+            registry.register(project)
+
+            assertEquals(project, registry.get("pdf", root.resolve("other/..")))
+            assertEquals(global, registry.get("pdf", root.resolve("module")))
+            assertEquals(global, registry.get("pdf", root.parent))
+            assertEquals(listOf(project), registry.visibleFor(root))
+            assertEquals(2, registry.all().size)
+        }
+
+        @Test
+        fun `same identity keeps the existing last registered root winner policy`() {
+            val root = Path.of("/projects/repo")
+            val first = SkillInfo("pdf", "First", root.resolve(".agents/skills/folder/SKILL.md"), "first")
+            val last = SkillInfo("pdf", "Last", root.resolve(".easyai/skills/folder/SKILL.md"), "last")
+            registry.register(first)
+            registry.register(last)
+
+            assertEquals(last, registry.get("pdf", root))
+            assertEquals(listOf(last), registry.all())
+        }
+
+        @Test
+        fun `unknown install roots are rejected without populating the registry`() {
+            val skill = SkillInfo("unknown", "Unknown", Path.of("/unknown/folder/SKILL.md"), "body")
+            assertThrows(IllegalArgumentException::class.java) { registry.register(skill) }
+            assertTrue(registry.all().isEmpty())
         }
 
         @Test
@@ -148,6 +201,22 @@ class SkillRegistryTest {
         }
 
         @Test
+        fun `an edited skill is reported as updated, not as churn`(@TempDir tempDir: Path) {
+            val underScan = registry(tempDir)
+            val skillDir = writeSkill(tempDir, "pdf")
+            underScan.rescan(emptySet())
+
+            skillDir.resolve("SKILL.md").writeText("---\nname: pdf\ndescription: pdf does things\n---\nRevised content")
+            val delta = underScan.rescan(emptySet())
+
+            assertEquals(listOf("pdf"), delta.updatedKeys.map { it.name })
+            assertEquals(emptyList<String>(), delta.added)
+            assertEquals(emptyList<String>(), delta.removed)
+            assertTrue(delta.changed, "a body update is a change")
+            assertTrue(underScan.get("pdf", null)!!.content.contains("Revised"))
+        }
+
+        @Test
         fun `the extra root reaches a project the server was not started in`(@TempDir tempDir: Path) {
             val project = tempDir.resolve("work/repo").createDirectories()
             val underScan = registry(tempDir.resolve("server"), ancestorDirNames = listOf("nested-skills"))
@@ -181,6 +250,40 @@ class SkillRegistryTest {
 
             assertEquals(emptyList<String>(), delta.removed)
             assertNotNull(underScan.get("pdf", beta), "beta's snapshot survived a scan that only mentioned alpha")
+        }
+
+        @Test
+        fun `initial and later scans never walk up to a parent project`(@TempDir tempDir: Path) {
+            val parent = tempDir.resolve("repo").createDirectories()
+            val child = parent.resolve("module").createDirectories()
+            writeSkill(parent.resolve(".test-skills"), "parent-only")
+            writeSkill(child.resolve(".test-skills"), "child-only")
+            val underScan = DefaultSkillRegistry(
+                discovery, SkillConfig(homeSkillDirs = listOf(".test-skills"), workDir = child.toString())
+            )
+
+            assertEquals(listOf("child-only"), underScan.all().map { it.name })
+            assertFalse(parent in underScan.knownProjectRoots())
+            underScan.rescan(setOf(child))
+            assertEquals(listOf("child-only"), underScan.all().map { it.name })
+            underScan.rescan(setOf(parent))
+            assertEquals(setOf("parent-only", "child-only"), underScan.all().map { it.name }.toSet())
+            assertEquals(listOf("child-only"), underScan.visibleFor(child).map { it.name })
+            assertEquals(listOf("parent-only"), underScan.visibleFor(parent).map { it.name })
+        }
+
+        @Test
+        fun `scan finds nested skill whose name differs from its folder`(@TempDir tempDir: Path) {
+            val root = tempDir.resolve("repo").createDirectories()
+            val folder = root.resolve(".test-skills/group/folder").createDirectories()
+            folder.resolve("SKILL.md").writeText("---\nname: declared-name\ndescription: nested skill\n---\nContent")
+            val underScan = DefaultSkillRegistry(
+                discovery, SkillConfig(homeSkillDirs = listOf(".test-skills"), workDir = root.toString())
+            )
+
+            val skill = underScan.get("declared-name", root)
+            assertEquals(folder, skill?.location?.parent)
+            assertNull(underScan.get("declared-name", null))
         }
 
         @Test

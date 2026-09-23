@@ -7,6 +7,23 @@ import com.easy.easyai.api.model.ModelProviderInfo.Protocol
 import com.easy.easyai.repository.database.Tables
 import org.jetbrains.exposed.v1.core.ResultRow
 import tools.jackson.databind.ObjectMapper
+import tools.jackson.databind.cfg.EnumFeature
+import tools.jackson.databind.json.JsonMapper
+import java.util.concurrent.ConcurrentHashMap
+
+// Capabilities JSON may contain enum values written by a newer build; degrade them to null
+// (i.e. legacy default semantics) instead of failing the whole config row on read.
+// Jackson ignores unknown fields by default, but unknown enum values throw unless this feature is on.
+private val tolerantMappers = ConcurrentHashMap<ObjectMapper, ObjectMapper>()
+
+internal fun capabilitiesMapper(base: ObjectMapper): ObjectMapper =
+    tolerantMappers.computeIfAbsent(base) {
+        // JsonMapper.rebuild() has a concrete Builder type; ObjectMapper.rebuild() is generic
+        // and Kotlin cannot infer its self-referential bounds.
+        (it as JsonMapper).rebuild()
+            .enable(EnumFeature.READ_UNKNOWN_ENUM_VALUES_AS_NULL)
+            .build()
+    }
 
 /**
  * Shared row mapper for ModelProviderConfig.
@@ -19,7 +36,7 @@ internal fun mapToModelProviderConfig(row: ResultRow, objectMapper: ObjectMapper
 
     val capabilitiesJson = row[Tables.ModelProviderConfigTable.capabilities]
     val capabilities: ModelCapabilities? = capabilitiesJson?.takeIf { it.isNotBlank() }
-        ?.let { objectMapper.readValue(it, ModelCapabilities::class.java) }
+        ?.let { capabilitiesMapper(objectMapper).readValue(it, ModelCapabilities::class.java) }
 
     return ModelProviderConfig(
         id = row[Tables.ModelProviderConfigTable.id],

@@ -10,10 +10,12 @@ import com.easy.easyai.core.agent.AgentToolConfig
 import com.easy.easyai.core.agent.AgentType
 import com.easy.easyai.core.agent.AsyncAgentStore
 import com.easy.easyai.core.agent.TargetType
+import com.easy.easyai.web.model.ConfigValidationError
 import com.easy.easyai.web.model.ValidateTemplateRequest
 import com.easy.easyai.web.model.ValidateTemplateResponse
 import com.easy.easyai.web.model.TemplateValidationError
 import com.easy.easyai.web.security.getCurrentUserId
+import com.easy.easyai.web.service.validation.ResourceExistenceValidator
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.reactor.mono
@@ -169,6 +171,7 @@ class AgentController(
         if (existing != null) {
             throw ResponseStatusException(HttpStatus.CONFLICT, "Agent already exists: ${request.id}")
         }
+        rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(request))
         validateTeamMembers(request.agentType, request.memberIds, request.customMembers, userId)
         val agent = AgentDefinition.create(
             id = request.id,
@@ -227,6 +230,7 @@ class AgentController(
         if (existing.userId == AuthConstants.SYSTEM_USER_ID) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot modify built-in agent: $id")
         }
+        rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(request))
         validateTeamMembers(request.agentType, request.memberIds, request.customMembers, userId)
 
         val updated = existing.copy(
@@ -285,6 +289,9 @@ class AgentController(
         if (agent.userId == AuthConstants.SYSTEM_USER_ID) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot modify built-in agent: $id")
         }
+        rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(
+            request.toolNames, agentStore.getAgentSkillNames(id)
+        ))
         agentStore.saveAgentTools(id, request.toolNames)
         request.toolNames
     }
@@ -322,6 +329,15 @@ class AgentController(
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot modify built-in agent: $id")
         }
         val type = parseTargetType(request.targetType)
+        when (type) {
+            TargetType.TOOL -> rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(
+                request.targetNames, agentStore.getAgentSkillNames(id)
+            ))
+            TargetType.SKILL -> rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(
+                agentStore.getAgentToolNames(id), request.targetNames
+            ))
+            else -> Unit
+        }
         agentStore.saveAgentToolConfigs(id, type, request.targetNames)
         agentStore.getAgentToolConfigs(id, type).map { it.toDto() }
     }
@@ -490,6 +506,14 @@ class AgentController(
                     "Member '$memberId' is ${member.agentType} — only ALL or SUBAGENT agents can be team members"
                 )
             }
+        }
+    }
+
+    private fun rejectInvalidSkillTools(errors: List<ConfigValidationError>) {
+        if (errors.isNotEmpty()) {
+            throw ResponseStatusException(
+                HttpStatus.BAD_REQUEST, errors.joinToString("; ") { "${it.field}: ${it.message}" }
+            )
         }
     }
 

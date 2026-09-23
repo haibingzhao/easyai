@@ -2,6 +2,7 @@ package com.easy.easyai.core.agent
 
 import com.easy.easyai.core.event.*
 import com.easy.easyai.core.memory.MemoryRef
+import com.easy.easyai.core.message.CommandMessageProjection
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.prompt.PromptContext
 import com.easy.easyai.core.resilience.LlmCircuitBreakerRegistry
@@ -11,7 +12,6 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.reactive.asFlow
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.messages.SystemMessage
 import org.springframework.ai.chat.model.ChatModel
 import org.springframework.ai.chat.model.ChatResponse
 import org.springframework.ai.chat.prompt.Prompt
@@ -19,6 +19,7 @@ import org.springframework.ai.model.tool.StructuredOutputChatOptions
 import org.springframework.ai.model.tool.ToolCallingChatOptions
 import java.util.concurrent.TimeoutException
 import kotlin.time.Duration.Companion.milliseconds
+import org.springframework.ai.chat.messages.SystemMessage as SpringAiSystemMessage
 
 /**
  * Handles LLM streaming calls with retry logic and response parsing.
@@ -392,33 +393,36 @@ internal class AgentLoopRunner(
         transformedMessages: List<EasyAiMessage>,
         tools: List<ToolDefinition>
     ): Prompt {
-        val springAiMessages = services.messageConverter.toSpringAiMessages(transformedMessages, context.userId ?: "system")
+        val projectedMessages = CommandMessageProjection.project(transformedMessages)
+        val springAiMessages = services.messageConverter.toSpringAiMessages(projectedMessages, context.userId ?: "system")
         val toolCallbacks = tools.map { EasyAiToolCallback(it) }
 
-        // Build ChatOptions at usage time with real toolCallbacks
-        val baseChatOptions = context.modelConfig?.let { config ->
+        // Timing gate for API-level structured output: multi-turn mode defers enforcement
+        // until the completion check sets forceStructuredOutput. Whether the model's protocol
+        // can actually express the schema (capabilities.structuredOutput gate) is decided by
+        // the protocol factory inside buildChatOptions; declined schemas fall through to the
+        // prompt-based OutputSchemaCompletionCheck path.
+        val deferredForMultiTurn = context.outputSchemaMultiTurn && !forceStructuredOutput
+        val effectiveOutputSchema =
+            if (context.outputSchema != null && !deferredForMultiTurn) context.outputSchema else null
+
+        val chatOptions = context.modelConfig?.let { config ->
             services.buildChatOptions(
                 config = config,
-                toolCallbacks = toolCallbacks
+                toolCallbacks = toolCallbacks,
+                outputSchema = effectiveOutputSchema
             )
-        } ?: ToolCallingChatOptions.builder()
-            .model(context.modelId.ifEmpty { null })
-            .toolCallbacks(toolCallbacks)
-            .build()
-
-        // Inject outputSchema for model-level structured output enforcement.
-        // Protocol-specific options (OpenAI, Anthropic) implement StructuredOutputChatOptions,
-        // which maps outputSchema to ResponseFormat(type=JSON_SCHEMA) / OutputConfig+JsonOutputFormat.
-        // In multi-turn mode, skip API-level enforcement until forceStructuredOutput is set by completion check.
-        val chatOptions = if (context.outputSchema != null && baseChatOptions is StructuredOutputChatOptions) {
-            val applyStructuredOutput = !context.outputSchemaMultiTurn || forceStructuredOutput
-            if (applyStructuredOutput) {
-                baseChatOptions.mutate().outputSchema(context.outputSchema).build()
+        } ?: run {
+            // No model config: no capabilities to consult, keep the generic enforcement path.
+            val fallback = ToolCallingChatOptions.builder()
+                .model(context.modelId.ifEmpty { null })
+                .toolCallbacks(toolCallbacks)
+                .build()
+            if (effectiveOutputSchema != null && fallback is StructuredOutputChatOptions) {
+                fallback.mutate().outputSchema(effectiveOutputSchema).build()
             } else {
-                baseChatOptions
+                fallback
             }
-        } else {
-            baseChatOptions
         }
 
         // Memory is NOT injected into the system prompt (keeps the prompt stable for LLM caching).
@@ -468,7 +472,7 @@ internal class AgentLoopRunner(
         }
 
         val allSpringAiMessages = if (systemPromptText.isNotBlank()) {
-            listOf(SystemMessage(systemPromptText)) + springAiMessages
+            listOf(SpringAiSystemMessage(systemPromptText)) + springAiMessages
         } else {
             springAiMessages
         }

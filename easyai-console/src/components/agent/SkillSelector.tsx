@@ -1,5 +1,8 @@
-import React from 'react';
-import { useAgentStore } from '@/services/stores/agent-store';
+import React, { useEffect, useState } from 'react';
+import { useProjectStore } from '@/services/stores/project-store';
+import { useAuthStore } from '@/services/stores/auth-store';
+import { agentService } from '@/services/agent-service';
+import type { SkillInfo } from '@/types/agent';
 import { BookOpen } from 'lucide-react';
 
 interface SkillSelectorProps {
@@ -9,7 +12,26 @@ interface SkillSelectorProps {
 }
 
 export const SkillSelector: React.FC<SkillSelectorProps> = ({ selectedSkills, onChange, disabled }) => {
-  const { skills } = useAgentStore();
+  const projectId = useProjectStore((state) => state.currentProject?.id);
+  const userId = useAuthStore((state) => state.user?.id);
+  const scopeKey = JSON.stringify([userId, projectId]);
+  const [snapshot, setSnapshot] = useState<{ scopeKey: string; skills: SkillInfo[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const skills = snapshot?.scopeKey === scopeKey ? snapshot.skills : [];
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setError(null);
+    agentService.listSkills(projectId, controller.signal).then((items) => {
+      if (!controller.signal.aborted) setSnapshot({ scopeKey, skills: items });
+    }).catch((err: unknown) => {
+      if (!controller.signal.aborted) {
+        setSnapshot({ scopeKey, skills: [] });
+        setError(err instanceof Error ? err.message : 'Failed to load skills');
+      }
+    });
+    return () => controller.abort();
+  }, [projectId, scopeKey]);
 
   const toggleSkill = (skillName: string) => {
     if (selectedSkills.includes(skillName)) {
@@ -28,6 +50,12 @@ export const SkillSelector: React.FC<SkillSelectorProps> = ({ selectedSkills, on
         </p>
       </div>
 
+      {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+      {!projectId && (
+        <p className="text-xs text-muted-foreground">
+          No project selected: only global skills are listed. Choose a project to see its project skills.
+        </p>
+      )}
       {skills.length === 0 ? (
         <p className="text-xs text-muted-foreground italic">No skills available.</p>
       ) : (
@@ -35,7 +63,7 @@ export const SkillSelector: React.FC<SkillSelectorProps> = ({ selectedSkills, on
           {skills.map((skill) => {
             const isSelected = selectedSkills.includes(skill.name);
             // Same-named skills of two projects must not collide as React keys or look identical.
-            const isProject = skill.scope === 'project';
+            const isProject = skill.scope?.toUpperCase() === 'PROJECT';
             return (
               <label
                 key={`${skill.name}@${skill.projectPath ?? 'global'}`}

@@ -1,261 +1,124 @@
 package com.easy.easyai.skills
 
-import com.easy.easyai.core.skill.AsyncSkillCatalogStore
-import com.easy.easyai.core.skill.SkillCatalogEntry
+import com.easy.easyai.core.skill.SkillSyncState
 import io.mockk.coEvery
-import io.mockk.every
-import io.mockk.mockk
+import io.mockk.coVerify
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
-import java.nio.file.Path
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/**
- * Tests for [SkillPromptSource] — the decision of which skills the system prompt advertises.
- *
- * The four combinations that matter are the ones the rollout contract is about: flag off, flag on
- * with a working index, flag on with a missing index bean, and full injection with disabled rows.
- * The third one is the regression guard: a downed RAG service must never leave the agent with no
- * skill discovery at all.
- */
 class SkillPromptSourceTest {
+    private val f = SkillModelFixture()
+    private val global = f.skill("review")
+    private val local = f.skill("review", f.project)
 
-    private val registry = mockk<SkillRegistry>()
-
-    private fun skill(name: String, description: String? = "Does $name things") = SkillInfo(
-        name = name,
-        description = description,
-        location = Path.of("/home/dev/.easyai/skills/$name/SKILL.md"),
-        content = "# $name"
+    private fun source(rag: Boolean = false, inject: Boolean = true, ready: Boolean = rag) = SkillPromptSource(
+        f.registry, f.catalog, inject, rag, ready, f.config
     )
-
-    private fun row(name: String, userId: String, enabled: Boolean = true) = SkillCatalogEntry(
-        id = "$userId/$name",
-        name = name,
-        enabled = enabled,
-        checksum = "a".repeat(64),
-        installPath = "/home/dev/.easyai/skills/$name",
-        userId = userId
-    )
-
-    private fun source(
-        catalog: AsyncSkillCatalogStore? = null,
-        inject: Boolean = true,
-        ragEnabled: Boolean = false,
-        ragDiscoveryReady: Boolean = ragEnabled,
-        registry: SkillRegistry? = this.registry
-    ) = SkillPromptSource(
-        registry = registry,
-        catalog = catalog,
-        injectIntoSystemPrompt = inject,
-        ragEnabled = ragEnabled,
-        ragDiscoveryReady = ragDiscoveryReady
-    )
-
-    private fun names(list: List<Map<String, Any?>>): List<String> = list.map { it["name"] as String }
 
     @Nested
-    inner class `which view the prompt gets` {
-
+    inner class EffectiveView {
         @Test
-        fun `with the flag off the whole catalogue rides along as before`() {
-            every { registry.visibleFor(null) } returns listOf(skill("pdf-report"), skill("git-flow"))
-
+        fun `project override is selected before disabled filtering`() = runTest {
+            f.skills = listOf(global, local)
+            f.rows = listOf(f.row(global, "system"), f.row(local, enabled = false))
             val prompt = source()
-
-            assertTrue(prompt.fullInjectionActive)
-            assertEquals(listOf("pdf-report", "git-flow"), names(prompt.skillsForPrompt("alice")))
+            assertTrue(prompt.skillsForPrompt("alice", f.project, listOf("review")).isEmpty())
+            assertEquals("Does review tasks", prompt.skillsForPrompt("alice", null, listOf("review")).single()["description"])
         }
 
         @Test
-        fun `a skill with nothing to say is never advertised`() {
-            every { registry.visibleFor(null) } returns listOf(skill("pdf-report"), skill("scaffold", description = "  "))
-
-            assertEquals(listOf("pdf-report"), names(source().skillsForPrompt("alice")))
-        }
-
-        @Test
-        fun `on-demand discovery empties the prompt view`() {
-            every { registry.visibleFor(null) } returns listOf(skill("pdf-report"))
-
-            val prompt = source(ragEnabled = true, ragDiscoveryReady = true)
-
-            assertFalse(prompt.fullInjectionActive)
-            assertEquals(emptyList(), names(prompt.skillsForPrompt("alice")))
-        }
-
-        @Test
-        fun `the flag alone is not enough, a missing store keeps the full list`() {
-            every { registry.visibleFor(null) } returns listOf(skill("pdf-report"))
-
-            val prompt = source(ragEnabled = true, ragDiscoveryReady = false)
-
-            assertTrue(
-                prompt.fullInjectionActive,
-                "skill_search would not resolve without a SkillStore bean, so suppression would blind the agent"
-            )
-            assertEquals(listOf("pdf-report"), names(prompt.skillsForPrompt("alice")))
-        }
-
-        @Test
-        fun `injection switched off outright is respected whatever RAG says`() {
-            every { registry.visibleFor(null) } returns listOf(skill("pdf-report"))
-
-            val prompt = source(inject = false, ragEnabled = false)
-
-            assertFalse(prompt.fullInjectionActive)
-            assertEquals(emptyList(), names(prompt.skillsForPrompt("alice")))
-        }
-
-        @Test
-        fun `the view is the requesting project's view, not the union`() {
-            val global = skill("git-flow")
-            val inProject = SkillInfo(
-                name = "pdf",
-                description = "Does pdf things",
-                location = Path.of("/work/repo/.easyai/skills/pdf/SKILL.md"),
-                content = "# pdf"
-            )
-            val project = Path.of("/work/repo")
-            every { registry.visibleFor(null) } returns listOf(global)
-            every { registry.visibleFor(project) } returns listOf(inProject, global)
-
+        fun `whitelist is required and unrelated projects never appear`() = runTest {
+            val other = f.skill("private", f.project.resolve("child"))
+            f.skills = listOf(global, other)
+            f.rows = listOf(f.row(global, "system"), f.row(other))
             val prompt = source()
-
-            assertEquals(listOf("git-flow"), names(prompt.skillsForPrompt("alice")))
-            assertEquals(
-                listOf("pdf", "git-flow"),
-                names(prompt.skillsForPrompt("alice", project)),
-                "a session inside a project sees that project's skills too — the same view load_skill will honor"
-            )
+            assertTrue(prompt.skillsForPrompt("alice", f.project).isEmpty())
+            coVerify(exactly = 0) { f.catalog.listByUser(any()) }
+            assertEquals(listOf("review"), prompt.skillsForPrompt("alice", f.project, listOf("review", "private")).map { it["name"] })
         }
 
         @Test
-        fun `no registry at all is an empty view, not a crash`() {
-            val prompt = source(registry = null)
+        fun `toggle and owner changes are visible without refresh`() = runTest {
+            f.skills = listOf(global)
+            f.rows = listOf(f.row(global, "system"))
+            val prompt = source()
+            assertEquals(1, prompt.skillsForPrompt("alice", null, listOf("review")).size)
+            f.rows = f.rows + f.row(global, enabled = false)
+            assertTrue(prompt.skillsForPrompt("alice", null, listOf("review")).isEmpty())
+            assertEquals(1, prompt.skillsForPrompt("bob", null, listOf("review")).size)
+        }
 
-            assertFalse(prompt.fullInjectionActive)
-            assertEquals(emptyList(), names(prompt.skillsForPrompt("alice")))
+        @Test
+        fun `catalog failure propagates on first and subsequent reads`() = runTest {
+            f.skills = listOf(global)
+            f.rows = listOf(f.row(global))
+            val prompt = source()
+            prompt.skillsForPrompt("alice", null, listOf("review"))
+            coEvery { f.catalog.listByUser("alice") } throws IllegalStateException("catalog down")
+            assertFailsWith<IllegalStateException> { prompt.skillsForPrompt("alice", null, listOf("review")) }
+            assertFailsWith<IllegalStateException> { source().skillsForPrompt("alice", null, listOf("review")) }
+        }
+
+        @Test
+        fun `cancellation propagates`() = runTest {
+            coEvery { f.catalog.listByUser(any()) } throws CancellationException("cancelled")
+            assertFailsWith<CancellationException> { source().skillsForPrompt("alice", null, listOf("review")) }
+        }
+
+        @Test
+        fun `without catalog only explicit globals are advertised`() = runTest {
+            f.skills = listOf(global, local, f.skill("private", f.project))
+            val prompt = SkillPromptSource(f.registry, null, true, false, config = f.config)
+            assertEquals(listOf("review"), prompt.skillsForPrompt("alice", f.project, listOf("review", "private")).map { it["name"] })
         }
     }
 
     @Nested
-    inner class `the disabled view` {
-
-        private val catalog = mockk<AsyncSkillCatalogStore>()
-
+    inner class DiscoveryReadiness {
         @Test
-        fun `nothing is hidden before the first refresh`() = runTest {
-            every { registry.visibleFor(null) } returns listOf(skill("pdf-report"))
-            val prompt = source(catalog = catalog)
-
-            assertEquals(listOf("pdf-report"), names(prompt.skillsForPrompt("alice")))
+        fun `store availability alone never suppresses pending or stale skills`() = runTest {
+            f.skills = listOf(global)
+            val prompt = source(rag = true)
+            assertTrue(prompt.fullInjectionActive)
+            for (state in listOf(SkillSyncState.PENDING_INDEX, SkillSyncState.SUBMITTED, SkillSyncState.ABSENT)) {
+                f.rows = listOf(f.row(global, state = state))
+                assertEquals(1, prompt.skillsForPrompt("alice", null, listOf("review"), true).size)
+            }
+            f.rows = listOf(f.row(global).copy(indexedChecksum = "old"))
+            assertEquals(1, prompt.skillsForPrompt("alice", null, listOf("review"), true).size)
         }
 
         @Test
-        fun `a disabled row is hidden for its owner and for nobody else`() = runTest {
-            every { registry.visibleFor(null) } returns listOf(skill("pdf-report"), skill("git-flow"))
-            coEvery { catalog.listDistinctUserIds() } returns listOf("alice")
-            coEvery { catalog.listByUser("alice") } returns listOf(row("pdf-report", "alice", enabled = false))
-            coEvery { catalog.listByUser(SkillCatalogEntry.DEFAULT_USER_ID) } returns emptyList()
-            val prompt = source(catalog = catalog)
-
-            assertTrue(prompt.refreshVisibility())
-
-            assertEquals(listOf("git-flow"), names(prompt.skillsForPrompt("alice")))
-            assertEquals(
-                listOf("pdf-report", "git-flow"),
-                names(prompt.skillsForPrompt("bob")),
-                "another user's switch-off must not hide a skill here"
-            )
+        fun `suppression requires ready effective view and agent search tool`() = runTest {
+            f.skills = listOf(global, local)
+            f.rows = listOf(f.row(global, "system"), f.row(local, state = SkillSyncState.PENDING_INDEX))
+            val prompt = source(rag = true)
+            assertEquals(1, prompt.skillsForPrompt("alice", null, listOf("review")).size)
+            assertTrue(prompt.skillsForPrompt("alice", null, listOf("review"), true).isEmpty())
+            assertEquals(1, prompt.skillsForPrompt("alice", f.project, listOf("review"), true).size)
+            assertEquals(1, source(rag = true, ready = false).skillsForPrompt("alice", null, listOf("review"), true).size)
         }
 
         @Test
-        fun `a disable hides one install directory, not every skill of that name`() = runTest {
-            val pdfInA = SkillInfo(
-                name = "pdf",
-                description = "Builds pdf in A",
-                location = Path.of("/work/repo-a/.easyai/skills/pdf/SKILL.md"),
-                content = "# a"
-            )
-            val pdfInB = SkillInfo(
-                name = "pdf",
-                description = "Builds pdf in B",
-                location = Path.of("/work/repo-b/.easyai/skills/pdf/SKILL.md"),
-                content = "# b"
-            )
-            every { registry.visibleFor(null) } returns listOf(pdfInA, pdfInB)
-            coEvery { catalog.listDistinctUserIds() } returns listOf("alice")
-            coEvery { catalog.listByUser("alice") } returns listOf(
-                SkillCatalogEntry(
-                    id = "row-a",
-                    name = "pdf",
-                    checksum = "a".repeat(64),
-                    enabled = false,
-                    installPath = "/work/repo-a/.easyai/skills/pdf",
-                    userId = "alice"
-                )
-            )
-            coEvery { catalog.listByUser(SkillCatalogEntry.DEFAULT_USER_ID) } returns emptyList()
-            val prompt = source(catalog = catalog)
-
-            prompt.refreshVisibility()
-
-            val view = prompt.skillsForPrompt("alice")
-            assertEquals(1, view.size, "switching off project A's pdf must not silence project B's copy")
-            assertEquals("Builds pdf in B", view.first()["description"])
+        fun `disabled injection and absent registry return empty`() = runTest {
+            assertFalse(source(inject = false).fullInjectionActive)
+            assertTrue(source(inject = false).skillsForPrompt("alice", null, listOf("review")).isEmpty())
+            val absent = SkillPromptSource(null, f.catalog, true, false)
+            assertFalse(absent.fullInjectionActive)
+            assertTrue(absent.skillsForPrompt("alice", null, listOf("review")).isEmpty())
         }
 
         @Test
-        fun `an anonymous request inherits the default owner`() = runTest {
-            every { registry.visibleFor(null) } returns listOf(skill("pdf-report"))
-            coEvery { catalog.listDistinctUserIds() } returns listOf(SkillCatalogEntry.DEFAULT_USER_ID)
-            coEvery { catalog.listByUser(SkillCatalogEntry.DEFAULT_USER_ID) } returns
-                listOf(row("pdf-report", SkillCatalogEntry.DEFAULT_USER_ID, enabled = false))
-
-            assertEquals(emptyList(), names(source(catalog = catalog).apply { refreshVisibility() }.skillsForPrompt(null)))
-        }
-
-        @Test
-        fun `a blank user id is the anonymous case too`() = runTest {
-            every { registry.visibleFor(null) } returns listOf(skill("pdf-report"))
-            coEvery { catalog.listDistinctUserIds() } returns listOf("alice")
-            coEvery { catalog.listByUser("alice") } returns listOf(row("pdf-report", "alice", enabled = false))
-            coEvery { catalog.listByUser(SkillCatalogEntry.DEFAULT_USER_ID) } returns emptyList()
-            val prompt = source(catalog = catalog)
-            prompt.refreshVisibility()
-
-            assertEquals(
-                listOf("pdf-report"),
-                names(prompt.skillsForPrompt("   ")),
-                "a blank identity has no claim on alice's switches"
-            )
-        }
-
-        @Test
-        fun `a failed refresh keeps hiding what was already hidden`() = runTest {
-            every { registry.visibleFor(null) } returns listOf(skill("pdf-report"), skill("git-flow"))
-            coEvery { catalog.listDistinctUserIds() } returns listOf("alice")
-            coEvery { catalog.listByUser("alice") } returns listOf(row("pdf-report", "alice", enabled = false))
-            coEvery { catalog.listByUser(SkillCatalogEntry.DEFAULT_USER_ID) } returns emptyList()
-            val prompt = source(catalog = catalog)
-            prompt.refreshVisibility()
-
-            coEvery { catalog.listDistinctUserIds() } throws IllegalStateException("database is down")
-
-            assertFalse(prompt.refreshVisibility(), "a failed pass must report that it changed nothing")
-            assertEquals(listOf("git-flow"), names(prompt.skillsForPrompt("alice")))
-        }
-
-        @Test
-        fun `without a table there is nothing to refresh`() = runTest {
-            every { registry.visibleFor(null) } returns listOf(skill("pdf-report"))
-
-            assertFalse(source().refreshVisibility())
-            assertEquals(listOf("pdf-report"), names(source().skillsForPrompt("alice")))
+        fun `blank descriptions are not advertised`() = runTest {
+            f.skills = listOf(global.copy(description = "  "))
+            f.rows = listOf(f.row(global))
+            assertTrue(source().skillsForPrompt("alice", null, listOf("review")).isEmpty())
         }
     }
 }

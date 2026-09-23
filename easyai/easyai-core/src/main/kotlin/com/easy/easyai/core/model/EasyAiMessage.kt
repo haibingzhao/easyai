@@ -264,6 +264,10 @@ data class UserMessage(
         const val SOURCE_COMPLETION_CHECK = "completion_check"
         const val COMMAND_EXPANSION = "commandExpansion"
         const val COMMAND_NAME = "commandName"
+        const val COMMAND_SOURCE = "commandSource"
+        const val COMMAND_CATEGORY = "commandCategory"
+        const val COMMAND_USER_ID = "commandUserId"
+        const val COMMAND_PROJECT_PATH = "commandProjectPath"
     }
 }
 

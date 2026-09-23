@@ -1,5 +1,7 @@
 import type { Attachment } from '../types/message';
 import type { ChatAttachment } from '../types/socket-request';
+import type { CommandIdentity } from './command-utils';
+import { commandLabel, parseCommand, serializeCommand } from './command-utils';
 
 /** Invisible character used to wrap file references in message text. */
 export const FILE_REF_CHAR = '\u201b';
@@ -120,7 +122,11 @@ export function buildMessageWithTextAttachments(message: string, textAttachments
     const content = decodeTextAttachment(a);
     return `<file name="${escapeXmlAttr(a.name)}">\n${content}\n</file>`;
   });
-  return parts.join('\n\n') + '\n\n' + message;
+  // Command dispatch only examines the head of the message. Keep all anchors and
+  // arguments intact, and append inline files instead of hiding the command.
+  return parseCommand(message)
+    ? message + '\n\n' + parts.join('\n\n')
+    : parts.join('\n\n') + '\n\n' + message;
 }
 
 /** Build a folder reference string to embed in message text. */
@@ -192,4 +198,86 @@ export function splitByFileRefs(text: string): ContentSegment[] {
     segments.push({ type: 'text', text: text.slice(lastIndex) });
   }
   return segments.length > 0 ? segments : [{ type: 'text', text }];
+}
+
+/** Read editable DOM (or a clipboard fragment) without losing atomic command/ref identities. */
+export function readMessageEditorText(root: Node, includeCommand = false): string {
+  const parts: string[] = [];
+  const walk = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parts.push(node.textContent ?? '');
+      return;
+    }
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const element = node as HTMLElement;
+      if (element.classList.contains('command-chip')) {
+        if (includeCommand) parts.push(`${element.dataset.commandToken ?? element.textContent ?? ''} `);
+        return;
+      }
+      if (element.classList.contains('mention-chip')) {
+        const name = element.dataset.name ?? (element.textContent ?? '').replace(/^[\u{1F4C4}\u{1F4C1}]\s*/u, '');
+        const path = element.dataset.path ?? '';
+        parts.push(element.dataset.type === 'directory' ? buildFolderRef(name, path) : buildFileRef(name, path));
+        return;
+      }
+      if (element.tagName === 'BR') {
+        parts.push('\n');
+        return;
+      }
+      if ((element.tagName === 'DIV' || element.tagName === 'P') && parts.length && !parts[parts.length - 1].endsWith('\n')) parts.push('\n');
+    }
+    node.childNodes.forEach(walk);
+  };
+  root.childNodes.forEach(walk);
+  return parts.join('');
+}
+
+export function createCommandChip(command: CommandIdentity): HTMLSpanElement {
+  const chip = document.createElement('span');
+  chip.className = 'command-chip';
+  chip.contentEditable = 'false';
+  chip.textContent = commandLabel(command);
+  chip.title = command.source ?? `/${command.name}`;
+  chip.dataset.commandToken = serializeCommand(command, '');
+  return chip;
+}
+
+/** Restore from text alone, including historical Skill sources absent from today's menu. */
+export function populateMessageEditor(editor: HTMLElement, content: string): CommandIdentity | null {
+  const parsed = parseCommand(content);
+  editor.replaceChildren();
+  if (parsed) editor.appendChild(createCommandChip(parsed.command));
+  for (const segment of splitByFileRefs(parsed ? parsed.args : content)) {
+    if (segment.type === 'text') {
+      editor.appendChild(document.createTextNode(segment.text));
+    } else {
+      const chip = document.createElement('span');
+      const isFolder = segment.type === 'folderRef';
+      chip.className = `mention-chip mention-${isFolder ? 'folder' : 'file'}`;
+      chip.contentEditable = 'false';
+      chip.dataset.path = segment.path;
+      chip.dataset.name = segment.name;
+      chip.dataset.type = isFolder ? 'directory' : 'file';
+      chip.title = segment.path;
+      chip.textContent = `${isFolder ? FOLDER_PREFIX : '\u{1F4C4}'} ${segment.name}`;
+      editor.appendChild(chip);
+    }
+  }
+  return parsed?.command ?? null;
+}
+
+/** Copy/cut only the selected range; chips always serialize as complete protocol tokens. */
+export function copyMessageSelection(root: HTMLElement, clipboard: DataTransfer, cut = false): boolean {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount || selection.isCollapsed) return false;
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return false;
+  for (const chip of root.querySelectorAll('.command-chip, .mention-chip')) {
+    if (!range.intersectsNode(chip)) continue;
+    if (chip.contains(range.startContainer)) range.setStartBefore(chip);
+    if (chip.contains(range.endContainer)) range.setEndAfter(chip);
+  }
+  clipboard.setData('text/plain', readMessageEditorText(range.cloneContents(), true));
+  if (cut) range.deleteContents();
+  return true;
 }

@@ -14,9 +14,12 @@ import { useSlashCommand } from '@/hooks/useSlashCommand';
 import { useAttachmentManager } from '@/hooks/useAttachmentManager';
 import { AttachmentPreviewBar } from './AttachmentPreviewBar';
 import type { SlashCommand } from '@/types/command';
+import type { CommandIdentity } from '@/utils/command-utils';
+import { parseCommand, serializeCommand } from '@/utils/command-utils';
+import { createCommandChip, populateMessageEditor, readMessageEditorText, copyMessageSelection } from '@/utils/attachment-utils';
 import type { Message } from '../../types/message';
 import type { ModelCapabilities } from '@/types/settings';
-import { isImageAttachment, isTextAttachment, toChatAttachment, buildMessageWithTextAttachments, buildFileRef, buildFolderRef, splitByFileRefs } from '../../utils/attachment-utils';
+import { isImageAttachment, isTextAttachment, toChatAttachment, buildMessageWithTextAttachments, buildFileRef, buildFolderRef } from '../../utils/attachment-utils';
 import { useMention } from '@/hooks/useMention';
 import type { MentionItem } from '@/hooks/useMention';
 import { ResourceMentionPopover } from '@/components/chat/ResourceMentionPopover';
@@ -32,7 +35,7 @@ interface InlineEditMessageProps {
 
 export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, messageIndex, onCancel, onSubmit }) => {
   const [editorValue, setEditorValue] = useState('');
-  const [selectedCommand, setSelectedCommand] = useState<SlashCommand | null>(null);
+  const [selectedCommand, setSelectedCommand] = useState<CommandIdentity | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,7 +73,9 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
   const currentProjectId = useProjectStore((state) => state.currentProject?.id);
 
   // Slash command autocomplete
-  const slashCommand = useSlashCommand(selectedAgentId);
+  const slashCommand = useSlashCommand(selectedAgentId, currentProjectId);
+  const { validateCommand, isCurrentContext } = slashCommand;
+  const commandError = slashCommand.selectionError(selectedCommand);
 
   // @ mention autocomplete
   const mention = useMention();
@@ -81,10 +86,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     const editor = editorRef.current;
     if (!editor) return;
 
-    const chip = document.createElement('span');
-    chip.className = 'command-chip';
-    chip.contentEditable = 'false';
-    chip.textContent = `/${cmd.name}`;
+    const chip = createCommandChip(cmd);
 
     // Remove existing chip if any
     const existing = editor.querySelector('.command-chip');
@@ -276,28 +278,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
   /** Extract text content, excluding command chip text and replacing mention chips with encoded refs */
   const getEditorText = useCallback((): string => {
     const editor = editorRef.current;
-    if (!editor) return '';
-    const parts: string[] = [];
-    const walk = (node: Node) => {
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        const el = node as HTMLElement;
-        if (el.classList.contains('command-chip')) return;
-        if (el.classList.contains('mention-chip')) {
-          const path = el.dataset.path || '';
-          const type = el.dataset.type || 'file';
-          const name = type === 'directory'
-            ? (el.textContent || '').replace(/^[📄📁]\s*/, '')
-            : (el.textContent || '').replace(/^[📄📁]\s*/, '');
-          parts.push(type === 'directory' ? buildFolderRef(name, path) : buildFileRef(name, path));
-          return;
-        }
-        el.childNodes.forEach(walk);
-      } else if (node.nodeType === Node.TEXT_NODE) {
-        parts.push(node.textContent || '');
-      }
-    };
-    editor.childNodes.forEach(walk);
-    return parts.join('');
+    return editor ? readMessageEditorText(editor) : '';
   }, []);
 
   /** Insert a mention chip at the cursor position, removing the @ trigger text */
@@ -353,93 +334,21 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     // Agent selection is managed in useAgentStore
   }, []);
 
-  // Initialize editor: parse command prefix from message content and insert chip
-  // We need to wait for commands to load to match the command name
+  // Restore history immediately from the text protocol, without guessing its category.
   useEffect(() => {
     if (commandsLoadedRef.current) return;
     const editor = editorRef.current;
     if (!editor) return;
-
-    const content = message.content;
-
-    // Helper to populate editor with text that may contain mention refs
-    const populateWithRefs = (text: string, parentNode: Node) => {
-      const segments = splitByFileRefs(text);
-      for (const seg of segments) {
-        if (seg.type === 'text') {
-          parentNode.appendChild(document.createTextNode(seg.text));
-        } else {
-          const chip = document.createElement('span');
-          chip.className = `mention-chip mention-${seg.type === 'folderRef' ? 'folder' : 'file'}`;
-          chip.contentEditable = 'false';
-          chip.dataset.path = seg.path;
-          chip.dataset.type = seg.type === 'folderRef' ? 'directory' : 'file';
-          chip.textContent = seg.type === 'folderRef' ? `📁 ${seg.name}` : `📄 ${seg.name}`;
-          parentNode.appendChild(chip);
-        }
-      }
-    };
-
-    const match = content.match(/^\/([a-zA-Z_]\w*)\s?([\s\S]*)$/);
-    if (!match) {
-      // No command prefix — populate with mention refs
-      editor.innerHTML = '';
-      populateWithRefs(content, editor);
-      setEditorValue(getEditorText());
-      commandsLoadedRef.current = true;
-      editor.focus();
-      return;
-    }
-
-    const cmdName = match[1];
-    const rest = match[2];
-    // Try to find the command in loaded commands (trigger a fetch check)
-    // We use a micro-timeout to allow useSlashCommand's useEffect to populate commands
-    const tryMatch = () => {
-      // We can't directly access commandsRef from useSlashCommand,
-      // but we can check if the popover would match by simulating
-      // For now, just insert the chip with the name directly
-      const chip = document.createElement('span');
-      chip.className = 'command-chip';
-      chip.contentEditable = 'false';
-      chip.textContent = `/${cmdName}`;
-
-      editor.innerHTML = '';
-      editor.appendChild(chip);
-      // Populate rest with mention refs
-      if (rest) {
-        editor.appendChild(document.createTextNode(' '));
-        populateWithRefs(rest, editor);
-      } else {
-        editor.appendChild(document.createTextNode(''));
-      }
-
-      // Set selectedCommand with a minimal match (name is enough for send reconstruction)
-      setSelectedCommand({
-        name: cmdName,
-        description: null,
-        aliases: [],
-        category: 'BUILTIN',
-        hints: [],
-      });
-      setEditorValue(getEditorText());
-      commandsLoadedRef.current = true;
-
-      // Place cursor at end
-      const range = document.createRange();
-      const sel = window.getSelection();
-      if (sel && editor.lastChild) {
-        range.setStartAfter(editor.lastChild);
-        range.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(range);
-      }
-      editor.focus();
-    };
-
-    // Small delay to let useSlashCommand load commands
-    const timer = setTimeout(tryMatch, 100);
-    return () => clearTimeout(timer);
+    setSelectedCommand(populateMessageEditor(editor, message.content));
+    setEditorValue(getEditorText());
+    commandsLoadedRef.current = true;
+    editor.focus();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
   }, [message.content, getEditorText]);
 
   // Handle Escape key to cancel edit or dismiss dialog
@@ -484,6 +393,8 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
 
   /** Shared execute logic: call edit-message API, truncate, send new message */
   const executeEdit = useCallback(async (messageText: string, messageId: string) => {
+    const validationError = await validateCommand(parseCommand(messageText)?.command);
+    if (validationError) throw new Error(validationError);
     if (attachments.some(isImageAttachment) && !visionSupported) {
       throw new Error(i18n('Current model does not support image input'));
     }
@@ -494,6 +405,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     const storedAttachments = uploadedAttachments.filter((a) => a.filePath);
     const chatAttachments = storedAttachments.map(toChatAttachment);
 
+    if (!isCurrentContext()) throw new Error(i18n('Project or user changed. Please try again.'));
     // Call edit-message API (deletes messages + rolls back files)
     const editResult = await editMessage(sessionId!, messageId);
 
@@ -548,12 +460,13 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
       onError: handleEvent as unknown as (event: ErrorEvent) => void,
     });
     setAttachments([]);
-  }, [sessionId, messageIndex, truncateMessagesFrom, setRevertState, addMessage, setStreaming, handleEvent, selectedAgentId, currentModelId, currentProjectId, onSubmit, attachments, setAttachments, uploadPendingAttachments, visionSupported]);
+  }, [sessionId, messageIndex, truncateMessagesFrom, setRevertState, addMessage, setStreaming, handleEvent, selectedAgentId, currentModelId, currentProjectId, onSubmit, attachments, setAttachments, uploadPendingAttachments, visionSupported, validateCommand, isCurrentContext]);
 
   /** Phase 1: Validate and show confirm dialog if files will be reverted */
   const handleSubmit = useCallback(async () => {
     const editorText = getEditorText().trim();
-    const messageText = selectedCommand ? `/${selectedCommand.name} ${editorText}`.trim() : editorText;
+    const command = editorRef.current?.querySelector('.command-chip') ? selectedCommand : null;
+    const messageText = serializeCommand(command, editorText);
 
     if (!messageText || isSubmitting || submittingRef.current || isProcessingFiles() || showConfirmDialog || isAwaitingPermission() || !sessionId) return;
     const messageId = (message as { messageId?: string }).messageId;
@@ -598,7 +511,8 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
   /** Phase 2: User confirmed — execute the actual edit */
   const handleConfirmEdit = useCallback(async () => {
     const editorText = getEditorText().trim();
-    const messageText = selectedCommand ? `/${selectedCommand.name} ${editorText}`.trim() : editorText;
+    const command = editorRef.current?.querySelector('.command-chip') ? selectedCommand : null;
+    const messageText = serializeCommand(command, editorText);
     const messageId = (message as { messageId?: string }).messageId;
     if (!messageText || !messageId || !sessionId || submittingRef.current || isProcessingFiles() || isAwaitingPermission()) return;
 
@@ -642,11 +556,25 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
   // --- Editor event handlers ---
 
   const handleEditorInput = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const chip = editor.querySelector<HTMLElement>('.command-chip');
+    let command = chip ? (serializeCommand(selectedCommand, '') === chip.dataset.commandToken
+      ? selectedCommand : parseCommand(chip.dataset.commandToken ?? '')?.command ?? null) : null;
+    if (!chip && parseCommand(getEditorText())?.command.source) {
+      command = populateMessageEditor(editor, getEditorText());
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+    setSelectedCommand(command);
     const text = getEditorText();
-    const cursorPosition = getCursorPosition();
     setEditorValue(text);
-    slashCommand.onInput(text, selectedCommand !== null);
-    mention.onInput(text, cursorPosition);
+    slashCommand.onInput(text, command !== null);
+    mention.onInput(text, getCursorPosition());
   }, [slashCommand, selectedCommand, getEditorText, getCursorPosition, mention]);
 
   const handleEditorKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -735,6 +663,15 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     e.preventDefault();
     const text = e.clipboardData?.getData('text/plain') || '';
     document.execCommand('insertText', false, text);
+    handleEditorInput();
+  };
+
+  const handleClipboard = (e: React.ClipboardEvent<HTMLDivElement>, cut = false) => {
+    if (cut && (submittingRef.current || showConfirmDialog)) { e.preventDefault(); return; }
+    if (copyMessageSelection(e.currentTarget, e.clipboardData, cut)) {
+      e.preventDefault();
+      if (cut) handleEditorInput();
+    }
   };
 
   const handleEditorClick = useCallback(() => {
@@ -761,9 +698,9 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
   return (
     <div className="flex justify-end mx-4">
       <div className="w-full max-w-[80%] flex flex-col gap-2">
-        {error && (
-          <div className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1">
-            {error}
+        {(error || commandError) && (
+          <div role="alert" className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1">
+            {error || commandError}
           </div>
         )}
 
@@ -806,6 +743,8 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
           onInput={handleEditorInput}
           onKeyDown={handleEditorKeyDown}
           onPaste={handleEditorPaste}
+          onCopy={(e) => handleClipboard(e)}
+          onCut={(e) => handleClipboard(e, true)}
           onClick={handleEditorClick}
           data-placeholder={i18n('Plan, @ for context, / for commands')}
           className="message-editor w-full px-3 py-2 rounded-xl border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring overflow-y-auto whitespace-pre-wrap break-words"

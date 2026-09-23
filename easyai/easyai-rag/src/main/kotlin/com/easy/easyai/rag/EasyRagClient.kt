@@ -99,8 +99,12 @@ internal class EasyRagClient(
             ?: throw RagException("EasyRAG upsert response missing docId")
         val unchanged = (insertResponse["message"] as? String).orEmpty().contains("unchanged", ignoreCase = true)
         if (unchanged) {
-            logger.debug("RAG upsert skipped (content unchanged): {}", doc.externalId)
-            return RagUpsertResult(docId = docId, indexed = true, unchanged = true)
+            val status = readDocStatusByDocId(config, docId, bizId)
+            if (status?.get("status") == STATUS_PROCESSED) {
+                return RagUpsertResult(docId = docId, indexed = true, unchanged = true)
+            }
+            // An unchanged upload may have crashed before indexing, failed, or still be pending.
+            // Submit again (409 is handled below); unchanged bytes alone never establish readiness.
         }
 
         // Submit indexing and poll until terminal state (processed / failed) or timeout.
@@ -189,6 +193,9 @@ internal class EasyRagClient(
         if (!config.enabled) return null
         return readByExternalId(config, externalId, bizId)
     }
+
+    override suspend fun inspectByExternalId(externalId: String, bizId: String?): RagDocumentDetail? =
+        readByExternalId(loadEnabledConfig("inspect"), externalId, bizId)
 
     override suspend fun list(pathPrefix: String, bizId: String?): List<RagDocInfo> {
         val config = RagConfig.load(configPath)
@@ -367,13 +374,15 @@ internal class EasyRagClient(
             if (e.statusCode == NOT_FOUND) return null else throw e
         }
         return RagDocumentDetail(
-            docId = node["doc_id"] as? String ?: return null,
+            docId = node["doc_id"] as? String ?: throw RagException("EasyRAG document response missing doc_id"),
             externalId = node["external_id"] as? String,
             filePath = node["file_path"] as? String,
             content = node["content"] as? String,
             status = node["status"] as? String,
             createTime = (node["create_time"] as? Number)?.toLong(),
-            chunksCount = (node["chunks_count"] as? Number)?.toInt()
+            chunksCount = (node["chunks_count"] as? Number)?.toInt(),
+            metadata = (node["metadata"] as? Map<*, *>)?.entries?.associate { it.key.toString() to it.value }
+                ?: emptyMap()
         )
     }
 

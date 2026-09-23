@@ -4,7 +4,9 @@ import com.anthropic.models.messages.OutputConfig
 import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.api.model.StructuredOutputSupport
 import io.micrometer.observation.ObservationRegistry
+import org.slf4j.LoggerFactory
 import org.springframework.ai.anthropic.AnthropicChatModel
 import org.springframework.ai.anthropic.AnthropicChatOptions
 import org.springframework.ai.anthropic.AnthropicSetup
@@ -18,6 +20,8 @@ import java.time.Duration
  * Creates AnthropicChatModel instances and builds AnthropicChatOptions based on the provided configuration.
  */
 class AnthropicChatModelFactory : ChatModelFactory {
+
+    private val logger = LoggerFactory.getLogger(javaClass)
 
     override fun supports(protocol: Protocol): Boolean = protocol == Protocol.ANTHROPIC
 
@@ -64,7 +68,8 @@ class AnthropicChatModelFactory : ChatModelFactory {
 
     override fun build(
         config: ModelProviderConfig,
-        toolCallbacks: List<ToolCallback>
+        toolCallbacks: List<ToolCallback>,
+        outputSchema: String?
     ): ChatOptions {
         val builder = AnthropicChatOptions.builder()
             .model(config.modelId)
@@ -88,6 +93,21 @@ class AnthropicChatModelFactory : ChatModelFactory {
             if (!it.thinking) {
                 builder.temperature(it.temperature)
                 builder.maxTokens(it.maxTokens)
+            }
+        }
+
+        // 4. Structured output: applied only when the model declares support. The Anthropic
+        // SDK's JsonOutputFormat hardcodes type=json_schema, so JSON_OBJECT is not
+        // expressible here and degrades to the prompt-based enforcement path.
+        if (outputSchema != null) {
+            when (config.capabilities?.structuredOutput) {
+                // null = undeclared, keep today's schema enforcement
+                null, StructuredOutputSupport.JSON_SCHEMA -> builder.outputSchema(outputSchema)
+                StructuredOutputSupport.JSON_OBJECT -> logger.debug(
+                    "Model {} declares JSON_OBJECT-only structured output, which the Anthropic protocol cannot express; using prompt-based enforcement",
+                    config.modelId
+                )
+                StructuredOutputSupport.NONE -> Unit
             }
         }
         return builder.build()

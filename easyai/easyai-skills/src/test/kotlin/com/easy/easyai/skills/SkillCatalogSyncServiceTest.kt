@@ -34,6 +34,9 @@ class SkillCatalogSyncServiceTest {
 
     private val catalog = mockk<AsyncSkillCatalogStore>(relaxed = true)
 
+    private fun sync(config: SkillConfig = SkillConfig(paths = listOf(tempDir.toString()))) =
+        SkillCatalogSyncService(catalog, config, mockk<SkillRegistry>(relaxed = true))
+
     /** Create `{tempDir}/{name}/SKILL.md` with [body] and return the skill directory. */
     private fun skillDir(name: String, body: String = "---\nname: $name\ndescription: d\n---\n\nbody\n"): Path {
         val dir = tempDir.resolve(name)
@@ -63,9 +66,9 @@ class SkillCatalogSyncServiceTest {
             userId = userId
         )
 
-    private fun capturedUpsert(): CapturingSlot<SkillCatalogEntry> {
+    private fun capturedClaim(): CapturingSlot<SkillCatalogEntry> {
         val captured = slot<SkillCatalogEntry>()
-        coEvery { catalog.upsert(capture(captured)) } answers { firstArg() }
+        coEvery { catalog.claim(capture(captured)) } answers { firstArg() }
         return captured
     }
 
@@ -75,10 +78,10 @@ class SkillCatalogSyncServiceTest {
         @Test
         fun `a discovered skill gets one LOCAL row owned by the default user`() = runTest {
             val dir = skillDir("pdf-report")
-            val captured = capturedUpsert()
+            val captured = capturedClaim()
             coEvery { catalog.listByName(any(), any()) } returns emptyList()
 
-            val created = SkillCatalogSyncService(catalog).backfillAll(listOf(discovered(dir)))
+            val created = sync().claimUnclaimed(listOf(discovered(dir)), requestedUserId = null).claimed
 
             assertEquals(1, created)
             val entry = captured.captured
@@ -94,10 +97,10 @@ class SkillCatalogSyncServiceTest {
         @Test
         fun `the version declared in the frontmatter is claimed with the row`() = runTest {
             val dir = skillDir("versioned", "---\nname: versioned\ndescription: d\nversion: 1.4.2\n---\n\nbody\n")
-            val captured = capturedUpsert()
+            val captured = capturedClaim()
             coEvery { catalog.listByName(any(), any()) } returns emptyList()
 
-            SkillCatalogSyncService(catalog).backfillAll(listOf(discovered(dir)))
+            sync().claimUnclaimed(listOf(discovered(dir)), requestedUserId = null).claimed
 
             assertEquals("1.4.2", captured.captured.version)
         }
@@ -106,14 +109,13 @@ class SkillCatalogSyncServiceTest {
         fun `a second pass claims nothing, so startup is idempotent`() = runTest {
             val dir = skillDir("pdf-report")
             val existing = row(dir, userId = SkillCatalogEntry.DEFAULT_USER_ID)
-            // M6: backfillAll now preloads the owner's whole slice in one round trip rather than
-            // doing a `listByName` per discovered skill.
-            coEvery { catalog.listByUser(SkillCatalogEntry.DEFAULT_USER_ID) } returns listOf(existing)
+            // All owners reserve their installation paths before claims begin.
+            coEvery { catalog.listAll() } returns listOf(existing)
 
-            val created = SkillCatalogSyncService(catalog).backfillAll(listOf(discovered(dir)))
+            val created = sync().claimUnclaimed(listOf(discovered(dir)), requestedUserId = null).claimed
 
             assertEquals(0, created)
-            coVerify(exactly = 0) { catalog.upsert(any()) }
+            coVerify(exactly = 0) { catalog.claim(any()) }
         }
 
         @Test
@@ -125,11 +127,15 @@ class SkillCatalogSyncServiceTest {
             Files.writeString(dir.resolve("SKILL.md"), "---\nname: pdf\ndescription: d\n---\n\nbody\n")
             val otherDir = tempDir.resolve("other/.easyai/skills/pdf").also { Files.createDirectories(it) }
             Files.writeString(otherDir.resolve("SKILL.md"), "---\nname: pdf\ndescription: d\n---\n\nbody\n")
-            val otherProjectRow = row(otherDir, name = "pdf", userId = SkillCatalogEntry.DEFAULT_USER_ID)
-            coEvery { catalog.listByUser(SkillCatalogEntry.DEFAULT_USER_ID) } returns listOf(otherProjectRow)
-            val captured = capturedUpsert()
+            val otherProject = tempDir.resolve("other")
+            val otherProjectRow = row(otherDir, name = "pdf", userId = SkillCatalogEntry.DEFAULT_USER_ID).copy(
+                projectHash = SkillScopeResolver.projectHashOf(otherProject),
+                indexProjectPath = SkillPaths.canonicalize(otherProject)
+            )
+            coEvery { catalog.listAll() } returns listOf(otherProjectRow)
+            val captured = capturedClaim()
 
-            val created = SkillCatalogSyncService(catalog, config).backfillAll(listOf(discovered(dir)))
+            val created = sync(config).claimUnclaimed(listOf(discovered(dir)), "alice", project).claimed
 
             assertEquals(1, created, "a row for a different directory is not this skill's row")
             assertEquals(
@@ -137,6 +143,7 @@ class SkillCatalogSyncServiceTest {
                 captured.captured.projectHash,
                 "the granularity token must match what the unique index expects for this project"
             )
+            assertEquals(SkillPaths.canonicalize(project), captured.captured.indexProjectPath)
         }
 
         @Test
@@ -144,15 +151,19 @@ class SkillCatalogSyncServiceTest {
             val ghost = tempDir.resolve("ghost")
             coEvery { catalog.listByName(any(), any()) } returns emptyList()
 
-            val created = SkillCatalogSyncService(catalog).backfillAll(listOf(discovered(ghost)))
+            val created = sync().claimUnclaimed(listOf(discovered(ghost)), requestedUserId = null).claimed
 
             assertEquals(0, created)
-            coVerify(exactly = 0) { catalog.upsert(any()) }
+            coVerify(exactly = 0) { catalog.claim(any()) }
         }
 
         @Test
         fun `without a catalog there is nothing to claim`() = runTest {
-            assertEquals(0, SkillCatalogSyncService(null).backfillAll(listOf(discovered(skillDir("pdf-report")))))
+            val result = SkillCatalogSyncService(null).claimUnclaimed(
+                listOf(discovered(skillDir("pdf-report"))), requestedUserId = null
+            )
+            assertEquals(0, result.claimed)
+            assertEquals(1, result.unclaimed)
         }
     }
 
@@ -162,7 +173,7 @@ class SkillCatalogSyncServiceTest {
         @Test
         fun `unchanged content costs no write`() = runTest {
             val dir = skillDir("stable")
-            val sync = SkillCatalogSyncService(catalog)
+            val sync = sync()
 
             assertIs<SkillDrift.None>(sync.driftOf(row(dir, id = "stable-1")))
         }
@@ -170,7 +181,7 @@ class SkillCatalogSyncServiceTest {
         @Test
         fun `changed bytes are reported as content drift with the new fingerprint`() = runTest {
             val dir = skillDir("edited")
-            val sync = SkillCatalogSyncService(catalog)
+            val sync = sync()
             val original = row(dir, id = "edited-1")
 
             Files.writeString(dir.resolve("SKILL.md"), "---\nname: edited\ndescription: d\nversion: 2.0.0\n---\n\nnew body\n")
@@ -184,7 +195,7 @@ class SkillCatalogSyncServiceTest {
         @Test
         fun `a touched file with identical bytes is still not drift`() = runTest {
             val dir = skillDir("touched")
-            val sync = SkillCatalogSyncService(catalog)
+            val sync = sync()
             val original = row(dir, id = "touched-1")
 
             assertTrue(dir.resolve("SKILL.md").toFile().setLastModified(System.currentTimeMillis() + 60_000L))
@@ -195,7 +206,7 @@ class SkillCatalogSyncServiceTest {
         @Test
         fun `a deleted skill tree is reported as missing`() = runTest {
             val dir = skillDir("removed")
-            val sync = SkillCatalogSyncService(catalog)
+            val sync = sync()
             val original = row(dir, id = "removed-1")
             deleteRecursively(dir)
 
@@ -205,7 +216,7 @@ class SkillCatalogSyncServiceTest {
         @Test
         fun `a row whose file exists but whose directory was swapped for a file is missing`() = runTest {
             val dir = skillDir("hijacked")
-            val sync = SkillCatalogSyncService(catalog)
+            val sync = sync()
             val original = row(dir, id = "hijacked-1")
             deleteRecursively(dir)
             Files.writeString(dir, "not a directory any more")
@@ -214,20 +225,20 @@ class SkillCatalogSyncServiceTest {
         }
 
         @Test
-        fun `invalidate forces the next comparison to re-read the file`() = runTest {
-            val dir = skillDir("memoised")
-            val sync = SkillCatalogSyncService(catalog)
-            val original = row(dir, id = "memoised-1")
+        fun `same size and mtime still require comparing the content bytes`() = runTest {
+            val dir = skillDir("verified")
+            val sync = sync()
+            val original = row(dir, id = "verified-1")
             assertIs<SkillDrift.None>(sync.driftOf(original))
 
-            // Same mtime, different bytes: only an invalidated cache can notice.
             val file = dir.resolve("SKILL.md")
-            val stamp = file.toFile().lastModified()
-            Files.writeString(file, "---\nname: memoised\ndescription: d\n---\n\nsilently edited\n")
-            file.toFile().setLastModified(stamp)
-            assertIs<SkillDrift.None>(sync.driftOf(original), "the mtime short-circuit must be observable")
-
-            sync.invalidate(original.id)
+            val stamp = Files.getLastModifiedTime(file)
+            val size = Files.size(file)
+            Files.writeString(file, "---\nname: verified\ndescription: d\n---\n\nedit\n")
+            Files.setLastModifiedTime(file, stamp)
+            assertEquals(size, Files.size(file))
+            assertEquals(stamp, Files.getLastModifiedTime(file))
+            assertIs<SkillDrift.Content>(sync.driftOf(original), "explicit refresh must hash even at identical mtime")
             assertIs<SkillDrift.Content>(sync.driftOf(original))
         }
     }
@@ -236,18 +247,18 @@ class SkillCatalogSyncServiceTest {
     inner class `fingerprints and versions` {
 
         @Test
-        fun `checksumOf matches what backfill would have stored`() = runTest {
+        fun `checksumOf matches the claimed content fingerprint`() = runTest {
             val dir = skillDir("hashing")
 
             assertEquals(
                 SkillChecksums.sha256Hex(Files.readAllBytes(dir.resolve("SKILL.md"))),
-                SkillCatalogSyncService(catalog).checksumOf(row(dir, id = "hashing-1"))
+                sync().checksumOf(row(dir, id = "hashing-1"))
             )
         }
 
         @Test
         fun `checksumOf is null when the file is gone`() = runTest {
-            val sync = SkillCatalogSyncService(catalog)
+            val sync = sync()
             val dir = skillDir("gone")
             val original = row(dir, id = "gone-1")
             deleteRecursively(dir)
@@ -261,7 +272,7 @@ class SkillCatalogSyncServiceTest {
 
             assertEquals(
                 SkillCatalogEntry.DEFAULT_VERSION,
-                SkillCatalogSyncService(catalog).declaredVersionOf(row(dir, id = "unversioned-1"))
+                sync().declaredVersionOf(row(dir, id = "unversioned-1"))
             )
         }
     }
@@ -271,7 +282,6 @@ class SkillCatalogSyncServiceTest {
     }
 
     private companion object {
-        /** Keeps row ids unique so the process-local mtime cache of one case cannot serve another. */
         fun uuid(): String = UUID.randomUUID().toString().take(8)
     }
 }

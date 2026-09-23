@@ -1,5 +1,6 @@
 package com.easy.easyai.compaction.estimator
 
+import com.easy.easyai.core.message.CommandMessageProjection
 import com.easy.easyai.core.model.*
 import com.knuddels.jtokkit.Encodings
 import com.knuddels.jtokkit.api.Encoding
@@ -31,8 +32,8 @@ interface TokenEstimator {
  * Token estimator backed by a real tokenizer (jtokkit), anchored on actual LLM usage data.
  *
  * Strategy:
- * - [estimate]: per-message tokenizer counting (O200K_BASE encoding), cached by message id
- *   plus a content-char fingerprint. Tool result content is counted in full: the send layer
+ * - [estimate]: projects command snapshots, then counts each message (O200K_BASE encoding),
+ *   cached by message id with content equality checks. Tool result content is counted in full: the send layer
  *   transmits the persisted text as-is (oversized results are spilled to the temp dir and
  *   replaced with a small pointer notice at generation time, so persisted text is bounded
  *   in practice), so the estimate matches what is actually transmitted to the model.
@@ -47,20 +48,19 @@ class UsageAwareTokenEstimator : TokenEstimator {
     private val logger = LoggerFactory.getLogger(UsageAwareTokenEstimator::class.java)
 
     /**
-     * Token counts cached per `messageId:contentChars`. The char fingerprint keeps entries
-     * correct on the rare paths that replace content under the same message id (pending
-     * tool-result merge on resume, steering message updates), without invalidation hooks.
-     * Bounded: the whole cache is dropped when it exceeds [MAX_CACHE_ENTRIES] (it is a
-     * pure accelerator, so clearing never affects correctness).
+     * Same-ID replacements (including same-length command edits) must invalidate cached counts.
+     * Bounded: clearing this pure accelerator never affects correctness.
      */
-    private val tokenCountCache = ConcurrentHashMap<String, Int>()
+    private data class CachedTokenCount(val content: List<ContentBlock>, val tokens: Int)
+
+    private val tokenCountCache = ConcurrentHashMap<String, CachedTokenCount>()
 
     /**
      * Estimate total token count for the given messages via tokenizer counting.
      * Per-message results are cached by message id.
      */
     override fun estimate(messages: List<EasyAiMessage>): Int =
-        messages.sumOf { msg -> estimateMessage(msg) }
+        CommandMessageProjection.project(messages).sumOf { msg -> estimateMessage(msg) }
 
     /**
      * Estimate the current context window token count.
@@ -113,20 +113,13 @@ class UsageAwareTokenEstimator : TokenEstimator {
 
     private fun estimateMessage(message: EasyAiMessage): Int {
         val id = message.id
-        if (id.isEmpty()) return countContentTokens(message.content)
-        val key = "$id:${contentChars(message.content)}"
+        val content = message.content
+        if (id.isEmpty()) return countContentTokens(content)
         if (tokenCountCache.size >= MAX_CACHE_ENTRIES) tokenCountCache.clear()
-        return tokenCountCache.computeIfAbsent(key) { countContentTokens(message.content) }
-    }
-
-    private fun contentChars(content: List<ContentBlock>): Int = content.sumOf { block ->
-        when (block) {
-            is TextContent -> block.text.length
-            is ThinkingContent -> block.thinking.length
-            is ToolCallContent -> block.arguments.length
-            is ToolResultContent -> block.output.length
-            else -> 0
-        }
+        return tokenCountCache.compute(id) { _, cached ->
+            cached?.takeIf { it.content == content }
+                ?: CachedTokenCount(content, countContentTokens(content))
+        }!!.tokens
     }
 
     private fun countContentTokens(content: List<ContentBlock>): Int = content.sumOf { block ->

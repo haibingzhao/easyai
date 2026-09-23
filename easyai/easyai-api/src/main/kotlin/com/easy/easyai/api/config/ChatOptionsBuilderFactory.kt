@@ -19,9 +19,15 @@ interface ChatOptionsBuilderFactory {
      * Build ChatOptions for the given configuration.
      * @param config The model provider configuration
      * @param toolCallbacks The tool callbacks to register
+     * @param outputSchema JSON schema to enforce at the API level for this turn, if any.
+     *   Implementations must apply it only when the model's declared
+     *   `capabilities.structuredOutput` (null = JSON_SCHEMA) supports it AND the protocol
+     *   can express it; otherwise return options without API-level enforcement so the run
+     *   degrades to prompt-based validation (OutputSchemaCompletionCheck).
      */
     fun build(
         config: ModelProviderConfig,
-        toolCallbacks: List<ToolCallback>
+        toolCallbacks: List<ToolCallback>,
+        outputSchema: String? = null
     ): ChatOptions
 }

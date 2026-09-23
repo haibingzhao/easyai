@@ -1,5 +1,6 @@
 package com.easy.easyai.autoconfigure.r2dbc
 
+import com.easy.easyai.repository.database.Tables
 import org.flywaydb.core.Flyway
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -86,6 +87,30 @@ class FlywayMigrationRunnerTest {
         }
 
         @Test
+        fun `migrated skill schema supports every current mapped column`() {
+            val jdbcUrl = "jdbc:h2:mem:flyway_skill_mapping;MODE=MYSQL;DB_CLOSE_DELAY=-1"
+            Flyway.configure()
+                .dataSource(jdbcUrl, "sa", "")
+                .locations("classpath:db/migration")
+                .load()
+                .migrate()
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.executeSkillInsert("alice", "report")
+                val columns = Tables.SkillTable.columns.joinToString(", ") { it.name }
+                connection.createStatement().use { statement ->
+                    statement.executeQuery("SELECT $columns FROM skill").use { result ->
+                        assertTrue(result.next())
+                        assertEquals("alice", result.getString(Tables.SkillTable.userId.name))
+                        assertEquals("report", result.getString(Tables.SkillTable.name.name))
+                        assertEquals("", result.getString(Tables.SkillTable.projectHash.name))
+                        assertEquals("PENDING_INDEX", result.getString(Tables.SkillTable.syncState.name))
+                        assertEquals(0L, result.getLong(Tables.SkillTable.revision.name))
+                    }
+                }
+            }
+        }
+
+        @Test
         fun `V1 creates all expected tables on fresh database`() {
             // Validates that the consolidated V1 schema contains all tables
             val jdbcUrl = "jdbc:h2:mem:flyway_tables_test;MODE=MYSQL;DB_CLOSE_DELAY=-1"
@@ -119,9 +144,9 @@ class FlywayMigrationRunnerTest {
                     "SELECT user_id, enabled, storage_type, endpoint, bucket, access_key_id, access_key_secret, local_dir " +
                         "FROM storage_settings"
                 ).close()
-                // V6: the granularity column the unique identity is built on, and the index swap itself.
                 conn.createStatement().executeQuery(
-                    "SELECT id, name, install_path, user_id, project_hash FROM skill"
+                    "SELECT id, name, install_path, user_id, project_hash, index_project_path, " +
+                        "indexed_checksum, sync_state, revision, next_attempt_at, last_error FROM skill"
                 ).close()
                 conn.createStatement().use { statement ->
                     val indexes = mutableSetOf<String>()

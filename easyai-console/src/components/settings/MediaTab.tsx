@@ -105,11 +105,7 @@ const MediaProviderCard: React.FC<CardProps> = ({ kind, config, onSaved }) => {
   const [enabled, setEnabled] = useState(false);
   const [providerType, setProviderType] = useState('openai');
   const [baseUrl, setBaseUrl] = useState('');
-  const [region, setRegion] = useState('');
   const [apiKey, setApiKey] = useState('');
-  const [accessKeyId, setAccessKeyId] = useState('');
-  // Always start blank: the server only returns a mask, and blank on save means "keep stored"
-  const [accessKeySecret, setAccessKeySecret] = useState('');
   const [defaultModel, setDefaultModel] = useState('');
   const [options, setOptions] = useState('');
   const [timeoutSeconds, setTimeoutSeconds] = useState(600);
@@ -123,10 +119,7 @@ const MediaProviderCard: React.FC<CardProps> = ({ kind, config, onSaved }) => {
     setEnabled(config?.enabled ?? false);
     setProviderType(config?.providerType ?? 'openai');
     setBaseUrl(config?.baseUrl ?? '');
-    setRegion(config?.region ?? '');
     setApiKey('');
-    setAccessKeyId(config?.accessKeyId ?? '');
-    setAccessKeySecret('');
     setDefaultModel(config?.defaultModel ?? '');
     setOptions(config?.options ?? '');
     setTimeoutSeconds(config?.timeoutSeconds ?? 600);
@@ -136,11 +129,12 @@ const MediaProviderCard: React.FC<CardProps> = ({ kind, config, onSaved }) => {
     enabled,
     providerType,
     baseUrl: baseUrl.trim(),
-    region: region.trim(),
+    // region/accessKeyId are not consumed by any media provider today; pass the stored values
+    // through so saving other fields never wipes them, and hide the inputs.
+    region: config?.region ?? '',
     // undefined (not "") keeps the stored credential; the field only ever holds a newly typed value
     apiKey: apiKey.trim() ? apiKey.trim() : undefined,
-    accessKeyId: accessKeyId.trim(),
-    accessKeySecret: accessKeySecret.trim() ? accessKeySecret.trim() : undefined,
+    accessKeyId: config?.accessKeyId ?? '',
     defaultModel: defaultModel.trim(),
     options: options.trim(),
     timeoutSeconds,
@@ -236,25 +230,14 @@ const MediaProviderCard: React.FC<CardProps> = ({ kind, config, onSaved }) => {
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-sm font-medium mb-1 block">{i18n('Region')}</label>
-            <input
-              type="text"
-              value={region}
-              onChange={(e) => setRegion(e.target.value)}
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm font-mono"
-            />
-          </div>
-          <div>
-            <label className="text-sm font-medium mb-1 block">{i18n('Timeout (seconds)')}</label>
-            <input
-              type="number"
-              value={timeoutSeconds}
-              onChange={(e) => setTimeoutSeconds(Number(e.target.value) || 600)}
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
-            />
-          </div>
+        <div>
+          <label className="text-sm font-medium mb-1 block">{i18n('Timeout (seconds)')}</label>
+          <input
+            type="number"
+            value={timeoutSeconds}
+            onChange={(e) => setTimeoutSeconds(Number(e.target.value) || 600)}
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+          />
         </div>
 
         <div>
@@ -266,28 +249,6 @@ const MediaProviderCard: React.FC<CardProps> = ({ kind, config, onSaved }) => {
             placeholder={config?.apiKey ? `${config.apiKey} · ${i18n('leave blank to keep unchanged')}` : i18n('OpenAI-style single key')}
             className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
           />
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-sm font-medium mb-1 block">{i18n('Access Key ID')}</label>
-            <input
-              type="text"
-              value={accessKeyId}
-              onChange={(e) => setAccessKeyId(e.target.value)}
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
-            />
-          </div>
-          <div>
-            <label className="text-sm font-medium mb-1 block">{i18n('Access Key Secret')}</label>
-            <input
-              type="password"
-              value={accessKeySecret}
-              onChange={(e) => setAccessKeySecret(e.target.value)}
-              placeholder={config?.accessKeySecret ? `${config.accessKeySecret} · ${i18n('leave blank to keep unchanged')}` : i18n('AK/SK-style (optional)')}
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
-            />
-          </div>
         </div>
 
         <div>

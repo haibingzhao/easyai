@@ -121,6 +121,7 @@ private class FakeRagClient : RagClient {
     override suspend fun delete(externalId: String, bizId: String?): Boolean = true
     override suspend fun batchDelete(docIds: List<String>, bizId: String?): Int = 0
     override suspend fun readByExternalId(externalId: String, bizId: String?): RagDocumentDetail? = null
+    override suspend fun inspectByExternalId(externalId: String, bizId: String?): RagDocumentDetail? = null
     override suspend fun list(pathPrefix: String, bizId: String?): List<RagDocInfo> = emptyList()
     override suspend fun search(
         query: String,

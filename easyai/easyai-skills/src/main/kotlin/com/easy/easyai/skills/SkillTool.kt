@@ -15,14 +15,8 @@ import kotlin.streams.asSequence
  * Tool that allows the LLM agent to load a skill by name during conversation.
  * Returns the skill's content + a sampled list of associated files.
  *
- * Authorization is three-layered, and this tool holds the last two: the agent whitelist, then the
- * catalog gate. The registry is process-wide and keyed by (name, granularity), so without [catalog]
- * a user could type a name that another user owns and receive that user's files; [catalog] resolves
- * the requesting user's own row and refuses anything that is not theirs. A null catalog (no R2DBC)
- * keeps the previous whitelist-only behaviour.
- *
- * [config] feeds the granularity resolution of the catalog gate ([SkillOwnership.checkLoad]) so it
- * walks exactly the same candidate-root sequence the registry used to pick [registry]'s entry.
+ * Resolves the same name-bound, enabled and whitelisted instance advertised by prompt and search.
+ * Catalog failures never fall back to a registry-only read.
  */
 class SkillTool(
     metadata: ToolMetadata,
@@ -33,6 +27,7 @@ class SkillTool(
 ) : BaseToolDefinition(metadata) {
 
     private val logger = LoggerFactory.getLogger(javaClass)
+    private val modelView = SkillModelView(registry, catalog, config)
 
     override fun parameterType() = SkillToolParams::class.java
     override val executionMode = ToolExecutionMode.SEQUENTIAL
@@ -64,80 +59,31 @@ class SkillTool(
                     isError = true,
                 )
             }
-            val allowed = allowedSkillNames.joinToString(", ")
             return ToolResult(
-                content = listOf(TextContent("Error: Skill '$skillName' is not authorized for this agent. Allowed skills: $allowed")),
+                content = listOf(TextContent("Error: Skill '$skillName' is not authorized for this agent.")),
                 isError = true,
             )
         }
 
-        val projectPath = agentContext.projectPath
-        val skill = registry.get(skillName, projectPath)
-        if (skill == null) {
-            // Only advertise whitelisted skills that actually exist: the caller already knows the
-            // whitelist from the previous branch, so this hint narrows to what is loadable right now.
-            val available = registry.visibleFor(projectPath)
-                .filter { it.name in allowedSkillNames }
-                .joinToString(", ") { it.name }
+        val visible = try {
+            modelView.list(agentContext.userId, agentContext.projectPath, allowedSkillNames)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("Skill access is unavailable: {}", e.message)
             return ToolResult(
-                content = listOf(
-                    TextContent(
-                        "Error: Skill '$skillName' not found. Authorized skills currently registered: $available. " +
-                            "If you just wrote its SKILL.md, call refresh_skills — a file on disk is not a " +
-                            "loadable skill until that has run."
-                    )
-                ),
-                isError = true,
+                content = listOf(TextContent("Error: Skill catalog is unavailable; skill access could not be verified. Retry later.")),
+                isError = true
             )
         }
-
-        // Catalog gate: the requesting user must own an enabled row for this name at this granularity.
-        when (val permission = SkillOwnership.checkLoad(catalog, skillName, agentContext.userId, projectPath, config)) {
-            is SkillLoadPermission.Allowed -> {
-                // The catalog row is authoritative for *which* directory this request may serve —
-                // reject whenever the registry location drifts from it, so a stale registry can never
-                // hand over another tenant's or another project's bytes.
-                val expected = SkillPaths.canonicalizeOrNull(permission.installPath)
-                val actual = skill.location.parent?.let { SkillPaths.canonicalize(it) }
-                if (expected != null && actual != expected) {
-                    logger.warn(
-                        "Rejected load of '{}': registry location '{}' does not match catalog installPath '{}' (cross-tenant collision or stale registry)",
-                        skillName, actual, expected
-                    )
-                    return ToolResult(
-                        content = listOf(
-                            TextContent(
-                                "Error: Skill '$skillName' installation is out of sync with the catalog. " +
-                                    "Call refresh_skills to re-read the skill directories."
-                            )
-                        ),
-                        isError = true,
-                    )
-                }
-            }
-            SkillLoadPermission.NotInstalled -> {
-                logger.warn("Rejected load of '{}': no catalog row for user '{}'", skillName, agentContext.userId)
-                return ToolResult(
-                    content = listOf(
-                        TextContent(
-                            "Error: Skill '$skillName' is not installed for this user. " +
-                                "Run skill_search to see what you can load, or call refresh_skills " +
-                                "if you wrote it in this chat."
-                        )
-                    ),
-                    isError = true,
-                )
-            }
-            SkillLoadPermission.Disabled -> return ToolResult(
-                content = listOf(
-                    TextContent(
-                        "Error: Skill '$skillName' is disabled. Enable it first " +
-                            "(PATCH /api/skills/enabled {name: '$skillName', enabled: true})."
-                    )
-                ),
-                isError = true,
+        val skill = visible.firstOrNull { it.skill.name == skillName }?.skill
+            ?: return ToolResult(
+                content = listOf(TextContent(
+                    "Error: Skill '$skillName' is not available for this agent in the current project " +
+                        "(not installed, disabled, or out of sync). Call refresh_skills after writing a skill."
+                )),
+                isError = true
             )
-        }
 
         // Sample files in the skill's directory
         val skillDir = skill.location.parent

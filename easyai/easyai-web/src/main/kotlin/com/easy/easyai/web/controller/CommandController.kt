@@ -7,8 +7,16 @@ import com.easy.easyai.core.command.UserCommandDefinition
 import com.easy.easyai.skills.command.CommandCategory
 import com.easy.easyai.skills.command.CommandInfo
 import com.easy.easyai.skills.command.CommandRegistry
+import com.easy.easyai.skills.command.CommandService
+import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.web.security.getCurrentUserId
 import com.fasterxml.jackson.annotation.JsonInclude
+import java.nio.file.Files
+import java.nio.file.Path
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.springframework.http.HttpStatus
+import org.springframework.web.server.ResponseStatusException
 import kotlinx.coroutines.reactor.mono
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.web.bind.annotation.GetMapping
@@ -36,29 +44,43 @@ class CommandController(
     private val agentStore: AsyncAgentStore? = null,
     @param:Autowired(required = false)
     private val userCommandStore: AsyncUserCommandStore? = null,
+    @param:Autowired(required = false)
+    private val commandService: CommandService? = null,
+    @param:Autowired(required = false)
+    private val projectStore: AsyncProjectStore? = null,
 ) {
 
     private val objectMapper: ObjectMapper = SharedObjectMapper.instance
 
     @GetMapping
     fun listCommands(
-        @RequestParam(required = false) agentId: String?
+        @RequestParam(required = false) agentId: String?,
+        @RequestParam(required = false) projectId: String? = null
     ): Mono<List<CommandDto>> {
         return mono {
             val userId = getCurrentUserId()
-
-            // Merge USER commands from DB + SKILL/MCP/BUILTIN from registry
+            val projectPath = if (projectId.isNullOrBlank()) null else {
+                val project = projectStore?.findById(projectId, userId)
+                    ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found")
+                val path = Path.of(project.path).toAbsolutePath().normalize()
+                if (project.path.isBlank() || !withContext(Dispatchers.IO) { Files.isDirectory(path) }) {
+                    throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Project directory is unavailable")
+                }
+                path
+            }
             val userCommands = userCommandStore?.findAll(userId)?.map { it.toCommandInfo() } ?: emptyList()
-            val registryCommands = commandRegistry?.all() ?: emptyList()
-            val all = userCommands + registryCommands
+            val registryCommands = commandRegistry?.all().orEmpty().filter { it.category != CommandCategory.SKILL }
+            val skills = commandService?.listSkillCommands(userId, projectPath).orEmpty()
+            val all = userCommands + registryCommands + skills
 
             if (agentId == null || agentStore == null) {
                 all.map { it.toDto() }
             } else {
-                val allowedSkills = agentStore.getAgentSkillNames(agentId)
+                agentStore.findById(agentId, userId)
+                    ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found")
                 val mcpConfigs = agentStore.getAgentMcpConfigs(agentId)
                 val allowedCommands = agentStore.getAgentCommandNames(agentId)
-                all.filter { cmd -> filterCommand(cmd, allowedSkills, mcpConfigs, allowedCommands) }
+                all.filter { cmd -> filterCommand(cmd, mcpConfigs, allowedCommands) }
                     .map { it.toDto() }
             }
         }
@@ -66,14 +88,11 @@ class CommandController(
 
     private fun filterCommand(
         cmd: CommandInfo,
-        allowedSkills: List<String>,
         mcpConfigs: List<AgentToolConfig>,
         allowedCommands: List<String>,
     ): Boolean = when (cmd.category) {
-        // USER commands: whitelist mode - empty = none allowed
         CommandCategory.USER -> cmd.name in allowedCommands
-        // SKILL commands: lenient - controlled independently via agent's skill bindings
-        CommandCategory.SKILL -> allowedSkills.isEmpty() || cmd.name in allowedSkills
+        CommandCategory.SKILL -> true
         // MCP commands: filter by agent's MCP bindings + promptNames whitelist
         CommandCategory.MCP -> filterByMcpConfig(cmd, mcpConfigs)
         // BUILTIN commands: whitelist mode - must be explicitly allowed
@@ -125,6 +144,9 @@ class CommandController(
         aliases = aliases,
         category = category.name,
         hints = hints,
+        source = source.takeIf { category == CommandCategory.SKILL },
+        scope = scope,
+        projectPath = projectPath,
     )
 }
 
@@ -135,4 +157,7 @@ data class CommandDto(
     val aliases: List<String>,
     val category: String,
     val hints: List<String>,
+    val source: String? = null,
+    val scope: String? = null,
+    val projectPath: String? = null,
 )

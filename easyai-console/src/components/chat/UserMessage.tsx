@@ -1,19 +1,19 @@
 import React from 'react';
 import type { Message, Attachment } from '../../types/message';
-import { getAttachmentIcon, isImageAttachment, splitByFileRefs } from '../../utils/attachment-utils';
+import { getAttachmentIcon, isImageAttachment, splitByFileRefs, copyMessageSelection } from '../../utils/attachment-utils';
+import { commandLabel, parseCommand, serializeCommand } from '@/utils/command-utils';
 import { RotateCw } from 'lucide-react';
 import { AttachmentImage } from './AttachmentImage';
 
 /** Parse message content and render command prefix (e.g. /goal) as a styled chip, plus file/folder references */
-function renderContent(content: string) {
-  // Step 1: Extract command prefix if present
-  const cmdMatch = content.match(/^(\/[a-zA-Z_]\w*)([\s\S]*)$/);
-  let cmdChip = null;
-  let textContent = content;
-  if (cmdMatch) {
-    cmdChip = <span className="command-chip">{cmdMatch[1]}</span>;
-    textContent = cmdMatch[2];
-  }
+export function UserMessageContent({ content }: { content: string }) {
+  const parsed = parseCommand(content);
+  const cmdChip = parsed ? (
+    <span className="command-chip" title={parsed.command.source} data-command-token={serializeCommand(parsed.command, '')}>
+      {commandLabel(parsed.command)}
+    </span>
+  ) : null;
+  const textContent = parsed ? parsed.args : content;
 
   // Step 2: Split remaining text by file/folder references
   const segments = splitByFileRefs(textContent);
@@ -30,14 +30,14 @@ function renderContent(content: string) {
       {segments.map((seg, i) => {
         if (seg.type === 'fileRef') {
           return (
-            <span key={i} className="mention-chip mention-file" title={seg.path}>
+            <span key={i} className="mention-chip mention-file" title={seg.path} data-path={seg.path} data-name={seg.name} data-type="file">
               📄 {seg.name}
             </span>
           );
         }
         if (seg.type === 'folderRef') {
           return (
-            <span key={i} className="mention-chip mention-folder" title={seg.path}>
+            <span key={i} className="mention-chip mention-folder" title={seg.path} data-path={seg.path} data-name={seg.name} data-type="directory">
               📁 {seg.name}
             </span>
           );
@@ -98,9 +98,7 @@ function AttachmentPreview({ attachments }: { attachments: Attachment[] }) {
 export const UserMessage: React.FC<UserMessageProps> = ({ message, isEditable, onEditClick, onDoubleClick }) => {
   // Check if this is a system-injected completion check message
   const isCompletionCheck = message.metadata?.source === 'completion_check';
-  const isFollowUp = message.metadata?.source === 'follow_up';
-  const isSteering = message.metadata?.source === 'steering';
-  const isSystemMessage = isCompletionCheck || isFollowUp || isSteering;
+  const isSystemMessage = isCompletionCheck;
 
   return (
     <div
@@ -123,7 +121,13 @@ export const UserMessage: React.FC<UserMessageProps> = ({ message, isEditable, o
             <span>Auto-continue</span>
           </div>
         )}
-        <div className="whitespace-pre-wrap text-sm text-gray-800 dark:text-blue-100">{renderContent(message.content)}</div>
+        <div
+          className="whitespace-pre-wrap text-sm text-gray-800 dark:text-blue-100"
+          data-message-content={message.content}
+          onCopy={(e) => { if (copyMessageSelection(e.currentTarget, e.clipboardData)) e.preventDefault(); }}
+        >
+          <UserMessageContent content={message.content} />
+        </div>
         
         {message.role === 'user-with-attachments' && message.attachments && message.attachments.length > 0 && (
           <AttachmentPreview attachments={message.attachments} />

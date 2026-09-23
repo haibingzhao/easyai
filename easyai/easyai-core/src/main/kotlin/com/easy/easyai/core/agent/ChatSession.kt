@@ -102,8 +102,22 @@ class ChatSession(
         return steeringQueue.remove(id) || followUpQueue.remove(id)
     }
 
+    /** Return the current editable snapshot from either queue, without consuming it. */
+    fun getQueuedMessage(id: String): UserMessage? {
+        return steeringQueue.get(id) ?: followUpQueue.get(id)
+    }
+
     /**
-     * Update the content of a queued message by ID.
+     * Atomically replace a previously read snapshot with an upstream-prepared user message.
+     * Returns false after consumption or any concurrent edit; never re-enqueues a message.
+     */
+    fun updateQueuedMessage(id: String, expectedSnapshot: UserMessage, replacement: UserMessage): Boolean {
+        return steeringQueue.updateMessage(id, expectedSnapshot, replacement) ||
+            followUpQueue.updateMessage(id, expectedSnapshot, replacement)
+    }
+
+    /**
+     * Update text, invalidating command metadata. Command edits must use the snapshot overload.
      * Returns true if the message was found and updated.
      */
     fun updateQueuedMessage(id: String, newContent: String): Boolean {

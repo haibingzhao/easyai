@@ -127,6 +127,15 @@ open class EasyAiCoreAutoConfiguration(
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "easyai.skills", name = ["enabled"], havingValue = "true", matchIfMissing = true)
+    open fun skillAccessResolver(
+        skillRegistry: SkillRegistry,
+        catalog: ObjectProvider<AsyncSkillCatalogStore>,
+        skillConfig: SkillConfig
+    ): SkillAccessResolver = SkillAccessResolver(skillRegistry, catalog.getIfAvailable(), skillConfig)
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "easyai.skills", name = ["enabled"], havingValue = "true", matchIfMissing = true)
     open fun agentSkillFactory(): AgentSkillFactory = DefaultAgentSkillFactory()
 
     // ========== Skill Prompt / RAG Beans ==========
@@ -149,10 +158,11 @@ open class EasyAiCoreAutoConfiguration(
         ragEnabled = properties.skills.rag.enabled,
         // Discovery is only "ready" when the whole chain exists. RagAutoConfiguration hands out a
         // SkillStore whenever the flag is on, but the write side (SkillIndexStartupRunner → 
-        // SkillCatalogSyncService.backfillAll) needs the R2DBC catalog to have anything to index.
+        // SkillCatalogSyncService.claimUnclaimed) needs the R2DBC catalog to have anything to index.
         // Without this conjunction, `rag on + r2dbc off` would suppress the prompt listing while 
         // skill_search returns empty forever — the worst of both worlds.
-        ragDiscoveryReady = skillStore != null && catalog != null
+        ragDiscoveryReady = skillStore != null && catalog != null,
+        config = skillConfigOf(properties)
     )
 
     @Bean
@@ -184,7 +194,6 @@ open class EasyAiCoreAutoConfiguration(
     @ConditionalOnProperty(prefix = SKILL_RAG_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = false)
     open fun skillCatalogService(
         skillIndexer: SkillIndexer,
-        skillPromptSource: SkillPromptSource,
         @Autowired(required = false) skillStore: SkillStore? = null,
         @Autowired(required = false) catalog: AsyncSkillCatalogStore? = null,
         properties: EasyAiProperties
@@ -192,13 +201,12 @@ open class EasyAiCoreAutoConfiguration(
         catalog = catalog,
         indexer = skillIndexer,
         skillStore = skillStore,
-        config = skillConfigOf(properties),
-        promptSource = skillPromptSource
+        config = skillConfigOf(properties)
     )
 
     /**
-     * The one refresh chain — re-read the disk, claim catalog rows, reconcile the index, republish the
-     * prompt view — shared by the startup pass below and by the `refresh_skills` tool.
+     * The one refresh chain — re-read the disk, claim catalog rows and reconcile the index — shared
+     * by the startup pass below and by the `refresh_skills` tool.
      *
      * Created only when the whole chain is present: a registry with nothing to index into or no table
      * to read owners from would make the pass a no-op that still costs a listener.
@@ -209,7 +217,6 @@ open class EasyAiCoreAutoConfiguration(
     open fun skillRefreshService(
         skillIndexer: SkillIndexer,
         skillCatalogSyncService: SkillCatalogSyncService,
-        skillPromptSource: SkillPromptSource,
         skillConfig: SkillConfig,
         @Autowired(required = false) skillRegistry: SkillRegistry? = null,
         @Autowired(required = false) catalog: AsyncSkillCatalogStore? = null,
@@ -227,7 +234,6 @@ open class EasyAiCoreAutoConfiguration(
             catalog = catalog,
             syncService = skillCatalogSyncService,
             indexer = skillIndexer,
-            promptSource = skillPromptSource,
             config = skillConfig
         )
     }
@@ -264,11 +270,10 @@ open class EasyAiCoreAutoConfiguration(
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "easyai.commands", name = ["enabled"], havingValue = "true", matchIfMissing = true)
     open fun commandRegistry(
-        @Autowired(required = false) skillRegistry: SkillRegistry? = null,
         @Autowired(required = false) promptProvider: McpPromptProvider? = null,
         @Autowired(required = false) builtinHandlers: List<BuiltinCommandHandler>? = null,
     ): CommandRegistry {
-        return DefaultCommandRegistry(skillRegistry, promptProvider, builtinHandlers ?: emptyList())
+        return DefaultCommandRegistry(promptProvider, builtinHandlers ?: emptyList())
     }
 
     @Bean
@@ -276,10 +281,15 @@ open class EasyAiCoreAutoConfiguration(
     @ConditionalOnProperty(prefix = "easyai.commands", name = ["enabled"], havingValue = "true", matchIfMissing = true)
     open fun commandService(
         commandRegistry: CommandRegistry,
+        skillAccessResolver: ObjectProvider<SkillAccessResolver>,
+        skillConfig: SkillConfig,
         @Autowired(required = false) promptProvider: McpPromptProvider? = null,
         @Autowired(required = false) userCommandStore: AsyncUserCommandStore? = null,
         @Autowired(required = false) builtinHandlers: List<BuiltinCommandHandler>? = null,
-    ): CommandService = CommandService(commandRegistry, promptProvider, userCommandStore, builtinHandlers ?: emptyList())
+    ): CommandService = CommandService(
+        commandRegistry, promptProvider, userCommandStore, builtinHandlers ?: emptyList(),
+        skillAccessResolver.getIfAvailable(), skillConfig
+    )
 
     @Bean
     @ConditionalOnMissingBean(AgentService::class)

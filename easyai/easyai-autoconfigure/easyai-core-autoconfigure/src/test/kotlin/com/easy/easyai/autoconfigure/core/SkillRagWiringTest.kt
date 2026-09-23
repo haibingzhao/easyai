@@ -98,25 +98,29 @@ class SkillRagWiringTest {
         )
 
         @Test
-        fun `the prompt view learns about discovery from the store bean, not from the flag`() {
+        fun `the prompt view keeps injecting whatever the store bean says`() {
             val withoutStore = configuration.skillPromptSource(registry, catalog, null, enabledProperties)
             val withStore = configuration.skillPromptSource(registry, catalog, store, enabledProperties)
 
             assertTrue(
                 withoutStore.fullInjectionActive,
-                "the flag is on but nothing can answer skill_search, so the list must stay in the prompt"
+                "nothing can answer skill_search, so the list must stay in the prompt"
             )
-            assertFalse(withStore.fullInjectionActive, "with a store the catalogue is discovered on demand")
+            assertTrue(
+                withStore.fullInjectionActive,
+                "readiness is judged per skill and per request inside skillsForPrompt, never by bean presence"
+            )
         }
 
         @Test
         fun `a disabled row is filtered even while the full list is injected`() = runBlocking {
             val registry = mockk<SkillRegistry>()
-            every { registry.visibleFor(null) } returns listOf(
+            val installDir = Path.of(System.getProperty("user.home"), ".easyai", "skills", "pdf-report")
+            every { registry.all() } returns listOf(
                 SkillInfo(
                     name = "pdf-report",
                     description = "Builds PDF reports",
-                    location = Path.of("/home/dev/.easyai/skills/pdf-report/SKILL.md"),
+                    location = installDir.resolve("SKILL.md"),
                     content = "# pdf-report"
                 )
             )
@@ -127,18 +131,29 @@ class SkillRagWiringTest {
                     name = "pdf-report",
                     checksum = "a".repeat(64),
                     enabled = false,
-                    installPath = "/home/dev/.easyai/skills/pdf-report"
+                    installPath = installDir.toString()
                 )
             )
 
             val promptSource = configuration.skillPromptSource(registry, catalog, null, EasyAiProperties())
-            promptSource.refreshVisibility()
 
             assertEquals(
                 emptyList(),
-                promptSource.skillsForPrompt(SkillCatalogEntry.DEFAULT_USER_ID),
+                promptSource.skillsForPrompt(SkillCatalogEntry.DEFAULT_USER_ID, null, listOf("pdf-report")),
                 "a skill the user switched off must not be advertised by the prompt either"
             )
+        }
+
+        @Test
+        fun `prompt authorization uses the same configured source roots as catalog synchronization`() = runBlocking {
+            val properties = EasyAiProperties(skills = SkillProperties(paths = listOf("/configured/skills")))
+            val skill = SkillInfo("custom", "Configured skill", Path.of("/configured/skills/custom/SKILL.md"), "body")
+            every { registry.all() } returns listOf(skill)
+            coEvery { catalog.listByUser(SkillCatalogEntry.DEFAULT_USER_ID) } returns listOf(
+                SkillCatalogEntry(name = skill.name, checksum = "checksum", installPath = skill.location.parent.toString())
+            )
+            val prompt = configuration.skillPromptSource(registry, catalog, null, properties)
+            assertEquals(listOf("custom"), prompt.effectiveNames(SkillCatalogEntry.DEFAULT_USER_ID, null))
         }
 
         @Test
@@ -149,15 +164,13 @@ class SkillRagWiringTest {
                 syncService = syncService,
                 config = SkillConfig()
             )
-            val promptSource = configuration.skillPromptSource(registry, catalog, store, enabledProperties)
-
             assertNotNull(
-                configuration.skillRefreshService(indexer, syncService, promptSource, SkillConfig(), registry, catalog, store),
+                configuration.skillRefreshService(indexer, syncService, SkillConfig(), registry, catalog, store),
                 "registry, catalog and store are all present, so the tool and the startup pass have a service to call"
             )
-            assertNull(configuration.skillRefreshService(indexer, syncService, promptSource, SkillConfig(), null, catalog, store))
-            assertNull(configuration.skillRefreshService(indexer, syncService, promptSource, SkillConfig(), registry, null, store))
-            assertNull(configuration.skillRefreshService(indexer, syncService, promptSource, SkillConfig(), registry, catalog, null))
+            assertNull(configuration.skillRefreshService(indexer, syncService, SkillConfig(), null, catalog, store))
+            assertNull(configuration.skillRefreshService(indexer, syncService, SkillConfig(), registry, null, store))
+            assertNull(configuration.skillRefreshService(indexer, syncService, SkillConfig(), registry, catalog, null))
         }
 
         @Test

@@ -1,5 +1,6 @@
 package com.easy.easyai.compaction.estimator
 
+import com.easy.easyai.core.message.CommandMessageProjection
 import com.easy.easyai.core.model.AssistantMessage
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.model.ToolResultEntry
@@ -97,6 +98,63 @@ class UsageAwareTokenEstimatorTest {
             assertEquals(estimator.estimate(first) + estimator.estimate(second), combined)
             // Cached per-message results must stay stable on repeated calls
             assertEquals(combined, estimator.estimate(first + second))
+        }
+    }
+
+    @Nested
+    inner class `command snapshots` {
+
+        @Test
+        fun `counts expansion exactly once for raw and already projected snapshots`() {
+            val estimator = UsageAwareTokenEstimator()
+            val text = "/review source"
+            val expansion = "Review the source using the captured server instructions."
+            val command = UserMessage(text).copy(metadata = mapOf(UserMessage.COMMAND_EXPANSION to expansion))
+            val messages = listOf(command)
+            val expected = encoding.countTokens(text) + encoding.countTokens(expansion)
+            assertEquals(expected, estimator.estimate(messages))
+            assertEquals(expected, estimator.estimateContextTokens(messages))
+            assertEquals(expected, estimator.estimate(CommandMessageProjection.project(messages)))
+            assertEquals(listOf(command), messages)
+        }
+
+        @Test
+        fun `same-id same-length expansion replacement cannot reuse stale token counts`() {
+            val estimator = UsageAwareTokenEstimator()
+            val text = "/review"
+            val oldExpansion = "a".repeat(32)
+            val newExpansion = "中".repeat(32)
+            val command = UserMessage(text).copy(metadata = mapOf(UserMessage.COMMAND_EXPANSION to oldExpansion))
+            assertEquals(encoding.countTokens(text) + encoding.countTokens(oldExpansion), estimator.estimate(listOf(command)))
+            val updated = command.copy(metadata = mapOf(UserMessage.COMMAND_EXPANSION to newExpansion))
+            assertTrue(encoding.countTokens(newExpansion) != encoding.countTokens(oldExpansion))
+            assertEquals(encoding.countTokens(text) + encoding.countTokens(newExpansion), estimator.estimate(listOf(updated)))
+            assertEquals(encoding.countTokens(text), estimator.estimate(listOf(updated.copy(metadata = emptyMap()))))
+        }
+
+        @Test
+        fun `usage anchor includes only trailing expansion delta instead of adding old commands again`() {
+            val estimator = UsageAwareTokenEstimator()
+            val command = UserMessage("/first").copy(metadata = mapOf(
+                UserMessage.COMMAND_EXPANSION to "Previously submitted command instructions. ".repeat(200)
+            ))
+            val baseline = estimator.estimate(listOf(command))
+            val assistant = assistantWithUsage(inputTokens = baseline, outputTokens = 10)
+            val trailing = UserMessage("/next").copy(metadata = mapOf(UserMessage.COMMAND_EXPANSION to "Next command snapshot"))
+            val messages = listOf(command, assistant, trailing)
+            val expected = baseline + 10 + estimator.estimate(listOf(trailing))
+            assertEquals(expected, estimator.estimateContextTokens(messages))
+            assertEquals(expected, estimator.estimateContextTokens(CommandMessageProjection.project(messages)))
+        }
+
+        @Test
+        fun `summary with legacy command metadata only counts summary text`() {
+            val estimator = UsageAwareTokenEstimator()
+            val summary = UserMessage("Compacted command context").copy(metadata = mapOf(
+                "isCompactionSummary" to "true",
+                UserMessage.COMMAND_EXPANSION to "Obsolete snapshot ".repeat(100)
+            ))
+            assertEquals(encoding.countTokens("Compacted command context"), estimator.estimate(listOf(summary)))
         }
     }
 

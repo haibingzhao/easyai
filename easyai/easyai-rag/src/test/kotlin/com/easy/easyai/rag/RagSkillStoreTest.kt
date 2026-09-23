@@ -1,5 +1,7 @@
 package com.easy.easyai.rag
 
+import com.easy.easyai.core.skill.SkillDeleteResult
+import com.easy.easyai.core.skill.SkillDocumentState
 import com.easy.easyai.core.skill.SkillEntry
 import com.easy.easyai.core.skill.SkillOwnerContext
 import com.easy.easyai.core.skill.SkillScope
@@ -15,6 +17,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -44,7 +47,8 @@ class RagSkillStoreTest {
             tags = listOf("pdf", "report"),
             examples = listOf("把季度数据导出成 PDF"),
             content = "## Workflow\n\nRun the render script.",
-            origin = "handwritten"
+            origin = "handwritten",
+            checksum = "source-checksum"
         )
 
     // ── index ──────────────────────────────────────────────────────────
@@ -60,9 +64,10 @@ class RagSkillStoreTest {
             coEvery { client.upsert(capture(docSlot), capture(bizSlot), capture(awaitSlot)) } returns
                 RagUpsertResult(docId = "doc-1", indexed = false)
 
-            val indexed = store.index(listOf(entry()), SkillScope.GLOBAL, globalOwner)
+            val indexed = store.submit(listOf(entry()), SkillScope.GLOBAL, globalOwner)
 
-            assertEquals(1, indexed)
+            assertIs<SkillDocumentState.Submitted>(indexed.single().state)
+            assertEquals("source-checksum", docSlot.captured.metadata["checksum"])
             assertEquals(globalBizId, bizSlot.captured)
             // Bulk paths are fire-and-forget; install and create pass awaitIndexing = true explicitly.
             assertFalse(awaitSlot.captured)
@@ -87,7 +92,7 @@ class RagSkillStoreTest {
             val bizSlot = slot<String>()
             coEvery { client.upsert(any(), capture(bizSlot), any()) } returns RagUpsertResult(docId = "doc-1", indexed = false)
 
-            store.index(listOf(entry()), SkillScope.PROJECT, projectOwner)
+            store.submit(listOf(entry()), SkillScope.PROJECT, projectOwner)
 
             assertEquals(projectBizId, bizSlot.captured)
             assertTrue(bizSlot.captured.startsWith("u_alice-demo-project-"), bizSlot.captured)
@@ -96,9 +101,9 @@ class RagSkillStoreTest {
 
         @Test
         fun `PROJECT without a project path degrades to zero writes`() = runTest {
-            val indexed = store.index(listOf(entry()), SkillScope.PROJECT, globalOwner)
+            val indexed = store.submit(listOf(entry()), SkillScope.PROJECT, globalOwner)
 
-            assertEquals(0, indexed)
+            assertIs<SkillDocumentState.Failed>(indexed.single().state)
             coVerify(exactly = 0) { client.upsert(any(), any(), any()) }
         }
 
@@ -107,14 +112,14 @@ class RagSkillStoreTest {
             val awaitSlot = slot<Boolean>()
             coEvery { client.upsert(any(), any(), capture(awaitSlot)) } returns RagUpsertResult(docId = "doc-1", indexed = true)
 
-            store.index(listOf(entry()), SkillScope.GLOBAL, globalOwner, awaitIndexing = true)
+            store.submit(listOf(entry()), SkillScope.GLOBAL, globalOwner, awaitIndexing = true)
 
             assertTrue(awaitSlot.captured)
         }
 
         @Test
         fun `an empty entry list costs no request`() = runTest {
-            assertEquals(0, store.index(emptyList(), SkillScope.GLOBAL, globalOwner))
+            assertTrue(store.submit(emptyList(), SkillScope.GLOBAL, globalOwner).isEmpty())
             coVerify(exactly = 0) { client.upsert(any(), any(), any()) }
         }
 
@@ -125,9 +130,11 @@ class RagSkillStoreTest {
                 client.upsert(match { doc -> doc.key == "skills/broken.md" }, any(), any())
             } throws RagException("pipeline busy", statusCode = 409)
 
-            val indexed = store.index(listOf(entry("good"), entry("broken")), SkillScope.GLOBAL, globalOwner)
+            val indexed = store.submit(listOf(entry("good"), entry("broken")), SkillScope.GLOBAL, globalOwner)
 
-            assertEquals(1, indexed, "log-and-continue drops only the failing entry")
+            assertEquals(2, indexed.size)
+            assertIs<SkillDocumentState.Submitted>(indexed.first().state)
+            assertIs<SkillDocumentState.Failed>(indexed.last().state)
         }
 
         @Test
@@ -140,7 +147,7 @@ class RagSkillStoreTest {
             val docSlot = slot<RagDocument>()
             coEvery { client.upsert(capture(docSlot), any(), any()) } returns RagUpsertResult(docId = "doc-1", indexed = false)
 
-            store.index(listOf(entry().copy(location = skillFile.toString())), SkillScope.GLOBAL, globalOwner)
+            store.submit(listOf(entry().copy(location = skillFile.toString())), SkillScope.GLOBAL, globalOwner)
 
             assertEquals(stamped / 1000, docSlot.captured.createTime)
         }
@@ -246,14 +253,15 @@ class RagSkillStoreTest {
         @Test
         fun `delete removes the document from the addressed slice only`() = runTest {
             coEvery { client.delete(any(), any()) } returns true
+            coEvery { client.inspectByExternalId(any(), any()) } returns null
 
-            assertTrue(store.delete("pdf-report", SkillScope.GLOBAL, globalOwner))
+            assertIs<SkillDeleteResult.Absent>(store.ensureAbsent("pdf-report", SkillScope.GLOBAL, globalOwner))
             coVerify(exactly = 1) { client.delete("easyai:skills/pdf-report.md", globalBizId) }
         }
 
         @Test
         fun `delete on an unaddressable PROJECT slice never reaches the client`() = runTest {
-            assertFalse(store.delete("pdf-report", SkillScope.PROJECT, globalOwner))
+            assertIs<SkillDeleteResult.Failed>(store.ensureAbsent("pdf-report", SkillScope.PROJECT, globalOwner))
             coVerify(exactly = 0) { client.delete(any(), any()) }
         }
     }
@@ -299,14 +307,52 @@ class RagSkillStoreTest {
         fun `an index outage returns zero and does not throw`() = runTest {
             coEvery { client.upsert(any(), any(), any()) } throws RagException("connection refused")
 
-            assertEquals(0, store.index(listOf(entry()), SkillScope.GLOBAL, globalOwner))
+            assertIs<SkillDocumentState.Failed>(store.submit(listOf(entry()), SkillScope.GLOBAL, globalOwner).single().state)
         }
 
         @Test
         fun `a delete outage reports false`() = runTest {
             coEvery { client.delete(any(), any()) } throws RagException("connection refused")
 
-            assertFalse(store.delete("pdf-report", SkillScope.GLOBAL, globalOwner))
+            assertIs<SkillDeleteResult.Failed>(store.ensureAbsent("pdf-report", SkillScope.GLOBAL, globalOwner))
+        }
+    }
+
+    @Nested
+    inner class `remote confirmation` {
+        @Test
+        fun `unchanged but unprocessed remains submitted even when awaiting`() = runTest {
+            coEvery { client.upsert(any(), any(), any()) } returns RagUpsertResult("doc", indexed = false, unchanged = true)
+            val result = store.submit(listOf(entry()), SkillScope.GLOBAL, globalOwner, awaitIndexing = true)
+            assertIs<SkillDocumentState.Submitted>(result.single().state)
+        }
+
+        @Test
+        fun `processed result carries observed remote metadata checksum not submitted checksum`() = runTest {
+            coEvery { client.upsert(any(), any(), any()) } returns RagUpsertResult("doc", indexed = true)
+            coEvery { client.inspectByExternalId("easyai:skills/pdf-report.md", globalBizId) } returns
+                RagDocumentDetail("doc", null, null, null, "processed", null, null, mapOf("checksum" to "remote-version"))
+            val result = store.submit(listOf(entry()), SkillScope.GLOBAL, globalOwner).single().state
+            assertIs<SkillDocumentState.Processed>(result)
+            assertEquals("remote-version", result.checksum)
+        }
+
+        @Test
+        fun `missing is idempotent success but disabled backend is not missing`() = runTest {
+            coEvery { client.delete(any(), any()) } returns false
+            coEvery { client.inspectByExternalId(any(), any()) } returns null
+            assertIs<SkillDeleteResult.Absent>(store.ensureAbsent("pdf-report", SkillScope.GLOBAL, globalOwner))
+            coEvery { client.inspectByExternalId(any(), any()) } throws RagException("disabled")
+            assertIs<SkillDeleteResult.Failed>(store.ensureAbsent("pdf-report", SkillScope.GLOBAL, globalOwner))
+            assertIs<SkillDocumentState.Failed>(store.inspect("pdf-report", SkillScope.GLOBAL, globalOwner))
+        }
+
+        @Test
+        fun `delete acceptance is not absence while the remote document still exists`() = runTest {
+            coEvery { client.delete(any(), any()) } returns true
+            coEvery { client.inspectByExternalId(any(), any()) } returns
+                RagDocumentDetail("doc", null, null, null, "pending", null, null)
+            assertIs<SkillDeleteResult.Failed>(store.ensureAbsent("pdf-report", SkillScope.GLOBAL, globalOwner))
         }
     }
 
@@ -339,7 +385,7 @@ class RagSkillStoreTest {
     private suspend fun storedContentOf(skillEntry: SkillEntry): String {
         val docSlot = slot<RagDocument>()
         coEvery { client.upsert(capture(docSlot), any(), any()) } returns RagUpsertResult(docId = "doc-1", indexed = false)
-        store.index(listOf(skillEntry), SkillScope.GLOBAL, globalOwner)
+        store.submit(listOf(skillEntry), SkillScope.GLOBAL, globalOwner)
         return docSlot.captured.content
     }
 }
