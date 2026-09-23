@@ -2,256 +2,167 @@ package com.easy.easyai.skills
 
 import com.easy.easyai.core.skill.AsyncSkillCatalogStore
 import com.easy.easyai.core.skill.SkillCatalogEntry
+import com.easy.easyai.core.skill.SkillScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
-import java.io.BufferedInputStream
-import java.io.BufferedReader
-import java.io.File
-import java.io.FileInputStream
-import java.io.FileReader
+import java.nio.ByteBuffer
+import java.nio.file.Files
+import java.nio.file.FileSystemException
+import java.nio.file.NoSuchFileException
+import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.Path
-import java.security.DigestInputStream
 import java.security.MessageDigest
 import java.util.HexFormat
-import java.util.concurrent.ConcurrentHashMap
+import java.util.UUID
 
-/**
- * Outcome of comparing one catalog row against the file on disk.
- *
- * Only [Content] justifies a backend write; that distinction is what turns startup from
- * "N upsert requests every boot" into "N stat calls, plus a write for rows that really moved".
- */
 sealed interface SkillDrift {
-    /** Disk content still matches the recorded checksum — nothing to do. */
     data object None : SkillDrift
-
-    /** SKILL.md bytes changed: re-index and persist the new fingerprint. */
     data class Content(val newChecksum: String, val newVersion: String) : SkillDrift
-
-    /** Row exists but the file does not (directory hand-deleted or moved machine). */
     data object Missing : SkillDrift
 }
 
-/**
- * Two-way alignment between the skill directory tree and the `skill` catalog table.
- *
- * [backfillAll] is the only claim path for skills that predate the catalog: without a row they
- * would never be indexed under any owner, so `skill_search` could not find them at all.
- * [driftOf] is the reconciliation primitive the indexer builds on.
- *
- * [config] lets the claim pass derive each skill's granularity ([SkillScopeResolver]) so the row
- * lands under the right (owner, name, project_hash) coordinates — two projects' same-named skills
- * claim two independent rows.
- */
+/** Parsed metadata, body and checksum all originate from one read of SKILL.md. */
+data class SkillSnapshot(val info: SkillInfo, val checksum: String, val version: String)
+
+data class SkillClaimSummary(val claimed: Int = 0, val failed: Int = 0, val unclaimed: Int = 0)
+
 class SkillCatalogSyncService(
     private val catalog: AsyncSkillCatalogStore?,
     private val config: SkillConfig = SkillConfig(),
+    registry: SkillRegistry? = null
 ) {
-
     private val logger = LoggerFactory.getLogger(javaClass)
+    private val claimMutex = Mutex()
+    // Bounded local stripes serialize all remote operations for an installation, including toggles.
+    private val installationLocks = Array(64) { Mutex() }
+    @Volatile private var publicationRegistry = registry
 
-    /**
-     * Process-local `catalog id -> mtime already verified as unchanged`.
-     *
-     * Purely an optimization: it lets a steady-state pass cost one `stat` instead of a full
-     * file read + hash. Correctness across restarts comes from the persisted checksum, never
-     * from this map, so a lost entry only costs one extra hash.
-     *
-     * Bounded via [invalidate] calls from `SkillIndexer.removeOne` / `delist`; without that
-     * eviction, rows deleted over the process lifetime would leave stale ids here forever.
-     */
-    private val verifiedMtimes = ConcurrentHashMap<String, Long>()
+    internal fun bindRegistry(registry: SkillRegistry) { publicationRegistry = registry }
 
-    /**
-     * Insert a catalog row for every discovered skill that has none at its own install directory,
-     * owned by [defaultUserId] (filesystem-discovered skills carry no user information).
-     *
-     * Idempotency is per (name, granularity): an existing same-named row for a *different* project
-     * must not suppress this skill's claim — only a row pointing at the very same directory does.
-     *
-     * One [AsyncSkillCatalogStore.listByUser] round trip up front replaces what used to be an
-     * N-query loop (`listByName` per skill). With 100 skills discovered on a fresh workspace that
-     * is 100 queries collapsed into 1, and the local `(name, install_path)` index is what makes
-     * the "same directory already claimed" check O(1).
-     *
-     * @return number of rows created; idempotent, a second pass returns 0
-     */
-    suspend fun backfillAll(
-        discovered: List<SkillInfo>,
-        defaultUserId: String = SkillCatalogEntry.DEFAULT_USER_ID
-    ): Int {
-        val store = catalog ?: return 0
-        if (discovered.isEmpty()) return 0
+    internal suspend fun <T> withInstallation(installPath: String, block: suspend () -> T): T {
+        val key = SkillPaths.canonicalize(Path.of(installPath))
+        return installationLocks[(key.hashCode() and Int.MAX_VALUE) % installationLocks.size].withLock { block() }
+    }
 
-        val existingRows = try {
-            store.listByUser(defaultUserId)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger.warn("Skill catalog backfill could not preload existing rows: {}", e.message)
-            emptyList()
-        }
-        // (name, canonical install_path) -> already claimed. Two same-named skills under different
-        // project roots land in different buckets, matching the UNIQUE index semantics.
-        val claimed = HashMap<Pair<String, String>, Unit>(existingRows.size * 2)
-        for (row in existingRows) {
-            val canonical = SkillPaths.canonicalizeOrNull(row.installPath) ?: continue
-            claimed[row.name to canonical] = Unit
-        }
+    internal fun publish(snapshot: SkillSnapshot) {
+        checkNotNull(publicationRegistry) { "SkillCatalogSyncService requires a SkillRegistry for publication" }
+            .register(snapshot.info)
+    }
 
+    /** Catalog reads must succeed before any claim; every owner reserves its installation path. */
+    suspend fun claimUnclaimed(
+        discovered: List<SkillInfo>, requestedUserId: String?, projectPath: Path? = null
+    ): SkillClaimSummary = claimMutex.withLock {
+        val store = catalog ?: return@withLock SkillClaimSummary(unclaimed = discovered.size)
+        val rows = store.listAll()
+        val claimedPaths = rows.mapNotNull { SkillPaths.canonicalizeOrNull(it.installPath) }.toMutableSet()
+        val identities = rows.associateBy { Triple(it.userId, it.name, it.projectHash) }.toMutableMap()
+        val owner = requestedUserId?.takeIf { it.isNotBlank() } ?: SkillCatalogEntry.DEFAULT_USER_ID
         var created = 0
+        var failed = 0
+        var unclaimed = 0
         for (skill in discovered) {
             try {
-                val installDir = skill.location.parent ?: continue
-                val canonicalDir = SkillPaths.canonicalize(installDir)
-                if (claimed.containsKey(skill.name to canonicalDir)) continue
-                val skillFile = installDir.resolve(SKILL_FILE_NAME).toFile()
-                val checksum = sha256OfFile(skillFile)
-                if (checksum == null) {
-                    logger.warn("Skill '{}' has no readable SKILL.md at {}; not claimed", skill.name, installDir)
+                val dir = skill.location.parent ?: continue
+                val canonical = SkillPaths.canonicalize(dir)
+                if (canonical in claimedPaths) continue
+                val identity = SkillScopeResolver.classify(skill, config)
+                if (identity == null) {
+                    unclaimed++
                     continue
                 }
-                val (_, projectPath) = SkillScopeResolver.resolve(skill, config)
-                store.upsert(
-                    SkillCatalogEntry(
-                        name = skill.name,
-                        source = SkillCatalogEntry.SOURCE_LOCAL,
-                        version = declaredVersion(skillFile),
-                        checksum = checksum,
-                        enabled = true,
-                        installPath = canonicalDir,
-                        origin = null,
-                        userId = defaultUserId,
-                        projectHash = SkillScopeResolver.projectHashOf(projectPath)
-                    )
-                )
-                claimed[skill.name to canonicalDir] = Unit
-                created++
+                val (scope, root) = identity
+                val shared = isExplicitGlobal(dir)
+                if ((scope == SkillScope.GLOBAL && !shared) ||
+                    (owner == SkillCatalogEntry.DEFAULT_USER_ID && !shared) ||
+                    (scope == SkillScope.PROJECT && (projectPath == null ||
+                        SkillPaths.canonicalize(projectPath) != root?.let { SkillPaths.canonicalize(it) }))) {
+                    unclaimed++
+                    continue
+                }
+                val snapshot = snapshotOf(dir) ?: continue
+                require(snapshot.info.name == skill.name) { "Skill name changed during discovery" }
+                val hash = SkillScopeResolver.projectHashOf(root)
+                val key = Triple(owner, skill.name, hash)
+                check(key !in identities) { "Skill identity is already claimed at another path" }
+                publish(snapshot)
+                val claimId = UUID.randomUUID().toString()
+                val row = store.claim(SkillCatalogEntry(
+                    id = claimId, name = skill.name, checksum = snapshot.checksum, version = snapshot.version,
+                    installPath = canonical, userId = owner, projectHash = hash,
+                    indexProjectPath = root?.let { SkillPaths.canonicalize(it) }
+                ))
+                check(SkillPaths.canonicalizeOrNull(row.installPath) == canonical) { "Concurrent skill identity conflict" }
+                claimedPaths.add(canonical)
+                identities[key] = row
+                if (row.id == claimId) created++
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // One unreadable skill must not abort the whole claim pass.
-                logger.warn("Failed to claim skill '{}' into the catalog: {}", skill.name, e.message)
+                failed++
+                logger.warn("Skill claim failed for '{}': {}", skill.name, e.message)
             }
         }
-        logger.info("Skill catalog backfill claimed {} of {} discovered skills", created, discovered.size)
-        return created
+        SkillClaimSummary(created, failed, unclaimed)
     }
 
-    /**
-     * Compare one catalog row with its SKILL.md on disk.
-     *
-     * A missing file and a file whose mtime is 0 are told apart with an explicit existence
-     * check: `lastModified()` returns 0 for absent files, so trusting that value alone would
-     * make `Missing` and "unchanged" indistinguishable.
-     */
-    suspend fun driftOf(entry: SkillCatalogEntry): SkillDrift = withContext(Dispatchers.IO) {
-        val file = skillFileOf(entry)
-        if (!file.isFile) {
-            verifiedMtimes.remove(entry.id)
-            return@withContext SkillDrift.Missing
-        }
-        val mtime = file.lastModified()
-        if (mtime > 0 && verifiedMtimes[entry.id] == mtime) {
-            return@withContext SkillDrift.None
-        }
-        val checksum = sha256OfFile(file)
-        if (checksum == null) {
-            // Unreadable content is treated as unchanged rather than missing: deleting the
-            // index over a transient I/O error would be far worse than a stale hit.
-            logger.warn("Skill '{}' could not be read ({}); leaving its index as is", entry.name, file)
-            return@withContext SkillDrift.None
-        }
-        if (checksum == entry.checksum) {
-            if (mtime > 0) verifiedMtimes[entry.id] = mtime
-            return@withContext SkillDrift.None
-        }
-        SkillDrift.Content(checksum, declaredVersion(file))
-    }
+    /** Reuse the same explicit shared-root classification as the access layer. */
+    internal fun isExplicitGlobal(installPath: Path): Boolean =
+        SkillScopeResolver.classify(installPath, config)?.first == SkillScope.GLOBAL
 
-    /** Version declared in a row's SKILL.md frontmatter, or [SkillCatalogEntry.DEFAULT_VERSION]. */
-    suspend fun declaredVersionOf(entry: SkillCatalogEntry): String = withContext(Dispatchers.IO) {
-        declaredVersion(skillFileOf(entry))
-    }
+    suspend fun snapshotOf(entry: SkillCatalogEntry): SkillSnapshot? = snapshotOf(Path.of(entry.installPath))
 
-    /** Drop the memoised mtime for a row, forcing a fresh hash on the next comparison. */
-    fun invalidate(id: String) {
-        verifiedMtimes.remove(id)
-    }
-
-    /** SHA-256 hex of a row's SKILL.md, or null when it cannot be read. */
-    suspend fun checksumOf(entry: SkillCatalogEntry): String? = withContext(Dispatchers.IO) {
-        sha256OfFile(skillFileOf(entry))
-    }
-
-    /** SHA-256 hex of one SKILL.md file, or null when it cannot be read. */
-    suspend fun checksumOf(installDir: Path): String? = withContext(Dispatchers.IO) {
-        sha256OfFile(installDir.resolve(SKILL_FILE_NAME).toFile())
-    }
-
-    private fun skillFileOf(entry: SkillCatalogEntry): File =
-        File(Path.of(entry.installPath).resolve(SKILL_FILE_NAME).toString())
-
-    /**
-     * Read the `version` declared in a SKILL.md frontmatter, falling back to the default.
-     *
-     * Streaming on purpose: frontmatter is capped at 500 lines by the skill contract, so reading
-     * the whole file just to look at the first block would waste I/O on skills that embed large
-     * reference-style examples in the body. [FRONTMATTER_MAX_LINES] leaves comfortable
-     * headroom over the 500-line rule.
-     */
-    private fun declaredVersion(file: File): String = try {
-        if (!file.isFile) return SkillCatalogEntry.DEFAULT_VERSION
-        BufferedReader(FileReader(file, Charsets.UTF_8)).use { reader ->
-            val lines = reader.lineSequence().take(FRONTMATTER_MAX_LINES).toList()
-            val (frontmatter, _) = SkillLoader.extractFrontmatter(lines.joinToString("\n"))
-            when (val raw = frontmatter["version"]) {
-                is String -> raw.takeIf { it.isNotBlank() }
-                is Number -> raw.toString()
-                else -> null
-            } ?: SkillCatalogEntry.DEFAULT_VERSION
-        }
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        logger.debug("Failed to read version from {}: {}", file, e.message)
-        SkillCatalogEntry.DEFAULT_VERSION
-    }
-
-    /**
-     * SHA-256 of one SKILL.md, streamed through a [DigestInputStream] rather than a full
-     * `readBytes()`: skills can carry multi-MB bodies and this runs once per drift check.
-     */
-    private fun sha256OfFile(file: File): String? = try {
-        if (!file.isFile) return null
-        val digest = MessageDigest.getInstance("SHA-256")
-        BufferedInputStream(FileInputStream(file)).use { input ->
-            DigestInputStream(input, digest).use { dis ->
-                val buffer = ByteArray(HASH_BUFFER_SIZE)
-                while (dis.read(buffer) != -1) {
-                    // Drain: DigestInputStream updates the digest as bytes flow through.
-                }
+    suspend fun snapshotOf(installDir: Path): SkillSnapshot? = withContext(Dispatchers.IO) {
+        val path = installDir.resolve(SKILL_FILE_NAME).toAbsolutePath().normalize()
+        val bytes = try {
+            Files.readAllBytes(path)
+        } catch (e: NoSuchFileException) {
+            // Do not turn an inaccessible mount/parent into deletion.
+            if (Files.notExists(path)) return@withContext null
+            throw e
+        } catch (e: FileSystemException) {
+            // ENOTDIR: the install directory was replaced by a regular file. A stat failure on the
+            // directory itself stays an error so an unreadable mount can never look like a deletion.
+            val attrs = try {
+                Files.readAttributes(installDir.toAbsolutePath().normalize(), BasicFileAttributes::class.java)
+            } catch (x: FileSystemException) {
+                throw e
             }
+            if (!attrs.isDirectory) return@withContext null
+            throw e
         }
-        HEX.formatHex(digest.digest())
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        logger.warn("Failed to hash {}: {}", file, e.message)
-        null
+        val text = Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString()
+        val (metadata, body) = SkillLoader.extractFrontmatter(text)
+        val name = metadata["name"] as? String
+        require(!name.isNullOrBlank()) { "SKILL.md at $path missing required 'name' field" }
+        fun values(key: String): Set<String> = when (val value = metadata[key]) {
+            is List<*> -> value.filterIsInstance<String>().toSet()
+            is String -> setOf(value)
+            else -> emptySet()
+        }
+        SkillSnapshot(
+            SkillInfo(name, metadata["description"] as? String, path, body.trim(), values("tags"), values("examples")),
+            HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)),
+            metadata["version"]?.toString()?.takeIf { it.isNotBlank() } ?: SkillCatalogEntry.DEFAULT_VERSION
+        )
     }
 
-    companion object {
-        const val SKILL_FILE_NAME = "SKILL.md"
-
-        /** Frontmatter is capped at 500 lines by contract; 1000 gives room for stray whitespace. */
-        private const val FRONTMATTER_MAX_LINES = 1000
-
-        /** 8 KiB is the sweet spot for `DigestInputStream` on typical SSD-backed workspaces. */
-        private const val HASH_BUFFER_SIZE = 8 * 1024
-
-        private val HEX: HexFormat = HexFormat.of()
+    /** Explicit reconciliation always hashes, even if size and mtime were preserved. */
+    suspend fun driftOf(entry: SkillCatalogEntry): SkillDrift {
+        val snapshot = snapshotOf(entry) ?: return SkillDrift.Missing
+        return if (snapshot.checksum == entry.checksum) SkillDrift.None
+        else SkillDrift.Content(snapshot.checksum, snapshot.version)
     }
+
+    suspend fun declaredVersionOf(entry: SkillCatalogEntry): String =
+        snapshotOf(entry)?.version ?: SkillCatalogEntry.DEFAULT_VERSION
+
+    suspend fun checksumOf(entry: SkillCatalogEntry): String? = snapshotOf(entry)?.checksum
+    suspend fun checksumOf(installDir: Path): String? = snapshotOf(installDir)?.checksum
+
+    companion object { const val SKILL_FILE_NAME = "SKILL.md" }
 }

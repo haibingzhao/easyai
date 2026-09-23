@@ -3,12 +3,11 @@ package com.easy.easyai.web.controller
 import com.easy.easyai.core.skill.SkillOwnerContext
 import com.easy.easyai.core.skill.SkillScope
 import com.easy.easyai.repository.project.AsyncProjectStore
+import com.easy.easyai.skills.SkillAccessResolver
 import com.easy.easyai.skills.SkillCatalogService
 import com.easy.easyai.skills.SkillCatalogView
 import com.easy.easyai.skills.SkillConfig
 import com.easy.easyai.skills.SkillInfo
-import com.easy.easyai.skills.SkillPromptSource
-import com.easy.easyai.skills.SkillRegistry
 import com.easy.easyai.skills.SkillScopeResolver
 import com.easy.easyai.skills.SkillToggleResult
 import com.easy.easyai.web.security.getCurrentUserId
@@ -53,42 +52,23 @@ import reactor.core.publisher.Mono
 @RequestMapping("/api/skills")
 class SkillController(
     @param:Autowired(required = false)
-    private val skillRegistry: SkillRegistry? = null,
-    @param:Autowired(required = false)
     private val skillCatalogService: SkillCatalogService? = null,
     @param:Autowired(required = false)
     private val projectStore: AsyncProjectStore? = null,
     @param:Autowired(required = false)
-    private val skillPromptSource: SkillPromptSource? = null,
+    private val skillConfig: SkillConfig? = null,
     @param:Autowired(required = false)
-    private val skillConfig: SkillConfig? = null
+    private val skillAccessResolver: SkillAccessResolver? = null
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
 
-    /**
-     * Installed skills this caller may use at one project's granularity.
-     *
-     * [projectId] is resolved through the user-scoped project store — a client never names a path —
-     * and selects which view [SkillRegistry.visibleFor] renders: GLOBAL plus that project's chain,
-     * same winner rules `load_skill` will apply. Without it only GLOBAL (and the server's own chain,
-     * which the registry folds in) shows.
-     *
-     * With a [SkillPromptSource] the list is the same one the system prompt gets, so the UI and the
-     * agent can never disagree about what is available; without it the registry listing is returned
-     * unfiltered, as before.
-     */
+    /** Configuration candidates include disabled skills and preserve distinct permitted sources. */
     @GetMapping
     fun listSkills(@RequestParam(required = false) projectId: String?): Mono<List<SkillDto>> = mono {
-        val registry = skillRegistry ?: return@mono emptyList<SkillDto>()
         val userId = getCurrentUserId()
         val projectPath = resolveProjectPath(projectId, userId)
-        val visible = registry.visibleFor(projectPath)
-        val promptSource = skillPromptSource
-        if (promptSource == null || !promptSource.fullInjectionActive) {
-            visible.map { it.toDto() }
-        } else {
-            val visibleNames = promptSource.skillsForPrompt(userId, projectPath).mapNotNull { it["name"] as? String }.toSet()
-            visible.filter { it.name in visibleNames }.map { it.toDto() }
+        skillAccessResolver?.listScopedSkills(userId, projectPath).orEmpty().map {
+            it.skill.toDto().copy(enabled = it.catalogEntry?.enabled ?: true)
         }
     }
 
@@ -147,11 +127,13 @@ class SkillController(
 
     private suspend fun resolveProjectPath(projectId: String?, userId: String): Path? {
         if (projectId.isNullOrBlank()) return null
-        val store = projectStore ?: return null
-        val project = store.findById(projectId, userId) ?: return null
-        val path = project.path.takeIf { it.isNotBlank() } ?: return null
+        val project = projectStore?.findById(projectId, userId)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found")
+        val path = project.path.takeIf { it.isNotBlank() }
+            ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Project directory is unavailable")
         val absolute = Path.of(path).toAbsolutePath().normalize()
-        return if (Files.isDirectory(absolute)) absolute else null
+        if (!Files.isDirectory(absolute)) throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Project directory is unavailable")
+        return absolute
     }
 
     private fun skillRagNotEnabled(): ResponseStatusException = ResponseStatusException(
@@ -194,7 +176,8 @@ data class SkillDto(
     val description: String?,
     val tags: List<String> = emptyList(),
     val scope: String = "global",
-    val projectPath: String? = null
+    val projectPath: String? = null,
+    val enabled: Boolean = true
 )
 
 /** One catalog row as the management surface needs to see it. */

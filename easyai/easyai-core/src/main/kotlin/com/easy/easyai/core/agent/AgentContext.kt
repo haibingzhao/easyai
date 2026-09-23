@@ -26,7 +26,8 @@ import java.nio.file.Path
  * @param promptTemplate Jinja2 template from AgentDefinition, or null for default segment-based prompt.
  * @param customInstructions Custom instructions from agent definition or configuration.
  * @param skills Skills data for prompt template rendering (list of {name, description} maps).
- * @param allowedSkillNames Skill whitelist for this agent. Empty = all skills allowed. Non-empty = only listed skills.
+ * @param allowedSkillNames Skill whitelist for this agent. Empty = no skills authorized (fail-closed).
+ *   Non-empty = only listed skills.
  * @param subAgents Sub-agents data for prompt template rendering (list of {name, description} maps).
  * @param tools The list of tool definitions available to the agent.
  * @param maxIterations Maximum number of agent loop iterations.

@@ -8,6 +8,10 @@ export interface SlashCommand {
   aliases: string[];
   category: CommandCategory;
   hints: string[];
+  /** Normalized absolute SKILL.md path for SKILL commands. */
+  source?: string;
+  scope?: 'GLOBAL' | 'PROJECT';
+  projectPath?: string;
 }
 
 // User command CRUD types (DB-persisted)

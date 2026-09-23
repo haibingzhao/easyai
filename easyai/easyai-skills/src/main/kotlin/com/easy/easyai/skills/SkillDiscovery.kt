@@ -12,7 +12,6 @@ interface SkillDiscovery {
     fun discoverFromPaths(paths: List<Path>): List<SkillInfo>
     fun discoverFromHome(homeDir: Path, dirs: List<String>): List<SkillInfo>
     fun discoverFromUrl(url: String): List<SkillInfo>
-    fun discoverByWalkingUp(workDir: Path, skillDirNames: List<String>): List<SkillInfo>
 }
 
 class DefaultSkillDiscovery : SkillDiscovery {
@@ -36,30 +35,6 @@ class DefaultSkillDiscovery : SkillDiscovery {
     override fun discoverFromUrl(url: String): List<SkillInfo> {
         logger.warn("Remote skill discovery from URL '{}' is not yet implemented", url)
         return emptyList()
-    }
-
-    override fun discoverByWalkingUp(workDir: Path, skillDirNames: List<String>): List<SkillInfo> {
-        val discovered = mutableListOf<SkillInfo>()
-        val seen = mutableSetOf<Path>()
-        var current: Path? = workDir.toAbsolutePath().normalize()
-        while (current != null) {
-            for (dirName in skillDirNames) {
-                val candidate = current.resolve(dirName)
-                if (candidate.exists() && Files.isDirectory(candidate)) {
-                    try {
-                        if (seen.add(candidate.toRealPath())) {
-                            logger.debug("Scanning skills from ancestor directory: {}", candidate)
-                            discovered.addAll(scanDirectory(candidate))
-                        }
-                    } catch (e: Exception) {
-                        logger.debug("Failed to resolve real path for {}: {}", candidate, e.message)
-                    }
-                }
-            }
-            current = current.parent
-        }
-
-        return discovered
     }
 
     internal fun scanDirectory(dir: Path): List<SkillInfo> {

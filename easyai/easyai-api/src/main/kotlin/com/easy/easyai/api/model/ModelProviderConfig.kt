@@ -75,13 +75,32 @@ data class ModelOptions(
 
 /**
  * Declared capabilities of a model (e.g. vision/image support).
- * Used by the frontend to conditionally show/hide image upload UI.
+ * Used by the frontend to conditionally show/hide image upload UI,
+ * and by the agent loop to decide whether API-level structured output is enforceable.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class ModelCapabilities(
     /** Whether the model supports vision/image input. */
-    val vision: Boolean = false
+    val vision: Boolean = false,
+    /**
+     * API-level structured output support. Null means undeclared — treated as
+     * [StructuredOutputSupport.JSON_SCHEMA] (current enforcement behavior). Mark models
+     * explicitly when their gateway rejects response_format/output_config (HTTP 400).
+     */
+    val structuredOutput: StructuredOutputSupport? = null
 )
+
+/**
+ * Structured output enforcement capability of a model's API.
+ *
+ * @property JSON_SCHEMA The gateway accepts schema-constrained output
+ *   (Anthropic `output_config.format=json_schema` / OpenAI `response_format` json_schema).
+ * @property JSON_OBJECT The gateway only accepts plain-JSON enforcement
+ *   (OpenAI `response_format` json_object). Not expressible on the Anthropic protocol —
+ *   falls back to prompt-based enforcement there.
+ * @property NONE No API-level enforcement; rely on prompt + OutputSchemaValidator fallback.
+ */
+enum class StructuredOutputSupport { JSON_SCHEMA, JSON_OBJECT, NONE }
 
 /**
  * A group of model configurations sharing the same connection settings.

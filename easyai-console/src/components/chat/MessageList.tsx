@@ -59,9 +59,7 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
             }
             // Determine if message is editable: has messageId, not streaming, not system message
             const msgId = (message as { messageId?: string }).messageId;
-            const isSystemMsg = message.metadata?.source === 'completion_check' ||
-              message.metadata?.source === 'follow_up' ||
-              message.metadata?.source === 'steering';
+            const isSystemMsg = message.metadata?.source === 'completion_check';
             const isEditable = !disableEdit && !isStreaming && !!msgId && !isSystemMsg;
             return (
               <div key={index} className="group relative">

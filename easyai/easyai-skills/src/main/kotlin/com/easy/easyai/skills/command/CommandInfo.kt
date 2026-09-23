@@ -12,6 +12,8 @@ data class CommandInfo(
     val mcpServer: String? = null,
     val mcpPromptName: String? = null,
     val mcpArguments: List<McpPromptArgument> = emptyList(),
+    val scope: String? = null,
+    val projectPath: String? = null,
 )
 
 enum class CommandCategory { USER, SKILL, MCP, BUILTIN }
@@ -19,4 +21,6 @@ enum class CommandCategory { USER, SKILL, MCP, BUILTIN }
 data class CommandExpansion(
     val commandName: String,
     val expandedPrompt: String,
+    val commandCategory: CommandCategory = CommandCategory.BUILTIN,
+    val commandSource: String = "",
 )

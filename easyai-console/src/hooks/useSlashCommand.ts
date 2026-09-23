@@ -1,105 +1,127 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { SlashCommand } from '@/types/command';
+import type { CommandIdentity } from '@/utils/command-utils';
+import { flattenCommands } from '@/utils/command-utils';
 import { CommandService } from '@/services/command-service';
+import { useAuthStore } from '@/services/stores/auth-store';
+import { useProjectStore } from '@/services/stores/project-store';
+import { i18n } from '@/utils/i18n';
 
-interface UseSlashCommandReturn {
-  isOpen: boolean;
-  filtered: SlashCommand[];
-  selectedIndex: number;
-  onInput: (text: string, hasCommand: boolean) => void;
-  onKeyDown: (e: React.KeyboardEvent) => boolean;
-  close: () => void;
+interface CommandSnapshot {
+  scopeKey: string;
+  agentId: string | null;
+  commands: SlashCommand[];
 }
 
-/**
- * Hook for slash command autocomplete in the message editor.
- *
- * Detects when input starts with `/`, filters available commands,
- * and provides keyboard navigation. The caller is responsible for
- * inserting the command chip into the DOM.
- */
-export function useSlashCommand(agentId: string | null): UseSlashCommandReturn {
-  const [filtered, setFiltered] = useState<SlashCommand[]>([]);
-  const [isOpen, setIsOpen] = useState(false);
+/** Project/user-scoped candidates, refreshed on every opening. No process-wide cache. */
+export function useSlashCommand(agentId: string | null, projectId?: string) {
+  const userId = useAuthStore((state) => state.user?.id);
+  const scopeKey = JSON.stringify([userId, projectId]);
+  const [snapshot, setSnapshot] = useState<CommandSnapshot | null>(null);
+  const [query, setQuery] = useState<string | null>(null);
+  const queryRef = useRef<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const commandsRef = useRef<SlashCommand[]>([]);
+  const requestRef = useRef<AbortController | null>(null);
+  const validationsRef = useRef(new Set<AbortController>());
 
-  // Load commands when agentId changes
-  useEffect(() => {
-    let cancelled = false;
-    CommandService.invalidateCache();
-    CommandService.fetchCommands(agentId).then((cmds) => {
-      if (!cancelled) {
-        commandsRef.current = cmds;
+  const isCurrentContext = useCallback(() => (
+    useAuthStore.getState().user?.id === userId
+    && useProjectStore.getState().currentProject?.id === projectId
+  ), [userId, projectId]);
+
+  const refresh = useCallback(() => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    CommandService.fetchCommands(agentId, projectId, controller.signal).then((commands) => {
+      if (!controller.signal.aborted && isCurrentContext()) {
+        setSnapshot({ scopeKey, agentId, commands });
+        setSelectedIndex(0);
+      }
+    }).catch(() => {
+      if (!controller.signal.aborted && isCurrentContext()) {
+        setSnapshot({ scopeKey, agentId, commands: [] });
       }
     });
-    return () => { cancelled = true; };
-  }, [agentId]);
+  }, [agentId, projectId, scopeKey, isCurrentContext]);
 
   const close = useCallback(() => {
-    setIsOpen(false);
-    setFiltered([]);
+    queryRef.current = null;
+    setQuery(null);
     setSelectedIndex(0);
   }, []);
 
+  useEffect(() => {
+    close();
+    refresh();
+    const validations = validationsRef.current;
+    return () => {
+      requestRef.current?.abort();
+      validations.forEach((controller) => controller.abort());
+      validations.clear();
+    };
+  }, [refresh, close]);
+
+  // Gate synchronously on scope, so a render after switching user/project never shows old rows.
+  const commands = snapshot?.scopeKey === scopeKey && snapshot.agentId === agentId ? snapshot.commands : [];
+  const filtered = useMemo(() => flattenCommands(commands.filter((command) => query !== null && (
+    command.name.toLowerCase().startsWith(query)
+    || command.aliases.some((alias) => alias.toLowerCase().startsWith(query))
+  ))), [commands, query]);
+  const isOpen = query !== null;
+
   const onInput = useCallback((text: string, hasCommand: boolean) => {
-    // Don't trigger when a command chip is already selected
-    if (hasCommand) {
+    if (hasCommand || !/^\/[a-zA-Z0-9_:-]*$/.test(text)) {
       close();
       return;
     }
-
-    // Only trigger when text starts with `/`
-    if (!text.startsWith('/')) {
-      close();
-      return;
-    }
-
-    const query = text.slice(1).toLowerCase();
-    const matched = commandsRef.current.filter((c) =>
-      c.name.toLowerCase().startsWith(query) ||
-      c.aliases.some((a) => a.toLowerCase().startsWith(query))
-    );
-
-    if (matched.length === 0) {
-      close();
-      return;
-    }
-
-    setFiltered(matched);
+    if (queryRef.current === null) refresh();
+    queryRef.current = text.slice(1).toLowerCase();
+    setQuery(queryRef.current);
     setSelectedIndex(0);
-    setIsOpen(true);
-  }, [close]);
+  }, [close, refresh]);
+
+  const selectionError = useCallback((command: CommandIdentity | null | undefined): string | null => {
+    if (!command?.source && command?.category !== 'SKILL') return null;
+    if (snapshot?.scopeKey !== scopeKey) return i18n('Checking skill source...');
+    return snapshot.commands.some((candidate) => candidate.category === 'SKILL' && candidate.source === command.source && candidate.name === command.name)
+      ? null : i18n('This skill source is unavailable in the current project. Remove it or select another skill.');
+  }, [snapshot, scopeKey]);
+
+  /** Validate exact source, never substitute a same-named candidate. Also used before queue promotion. */
+  const validateCommand = useCallback(async (command: CommandIdentity | null | undefined): Promise<string | null> => {
+    if (!isCurrentContext()) return i18n('Project or user changed. Please try again.');
+    if (!command?.source && command?.category !== 'SKILL') return null;
+    const controller = new AbortController();
+    validationsRef.current.add(controller);
+    try {
+      // SKILL visibility does not depend on the selected agent.
+      const available = await CommandService.fetchCommands(null, projectId, controller.signal);
+      if (!isCurrentContext() || controller.signal.aborted) return i18n('Project or user changed. Please try again.');
+      return available.some((candidate) => candidate.category === 'SKILL' && candidate.source === command.source && candidate.name === command.name)
+        ? null : i18n('This skill source is unavailable in the current project. Remove it or select another skill.');
+    } catch {
+      return i18n('Unable to verify the skill source. Please try again.');
+    } finally {
+      validationsRef.current.delete(controller);
+    }
+  }, [projectId, isCurrentContext]);
 
   const onKeyDown = useCallback((e: React.KeyboardEvent): boolean => {
-    if (!isOpen || filtered.length === 0) return false;
-
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault();
-        setSelectedIndex((prev) => (prev + 1) % filtered.length);
-        return true;
-
-      case 'ArrowUp':
-        e.preventDefault();
-        setSelectedIndex((prev) => (prev - 1 + filtered.length) % filtered.length);
-        return true;
-
-      case 'Tab':
-      case 'Enter':
-        // Don't prevent default here — let the caller handle it
-        // but signal that a selection should be made
-        return true;
-
-      case 'Escape':
-        e.preventDefault();
-        close();
-        return true;
-
-      default:
-        return false;
+    if (!isOpen) return false;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+      return true;
     }
+    if (!filtered.length) return false;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedIndex((index) => (index + (e.key === 'ArrowDown' ? 1 : -1) + filtered.length) % filtered.length);
+      return true;
+    }
+    return e.key === 'Tab' || e.key === 'Enter';
   }, [isOpen, filtered.length, close]);
 
-  return { isOpen, filtered, selectedIndex, onInput, onKeyDown, close };
+  return { isOpen, filtered, selectedIndex, onInput, onKeyDown, close, selectionError, validateCommand, isCurrentContext };
 }

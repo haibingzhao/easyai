@@ -142,9 +142,10 @@ class DefaultAgentService(
 
     override fun buildChatOptions(
         config: ModelProviderConfig,
-        toolCallbacks: List<ToolCallback>
+        toolCallbacks: List<ToolCallback>,
+        outputSchema: String?
     ): ChatOptions {
-        return findFactory(config.protocol).build(config, toolCallbacks)
+        return findFactory(config.protocol).build(config, toolCallbacks, outputSchema)
     }
 
 }

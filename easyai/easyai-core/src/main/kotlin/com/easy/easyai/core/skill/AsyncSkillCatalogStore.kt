@@ -16,8 +16,18 @@ package com.easy.easyai.core.skill
  */
 interface AsyncSkillCatalogStore {
 
-    /** Insert or update the row keyed by `(userId, name, projectHash)`; returns the persisted entry. */
-    suspend fun upsert(entry: SkillCatalogEntry): SkillCatalogEntry
+    /** Insert only, returning the existing row on identity conflict without modifying it. */
+    suspend fun claim(entry: SkillCatalogEntry): SkillCatalogEntry
+
+    suspend fun findById(id: String): SkillCatalogEntry?
+
+    /** CAS on one byte snapshot. [enable] is used only by an explicit enable request. */
+    suspend fun updateContent(
+        id: String, expectedRevision: Long, checksum: String, version: String, enable: Boolean = false
+    ): Boolean
+
+    /** CAS completion; never writes owner, enabled, observed checksum or install path. */
+    suspend fun updateSync(id: String, expectedRevision: Long, update: SkillSyncUpdate): Boolean
 
     /**
      * Every row of [userId] carrying this [name], across all granularities. Empty when the user
@@ -47,9 +57,6 @@ interface AsyncSkillCatalogStore {
 
     /** Toggle enablement for one row by primary key; false when no row has that [id]. */
     suspend fun setEnabled(id: String, enabled: Boolean): Boolean
-
-    /** Record a new content fingerprint after the on-disk SKILL.md changed. */
-    suspend fun updateChecksum(id: String, checksum: String, version: String): Boolean
 
     /** Remove one row by primary key; false when no row has that [id]. */
     suspend fun delete(id: String): Boolean

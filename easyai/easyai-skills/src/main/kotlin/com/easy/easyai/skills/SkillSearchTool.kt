@@ -14,50 +14,22 @@ import com.easy.easyai.core.tool.ToolUpdate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import org.slf4j.LoggerFactory
-import java.util.concurrent.atomic.AtomicReference
+import java.nio.file.Path
 
-/**
- * Semantic discovery over the skill slices: `skill_search`.
- *
- * This is the read half of "stop putting every skill in every prompt", and it carries the first two
- * of the three authorization gates:
- * 1. **Tenant isolation happens in storage** — the biz id set is derived from the resolved owner, so
- *    another user's skills are physically unreachable; no metadata filtering is involved
- * 2. **Enablement is a catalog filter** on the hits, so a disabled or delisted skill cannot surface
- *    out of a stale index
- *
- * The third gate stays in `load_skill`, which checks the agent whitelist and the catalog row before
- * reading anything from disk.
- *
- * Output is advisory text, never an error result: an empty or failed search must not stall the loop.
- */
+/** Retrieval only ranks the same instances that load_skill can serve; it never grants access. */
 internal class SkillSearchTool(
     metadata: ToolMetadata,
-    private val store: SkillStore,
-    private val catalog: AsyncSkillCatalogStore?,
-    private val searchTopK: Int = DEFAULT_SEARCH_TOP_K
+    private val store: SkillStore?,
+    catalog: AsyncSkillCatalogStore?,
+    private val searchTopK: Int = DEFAULT_SEARCH_TOP_K,
+    registry: SkillRegistry,
+    config: SkillConfig = SkillConfig(),
+    private val allowedSkillNames: List<String> = emptyList()
 ) : BaseToolDefinition(metadata) {
-
     private val logger = LoggerFactory.getLogger(javaClass)
+    private val modelView = SkillModelView(registry, catalog, config)
 
-    /**
-     * Owner and enablement set of this user, memoised per tool instance.
-     *
-     * A tool instance is built per agent context, so this is request-scoped by construction: many
-     * searches in one exchange read the table once. A null `enabledNames` means "catalog unreadable",
-     * in which case hits pass through rather than disappearing behind an infrastructure problem.
-     *
-     * [AtomicReference] rather than a plain `var`: the agent loop can dispatch multiple tool calls
-     * concurrently on the same instance, and a non-volatile field would let both racers observe
-     * `null` and duplicate the DB round trip (plus JMM would not guarantee publication).
-     */
-    private val tenantRef = AtomicReference<SkillTenant?>(null)
-
-    data class Parameters(
-        val query: String,
-        val scope: String? = null,
-        val topK: Int? = null
-    )
+    data class Parameters(val query: String, val scope: String? = null, val topK: Int? = null)
 
     override fun parameterType(): Class<*> = Parameters::class.java
 
@@ -69,97 +41,89 @@ internal class SkillSearchTool(
         coroutineScope: CoroutineScope,
         onUpdate: suspend (ToolUpdate) -> Unit
     ): ToolResult {
-        val query = args["query"] as? String
-        if (query.isNullOrBlank()) {
-            return ToolResult(
-                content = listOf(TextContent("Error: 'query' parameter is required. Describe the task you need help with.")),
-                isError = true
-            )
-        }
-        val scopeFilter = (args["scope"] as? String)?.trim()?.lowercase()
-        val topK = (args["topK"] as? Number)?.toInt()?.takeIf { it > 0 } ?: searchTopK
-
-        val tenant = resolveTenant(agentContext.userId)
-        val owner = SkillOwnerContext(tenant.userId, agentContext.projectPath)
-        val hits = runCatchingSearch { store.search(query, scopesOf(scopeFilter, owner), owner, topK) }
-        return ToolResult(
-            content = listOf(TextContent(renderLocal(filterByCatalog(hits, tenant), query, tenant)))
-        )
-    }
-
-    /** Discovery is optional; a backend outage must look like "nothing matched", never an error. */
-    private suspend fun runCatchingSearch(search: suspend () -> List<SkillEntry>): List<SkillEntry> =
-        try {
-            search()
+        val query = (args["query"] as? String)?.trim()
+        if (query.isNullOrBlank()) return result("Error: 'query' parameter is required. Describe the task you need help with.", true)
+        if (allowedSkillNames.isEmpty()) return result("Error: No skills are authorized for this agent.", true)
+        val scope = (args["scope"] as? String)?.trim()?.lowercase()
+        val topK = ((args["topK"] as? Number)?.toInt()?.takeIf { it > 0 } ?: searchTopK).coerceIn(1, MAX_TOP_K)
+        val visible = try {
+            modelView.list(agentContext.userId, agentContext.projectPath, allowedSkillNames)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("skill_search degraded: {}", e.message)
-            emptyList()
-        }
-
-    /**
-     * Scopes to query, defaulting to both slices of this owner.
-     *
-     * GLOBAL and PROJECT go out in the **same** request (`SkillStore.search` sends them as one biz
-     * id set), which is what keeps discovery affordable while replacing a full name+description dump.
-     */
-    private fun scopesOf(scopeFilter: String?, owner: SkillOwnerContext): List<SkillScope> = when (scopeFilter) {
-        "global" -> listOf(SkillScope.GLOBAL)
-        "project" -> listOf(SkillScope.PROJECT)
-        else -> buildList {
-            add(SkillScope.GLOBAL)
-            if (owner.projectPath != null) add(SkillScope.PROJECT)
-        }
-    }
-
-    /** Read the tenant facts once per exchange; both gates are decided from the same snapshot. */
-    private suspend fun resolveTenant(requestedUserId: String?): SkillTenant {
-        tenantRef.get()?.let { return it }
-        val resolved = SkillOwnership.tenantOf(catalog, requestedUserId)
-        // compareAndSet rather than set: two concurrent racers both fetching the same tenant is
-        // harmless (idempotent), and CAS keeps a single winner without a lock.
-        tenantRef.compareAndSet(null, resolved)
-        return tenantRef.get() ?: resolved
-    }
-
-    /** Second gate: drop hits the catalog does not vouch for. */
-    private fun filterByCatalog(hits: List<SkillEntry>, tenant: SkillTenant): List<SkillEntry> {
-        if (hits.isEmpty()) return hits
-        val names = tenant.enabledNames ?: return hits
-        return hits.filter { it.name in names }
-    }
-
-    private fun renderLocal(visible: List<SkillEntry>, query: String, tenant: SkillTenant): String {
-        if (visible.isEmpty()) {
-            val recorded = tenant.enabledNames?.size ?: 0
-            val staleHint = if (recorded > 0) {
-                " $recorded enabled skill(s) are on record for '${tenant.userId}', so the index may still be warming up."
-            } else {
-                ""
+            logger.warn("Skill search access is unavailable: {}", e.message)
+            return result("Error: Skill catalog is unavailable; skill access could not be verified. Retry later.", true)
+        }.filter {
+            when (scope) {
+                "global" -> modelView.scopeOf(it) == SkillScope.GLOBAL
+                "project" -> modelView.scopeOf(it) == SkillScope.PROJECT
+                else -> true
             }
-            return "No skills found matching '$query'." +
-                staleHint +
-                " Try broader task wording."
         }
-        val header = "Found ${visible.size} skill(s) for '$query' (user '${tenant.userId}'):"
-        val footer = "Load the full instructions of one of them with `load_skill` by name. " +
-            "Only the leading text is shown here; the SKILL.md on disk is authoritative."
-        return "$header\n\n${visible.joinToString("\n") { formatHit(it) }}\n$footer"
+        val matches = linkedMapOf<String, ScopedSkill>()
+        val ready = visible.filter { modelView.indexReady(it) }
+        val slices = ready.groupBy { candidate ->
+            val sliceScope = modelView.scopeOf(candidate)
+            val project = if (sliceScope == SkillScope.PROJECT) agentContext.projectPath?.let {
+                Path.of(SkillPaths.canonicalize(it))
+            } else null
+            Slice(sliceScope, SkillOwnerContext(requireNotNull(candidate.catalogEntry).userId, project))
+        }
+        val index = store
+        if (index != null) {
+            // Each owner/project address is independent. A missing project slice cannot swallow
+            // GLOBAL matches, and a system fallback is per skill identity, never per whole tenant.
+            for ((slice, candidates) in slices) {
+                val hits = try {
+                    index.search(query, listOf(slice.scope), slice.owner, topK)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logger.warn("Skill search index unavailable for {}: {}", slice.scope, e.message)
+                    emptyList()
+                }
+                for (hit in hits) {
+                    val candidate = candidates.firstOrNull { matchesInstance(hit, it, slice.scope) } ?: continue
+                    matches.putIfAbsent(candidate.skill.name, candidate)
+                }
+            }
+        }
+        // Bounded name/description fallback also handles stores that report outages as no hits.
+        // Never search raw registry entries or use descriptions supplied by unverified index hits.
+        val terms = query.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }.take(MAX_QUERY_TERMS)
+        visible.asSequence().filter { candidate ->
+            val text = "${candidate.skill.name} ${candidate.skill.description.orEmpty()}".lowercase()
+            terms.any { it in text }
+        }.take(topK).forEach { matches.putIfAbsent(it.skill.name, it) }
+        val selected = matches.values.take(topK)
+        if (selected.isEmpty()) return result("No skills found matching '$query'. Try broader task wording.")
+        return result(
+            "Found ${selected.size} skill(s) for '$query':\n\n" +
+                selected.joinToString("\n") { formatHit(it) } +
+                "\nLoad the full instructions with `load_skill` by name."
+        )
     }
 
-    private fun formatHit(entry: SkillEntry): String {
-        val granularity = entry.scope?.name?.lowercase() ?: "global"
-        val tags = entry.tags.take(MAX_TAGS).joinToString(", ").takeIf { it.isNotEmpty() }
-        val description = entry.description.lineSequence().first().take(MAX_DESCRIPTION_CHARS)
-        val location = entry.location?.let { "  (file: $it)" } ?: ""
-        return "- [$granularity] ${entry.name}: $description${tags?.let { " [$it]" } ?: ""}$location"
+    private fun matchesInstance(hit: SkillEntry, candidate: ScopedSkill, scope: SkillScope): Boolean =
+        hit.name == candidate.skill.name && hit.key == SkillEntry.keyFor(candidate.skill.name) &&
+            hit.scope == scope &&
+            SkillPaths.canonicalizeOrNull(hit.location) == SkillPaths.canonicalize(candidate.skill.location) &&
+            (hit.checksum == null || hit.checksum == candidate.catalogEntry?.checksum)
+
+    private fun formatHit(candidate: ScopedSkill): String {
+        val skill = candidate.skill
+        val description = skill.description.orEmpty().lineSequence().firstOrNull().orEmpty().take(MAX_DESCRIPTION_CHARS)
+        return "- [${modelView.scopeOf(candidate).name.lowercase()}] ${skill.name}: $description  (file: ${skill.location})"
     }
+
+    private fun result(text: String, isError: Boolean = false) = ToolResult(listOf(TextContent(text)), isError = isError)
+
+    private data class Slice(val scope: SkillScope, val owner: SkillOwnerContext)
 
     companion object {
         const val DEFAULT_SEARCH_TOP_K = 5
-
-        private const val MAX_TAGS = 6
+        private const val MAX_TOP_K = 20
+        private const val MAX_QUERY_TERMS = 16
         private const val MAX_DESCRIPTION_CHARS = 240
     }
 }

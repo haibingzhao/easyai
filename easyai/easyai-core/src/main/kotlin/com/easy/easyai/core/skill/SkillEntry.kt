@@ -29,7 +29,9 @@ data class SkillEntry(
     val location: String? = null,
     val origin: String? = null,
     val scope: SkillScope? = null,
-    val score: Double? = null
+    val score: Double? = null,
+    /** SHA-256 of the raw source bytes, not the generated RAG document. */
+    val checksum: String? = null
 ) {
     companion object {
         /** Directory segment of the logical key layout. */

@@ -34,8 +34,6 @@ export const useCommandStore = create<CommandStore>((set, _get) => ({
   createCommand: async (request) => {
     const command = await CommandService.createUserCommand(request);
     set((state) => ({ commands: [...state.commands, command] }));
-    // Invalidate slash command cache so new command appears in autocomplete
-    CommandService.invalidateCache();
     return command;
   },
 
@@ -44,7 +42,6 @@ export const useCommandStore = create<CommandStore>((set, _get) => ({
     set((state) => ({
       commands: state.commands.map((c) => (c.id === id ? updated : c)),
     }));
-    CommandService.invalidateCache();
     return updated;
   },
 
@@ -53,7 +50,6 @@ export const useCommandStore = create<CommandStore>((set, _get) => ({
     set((state) => ({
       commands: state.commands.filter((c) => c.id !== id),
     }));
-    CommandService.invalidateCache();
   },
 
   clearError: () => set({ error: null }),

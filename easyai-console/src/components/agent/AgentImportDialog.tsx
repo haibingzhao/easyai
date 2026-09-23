@@ -4,6 +4,8 @@ import { agentService } from '@/services/agent-service';
 import { mcpService } from '@/services/mcp-service';
 import { CommandService } from '@/services/command-service';
 import { useAgentStore } from '@/services/stores/agent-store';
+import { useProjectStore } from '@/services/stores/project-store';
+import { useAuthStore } from '@/services/stores/auth-store';
 import { i18n } from '@/utils/i18n';
 import { X, Loader2, AlertTriangle } from 'lucide-react';
 
@@ -14,7 +16,9 @@ interface AgentImportDialogProps {
 }
 
 export const AgentImportDialog: React.FC<AgentImportDialogProps> = ({ agent, onClose, onImported }) => {
-  const { agents } = useAgentStore();
+  const agents = useAgentStore((state) => state.agents);
+  const projectId = useProjectStore((state) => state.currentProject?.id);
+  const userId = useAuthStore((state) => state.user?.id);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,16 +34,21 @@ export const AgentImportDialog: React.FC<AgentImportDialogProps> = ({ agent, onC
   const idConflict = agents.some(a => a.id === agentId);
 
   useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setSkills([]);
+    setCommands([]);
     const loadResources = async () => {
       try {
         const [availableTools, availableSkills, availableSubAgents, availableMcpServers, availableCommands] =
           await Promise.all([
             agentService.listTools().catch(() => []),
-            agentService.listSkills().catch(() => []),
+            agentService.listSkills(projectId, controller.signal).catch(() => []),
             agentService.listSubAgents().catch(() => []),
             mcpService.listServers().catch(() => []),
-            CommandService.fetchCommands().catch(() => []),
+            CommandService.fetchCommands(null, projectId, controller.signal).catch(() => []),
           ]);
+        if (controller.signal.aborted) return;
 
         const toolNames = new Set(availableTools.map(t => t.name));
         // Auto-injected tools (alwaysInclude, e.g. team coordination tools) are
@@ -103,11 +112,12 @@ export const AgentImportDialog: React.FC<AgentImportDialogProps> = ({ agent, onC
         checkInlineSpecs(agent.customMembers, 'Custom Member');
         setInlineWarnings(warnings);
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     };
     loadResources();
-  }, [agent]);
+    return () => controller.abort();
+  }, [agent, projectId, userId]);
 
   const toggleItem = (list: ResourceItem[], setList: (v: ResourceItem[]) => void, name: string) => {
     setList(list.map(item => item.name === name ? { ...item, checked: !item.checked } : item));

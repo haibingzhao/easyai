@@ -1,34 +1,28 @@
 package com.easy.easyai.skills.command
 
-import com.easy.easyai.skills.SkillInfo
-import com.easy.easyai.skills.SkillRegistry
-
 interface CommandRegistry {
     fun resolve(name: String): CommandInfo?
     fun all(): List<CommandInfo>
 }
 
 /**
- * Registry for SKILL and MCP commands.
- * Queries SkillRegistry and McpPromptProvider on every call — no caching,
- * so it always reflects the current state (MCP connections, dynamically added skills, etc.).
+ * Registry for MCP commands.
+ * Queries McpPromptProvider on every call — no caching, so it always reflects the current
+ * MCP connections.
  *
+ * SKILL commands are user/project-scoped and served by CommandService.listSkillCommands, never
+ * from this registry: a registry-wide snapshot would advertise other owners' and projects' skills.
  * USER commands are served from DB via AsyncUserCommandStore and are NOT part of this registry.
  * BUILTIN commands are exposed via [builtinHandlers] and included in [all] for autocomplete.
  */
 class DefaultCommandRegistry(
-    private val skillRegistry: SkillRegistry?,
     private val promptProvider: McpPromptProvider?,
     private val builtinHandlers: List<BuiltinCommandHandler> = emptyList(),
 ) : CommandRegistry {
 
     override fun resolve(name: String): CommandInfo? {
-        // 1. Try skill by name. A slash command carries no session context, so GLOBAL is the
-        // preferred hit and any other granularity with this name is the fallback.
-        skillRegistry?.let { reg -> reg.get(name, null) ?: reg.all().firstOrNull { it.name == name } }
-            ?.let { return it.toCommand() }
-
-        // 2. Try MCP "server:prompt" exact match
+        // Skills require user/project resolution in CommandService, never a global fallback.
+        // 1. Try MCP "server:prompt" exact match
         if (name.contains(":")) {
             val (server, prompt) = name.split(":", limit = 2)
             val prompts = promptProvider?.getAllPrompts()?.get(server)
@@ -37,7 +31,7 @@ class DefaultCommandRegistry(
             }
         }
 
-        // 3. Try MCP prompt alias (short name without server prefix)
+        // 2. Try MCP prompt alias (short name without server prefix)
         promptProvider?.getAllPrompts()?.forEach { (serverName, prompts) ->
             prompts.find { it.name == name }?.let {
                 return it.toCommand(serverName)
@@ -48,7 +42,6 @@ class DefaultCommandRegistry(
     }
 
     override fun all(): List<CommandInfo> {
-        val skills = skillRegistry?.all()?.map { it.toCommand() } ?: emptyList()
         val mcp = promptProvider?.getAllPrompts()?.flatMap { (server, prompts) ->
             prompts.map { it.toCommand(server) }
         } ?: emptyList()
@@ -61,17 +54,8 @@ class DefaultCommandRegistry(
                 hints = handler.hints,
             )
         }
-        return (builtins + skills + mcp).sortedBy { it.name }
+        return (builtins + mcp).sortedBy { it.name }
     }
-
-    private fun SkillInfo.toCommand(): CommandInfo = CommandInfo(
-        name = name,
-        description = description,
-        template = content,
-        category = CommandCategory.SKILL,
-        source = location.toString(),
-        hints = extractHints(content),
-    )
 
     private fun McpPromptMeta.toCommand(serverName: String): CommandInfo {
         val cmdHints = arguments.mapIndexed { i, _ -> "\$${i + 1}" }

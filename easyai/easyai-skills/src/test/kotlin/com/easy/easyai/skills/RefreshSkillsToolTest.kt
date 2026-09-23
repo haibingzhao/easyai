@@ -64,7 +64,7 @@ class RefreshSkillsToolTest {
         owner = "alice",
         claimed = claimed,
         submitted = submitted,
-        summary = if (summaryPresent) ReconcileSummary(owners = 1, reindexed = 2, delisted = delisted) else null
+        summary = if (summaryPresent) ReconcileSummary(owners = 1, confirmed = 2, submitted = submitted, delisted = delisted) else null
     )
 
     /** Hands the tool a real [CoroutineScope], the way the agent loop does. */
@@ -126,8 +126,8 @@ class RefreshSkillsToolTest {
             verify(exactly = 1) { registry.rescan(setOf(project)) }
             coVerify(exactly = 0) { refresher.refreshFor(any(), any()) }
             assertTrue(text.contains("registered=4 added=[pdf]"), "got: $text")
-            assertTrue(text.contains("easyai.skills.rag.enabled=false"), "got: $text")
-            assertTrue(text.contains("skill_search"), "the agent must know search will miss it: $text")
+            assertTrue(text.contains("Catalog coordination is unavailable"), "got: $text")
+            assertTrue(text.contains("does not establish ownership or search readiness"), "got: $text")
         }
 
         @Test
@@ -152,7 +152,7 @@ class RefreshSkillsToolTest {
             coVerify(exactly = 1) { refresher.refreshFor("alice", project) }
             verify(exactly = 0) { registry.rescan(any()) }
             assertTrue(text.contains("owner 'alice'"), "the tenant the rows landed in must be visible: $text")
-            assertTrue(text.contains("handed 1 to the search index"), "got: $text")
+            assertTrue(text.contains("submitted=1"), "got: $text")
         }
 
         @Test
@@ -161,7 +161,7 @@ class RefreshSkillsToolTest {
 
             val text = call(tool())
 
-            assertTrue(text.contains("could not be reached"), "got: $text")
+            assertTrue(text.contains("could not be inspected"), "got: $text")
         }
 
         @Test
@@ -172,9 +172,9 @@ class RefreshSkillsToolTest {
 
             val text = call(tool(allowed = listOf("pdf", "csv", "docx")))
 
-            assertTrue(text.contains("handed 3 to the search index"), "got: $text")
-            assertTrue(text.contains("embedding runs in the background"), "got: $text")
-            assertTrue(text.contains("skill_search may be a moment behind"), "got: $text")
+            assertTrue(text.contains("submitted=3"), "got: $text")
+            assertTrue(text.contains("Submitted is not searchable"), "got: $text")
+            assertTrue(text.contains("target checksum confirmed processed"), "got: $text")
         }
 
         @Test
@@ -183,8 +183,8 @@ class RefreshSkillsToolTest {
 
             val text = call(tool(allowed = listOf("pdf")))
 
-            assertTrue(text.contains("reindexed=2"), "got: $text")
-            assertTrue(text.contains("The new skills are usable now"), "got: $text")
+            assertTrue(text.contains("confirmed=2"), "got: $text")
+            assertFalse(text.contains("The new skills are usable now"), "got: $text")
             assertTrue(text.contains("load_skill"), "the agent needs a next step: $text")
         }
     }
@@ -198,9 +198,25 @@ class RefreshSkillsToolTest {
 
             val text = call(tool())
 
-            assertTrue(text.contains("was not parsed"), "got: $text")
-            assertTrue(text.contains("description"), "frontmatter is the usual culprit: $text")
-            assertTrue(text.contains("Failed to parse SKILL.md at"), "got: $text")
+            assertTrue(text.contains("No new or changed source was registered"), "got: $text")
+            assertTrue(text.contains("parse warnings"), "got: $text")
+        }
+
+        @Test
+        fun `a body update is reported apart from new sources`() = runTest {
+            coEvery { refresher.refreshFor(any(), any()) } returns RefreshOutcome(
+                delta = RegistryDelta(added = emptyList(), total = 2, updatedKeys = listOf(SkillKey("pdf", project))),
+                owner = "alice",
+                claimed = 0,
+                submitted = 1,
+                summary = ReconcileSummary(owners = 1, updated = 1, submitted = 1)
+            )
+
+            val text = call(tool(allowed = listOf("pdf")))
+
+            assertTrue(text.contains("updated=[pdf]"), "got: $text")
+            assertTrue(text.contains("Content updated=1"), "got: $text")
+            assertFalse(text.contains("No new or changed source"), "the source did change: $text")
         }
 
         @Test
@@ -219,8 +235,8 @@ class RefreshSkillsToolTest {
 
             val text = call(tool(allowed = listOf("pdf")))
 
-            assertTrue(text.contains("2 skill(s) lost their files on disk"), "got: $text")
-            assertTrue(text.contains("Tell the user"), "got: $text")
+            assertTrue(text.contains("deleted=2"), "got: $text")
+            assertTrue(text.contains("pending="), "got: $text")
         }
 
         @Test

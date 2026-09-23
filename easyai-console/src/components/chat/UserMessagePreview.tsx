@@ -1,24 +1,9 @@
 import React, { useState } from 'react';
 import { i18n } from '../../utils/i18n';
+import { UserMessageContent } from './UserMessage';
 
 interface UserMessagePreviewProps {
   content: string | null;
-}
-
-/** Parse message content and render command prefix (e.g. /goal) as a styled chip */
-function renderPreviewContent(content: string) {
-  const match = content.match(/^(\/[a-zA-Z_]\w*)([\s\S]*)$/);
-  if (!match) return content;
-
-  const cmdToken = match[1];
-  const rest = match[2];
-
-  return (
-    <>
-      <span className="command-chip">{cmdToken}</span>
-      {rest}
-    </>
-  );
 }
 
 /**
@@ -44,7 +29,7 @@ export const UserMessagePreview: React.FC<UserMessagePreviewProps> = ({ content 
       title={i18n('Double-click to expand/collapse')}
       style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}
     >
-      {renderPreviewContent(content)}
+      <UserMessageContent content={content} />
     </div>
   );
 };

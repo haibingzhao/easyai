@@ -3,6 +3,7 @@ package com.easy.easyai.autoconfigure.openai
 import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.api.model.StructuredOutputSupport
 import io.micrometer.observation.ObservationRegistry
 import org.springframework.ai.chat.model.ChatModel
 import org.springframework.ai.chat.prompt.ChatOptions
@@ -83,7 +84,8 @@ class OpenAiChatModelFactory : ChatModelFactory {
 
     override fun build(
         config: ModelProviderConfig,
-        toolCallbacks: List<ToolCallback>
+        toolCallbacks: List<ToolCallback>,
+        outputSchema: String?
     ): ChatOptions {
         val builder = OpenAiChatOptions.builder()
             .model(config.modelId)
@@ -103,6 +105,20 @@ class OpenAiChatModelFactory : ChatModelFactory {
             } else {
                 builder.temperature(it.temperature)
                 builder.maxTokens(it.maxTokens)
+            }
+        }
+        if (outputSchema != null) {
+            when (config.capabilities?.structuredOutput) {
+                // null = undeclared, keep today's schema enforcement
+                null, StructuredOutputSupport.JSON_SCHEMA -> builder.outputSchema(outputSchema)
+                // Schema-less JSON guarantee; the schema itself is conveyed via the prompt.
+                StructuredOutputSupport.JSON_OBJECT -> builder.responseFormat(
+                    OpenAiChatModel.ResponseFormat.builder()
+                        .type(OpenAiChatModel.ResponseFormat.Type.JSON_OBJECT)
+                        .build()
+                )
+                // No API-level enforcement; OutputSchemaCompletionCheck nudges with the schema.
+                StructuredOutputSupport.NONE -> Unit
             }
         }
         return builder.build()

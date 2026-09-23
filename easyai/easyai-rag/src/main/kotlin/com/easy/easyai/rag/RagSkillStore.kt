@@ -1,9 +1,12 @@
 package com.easy.easyai.rag
 
+import com.easy.easyai.core.skill.SkillDeleteResult
+import com.easy.easyai.core.skill.SkillDocumentState
 import com.easy.easyai.core.skill.SkillEntry
 import com.easy.easyai.core.skill.SkillOwnerContext
 import com.easy.easyai.core.skill.SkillScope
 import com.easy.easyai.core.skill.SkillStore
+import com.easy.easyai.core.skill.SkillSubmitResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -38,44 +41,55 @@ internal class RagSkillStore(
 
     // ── index ──────────────────────────────────────────────────────────
 
-    override suspend fun index(
+    override suspend fun submit(
         entries: List<SkillEntry>,
         scope: SkillScope,
         owner: SkillOwnerContext,
         awaitIndexing: Boolean
-    ): Int {
-        if (entries.isEmpty()) return 0
+    ): List<SkillSubmitResult> {
         val bizId = bizIdOf(scope, owner)
-        if (bizId == null) {
-            logger.debug("Skill index skipped: PROJECT scope without a project path ({} entries)", entries.size)
-            return 0
-        }
-        return indexToBiz(entries, bizId, awaitIndexing)
-    }
-
-    /** Upsert documents to one slice, bounded concurrency, log-and-continue per document. */
-    private suspend fun indexToBiz(entries: List<SkillEntry>, bizId: String, awaitIndexing: Boolean): Int {
-        var succeeded = 0
-        for (chunk in entries.chunked(INDEX_CONCURRENCY)) {
-            val results = coroutineScope {
+            ?: return entries.map { SkillSubmitResult(it.key, SkillDocumentState.Failed("Missing project path")) }
+        return entries.chunked(INDEX_CONCURRENCY).flatMap { chunk ->
+            coroutineScope {
                 chunk.map { entry ->
                     async {
-                        try {
-                            client.upsert(documentOf(entry, bizId), bizId, awaitIndexing)
-                            true
+                        val state = try {
+                            require(!entry.checksum.isNullOrBlank()) { "Skill source checksum is required" }
+                            val result = client.upsert(documentOf(entry, bizId), bizId, awaitIndexing)
+                            if (result.indexed) {
+                                // Verify the stored version too: another revision may have won the upsert.
+                                inspect(entry.name, scope, owner)
+                            } else {
+                                SkillDocumentState.Submitted(entry.checksum)
+                            }
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            logger.warn("Skill index failed for {}: {}", entry.key, e.message)
-                            false
+                            SkillDocumentState.Failed(e.message ?: "Skill submission failed")
                         }
+                        SkillSubmitResult(entry.key, state)
                     }
                 }.awaitAll()
             }
-            succeeded += results.count { it }
         }
-        logger.debug("Skill indexing submitted: {}/{} documents (bizId={})", succeeded, entries.size, bizId)
-        return succeeded
+    }
+
+    override suspend fun inspect(name: String, scope: SkillScope, owner: SkillOwnerContext): SkillDocumentState {
+        val bizId = bizIdOf(scope, owner) ?: return SkillDocumentState.Failed("Missing project path")
+        return try {
+            val document = client.inspectByExternalId(RagConstants.externalIdOf(keyOf(name)), bizId)
+                ?: return SkillDocumentState.Absent
+            val checksum = document.metadata["checksum"] as? String
+            when (document.status) {
+                "processed" -> SkillDocumentState.Processed(checksum)
+                "failed" -> SkillDocumentState.Failed("Remote skill indexing failed")
+                else -> SkillDocumentState.Submitted(checksum)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            SkillDocumentState.Failed(e.message ?: "Skill inspection failed")
+        }
     }
 
     private fun documentOf(entry: SkillEntry, bizId: String): RagDocument =
@@ -85,6 +99,7 @@ internal class RagSkillStore(
             metadata = buildMap {
                 put("name", entry.name)
                 put("description", entry.description)
+                entry.checksum?.let { put("checksum", it) }
                 if (entry.tags.isNotEmpty()) put("tags", entry.tags.joinToString(","))
                 entry.origin?.let { put("origin", it) }
                 entry.location?.let { put("location", it) }
@@ -151,10 +166,22 @@ internal class RagSkillStore(
 
     // ── delete ──────────────────────────────────────────────────────
 
-    override suspend fun delete(name: String, scope: SkillScope, owner: SkillOwnerContext): Boolean {
-        val bizId = bizIdOf(scope, owner) ?: return false
+    override suspend fun ensureAbsent(name: String, scope: SkillScope, owner: SkillOwnerContext): SkillDeleteResult {
+        val bizId = bizIdOf(scope, owner) ?: return SkillDeleteResult.Failed("Missing project path")
         val externalId = RagConstants.externalIdOf(keyOf(name))
-        return runCatchingRag("delete $externalId") { client.delete(externalId, bizId) } ?: false
+        return try {
+            try {
+                client.delete(externalId, bizId)
+            } catch (e: RagException) {
+                if (e.statusCode != 404) throw e
+            }
+            if (client.inspectByExternalId(externalId, bizId) == null) SkillDeleteResult.Absent
+            else SkillDeleteResult.Failed("Remote document still exists after deletion")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            SkillDeleteResult.Failed(e.message ?: "Skill deletion failed")
+        }
     }
 
     // ── Mapping helpers ────────────────────────────────────────────────

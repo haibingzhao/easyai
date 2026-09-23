@@ -1,3 +1,5 @@
+import type { CommandCategory } from './command';
+
 export interface Attachment {
   id: string;
   name: string;
@@ -231,6 +233,8 @@ export interface QueuedMessage {
   id: string;
   /** Message content text. */
   content: string;
+  /** Local-only command classification, never sent as a ChatRequest field. */
+  commandCategory?: CommandCategory;
   /** Queue type: steer is injected at next turn, followUp after current response completes. */
   type: 'steer' | 'followUp';
   /** Backend queue ID returned after successful sync. Undefined until synced. */

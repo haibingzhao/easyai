@@ -9,6 +9,7 @@ import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.event.ErrorEvent
 import com.easy.easyai.core.event.MessageEndEvent
 import com.easy.easyai.core.event.MessageUpdateEvent
+import com.easy.easyai.core.message.CommandMessageProjection
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.tool.*
 import com.fasterxml.jackson.annotation.JsonPropertyDescription
@@ -127,11 +128,12 @@ Rules:
             messages.size, context.currentTurnId, context.compactionRound
         )
 
+        val summaryMessages = CommandMessageProjection.project(messages)
         return try {
-            executeAgentCompaction(messages, context, chatModel)
+            executeAgentCompaction(summaryMessages, context, chatModel)
         } catch (e: Exception) {
             logger.warn("Agent compaction failed, falling back to simple summary", e)
-            StrategyOutput(generateFallbackSummary(messages, context, "Agent compaction failed: ${e.message}"))
+            StrategyOutput(generateFallbackSummary(summaryMessages, context, "Agent compaction failed: ${e.message}"))
         }
     }
 

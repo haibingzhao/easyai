@@ -20,8 +20,12 @@ import com.easy.easyai.core.tool.ScriptEnvProvider
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.repository.session.SessionExecutionService
+import com.easy.easyai.skills.command.CommandCategory
+import com.easy.easyai.skills.command.CommandReferenceException
 import com.easy.easyai.skills.command.CommandService
 import com.easy.easyai.snapshot.SnapshotService
+import java.nio.file.Files
+import java.nio.file.Path
 import com.easy.easyai.web.handler.ChatEventConverter
 import com.easy.easyai.web.handler.CustomEventConverter
 import com.easy.easyai.web.model.*
@@ -245,8 +249,10 @@ class ChatStreamService(
         type: String,
         attachments: List<ChatAttachment>? = null
     ): QueuedMessageResponse {
+        require(type == "steer" || type == "followUp") { "Invalid queue type: $type" }
         val session = executionService?.getActiveSession(sessionId)
             ?: throw IllegalStateException("No active session for queue operation: $sessionId")
+        require(session.agentContext.userId == userId) { "Session is not available to this user" }
 
         // Validate attachments and extract inline @ references BEFORE command expansion
         // (which has side effects: goal creation, notification) so an invalid attachment
@@ -270,15 +276,7 @@ class ChatStreamService(
                 contentBlocks.add(ImageContent(bytes, img.mimeType))
             }
         }
-        val userMessage = UserMessage(content = contentBlocks)
-
-        // Process command expansion for queued messages (e.g., /goal creates a fresh goal).
-        // Side effects (goal creation, notification) happen immediately so the Summary
-        // panel reflects the new goal state before the agent picks up the message.
-        commandService?.resolveAndExpand(content, userId, sessionId)?.let { expansion ->
-            logger.info("Processed command '{}' in queued {} message for session {}",
-                expansion.commandName, type, sessionId)
-        }
+        val userMessage = prepareCommandMessage(content, UserMessage(content = contentBlocks), session)
 
         val queueId = when (type) {
             "steer" -> session.steerWithId(userMessage)
@@ -319,7 +317,16 @@ class ChatStreamService(
     ): Boolean {
         val session = executionService?.getActiveSession(sessionId)
             ?: throw IllegalStateException("No active session for queue update: $sessionId")
-        val updated = session.updateQueuedMessage(queueId, newContent)
+        val previous = session.getQueuedMessage(queueId) ?: return false
+        if (previous.metadata[UserMessage.COMMAND_CATEGORY] == CommandCategory.BUILTIN.name) {
+            throw CommandReferenceException("Queued built-in commands cannot be edited; use Goal management instead")
+        }
+        val blocks = AttachmentProcessor.buildContentBlocks(newContent, session.agentContext.projectPath).toMutableList()
+        blocks.addAll(previous.content.filter { it !is TextContent })
+        val replacement = prepareCommandMessage(
+            newContent, previous.copy(content = blocks), session, allowSideEffects = false
+        )
+        val updated = session.updateQueuedMessage(queueId, previous, replacement)
         if (updated) {
             logger.info("Updated queued message {} in session {}", queueId, sessionId)
         } else {
@@ -371,13 +378,19 @@ class ChatStreamService(
             // Load fresh messages from DB (single source of truth)
             val messages = sessionManager.loadMessages(sessionId)
 
-            // Re-detect command from last UserMessage and inject SystemMessage
-            val messagesWithCommand = injectCommandSystemMessage(messages, userId, sessionId)
-
-            // Resume the session (injects resumption context internally)
-            val stream = session.resume(message, messagesWithCommand)
+            commandService?.validateReplay(messages, userId, session.agentContext.projectPath)
+            val stream = if (message.isNullOrBlank()) {
+                session.resume(messages = messages)
+            } else {
+                val content = AttachmentProcessor.buildContentBlocks(message, session.agentContext.projectPath)
+                val prepared = prepareCommandMessage(message, UserMessage(content = content), session)
+                sessionManager.saveSessionMessages(session.agentContext, listOf(prepared))
+                session.promptWithHistory(messages + prepared)
+            }
 
             buildSseFlow(session, stream, context = "resume", isRetryable = true)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             flowOf(errorSse(e.message?.removePrefix("Session not found: ") ?: e.message))
         }
@@ -448,6 +461,7 @@ class ChatStreamService(
         }
 
         val history = sessionManager.loadMessages(session.id)
+        commandService?.validateReplay(history, agentContext.userId ?: "system", session.agentContext.projectPath)
 
         // Resume goal timer if paused (defensive: user may send a new message instead of using dedicated resume endpoints)
         resumeGoalTimer(session.id, agentContext.userId ?: "system")
@@ -459,33 +473,14 @@ class ChatStreamService(
         val preGoalListener = createGoalListener(session.id, preGoalChannel)
         preGoalListener?.let { goalStatusNotifier?.addListener(it) }
 
-        // Command detection: resolve /command (including builtin /goal) and inject as SystemMessage
-        val commandExpansion = commandService?.resolveAndExpand(
-            message, agentContext.userId ?: "system", session.id
-        )
-
-        val messages = buildList {
-            addAll(history)
-            if (commandExpansion != null) {
-                add(SystemMessage(text = commandExpansion.expandedPrompt))
-                logger.info("Injected command SystemMessage for '{}' ({} chars)",
-                    commandExpansion.commandName, commandExpansion.expandedPrompt.length)
-            }
-            add(UserMessage(id = userMessageId, content = contentBlocks))
+        val userMessage = try {
+            prepareCommandMessage(messageText, UserMessage(id = userMessageId, content = contentBlocks), session)
+        } catch (e: Exception) {
+            preGoalListener?.let { goalStatusNotifier?.removeListener(it) }
+            preGoalChannel.close()
+            throw e
         }
-
-        // Persist UserMessage to DB with command expansion cached in metadata (SystemMessage is ephemeral)
-        val metadata = buildMap {
-            if (commandExpansion != null) {
-                put(UserMessage.COMMAND_EXPANSION, commandExpansion.expandedPrompt)
-                put(UserMessage.COMMAND_NAME, commandExpansion.commandName)
-            }
-        }
-        val userMessage = UserMessage(
-            id = userMessageId,
-            content = contentBlocks,
-            metadata = metadata
-        )
+        val messages = history + userMessage
         sessionManager.saveSessionMessages(session.agentContext, listOf(userMessage))
         // Update session agent with fresh inputVariables from current request
         session.updateInputVariables(agentContext.inputVariables)
@@ -503,44 +498,21 @@ class ChatStreamService(
         }
     }
 
-    /**
-     * Re-detect a slash command in the last UserMessage and inject a SystemMessage before it.
-     * Used by retry/resume to restore command context that was not persisted to DB.
-     *
-     * Priority:
-     * 1. Restore from cached expansion in UserMessage metadata (works even if MCP is offline)
-     * 2. Fall back to re-expanding via commandService (requires MCP to be connected)
-     */
-    private suspend fun injectCommandSystemMessage(
-        messages: List<EasyAiMessage>,
-        userId: String = "system",
-        sessionId: String = ""
-    ): List<EasyAiMessage> {
-        val lastUserMsg = messages.lastOrNull { it is UserMessage } as? UserMessage ?: return messages
-        val lastIndex = messages.indexOfLast { it is UserMessage && it.id == lastUserMsg.id }
-        if (lastIndex < 0) return messages
-
-        // 1. Try cached expansion from metadata (survives MCP disconnection)
-        val cachedExpansion = lastUserMsg.metadata[UserMessage.COMMAND_EXPANSION]
-        val cachedName = lastUserMsg.metadata[UserMessage.COMMAND_NAME]
-        if (cachedExpansion != null) {
-            logger.info("Re-injected cached command SystemMessage for '{}' during retry/resume ({} chars)",
-                cachedName, cachedExpansion.length)
-            return messages.toMutableList().apply {
-                add(lastIndex, SystemMessage(text = cachedExpansion))
-            }
-        }
-
-        // 2. Fall back to re-expansion (may fail if MCP server is disconnected)
-        val cs = commandService ?: return messages
-        val userText = lastUserMsg.content.filterIsInstance<TextContent>().joinToString("") { it.text }
-        val expansion = cs.resolveAndExpand(userText, userId, sessionId) ?: return messages
-
-        logger.info("Re-injected command SystemMessage for '{}' during retry/resume ({} chars)",
-            expansion.commandName, expansion.expandedPrompt.length)
-        return messages.toMutableList().apply {
-            add(lastIndex, SystemMessage(text = expansion.expandedPrompt))
-        }
+    private suspend fun prepareCommandMessage(
+        rawText: String,
+        message: UserMessage,
+        session: ChatSession,
+        allowSideEffects: Boolean = true
+    ): UserMessage {
+        val context = session.agentContext
+        val userId = context.userId ?: "system"
+        val expansion = commandService?.resolveAndExpand(rawText, userId, session.id, context.projectPath, allowSideEffects)
+        val commandKeys = setOf(
+            UserMessage.COMMAND_NAME, UserMessage.COMMAND_EXPANSION, UserMessage.COMMAND_SOURCE,
+            UserMessage.COMMAND_CATEGORY, UserMessage.COMMAND_USER_ID, UserMessage.COMMAND_PROJECT_PATH
+        )
+        val metadata = message.metadata - commandKeys + commandService?.metadata(expansion, userId, context.projectPath).orEmpty()
+        return message.copy(metadata = metadata)
     }
 
     private suspend fun createAgentContext(
@@ -550,10 +522,20 @@ class ChatStreamService(
         projectId: String? = null,
         userId: String = "system"
     ): AgentContext {
-        // Load project to get memoryAutoGeneration and projectPath
-        val project = if (projectId != null && projectStore != null) {
-            projectStore.findById(projectId, userId)
-        } else null
+        if (sessionId != null && sessionStore?.isSessionOwnedByUser(sessionId, userId) == false) {
+            throw IllegalArgumentException("Session is not available to this user")
+        }
+        val persisted = sessionId?.let { sessionStore?.findById(it, userId) }
+        val verifiedProjectId = if (persisted != null) persisted.projectId else projectId
+        val project = verifiedProjectId?.let {
+            projectStore?.findById(it, userId) ?: throw IllegalArgumentException("Project is not available to this user")
+        }
+        val projectPath = project?.let {
+            require(it.path.isNotBlank()) { "Project directory is unavailable" }
+            val path = Path.of(it.path).toAbsolutePath().normalize()
+            require(withContext(Dispatchers.IO) { Files.isDirectory(path) }) { "Project directory is unavailable" }
+            path
+        }
 
         // Build a partial context for script env generation
         val partialContext = AgentContext(
@@ -569,8 +551,8 @@ class ChatStreamService(
             modelConfig = config,
             sessionId = sessionId,
             userId = userId,
-            projectId = projectId,
-            projectPath = project?.let { java.nio.file.Path.of(it.path) },
+            projectId = verifiedProjectId,
+            projectPath = projectPath,
             memoryAutoGeneration = project?.memoryAutoGeneration ?: true,
             modelContextLength = config.options?.contextToken ?: 204_800,
             scriptEnv = scriptEnv
@@ -726,6 +708,7 @@ class ChatStreamService(
 
             // Load fresh messages from DB
             val messages = sessionManager.loadMessages(session.id)
+            commandService?.validateReplay(messages, userId, session.agentContext.projectPath)
 
             val chatContext = session.agentContext
             val messagesWithResult: List<EasyAiMessage>
@@ -787,6 +770,8 @@ class ChatStreamService(
                     mainFlow.collect { emit(it) }
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             flowOf(errorSse(e.message))
         }

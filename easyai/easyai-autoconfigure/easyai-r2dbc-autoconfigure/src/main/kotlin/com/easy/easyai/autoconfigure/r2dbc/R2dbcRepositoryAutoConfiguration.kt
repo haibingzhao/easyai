@@ -1,10 +1,6 @@
 package com.easy.easyai.autoconfigure.r2dbc
 
-import com.easy.easyai.api.config.ChatModelFactory
-import com.easy.easyai.api.config.DefaultModelConfigService
-import com.easy.easyai.api.config.ModelConfigGroupStore
-import com.easy.easyai.api.config.ModelConfigService
-import com.easy.easyai.api.config.ModelProviderConfigStore
+import com.easy.easyai.api.config.*
 import com.easy.easyai.auth.RefreshTokenStore
 import com.easy.easyai.auth.UserStore
 import com.easy.easyai.autoconfigure.core.EasyAiProperties
@@ -15,16 +11,18 @@ import com.easy.easyai.core.command.AsyncUserCommandStore
 import com.easy.easyai.core.goal.GoalCompletionCheck
 import com.easy.easyai.core.goal.GoalStatusNotifier
 import com.easy.easyai.core.goal.GoalStore
+import com.easy.easyai.core.media.MediaProviderStore
 import com.easy.easyai.core.permission.PermissionRuleStore
 import com.easy.easyai.core.permission.PermissionService
 import com.easy.easyai.core.permission.ShellAiRiskChecker
 import com.easy.easyai.core.prompt.InstructionsLoader
+import com.easy.easyai.core.skill.AsyncSkillCatalogStore
+import com.easy.easyai.core.storage.StorageSettingsStore
 import com.easy.easyai.core.team.TeamExecutionStore
 import com.easy.easyai.core.team.TeamMemberHistoryLoader
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolFactory
 import com.easy.easyai.repository.agent.R2dbcAgentStore
-import com.easy.easyai.skills.command.BuiltinCommandHandler
 import com.easy.easyai.repository.auth.R2dbcRefreshTokenStore
 import com.easy.easyai.repository.command.R2dbcAsyncUserCommandStore
 import com.easy.easyai.repository.config.R2dbcModelConfigGroupStore
@@ -32,24 +30,22 @@ import com.easy.easyai.repository.config.R2dbcModelConfigStore
 import com.easy.easyai.repository.database.DatabaseMigration
 import com.easy.easyai.repository.goal.SqlGoalStore
 import com.easy.easyai.repository.mcp.R2dbcMcpServerStore
+import com.easy.easyai.repository.media.R2dbcMediaProviderStore
 import com.easy.easyai.repository.permission.R2dbcAsyncPermissionRuleStore
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.repository.project.R2dbcAsyncProjectStore
-import com.easy.easyai.core.skill.AsyncSkillCatalogStore
-import com.easy.easyai.core.media.MediaProviderStore
-import com.easy.easyai.core.storage.StorageSettingsStore
 import com.easy.easyai.repository.session.*
-import com.easy.easyai.repository.media.R2dbcMediaProviderStore
 import com.easy.easyai.repository.skill.R2dbcAsyncSkillCatalogStore
 import com.easy.easyai.repository.storage.R2dbcStorageSettingsStore
-import com.easy.easyai.skills.SkillPromptSource
-import com.easy.easyai.skills.SkillRegistry
 import com.easy.easyai.repository.swarm.R2dbcSwarmPresetStore
 import com.easy.easyai.repository.swarm.R2dbcSwarmRunStore
 import com.easy.easyai.repository.todo.AsyncTodoStore
 import com.easy.easyai.repository.todo.R2dbcAsyncTodoStore
 import com.easy.easyai.repository.todo.TodoCompletionCheck
 import com.easy.easyai.repository.user.R2dbcUserStore
+import com.easy.easyai.skills.SkillPromptSource
+import com.easy.easyai.skills.SkillRegistry
+import com.easy.easyai.skills.command.BuiltinCommandHandler
 import com.easy.easyai.swarm.preset.SwarmPresetStore
 import com.easy.easyai.swarm.store.SwarmRunStore
 import com.easy.easyai.tools.mcp.AsyncMcpServerStore
@@ -78,29 +74,28 @@ class R2dbcRepositoryAutoConfiguration(
     private val r2dbcProperties: R2dbcProperties,
     private val easyAiProperties: EasyAiProperties
 ) {
-    /**
-     * Skill view for prompt rendering, keyed by the requesting user and session project.
-     *
-     * [SkillPromptSource] owns the decision (RAG suppression plus catalog `enabled` filtering); the
-     * registry-only fallback exists for contexts where core auto-configuration did not run, and keeps
-     * the previous full-injection behaviour.
-     */
+    /** SkillPromptSource is the sole authority for prompt visibility; missing wiring exposes no skills. */
     private fun skillsForPrompt(
         promptSource: SkillPromptSource?,
         skillRegistry: SkillRegistry?
-    ): (String?, Path?) -> List<Map<String, Any?>> =
-        { userId, projectPath -> promptSource?.skillsForPrompt(userId, projectPath) ?: buildSkillsData(skillRegistry, projectPath) }
-
-    private fun buildSkillsData(skillRegistry: SkillRegistry?, projectPath: Path?): List<Map<String, Any?>> {
-        return if (easyAiProperties.skills.injectIntoSystemPrompt) {
-            skillRegistry?.visibleFor(projectPath)
-                ?.filter { !it.description.isNullOrBlank() }
-                ?.map { mapOf<String, Any?>("name" to it.name, "description" to it.description) }
+    ): suspend (String?, Path?, List<String>) -> List<Map<String, Any?>> =
+        { userId, projectPath, allowedSkillNames ->
+            // Mirrors SkillSearchToolBuilder.build: the tool exists per agent only when a registry
+            // is present, RAG is on and the agent has a non-empty skill whitelist.
+            val searchAvailable = skillRegistry != null && easyAiProperties.skills.rag.enabled &&
+                allowedSkillNames.isNotEmpty()
+            promptSource?.skillsForPrompt(userId, projectPath, allowedSkillNames, searchAvailable)
                 ?: emptyList()
-        } else {
-            emptyList()
         }
-    }
+
+    /** Effective-view names for the default local agent; independent of the prompt-injection switch. */
+    private fun skillNamesForDefaultAgent(
+        promptSource: SkillPromptSource?
+    ): suspend (String?, Path?) -> List<String> =
+        { userId, projectPath ->
+            promptSource?.effectiveNames(userId, projectPath) ?: emptyList()
+        }
+
     @Bean
     fun databaseMigration(): DatabaseMigration = DatabaseMigration.defaultTables()
 
@@ -198,7 +193,8 @@ class R2dbcRepositoryAutoConfiguration(
                 } else {
                     val allowedSet = effectiveSkillNames.toSet()
                     // Re-read per call: disablement must take effect without restarting the session pool.
-                    skillsForPrompt(parentContext.userId, parentContext.projectPath).filter { (it["name"] as? String) in allowedSet } to effectiveSkillNames
+                    skillsForPrompt(parentContext.userId, parentContext.projectPath, effectiveSkillNames)
+                        .filter { (it["name"] as? String) in allowedSet } to effectiveSkillNames
                 }
                 // Resolve instructions based on sub-agent's own instructionsEnabled flag
                 val instructions = if (agentDef.instructionsEnabled) {
@@ -265,6 +261,7 @@ class R2dbcRepositoryAutoConfiguration(
             agentLookup = agentLookup,
             todoStore = todoStore,
             skillsSupplier = skillsForPrompt,
+            skillNamesSupplier = skillNamesForDefaultAgent(skillPromptSource),
             agentStore = agentStore,
             teamExecutionStore = teamExecutionStore
         )

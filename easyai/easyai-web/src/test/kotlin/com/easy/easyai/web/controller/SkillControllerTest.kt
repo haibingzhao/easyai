@@ -3,10 +3,11 @@ package com.easy.easyai.web.controller
 import com.easy.easyai.core.skill.SkillCatalogEntry
 import com.easy.easyai.core.skill.SkillOwnerContext
 import com.easy.easyai.core.skill.SkillScope
+import com.easy.easyai.skills.SkillAccessResolver
 import com.easy.easyai.skills.SkillCatalogService
 import com.easy.easyai.skills.SkillCatalogView
-import com.easy.easyai.skills.SkillPromptSource
-import com.easy.easyai.skills.SkillRegistry
+import com.easy.easyai.skills.SkillInfo
+import com.easy.easyai.skills.ScopedSkill
 import com.easy.easyai.skills.SkillToggleResult
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -20,6 +21,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.GrantedAuthority
 import org.springframework.security.core.context.ReactiveSecurityContextHolder
 import org.springframework.web.server.ResponseStatusException
+import java.nio.file.Path
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -39,13 +41,11 @@ import kotlin.test.assertTrue
 class SkillControllerTest {
 
     private val catalogService = mockk<SkillCatalogService>(relaxed = true)
-    private val registry = mockk<SkillRegistry>(relaxed = true)
-    private val promptSource = mockk<SkillPromptSource>(relaxed = true)
+    private val access = mockk<SkillAccessResolver>(relaxed = true)
 
     private fun controller(): SkillController = SkillController(
-        skillRegistry = registry,
         skillCatalogService = catalogService,
-        skillPromptSource = promptSource
+        skillAccessResolver = access
     )
 
     private fun view(enabled: Boolean = true) = SkillCatalogView(
@@ -177,24 +177,39 @@ class SkillControllerTest {
     }
 
     @Nested
-    inner class `the listing follows the prompt view` {
+    inner class `the listing is the scoped candidate view` {
+
+        private val skill = SkillInfo(
+            "pdf-report", "PDF", Path.of("/home/alice/.easyai/skills/pdf-report/SKILL.md"), "body"
+        )
 
         @Test
-        fun `with on-demand discovery the listing is not filtered by an injection view that is off`() {
-            every { promptSource.fullInjectionActive } returns false
-            every { registry.visibleFor(null) } returns emptyList()
+        fun `candidates come from the access resolver with per-row enabled state`() {
+            coEvery { access.listScopedSkills(any(), null) } returns listOf(
+                ScopedSkill(skill, null),
+                ScopedSkill(
+                    skill.copy(name = "review"),
+                    SkillCatalogEntry(
+                        id = "row-2", name = "review", source = SkillCatalogEntry.SOURCE_LOCAL,
+                        version = "1.0.0", checksum = "b".repeat(64), enabled = false,
+                        installPath = "/home/alice/.easyai/skills/review", userId = "alice"
+                    )
+                )
+            )
 
-            assertEquals(emptyList<SkillDto>(), controller().listSkills(projectId = null).block())
-            coVerify(exactly = 0) { promptSource.skillsForPrompt(any(), any()) }
+            val listed = controller().listSkills(projectId = null)
+                .contextWrite(ReactiveSecurityContextHolder.withAuthentication(
+                    UsernamePasswordAuthenticationToken("alice", "", emptyList<GrantedAuthority>())
+                ))
+                .block()!!
+
+            assertEquals(listOf("pdf-report", "review"), listed.map { it.name })
+            assertEquals(listOf(true, false), listed.map { it.enabled })
         }
 
         @Test
-        fun `while the full list is injected a disabled skill is hidden from the ui too`() {
-            every { promptSource.fullInjectionActive } returns true
-            every { promptSource.skillsForPrompt(any(), any()) } returns emptyList()
-            every { registry.visibleFor(null) } returns emptyList()
-
-            assertEquals(emptyList<SkillDto>(), controller().listSkills(projectId = null).block())
+        fun `without a resolver the listing stays empty instead of falling back to the registry`() {
+            assertEquals(emptyList<SkillDto>(), SkillController().listSkills(projectId = null).block())
         }
     }
 }

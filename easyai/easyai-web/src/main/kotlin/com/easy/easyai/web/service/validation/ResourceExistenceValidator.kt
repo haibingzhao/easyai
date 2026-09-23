@@ -2,7 +2,6 @@ package com.easy.easyai.web.service.validation
 
 import com.easy.easyai.agent.api.model.AgentCreateRequest
 import com.easy.easyai.agent.registry.ToolRegistry
-import com.easy.easyai.core.agent.AgentEnv
 import com.easy.easyai.core.agent.AgentType
 import com.easy.easyai.core.agent.AsyncAgentStore
 import com.easy.easyai.skills.SkillRegistry
@@ -103,18 +102,7 @@ class ResourceExistenceValidator(
             }
         }
 
-        // Validate skill/tool consistency: skills require the load_skill tool to be
-        // accessible at runtime. In SWARM context load_skill is unavailable, so skip.
-        if (request.skillNames.isNotEmpty() &&
-            "load_skill" !in request.toolNames &&
-            request.agentContext != AgentEnv.SWARM
-        ) {
-            errors.add(ConfigValidationError(
-                "skillNames",
-                "Skills are configured but 'load_skill' tool is missing from toolNames — the agent cannot load skill content at runtime",
-                "warning"
-            ))
-        }
+        errors.addAll(validateSkillTools(request))
 
         // Validate command/tool consistency: the /goal command creates a goal that
         // requires the 'goal' tool for lifecycle management (complete/block/pause).
@@ -145,6 +133,31 @@ class ResourceExistenceValidator(
     }
 
     companion object {
+        /** Shared by config validation and every Agent save endpoint, including inline agents. */
+        @JvmStatic
+        fun validateSkillTools(request: AgentCreateRequest): List<ConfigValidationError> = buildList {
+            addAll(validateSkillTools(request.toolNames, request.skillNames))
+            request.customSubAgents.forEachIndexed { index, spec ->
+                addAll(validateSkillTools(spec.toolNames, spec.skillNames, "customSubAgents[$index].skillNames"))
+            }
+            request.customMembers.forEachIndexed { index, spec ->
+                addAll(validateSkillTools(spec.toolNames, spec.skillNames, "customMembers[$index].skillNames"))
+            }
+        }
+
+        @JvmStatic
+        @JvmOverloads
+        fun validateSkillTools(
+            toolNames: List<String>,
+            skillNames: List<String>,
+            field: String = "skillNames"
+        ): List<ConfigValidationError> = if (skillNames.isNotEmpty() && "load_skill" !in toolNames) {
+            listOf(ConfigValidationError(
+                field,
+                "Skills are configured but 'load_skill' tool is missing from toolNames — the agent cannot load skill content at runtime"
+            ))
+        } else emptyList()
+
         /** Tools blocked at runtime for SUBAGENT agents (parentAgentId guard / mainAgentOnly). */
         private val SUBAGENT_BLOCKED_TOOLS = setOf("task", "run_swarm")
 

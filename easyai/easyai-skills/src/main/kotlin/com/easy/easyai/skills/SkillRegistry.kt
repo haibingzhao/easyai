@@ -11,9 +11,9 @@ import kotlin.concurrent.withLock
 /**
  * Composite identity of one skill in the in-memory snapshot.
  *
- * [projectPath] == null means GLOBAL: either a home-directory skill or a skill whose install
- * path cannot be attributed to a workspace. The value is always what [SkillScopeResolver]
- * derived from the skill's location — the registry keeps no separate scope truth.
+ * [projectPath] == null means GLOBAL: a home-directory skill or an explicitly configured shared
+ * source. The value is always what [SkillScopeResolver] derived from the skill's location — the
+ * registry keeps no separate scope truth. Unknown install roots cannot be registered.
  */
 data class SkillKey(val name: String, val projectPath: Path?)
 
@@ -21,20 +21,19 @@ data class SkillKey(val name: String, val projectPath: Path?)
  * Interface for managing skill lifecycle: registration, lookup, filtering.
  */
 interface SkillRegistry {
-    /** Register one discovered skill; the [SkillKey] is derived from its install location. */
+    /** Register one discovered skill; throws [IllegalArgumentException] for an unknown install root. */
     fun register(skill: SkillInfo)
 
     /**
-     * Resolve one skill for a request rooted at [projectPath]: the nearest PROJECT hit wins,
-     * GLOBAL is the fallback — the same candidate sequence the catalog gate and the prompt view
-     * use, so the listing can never advertise what loading then refuses.
+     * Resolve one skill for a request rooted at [projectPath]: only that exact PROJECT hit wins,
+     * with GLOBAL as fallback. This is a filesystem lookup, not a user authorization decision.
      */
     fun get(name: String, projectPath: Path?): SkillInfo?
 
-    /** Every registered skill, across all granularities. Catalog bookkeeping only. */
+    /** Every registered skill, across all granularities. Catalog bookkeeping and access resolution only. */
     fun all(): List<SkillInfo>
 
-    /** What a request from [projectPath] may see: GLOBAL + this project's ancestor chain, nearest wins. */
+    /** This exact project's skills plus GLOBAL, project first by name; does not authorize a user. */
     fun visibleFor(projectPath: Path?): List<SkillInfo>
 
     /** Drop one skill from the in-memory snapshot, returning what was removed. */
@@ -80,17 +79,20 @@ interface SkillRegistry {
  * @param addedKeys the [SkillKey]s behind [added] — claiming a catalog row must know *which*
  *   granularity is new, because the same name can be added in one project while surviving in another
  * @param removedKeys the [SkillKey]s behind [removed]
+ * @param updatedKeys keys that survived the pass but whose parsed source changed (content,
+ *   description, or location) — refresh reporting must distinguish body updates from no-ops
  */
 data class RegistryDelta(
     val added: List<String> = emptyList(),
     val removed: List<String> = emptyList(),
     val total: Int = 0,
     val addedKeys: List<SkillKey> = emptyList(),
-    val removedKeys: List<SkillKey> = emptyList()
+    val removedKeys: List<SkillKey> = emptyList(),
+    val updatedKeys: List<SkillKey> = emptyList()
 ) {
     /** Whether anything about the visible skill set changed. */
     val changed: Boolean
-        get() = added.isNotEmpty() || removed.isNotEmpty()
+        get() = added.isNotEmpty() || removed.isNotEmpty() || updatedKeys.isNotEmpty()
 }
 
 /**
@@ -128,25 +130,30 @@ class DefaultSkillRegistry(
     private val initialScanDone = AtomicBoolean(false)
 
     override fun rescan(projectRoots: Set<Path>): RegistryDelta = scanLock.withLock {
-        val previous = skills.keys.toSet()
+        val previous = skills.toMap()
         val discovered = discoverAll(projectRoots)
         // Register first, prune after: clearing would hand load_skill a snapshot with nothing in it.
         discovered.forEach { registerInternal(it) }
         val current = discovered.mapTo(mutableSetOf()) { keyOf(it) }
-        val removedKeys = sortedByKey(previous - current)
+        val removedKeys = sortedByKey(previous.keys - current)
         removedKeys.forEach { skills.remove(it) }
-        val addedKeys = sortedByKey(current - previous)
+        val addedKeys = sortedByKey(current - previous.keys)
+        // Survivors whose parsed source (content, description, location) changed on disk.
+        val updatedKeys = sortedByKey(
+            current.filterTo(mutableSetOf()) { it in previous.keys && skills[it] != previous[it] }
+        )
         initialScanDone.set(true)
         val delta = RegistryDelta(
             added = addedKeys.map { it.name },
             removed = removedKeys.map { it.name },
             total = skills.size,
             addedKeys = addedKeys,
-            removedKeys = removedKeys
+            removedKeys = removedKeys,
+            updatedKeys = updatedKeys
         )
         logger.info(
-            "Skill re-scan registered {} skill(s): added={}, removed={}",
-            delta.total, delta.addedKeys, delta.removedKeys
+            "Skill re-scan registered {} skill(s): added={}, updated={}, removed={}",
+            delta.total, delta.addedKeys, delta.updatedKeys, delta.removedKeys
         )
         if (discovered.isEmpty()) {
             logger.debug("No SKILL.md found under {}", config.homeSkillDirs)
@@ -194,20 +201,11 @@ class DefaultSkillRegistry(
             logger.info("Discovered {} skills from {} project roots", fromRoots.size, roots.size)
         }
 
-        // Walk-up from the server workDir and the freshly requested roots only: covers monorepo
-        // sessions whose skills live at an ancestor the DB has not claimed yet, and keeps the
-        // no-catalog deployment (easyai.skills.rag.enabled=false) working off the file tree alone.
-        val walkRoots = mutableSetOf(workDir)
-        extraProjectRoots.forEach { walkRoots.add(it.toAbsolutePath().normalize()) }
-        walkRoots.forEach { root ->
-            val fromAncestors = discovery.discoverByWalkingUp(root, config.homeSkillDirs)
-            discovered += fromAncestors
-            if (fromAncestors.isNotEmpty()) {
-                logger.info("Discovered {} skills from ancestor directories of {}", fromAncestors.size, root)
-            }
+        return discovered.filter { skill ->
+            val recognised = SkillScopeResolver.classify(skill, config) != null
+            if (!recognised) logger.warn("Rejecting skill with unknown install root: {}", skill.location)
+            recognised
         }
-
-        return discovered
     }
 
     override fun register(skill: SkillInfo) {

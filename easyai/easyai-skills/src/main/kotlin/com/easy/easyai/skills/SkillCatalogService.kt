@@ -5,6 +5,7 @@ import com.easy.easyai.core.skill.SkillCatalogEntry
 import com.easy.easyai.core.skill.SkillOwnerContext
 import com.easy.easyai.core.skill.SkillScope
 import com.easy.easyai.core.skill.SkillStore
+import com.easy.easyai.core.skill.SkillSyncState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -49,8 +50,7 @@ class SkillCatalogService(
     private val catalog: AsyncSkillCatalogStore?,
     private val indexer: SkillIndexer,
     private val skillStore: SkillStore?,
-    private val config: SkillConfig,
-    private val promptSource: SkillPromptSource? = null
+    private val config: SkillConfig
 ) {
 
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -80,7 +80,7 @@ class SkillCatalogService(
      * Enabling re-indexes from disk (so a skill edited while disabled publishes its new text);
      * disabling removes the document but keeps the row, which is where provenance lives.
      *
-     * The row is flipped **first**, then the index is asked to catch up: [SkillIndexer.indexOne] can
+     * The row is flipped **first**, then the index is asked to catch up: [SkillIndexer.synchronize] can
      * legitimately fail (missing SKILL.md, backend outage) and the row must not stay behind that
      * failure — otherwise the API says "applied" while `load_skill` still refuses the skill.
      * `indexSynced` reports only the index side; the row is the source of truth.
@@ -95,11 +95,11 @@ class SkillCatalogService(
         val userId = owner.userId ?: SkillCatalogEntry.DEFAULT_USER_ID
         val row = SkillOwnership.resolveRow(store, name, userId, owner.projectPath, config)
             ?: return SkillToggleResult.Rejected("Skill '$name' is not installed for user '$userId'")
-        val (scope, rowProjectPath) = SkillScopeResolver.resolve(row, config)
-        val scopedOwner = SkillOwnerContext(userId, if (scope == SkillScope.PROJECT) rowProjectPath else null)
-        // Row first: this is the authoritative state the load gate reads back.
+        if (owner.userId.isNullOrBlank() || row.userId != userId || row.userId == SkillCatalogEntry.DEFAULT_USER_ID) {
+            return SkillToggleResult.Rejected("Shared skills are read-only")
+        }
         val flipped = try {
-            store.setEnabled(row.id, enabled)
+            if (enabled) indexer.prepareEnable(row) else store.setEnabled(row.id, false)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -107,30 +107,14 @@ class SkillCatalogService(
             false
         }
         if (!flipped) {
-            return SkillToggleResult.Rejected("Failed to update the catalog row of '$name'")
+            return SkillToggleResult.Rejected("Skill content is unavailable or the catalog changed concurrently")
         }
-        // Then the index: a failure here is reported via indexSynced=false but does not roll back the row,
-        // because the row is what `load_skill` and the prompt view consult; the next reconciliation catches up.
-        val synced = if (skillStore == null) {
-            false
-        } else if (enabled) {
-            indexer.indexOne(row.copy(enabled = true), scope, scopedOwner, await = true)
-        } else {
-            indexer.removeOne(row.copy(enabled = false), removeCatalogRow = false)
-        }
-        publishVisibility()
+        val summary = indexer.synchronize(row, await = false)
+        val latest = store.findById(row.id)
+        val synced = summary.failed == 0 && latest != null && latest.enabled == enabled &&
+            latest.syncState == (if (enabled) SkillSyncState.SYNCED else SkillSyncState.ABSENT)
         logger.info("Skill '{}' of user '{}' enabled={} (indexSynced={})", name, userId, enabled, synced)
         return SkillToggleResult.Applied(name = name, enabled = enabled, indexSynced = synced)
-    }
-
-    /**
-     * Hand the new disablement to the prompt view.
-     *
-     * Without this a skill switched off in the UI would keep being advertised until the next restart,
-     * because the prompt path reads a cache instead of querying the table per request.
-     */
-    private suspend fun publishVisibility() {
-        promptSource?.refreshVisibility()
     }
 
     private fun viewOf(entry: SkillCatalogEntry): SkillCatalogView {

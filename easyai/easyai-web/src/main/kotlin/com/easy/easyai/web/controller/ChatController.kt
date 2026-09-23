@@ -6,6 +6,7 @@ import com.easy.easyai.core.goal.GoalStatus
 import com.easy.easyai.core.goal.GoalStatusNotifier
 import com.easy.easyai.core.goal.GoalStore
 import com.easy.easyai.repository.session.AsyncSessionStore
+import com.easy.easyai.skills.command.CommandReferenceException
 import com.easy.easyai.snapshot.RevertService
 import com.easy.easyai.snapshot.SnapshotService
 import com.easy.easyai.web.model.*
@@ -378,6 +379,8 @@ class ChatController(
             val userId = verifyOwnership(sessionId)
             try {
                 chatStreamService.addQueuedMessage(sessionId, userId, request.content, request.type, request.attachments)
+            } catch (e: CommandReferenceException) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
             } catch (e: AttachmentValidationException) {
                 throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
             }
@@ -426,9 +429,15 @@ class ChatController(
     ): Mono<Map<String, String>> {
         return mono {
             verifyOwnership(sessionId)
-            val updated = chatStreamService.updateQueuedMessage(sessionId, queueId, request.content)
+            val updated = try {
+                chatStreamService.updateQueuedMessage(sessionId, queueId, request.content)
+            } catch (e: CommandReferenceException) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+            } catch (e: AttachmentValidationException) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
+            }
             if (!updated) {
-                throw ResponseStatusException(HttpStatus.NOT_FOUND, "Queued message not found: $queueId")
+                throw ResponseStatusException(HttpStatus.CONFLICT, "Queued message was consumed or changed; refresh the queue")
             }
             mapOf("status" to "updated")
         }

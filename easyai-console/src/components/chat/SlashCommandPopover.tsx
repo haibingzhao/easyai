@@ -1,18 +1,14 @@
-import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Settings } from 'lucide-react';
 import type { SlashCommand } from '@/types/command';
+import { commandGroup, commandLabel } from '@/utils/command-utils';
 
 interface SlashCommandPopoverProps {
   commands: SlashCommand[];
   selectedIndex: number;
   onSelect: (cmd: SlashCommand) => void;
   onClose: () => void;
-}
-
-interface CommandGroup {
-  label: string;
-  commands: SlashCommand[];
 }
 
 export const SlashCommandPopover: React.FC<SlashCommandPopoverProps> = ({
@@ -57,39 +53,6 @@ export const SlashCommandPopover: React.FC<SlashCommandPopoverProps> = ({
     };
   }, []);
 
-  // Group commands into three sections
-  const groups = useMemo<CommandGroup[]>(() => {
-    const userSkills: SlashCommand[] = [];
-    const projectSkills: SlashCommand[] = [];
-    const cmds: SlashCommand[] = [];
-
-    for (const cmd of commands) {
-      switch (cmd.category) {
-        case 'USER':
-          userSkills.push(cmd);
-          break;
-        case 'SKILL':
-          projectSkills.push(cmd);
-          break;
-        default:
-          cmds.push(cmd);
-          break;
-      }
-    }
-
-    const result: CommandGroup[] = [];
-    if (userSkills.length > 0) {
-      result.push({ label: 'Skills (User)', commands: userSkills });
-    }
-    if (cmds.length > 0) {
-      result.push({ label: 'Commands', commands: cmds });
-    }
-    if (projectSkills.length > 0) {
-      result.push({ label: 'Skills (Project)', commands: projectSkills });
-    }
-    return result;
-  }, [commands]);
-
   // Scroll selected item into view
   useEffect(() => {
     selectedRef.current?.scrollIntoView({ block: 'nearest' });
@@ -108,59 +71,39 @@ export const SlashCommandPopover: React.FC<SlashCommandPopoverProps> = ({
 
   if (commands.length === 0) return null;
 
-  // Compute flat index offset for each group
-  let flatIndex = 0;
-
   return (
     <div
       ref={listRef}
       className="absolute left-0 right-0 z-50 bottom-full mb-1 mx-0 relative"
     >
       <div className="bg-popover border border-border rounded-lg shadow-lg overflow-hidden max-h-72 overflow-y-auto">
-        {groups.map((group) => {
-          const groupStartIndex = flatIndex;
-          flatIndex += group.commands.length;
-
+        {commands.map((cmd, index) => {
+          const isSelected = index === selectedIndex;
+          const group = commandGroup(cmd);
           return (
-            <div key={group.label}>
-              {/* Group header — title case */}
-              <div className="px-3 pt-2 pb-1 text-[11px] font-semibold text-muted-foreground tracking-wider">
-                {group.label}
+            <React.Fragment key={cmd.source ?? `${cmd.category}-${cmd.name}`}>
+              {(index === 0 || commandGroup(commands[index - 1]) !== group) && (
+                <div className="px-3 pt-2 pb-1 text-[11px] font-semibold text-muted-foreground tracking-wider">
+                  {group}
+                </div>
+              )}
+              <div
+                ref={isSelected ? selectedRef : undefined}
+                title={cmd.source}
+                className={`flex items-start gap-2 px-3 py-1.5 cursor-pointer transition-colors ${
+                  isSelected ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50'
+                }`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onSelect(cmd);
+                }}
+                onMouseEnter={(e) => handleMouseEnter(cmd, e)}
+                onMouseLeave={handleMouseLeave}
+              >
+                <span className="text-sm font-mono font-medium shrink-0 leading-5">{commandLabel(cmd)}</span>
+                {cmd.description && <span className="text-xs text-muted-foreground truncate leading-5">{cmd.description}</span>}
               </div>
-
-              {/* Group items */}
-              {group.commands.map((cmd, localIndex) => {
-                const globalIndex = groupStartIndex + localIndex;
-                const isSelected = globalIndex === selectedIndex;
-
-                return (
-                  <div
-                    key={`${cmd.category}-${cmd.name}`}
-                    ref={isSelected ? selectedRef : undefined}
-                    className={`flex items-start gap-2 px-3 py-1.5 cursor-pointer transition-colors ${
-                      isSelected
-                        ? 'bg-accent text-accent-foreground'
-                        : 'hover:bg-muted/50'
-                    }`}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      onSelect(cmd);
-                    }}
-                    onMouseEnter={(e) => handleMouseEnter(cmd, e)}
-                    onMouseLeave={handleMouseLeave}
-                  >
-                    <span className="text-sm font-mono font-medium shrink-0 leading-5">
-                      {cmd.name}
-                    </span>
-                    {cmd.description && (
-                      <span className="text-xs text-muted-foreground truncate leading-5">
-                        {cmd.description}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            </React.Fragment>
           );
         })}
 

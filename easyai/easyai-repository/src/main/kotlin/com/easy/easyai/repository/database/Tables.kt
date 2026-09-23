@@ -335,6 +335,12 @@ object Tables {
         val projectHash = varchar("project_hash", 16).default("")  // granularity key: '' = GLOBAL, else sha256(projectPath) prefix
         val createdAt = long("created_at")
         val updatedAt = long("updated_at")
+        val indexedChecksum = varchar("indexed_checksum", 64).nullable()
+        val syncState = varchar("sync_state", 24).default("PENDING_INDEX")
+        val revision = long("revision").default(0L)
+        val nextAttemptAt = long("next_attempt_at").nullable()
+        val lastError = varchar("last_error", 2000).nullable()
+        val indexProjectPath = varchar("index_project_path", 512).nullable()
 
         override val primaryKey = PrimaryKey(id)
 

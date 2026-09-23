@@ -38,10 +38,16 @@ data class SkillCatalogEntry(
     val userId: String = DEFAULT_USER_ID,
     val projectHash: String = GLOBAL_HASH,
     val createdAt: Long = 0L,
-    val updatedAt: Long = 0L
+    val updatedAt: Long = 0L,
+    val indexedChecksum: String? = null,
+    val syncState: SkillSyncState = if (enabled) SkillSyncState.PENDING_INDEX else SkillSyncState.PENDING_DELETE,
+    val revision: Long = 0L,
+    val nextAttemptAt: Long? = null,
+    val lastError: String? = null,
+    /** Persisted slice address, not an authorisation source. */
+    val indexProjectPath: String? = null
 ) {
     companion object {
-        /** Claimed by a disk scan: the skill predated the catalog table, or an agent just wrote it. */
         const val SOURCE_LOCAL = "LOCAL"
 
         /** Default owner for filesystem-discovered skills (no user info on disk). */
@@ -54,3 +60,13 @@ data class SkillCatalogEntry(
         const val GLOBAL_HASH = ""
     }
 }
+
+enum class SkillSyncState { PENDING_INDEX, SUBMITTED, SYNCED, PENDING_DELETE, ABSENT }
+
+/** Only projection fields may be completed by an index worker. */
+data class SkillSyncUpdate(
+    val state: SkillSyncState,
+    val indexedChecksum: String?,
+    val nextAttemptAt: Long? = null,
+    val lastError: String? = null
+)

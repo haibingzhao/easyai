@@ -147,7 +147,7 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
         isCustomModel: effectiveIsCustomModel,
         enabled: true,
         options: Object.keys(options).length > 0 ? options : undefined,
-        capabilities: capabilities.vision ? capabilities : undefined,
+        capabilities: (capabilities.vision || capabilities.structuredOutput) ? capabilities : undefined,
         groupId: currentGroupId,
       };
 
@@ -365,6 +365,23 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
                 }`}
               />
             </button>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium mb-1 block">{i18n('Structured Output')}</label>
+            <select
+              value={capabilities.structuredOutput || ''}
+              onChange={(e) => setCapabilities(prev => ({
+                ...prev,
+                structuredOutput: (e.target.value || undefined) as ModelCapabilities['structuredOutput'],
+              }))}
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+            >
+              <option value="">{i18n('Default')}</option>
+              <option value="JSON_SCHEMA">JSON Schema</option>
+              <option value="JSON_OBJECT">{i18n('JSON Object only')}</option>
+              <option value="NONE">{i18n('None (prompt fallback)')}</option>
+            </select>
           </div>
 
           <div>

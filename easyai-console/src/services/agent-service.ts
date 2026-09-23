@@ -1,5 +1,6 @@
 import type { AgentDto, AgentCreateRequest, ToolInfo, AgentToolConfig, AgentConfigsRequest, TargetType, SkillInfo, ValidateTemplateResponse } from '@/types/agent';
 import { authFetch, fetchJson, fetchVoid, downloadBlob, JSON_HEADERS } from '@/services/api-client';
+import { useProjectStore } from '@/services/stores/project-store';
 
 const API_BASE = '/api/agents';
 
@@ -55,8 +56,10 @@ export class AgentService {
     });
   }
 
-  async listSkills(): Promise<SkillInfo[]> {
-    return fetchJson<SkillInfo[]>('/api/skills');
+  async listSkills(projectId = useProjectStore.getState().currentProject?.id, signal?: AbortSignal): Promise<SkillInfo[]> {
+    const params = new URLSearchParams();
+    if (projectId) params.set('projectId', projectId);
+    return fetchJson<SkillInfo[]>(`/api/skills?${params}`, { signal });
   }
 
   async validateTemplate(template: string): Promise<ValidateTemplateResponse> {

@@ -85,7 +85,8 @@ data class RagDocumentDetail(
     val content: String?,
     val status: String?,
     val createTime: Long?,
-    val chunksCount: Int?
+    val chunksCount: Int?,
+    val metadata: Map<String, Any?> = emptyMap()
 )
 
 /**
