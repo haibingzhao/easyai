@@ -1,12 +1,12 @@
 import React from 'react';
 import type { Message, Attachment } from '../../types/message';
-import { getAttachmentIcon, isImageAttachment, splitByFileRefs, copyMessageSelection } from '../../utils/attachment-utils';
+import { getAttachmentIcon, isImageAttachment, parseFileRefs, splitByFileRefs, copyMessageSelection } from '../../utils/attachment-utils';
 import { commandLabel, parseCommand, serializeCommand } from '@/utils/command-utils';
 import { RotateCw } from 'lucide-react';
 import { AttachmentImage } from './AttachmentImage';
 
 /** Parse message content and render command prefix (e.g. /goal) as a styled chip, plus file/folder references */
-export function UserMessageContent({ content }: { content: string }) {
+export function UserMessageContent({ content, attachments = [] }: { content: string; attachments?: Attachment[] }) {
   const parsed = parseCommand(content);
   const cmdChip = parsed ? (
     <span className="command-chip" title={parsed.command.source} data-command-token={serializeCommand(parsed.command, '')}>
@@ -29,6 +29,10 @@ export function UserMessageContent({ content }: { content: string }) {
       {cmdChip}
       {segments.map((seg, i) => {
         if (seg.type === 'fileRef') {
+          const image = attachments.find((attachment) => attachment.filePath === seg.path && attachment.mimeType.startsWith('image/'));
+          if (image) {
+            return <AttachmentImage key={i} attachment={{ ...image, name: seg.name }} inline className="w-4 h-4 shrink-0 rounded-sm object-cover" />;
+          }
           return (
             <span key={i} className="mention-chip mention-file" title={seg.path} data-path={seg.path} data-name={seg.name} data-type="file">
               📄 {seg.name}
@@ -99,6 +103,11 @@ export const UserMessage: React.FC<UserMessageProps> = ({ message, isEditable, o
   // Check if this is a system-injected completion check message
   const isCompletionCheck = message.metadata?.source === 'completion_check';
   const isSystemMessage = isCompletionCheck;
+  const attachments = message.role === 'user-with-attachments' ? message.attachments ?? [] : [];
+  const inlineRefPaths = new Set(parseFileRefs(message.content).map((ref) => ref.path));
+  const previewAttachments = attachments.filter((attachment) =>
+    !attachment.mimeType.startsWith('image/') || !attachment.filePath || !inlineRefPaths.has(attachment.filePath),
+  );
 
   return (
     <div
@@ -126,11 +135,11 @@ export const UserMessage: React.FC<UserMessageProps> = ({ message, isEditable, o
           data-message-content={message.content}
           onCopy={(e) => { if (copyMessageSelection(e.currentTarget, e.clipboardData)) e.preventDefault(); }}
         >
-          <UserMessageContent content={message.content} />
+          <UserMessageContent content={message.content} attachments={attachments} />
         </div>
         
-        {message.role === 'user-with-attachments' && message.attachments && message.attachments.length > 0 && (
-          <AttachmentPreview attachments={message.attachments} />
+        {previewAttachments.length > 0 && (
+          <AttachmentPreview attachments={previewAttachments} />
         )}
 
         {/* Inline time bar: shown on hover */}

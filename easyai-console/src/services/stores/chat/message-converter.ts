@@ -3,6 +3,8 @@ import type {
   MessageSnapshot,
   ToolResultContentBlock as ToolResultContentBlockData,
   CustomContentBlock,
+  FileRefContentBlock,
+  FolderRefContentBlock,
 } from '@/services/session-service';
 import {
   type StreamingBlock,
@@ -16,7 +18,7 @@ import {
   isFileRefBlock,
   isFolderRefBlock,
 } from './types';
-import { parseAllRefs, buildFolderRef } from '@/utils/attachment-utils';
+import { parseAllRefs, buildFileRef, buildFolderRef } from '@/utils/attachment-utils';
 
 /**
  * Convert sub-agent streaming blocks to Message[] for committed subAgentMessages.
@@ -83,7 +85,6 @@ export function convertSnapshot(msg: MessageSnapshot): Message {
     const textContent = msg.content.filter(isTextBlock).map(b => b.text).join('');
     const imageBlocks = msg.content.filter(isImageBlock);
     const fileRefBlocks = msg.content.filter(isFileRefBlock);
-    const folderRefBlocks = msg.content.filter(isFolderRefBlock);
     // Parse all refs (files and folders) from text content
     const allRefs = parseAllRefs(textContent);
 
@@ -114,14 +115,17 @@ export function convertSnapshot(msg: MessageSnapshot): Message {
       });
     });
 
-    // FolderRefContent blocks: re-insert the encoded ref at its recorded offset so
-    // the inline 📁 chip renders at its original sentence position in history.
     let displayContent = textContent;
     let insertDelta = 0;
-    folderRefBlocks
+    // Stable sorting preserves block order for image/folder refs sharing an offset, matching the LLM view.
+    msg.content
+      .filter((block): block is FileRefContentBlock | FolderRefContentBlock =>
+        isFolderRefBlock(block) || (isFileRefBlock(block) && block.mimeType.startsWith('image/')
+          && !allRefs.some((ref) => ref.type === 'file' && ref.path === block.filePath)),
+      )
       .sort((a, b) => a.displayOffset - b.displayOffset)
       .forEach((ref) => {
-        const encoded = buildFolderRef(ref.name, ref.filePath);
+        const encoded = isFolderRefBlock(ref) ? buildFolderRef(ref.name, ref.filePath) : buildFileRef(ref.name, ref.filePath);
         const at = Math.min(Math.max(ref.displayOffset + insertDelta, 0), displayContent.length);
         displayContent = displayContent.slice(0, at) + encoded + displayContent.slice(at);
         insertDelta += encoded.length;
@@ -215,6 +219,13 @@ export function convertSnapshot(msg: MessageSnapshot): Message {
   if (role === 'custom') {
     const customBlock = msg.content.find((b): b is CustomContentBlock => b.type === 'custom');
     return { role: 'custom', customType: customBlock?.customType || '', metadata: customBlock?.metadata || {}, timestamp: msg.timestamp } as Message;
+  }
+
+  if (role === 'error') {
+    // Backend ErrorMessage carries its text as a TextContent block; without this the
+    // loaded session renders an empty error bubble and hides the real failure reason.
+    const errorText = msg.content.filter(isTextBlock).map(b => b.text).join('');
+    return { role: 'error', content: errorText, timestamp: msg.timestamp, messageId: msg.id } as Message;
   }
 
   return { role: role, content: '', timestamp: msg.timestamp } as Message;

@@ -26,8 +26,12 @@ abstract class AbstractMediaToolBuilder(
     protected val serviceKind: String
 ) : ToolBuilder {
 
+    /**
+     * Generation is auto-approved: the tools only exist once a user has configured a paid provider for
+     * [serviceKind], so that configuration is already the consent. Users can still add an ASK/DENY rule.
+     */
     override val defaultPermissionRules = listOf(
-        PermissionRule("tool.execute.media", "*", PermissionAction.ASK)
+        PermissionRule("tool.execute.media", "*", PermissionAction.ALLOW)
     )
 
     override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {

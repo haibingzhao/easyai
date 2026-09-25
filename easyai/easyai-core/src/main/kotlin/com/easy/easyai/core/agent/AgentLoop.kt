@@ -98,6 +98,8 @@ internal class AgentLoop(
     /** Tool names executed during this run, surfaced to completion checks for scope decisions. */
     private val invokedToolNames = mutableSetOf<String>()
 
+    private val reInvocationDetector = ReInvocationDetector()
+
     /** Why the loop ended — set during run() before end() is called. */
     @Volatile
     var endReason: String = "normal"
@@ -257,6 +259,7 @@ internal class AgentLoop(
             assistantMessage.usage.inputTokens, assistantMessage.usage.outputTokens, assistantMessage.usage.cacheReadTokens, assistantMessage.usage.cacheWriteTokens)
 
         var waitForUserReason: String? = null
+        var toolResults = emptyList<ToolCallResult>()
 
         if (toolCalls.isNotEmpty()) {
             // Check abort BEFORE executing tools to avoid starting expensive operations
@@ -274,7 +277,7 @@ internal class AgentLoop(
             logger.debug("${logPrefix}[Turn {}] Executing {} tool calls: {}", turnId, toolCalls.size,
                 toolCalls.joinToString(", ") { "${it.name}(${it.id})" })
             val toolExecStartTime = System.currentTimeMillis()
-            val toolResults = executeToolCallsWithHooks(
+            toolResults = executeToolCallsWithHooks(
                 messageId = messageId,
                 toolCalls = toolCalls,
                 tools = tools,
@@ -367,6 +370,37 @@ internal class AgentLoop(
             }
             push(TurnEndEvent(turnId, context.sessionId ?: "default"))
             return false
+        }
+
+        val notices = reInvocationDetector.observeTurn(toolCalls, toolResults)
+        if (notices.isNotEmpty()) {
+            val steeringText = buildString {
+                appendLine("Repeated tool calls produced identical results with the same arguments:")
+                for (notice in notices) {
+                    appendLine("- ${notice.toolName} (call ${notice.toolCallId}): ${notice.count} consecutive identical outcomes [${notice.level}]")
+                }
+                if (notices.any { it.level == ReInvocationDetector.Level.ESCALATE }) {
+                    appendLine("Repetition is persisting. Change your next action instead of immediately repeating these calls.")
+                } else {
+                    appendLine("Avoid immediately repeating these calls without evidence that another attempt will help.")
+                }
+                appendLine("Choose a justified next step: adjust your approach or request user direction.")
+                if (tools.any { it.name == "bash" }) {
+                    appendLine("If a delay could help, use bash for a bounded sleep, subject to permissions, with a timeout longer than the delay. Finish waiting before retrying; do not run the wait and retry in the same batch.")
+                }
+                if (tools.any { it.name == "ask_question" }) {
+                    appendLine("If continuing requires the user's decision, call ask_question alone to ask whether to continue or stop, then wait for the answer.")
+                } else {
+                    appendLine("If user direction is needed, explain the repeated outcome and ask for instructions in your response.")
+                }
+            }
+            appendAndNotify(
+                UserMessage(
+                    content = listOf(TextContent(steeringText)),
+                    metadata = mapOf(UserMessage.SOURCE_KEY to UserMessage.SOURCE_STEERING)
+                ),
+                transcript
+            )
         }
 
         logger.debug("${logPrefix}[Turn {}] Checking steering messages", turnId)

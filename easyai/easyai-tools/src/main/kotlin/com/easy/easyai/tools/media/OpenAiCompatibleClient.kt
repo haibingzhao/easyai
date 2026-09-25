@@ -9,6 +9,7 @@ import org.springframework.http.client.reactive.ReactorClientHttpConnector
 import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.bodyToMono
 import reactor.netty.http.client.HttpClient
+import java.net.URI
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -83,7 +84,7 @@ class OpenAiCompatibleClient(private val settings: MediaProviderSettings) {
                 .headers { applyAuth(it) }
                 .bodyValue(body)
                 .retrieve()
-                .bodyToMono(ByteArray::class.java)
+                .bodyToMono<ByteArray>()
                 .awaitSingle()
         }
 
@@ -102,7 +103,7 @@ class OpenAiCompatibleClient(private val settings: MediaProviderSettings) {
         MediaFetch.validateNotInternal(url)
         return withTimeout(timeout) {
             client.get()
-                .uri(url)
+                .uri(URI.create(url))
                 .retrieve()
                 .bodyToMono<ByteArray>()
                 .awaitSingle()

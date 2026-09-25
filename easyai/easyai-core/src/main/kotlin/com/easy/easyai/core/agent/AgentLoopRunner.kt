@@ -309,6 +309,35 @@ internal class AgentLoopRunner(
                     // rejection: never retried, surfaced with an actionable user message.
                     logger.warn("${logPrefix}[Turn {}] LLM output blocked by content safety policy (no retry): {}",
                         turnId, e.message)
+                    // The gateway aborts mid-stream, so whatever was generated before the
+                    // filter tripped has already been pushed to the frontend as live chunks.
+                    // Persist it (mirroring the abort path above) so a session reload keeps
+                    // the partial analysis instead of only the error message.
+                    if (fullText.isNotEmpty() || fullThinking.isNotEmpty()) {
+                        if (fullThinking.isNotEmpty() && !thinkingEnded) {
+                            thinkingDuration = System.currentTimeMillis() - thinkingStartTime
+                            push(ThinkingEndEvent(messageId, turnId, context.sessionId ?: "default", thinkingDuration))
+                        }
+                        val partialContent = mutableListOf<ContentBlock>()
+                        if (fullThinking.isNotEmpty()) {
+                            partialContent.add(ThinkingContent(thinking = fullThinking.toString(), durationMs = thinkingDuration.takeIf { it > 0 }))
+                        }
+                        if (fullText.isNotEmpty()) {
+                            partialContent.add(TextContent(text = fullText.toString(), durationMs = (System.currentTimeMillis() - textStartTime).takeIf { it > 0 }))
+                        }
+                        partialContent.add(TextContent("\n\n[输出被内容安全策略截断]"))
+                        val partialMessage = AssistantMessage(
+                            id = messageId,
+                            content = partialContent,
+                            stopReason = StopReason.ERROR,
+                            usage = Usage()
+                        )
+                        transcript.add(partialMessage)
+                        services.messageListener?.onMessageAdded(listOf(partialMessage))
+                        push(MessageEndEvent(messageId, turnId, context.sessionId ?: "default", partialMessage, usage = partialMessage.usage, modelName = context.modelId))
+                        logger.info("${logPrefix}[Turn {}] Saved partial message before content-filter abort ({} chars text, {} chars thinking)",
+                            turnId, fullText.length, fullThinking.length)
+                    }
                     throw ContentFilteredException(
                         "模型输出被内容安全策略拦截，请调整问题后重试", e
                     )

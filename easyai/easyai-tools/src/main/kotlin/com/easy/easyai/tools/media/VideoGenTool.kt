@@ -24,6 +24,7 @@ import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.bodyToMono
 import reactor.netty.http.client.HttpClient
 import tools.jackson.databind.JsonNode
+import java.net.URI
 import kotlin.time.Duration.Companion.seconds
 
 /** Parameters for [VideoGenTool]. */
@@ -160,7 +161,7 @@ class VideoGenTool(
     }
 
     private suspend fun download(url: String): ByteArray = withTimeout(timeout) {
-        client.get().uri(url).retrieve().bodyToMono<ByteArray>().awaitSingle()
+        client.get().uri(URI.create(url)).retrieve().bodyToMono<ByteArray>().awaitSingle()
     }
 
     private fun applyAuth(headers: HttpHeaders) {

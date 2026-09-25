@@ -40,6 +40,12 @@ class MessageConverterTest {
 
     private val converter = DefaultMessageConverter()
 
+    private fun writePng(path: Path): Path {
+        val image = java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+        javax.imageio.ImageIO.write(image, "png", path.toFile())
+        return path
+    }
+
     @Nested
     inner class `toSpringAiMessages` {
 
@@ -240,6 +246,71 @@ class MessageConverterTest {
         }
 
         @Test
+        fun `anchors image markers inline at their recorded offsets`(@TempDir tempDir: Path) = runTest {
+            val img1 = writePng(tempDir.resolve("a.png"))
+            val img2 = writePng(tempDir.resolve("b.png"))
+            val messages = listOf(
+                UserMessage(content = listOf(
+                    TextContent("compare  and  please"),
+                    FileRefContent(filePath = img1.toString(), name = "a.png", mimeType = "image/png", source = "inline", displayOffset = 8),
+                    FileRefContent(filePath = img2.toString(), name = "b.png", mimeType = "image/png", source = "inline", displayOffset = 13)
+                ))
+            )
+            val result = converter.toSpringAiMessages(messages).single() as SpringAiUserMsg
+
+            assertEquals(2, result.media.size)
+            val text = result.text!!
+            assertTrue(
+                text.contains("compare [image 1: a.png] and [image 2: b.png] please"),
+                "Expected markers at the sentence positions, got: $text"
+            )
+            assertTrue(text.contains("N-th image"), "Expected numbering instruction, got: $text")
+        }
+
+        @Test
+        fun `numbers image markers by media position including legacy base64 images`(@TempDir tempDir: Path) = runTest {
+            val img = writePng(tempDir.resolve("i.png"))
+            val messages = listOf(
+                UserMessage(content = listOf(
+                    TextContent("see "),
+                    ImageContent(byteArrayOf(1, 2), "image/png"),
+                    FileRefContent(filePath = img.toString(), name = "i.png", mimeType = "image/png", displayOffset = 4)
+                ))
+            )
+            val result = converter.toSpringAiMessages(messages).single() as SpringAiUserMsg
+
+            assertEquals(2, result.media.size)
+            assertTrue(
+                result.text!!.contains("see [image 2: i.png]"),
+                "Legacy image occupies media slot 1, so the ref must be numbered 2, got: ${result.text}"
+            )
+        }
+
+        @Test
+        fun `keeps original attachment order for refs sharing one anchor offset`(@TempDir tempDir: Path) = runTest {
+            val txt = tempDir.resolve("n.txt")
+            Files.writeString(txt, "T")
+            val img = writePng(tempDir.resolve("i.png"))
+            val messages = listOf(
+                UserMessage(content = listOf(
+                    TextContent("hello"),
+                    FolderRefContent(filePath = "/proj/d", name = "d", displayOffset = 5),
+                    FileRefContent(filePath = img.toString(), name = "i.png", mimeType = "image/png", displayOffset = 5),
+                    FileRefContent(filePath = txt.toString(), name = "n.txt", mimeType = "text/plain", displayOffset = 5)
+                ))
+            )
+            val text = (converter.toSpringAiMessages(messages).single() as SpringAiUserMsg).text!!
+
+            val folderAt = text.indexOf("[folder d: /proj/d]")
+            val imageAt = text.indexOf("[image 1: i.png]")
+            val fileAt = text.indexOf("<file name=\"n.txt\">")
+            assertTrue(
+                folderAt in 0 until imageAt && imageAt in 0 until fileAt,
+                "Expected folder, image, file order at the shared anchor, got: $text"
+            )
+        }
+
+        @Test
         fun `converts to path-only references when total size exceeds limit`(@TempDir tempDir: Path) = runTest {
             // Set a very low limit (100 bytes) so our small files exceed it
             val lowLimitConverter = DefaultMessageConverter(maxTotalInlineFileBytes = 100L)
@@ -362,7 +433,10 @@ class MessageConverterTest {
             assertEquals(firstUrl, first.media.single().data)
             assertEquals(secondUrl, second.media.single().data)
             assertEquals("image/png", first.media.single().mimeType.toString())
-            assertEquals("Look ", first.text)
+            assertTrue(
+                first.text!!.startsWith("Look [image 1: screenshot.png]"),
+                "Expected positional image marker at the ref offset, got: ${first.text}"
+            )
             assertEquals(original, message)
             assertSame(ref, message.content[1])
             assertEquals(path, ref.filePath)

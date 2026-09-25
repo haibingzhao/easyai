@@ -5,7 +5,7 @@ import type { Attachment } from '@/types/message';
 import { useAttachmentImage } from '@/hooks/useAttachmentImage';
 
 /** One loader owns both the thumbnail and the lightbox, including authenticated Blob URLs. */
-export function AttachmentImage({ attachment, className }: { attachment: Attachment; className: string }) {
+export function AttachmentImage({ attachment, className, inline = false }: { attachment: Attachment; className: string; inline?: boolean }) {
   const { src, error, onError, retry } = useAttachmentImage(attachment);
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
@@ -36,7 +36,29 @@ export function AttachmentImage({ attachment, className }: { attachment: Attachm
 
   return (
     <>
-      {src ? (
+      {inline ? (
+        <button
+          type="button"
+          className="mention-chip mention-file max-w-full hover:opacity-80 transition-opacity"
+          title={error ? `Image unavailable: ${attachment.name}. Click to retry.` : attachment.filePath ?? attachment.name}
+          aria-label={error ? `Retry image ${attachment.name}` : `Preview image ${attachment.name}`}
+          data-path={attachment.filePath}
+          data-name={attachment.name}
+          data-type="file"
+          onClick={(event) => { event.stopPropagation(); if (error) retry(); else if (src) setLightboxOpen(true); }}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
+          {src ? (
+            <img
+              src={src}
+              alt=""
+              className={className}
+              onError={(event) => onError(event.currentTarget.getAttribute('src') ?? '')}
+            />
+          ) : error ? <ImageOff className="w-4 h-4 shrink-0" /> : <Loader2 className="w-4 h-4 shrink-0 animate-spin" />}
+          <span className="truncate">{attachment.name}</span>
+        </button>
+      ) : src ? (
         <img
           src={src}
           alt={attachment.name}

@@ -14,6 +14,7 @@ import org.springframework.util.MimeType
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.IdentityHashMap
 import org.springframework.ai.chat.messages.AssistantMessage as SpringAiAssistantMessage
 import org.springframework.ai.chat.messages.SystemMessage as SpringAiSystemMessage
 import org.springframework.ai.chat.messages.UserMessage as SpringAiUserMessage
@@ -59,7 +60,15 @@ class DefaultMessageConverter(
 
                     // Validate and resolve all file refs first, collecting sizes
                     data class ResolvedRef(val ref: FileRefContent, val path: Path, val size: Long)
+                    data class AnchoredInsertion(val offset: Int, val seq: Int, val snippet: String)
                     val resolvedRefs = mutableListOf<ResolvedRef>()
+                    // Original block order breaks insertion ties when several refs share one
+                    // displayOffset (uploaded attachments are all anchored at the text end).
+                    val blockSeq = IdentityHashMap<ContentBlock, Int>()
+                    msg.content.forEachIndexed { index, block -> blockSeq.putIfAbsent(block, index) }
+                    val anchoredInsertions = mutableListOf<AnchoredInsertion>()
+                    var hasImageMarkers = false
+                    fun imageMarker(ref: FileRefContent): String = "[image ${mediaList.size}: ${ref.name}]"
                     for (img in images) {
                         mediaList.add(
                             Media.builder()
@@ -71,6 +80,10 @@ class DefaultMessageConverter(
                     for (ref in fileRefs) {
                         if (StoredFileReference.isStored(ref.filePath)) {
                             mediaList.add(resolveStoredImage(ref, userId))
+                            anchoredInsertions.add(
+                                AnchoredInsertion(ref.displayOffset, blockSeq[ref] ?: 0, imageMarker(ref))
+                            )
+                            hasImageMarkers = true
                             continue
                         }
                         val resolvedPath = try {
@@ -126,8 +139,8 @@ class DefaultMessageConverter(
                     // Refs are re-inserted into the original text at their recorded
                     // displayOffset so the LLM sees which sentence each ref belongs to
                     // (uploaded attachments are anchored at the end of the text by
-                    // AttachmentProcessor).
-                    val anchoredInsertions = mutableListOf<Pair<Int, String>>() // offset to snippet
+                    // AttachmentProcessor). Images get a positional [image N: name] marker
+                    // tying each Media entry to the sentence it was placed in.
 
                     for (resolved in resolvedRefs) {
                         val ref = resolved.ref
@@ -144,6 +157,10 @@ class DefaultMessageConverter(
                                     .data(bytes)
                                     .build()
                             )
+                            anchoredInsertions.add(
+                                AnchoredInsertion(ref.displayOffset, blockSeq[ref] ?: 0, imageMarker(ref))
+                            )
+                            hasImageMarkers = true
                         } else if (!exceedsTotalLimit) {
                             // Text file → inline into message text (only when within total limit)
                             val fileText = try { Files.readString(path) } catch (e: Exception) {
@@ -152,7 +169,7 @@ class DefaultMessageConverter(
                             }
                             // Wrap file content in CDATA to safely embed arbitrary text in XML
                             val snippet = "<file name=\"${escapeXmlAttr(ref.name)}\">\n<![CDATA[$fileText]]>\n</file>"
-                            anchoredInsertions.add(ref.displayOffset to snippet)
+                            anchoredInsertions.add(AnchoredInsertion(ref.displayOffset, blockSeq[ref] ?: 0, snippet))
                         }
                     }
 
@@ -161,7 +178,13 @@ class DefaultMessageConverter(
                     // Directory contents are never inlined — explored via list/read tools.
                     val folderRefs = msg.content.filterIsInstance<FolderRefContent>()
                     for (folder in folderRefs) {
-                        anchoredInsertions.add(folder.displayOffset to "[folder ${folder.name}: ${folder.filePath}]")
+                        anchoredInsertions.add(
+                            AnchoredInsertion(
+                                folder.displayOffset,
+                                blockSeq[folder] ?: 0,
+                                "[folder ${folder.name}: ${folder.filePath}]"
+                            )
+                        )
                     }
 
                     if (anchoredInsertions.isNotEmpty()) {
@@ -170,12 +193,20 @@ class DefaultMessageConverter(
                         // appended after it. Offsets are relative to that text.
                         var base = if (textParts.isNotEmpty()) textParts.removeAt(0) else ""
                         var delta = 0
-                        for ((offset, snippet) in anchoredInsertions.sortedBy { it.first }) {
-                            val at = (offset + delta).coerceIn(0, base.length)
-                            base = base.substring(0, at) + snippet + base.substring(at)
-                            delta += snippet.length
+                        for (insertion in anchoredInsertions.sortedWith(compareBy({ it.offset }, { it.seq }))) {
+                            val at = (insertion.offset + delta).coerceIn(0, base.length)
+                            base = base.substring(0, at) + insertion.snippet + base.substring(at)
+                            delta += insertion.snippet.length
                         }
                         textParts.add(0, base)
+                    }
+
+                    if (hasImageMarkers) {
+                        // Stated once for all positional image markers
+                        textParts.add(
+                            "(Markers like [image N: name] in the text above show where each attached image " +
+                                "appeared in the user's message; image N is the N-th image attached to it.)"
+                        )
                     }
 
                     if (folderRefs.isNotEmpty()) {

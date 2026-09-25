@@ -960,7 +960,12 @@ class R2dbcAsyncSessionStore(
                 SystemMessage(id = messageId, text = text)
             }
             Role.CUSTOM -> CustomMessage(id = messageId, content = contentBlocks, metadata = metadata)
-            Role.ERROR -> null
+            Role.ERROR -> {
+                // Reconstruct so the real failure reason survives a session reload;
+                // dropping it left the UI showing only a generic "interrupted" banner.
+                val text = contentBlocks.filterIsInstance<TextContent>().joinToString("") { it.text }
+                ErrorMessage(id = messageId, error = text)
+            }
         }
 
         val compactedAt = row[Tables.Message.compactedAt]
