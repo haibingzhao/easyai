@@ -26,6 +26,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import java.nio.file.Files
 
 /**
  * Tests [FetchMediaTool]: expiring URLs must come back as stable MediaResult references,
@@ -51,8 +52,9 @@ class FetchMediaToolTest {
 
     private fun tool(
         storage: ObjectStorage,
+        projectPath: Path? = Path.of("/proj"),
         fetch: suspend (String) -> Pair<ByteArray, String?>
-    ) = FetchMediaTool(metadata, storage, "alice", fetch)
+    ) = FetchMediaTool(metadata, storage, "alice", projectPath = projectPath, fetch = fetch)
 
     private fun execute(tool: FetchMediaTool, args: Map<String, Any?>): ToolResult = runBlocking {
         tool.execute(
@@ -190,6 +192,111 @@ class FetchMediaToolTest {
             )) {
                 assertFailsWith<IllegalArgumentException>("expected refusal for $url") { MediaFetch.validateNotInternal(url) }
             }
+        }
+    }
+
+    @Nested
+    inner class `savePath` {
+
+        @Test
+        fun `single url with savePath writes file to disk`() {
+            val tmpDir = Files.createTempDirectory("fetch-media-test")
+            val target = tmpDir.resolve("downloaded.png")
+            try {
+                val storage = InMemoryStorage()
+                val result = execute(
+                    tool(storage) { "fake-png-bytes".toByteArray() to "image/png" },
+                    mapOf("url" to "https://example.com/a.png", "savePath" to target.toString())
+                )
+
+                assertFalse(result.isError)
+                assertTrue(Files.exists(target), "file should be written to disk")
+                assertTrue(Files.readAllBytes(target).contentEquals("fake-png-bytes".toByteArray()))
+                assertTrue(storage.objects.isNotEmpty(), "OSS storage should still receive the file")
+            } finally {
+                Files.walk(tmpDir).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
+
+        @Test
+        fun `relative savePath resolves against project path`() {
+            val tmpDir = Files.createTempDirectory("fetch-media-test")
+            try {
+                val storage = InMemoryStorage()
+                val result = execute(
+                    tool(storage, projectPath = tmpDir) { "bytes".toByteArray() to "image/png" },
+                    mapOf("url" to "https://example.com/a.png", "savePath" to "output/pic.png")
+                )
+
+                assertFalse(result.isError)
+                assertTrue(Files.exists(tmpDir.resolve("output/pic.png")))
+            } finally {
+                Files.walk(tmpDir).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
+
+        @Test
+        fun `savePath without project path is an error`() {
+            val storage = InMemoryStorage()
+            val result = execute(
+                tool(storage, projectPath = null) { "bytes".toByteArray() to "image/png" },
+                mapOf("url" to "https://example.com/a.png", "savePath" to "/tmp/foo.png")
+            )
+            assertTrue(result.isError)
+            assertTrue(output(result).contains("project path"), output(result))
+        }
+    }
+
+    @Nested
+    inner class `internal URL short-circuit` {
+
+        @Test
+        fun `internal URL skips download and re-storage`() {
+            val storage = InMemoryStorage()
+            runBlocking { storage.put("media/alice/2026-09-23/abc.png", "original-bytes".toByteArray(), "image/png") }
+            var downloadCalls = 0
+
+            val result = execute(
+                tool(storage) { downloadCalls++; ByteArray(0) to "image/png" },
+                mapOf("url" to "/api/media/file?key=media/alice/2026-09-23/abc.png")
+            )
+
+            assertFalse(result.isError)
+            assertEquals(0, downloadCalls, "should not download when URL is internal")
+            assertEquals(1, storage.objects.size, "should not re-store")
+            val json = SharedObjectMapper.instance.readTree(output(result))
+            assertEquals("media/alice/2026-09-23/abc.png", json.path("items")[0].path("key").asString())
+        }
+
+        @Test
+        fun `internal URL with savePath reads from storage and writes to disk`() {
+            val tmpDir = Files.createTempDirectory("fetch-media-internal")
+            val target = tmpDir.resolve("saved.png")
+            try {
+                val storage = InMemoryStorage()
+                runBlocking { storage.put("media/alice/2026-09-23/abc.png", "stored-bytes".toByteArray(), "image/png") }
+
+                val result = execute(
+                    tool(storage) { throw IllegalStateException("should not be called") },
+                    mapOf("url" to "/api/media/file?key=media/alice/2026-09-23/abc.png", "savePath" to target.toString())
+                )
+
+                assertFalse(result.isError)
+                assertTrue(Files.exists(target))
+                assertTrue(Files.readAllBytes(target).contentEquals("stored-bytes".toByteArray()))
+            } finally {
+                Files.walk(tmpDir).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            }
+        }
+
+        @Test
+        fun `storageKeyOf parses internal URLs`() {
+            assertEquals("media/alice/x.png", FetchMediaTool.storageKeyOf("/api/media/file?key=media/alice/x.png"))
+            assertEquals("media/alice/x.png", FetchMediaTool.storageKeyOf("http://localhost:8080/api/media/file?key=media/alice/x.png"))
+            assertEquals("media/alice/x.png", FetchMediaTool.storageKeyOf("http://localhost:8080/api/media/file?token=abc&key=media/alice/x.png"))
+            assertNull(FetchMediaTool.storageKeyOf("https://example.com/image.png"))
+            assertNull(FetchMediaTool.storageKeyOf("https://example.com/api/media/file"))
+            assertNull(FetchMediaTool.storageKeyOf("/api/other?key=foo"))
         }
     }
 
