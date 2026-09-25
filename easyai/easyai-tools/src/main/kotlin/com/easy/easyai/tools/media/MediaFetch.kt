@@ -23,6 +23,7 @@ internal object MediaFetch {
     private val client: WebClient = WebClient.builder()
         .clientConnector(ReactorClientHttpConnector(HttpClient.create().followRedirect(false)))
         .codecs { it.defaultCodecs().maxInMemorySize(MAX_IN_MEMORY) }
+        .defaultHeader("User-Agent", DEFAULT_USER_AGENT)
         .build()
 
     /** Download [url]; returns the bytes plus the response Content-Type (null when absent). */
@@ -30,7 +31,8 @@ internal object MediaFetch {
         validateNotInternal(url)
         return withTimeout(timeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS).seconds) {
             client.get()
-                .uri(url)
+                // URI, not String: a signed URL's %XX escapes would be re-encoded as a URI template
+                .uri(URI.create(url))
                 .exchangeToMono { response ->
                     val status = response.statusCode().value()
                     if (status !in 200..299) {
@@ -56,6 +58,7 @@ internal object MediaFetch {
         }
     }
 
+    private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     private const val MAX_IN_MEMORY = 32 * 1024 * 1024 // 32MB: oversized bodies fail fast, not OOM
     private const val DEFAULT_TIMEOUT_SECONDS = 60L
     private const val MAX_TIMEOUT_SECONDS = 900L
