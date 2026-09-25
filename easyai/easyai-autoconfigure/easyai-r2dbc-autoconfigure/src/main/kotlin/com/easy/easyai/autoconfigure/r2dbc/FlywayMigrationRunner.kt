@@ -29,6 +29,9 @@ class FlywayMigrationRunner(private val properties: R2dbcProperties) {
     /**
      * Run Flyway migration synchronously.
      * Safe to call on startup thread — after first run, only reads flyway_schema_history (sub-ms).
+     *
+     * Strict version ordering: a history row with a version above the local scripts (e.g. left
+     * behind by another product sharing this database) fails startup instead of being ignored.
      */
     fun migrate() {
         val jdbcUrl = toJdbcUrl(properties.url)
@@ -39,7 +42,6 @@ class FlywayMigrationRunner(private val properties: R2dbcProperties) {
             .locations("classpath:db/migration")
             .baselineOnMigrate(true)
             .baselineVersion("0")
-            .outOfOrder(true)
             .load()
 
         val result = flyway.migrate()
