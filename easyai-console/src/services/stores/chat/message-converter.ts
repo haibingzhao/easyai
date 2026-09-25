@@ -221,5 +221,12 @@ export function convertSnapshot(msg: MessageSnapshot): Message {
     return { role: 'custom', customType: customBlock?.customType || '', metadata: customBlock?.metadata || {}, timestamp: msg.timestamp } as Message;
   }
 
+  if (role === 'error') {
+    // Backend ErrorMessage carries its text as a TextContent block; without this the
+    // loaded session renders an empty error bubble and hides the real failure reason.
+    const errorText = msg.content.filter(isTextBlock).map(b => b.text).join('');
+    return { role: 'error', content: errorText, timestamp: msg.timestamp, messageId: msg.id } as Message;
+  }
+
   return { role: role, content: '', timestamp: msg.timestamp } as Message;
 }

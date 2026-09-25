@@ -413,6 +413,13 @@ function detectInterruptedSession(
     cancelReason = 'Max Iterations Reached';
   }
 
+  // Scenario 0: The run ended with a persisted error (e.g. content-safety rejection).
+  // The error bubble above already shows the real reason; this only marks the session
+  // as resumable so the Resume button returns.
+  if (!cancelReason && mergedLastMsg && mergedLastMsg.role === 'error') {
+    cancelReason = 'Session Interrupted';
+  }
+
   // Scenario 1: Abort during LLM stream — last assistant has stopReason=ABORTED.
   if (!cancelReason && mergedLastMsg && mergedLastMsg.role === 'assistant') {
     const assistantMsg = mergedLastMsg as Extract<Message, { role: 'assistant' }>;

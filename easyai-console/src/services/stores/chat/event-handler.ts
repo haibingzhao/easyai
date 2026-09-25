@@ -639,7 +639,10 @@ function handleStreamError(
     isFileWriting: false,
     retryInfo: null,
     pendingPermission: isConnectionLost ? state.pendingPermission : null,
-    cancelReason: isConnectionLost ? 'Connection Lost' : null,
+    // Mark the session resumable on any terminal error so the Resume button appears
+    // live, matching the historical-load path (session-loader Scenario 0). The error
+    // bubble above already carries the specific reason.
+    cancelReason: isConnectionLost ? 'Connection Lost' : 'Session Interrupted',
     // Backend abort clears queues on any terminal error; frontend must match.
     // For connection_lost the backend SSE-drop handler also aborts, clearing queues.
     queuedMessages: [],
