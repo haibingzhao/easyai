@@ -5,42 +5,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Terminal, ChevronsDown, ChevronsUp, ChevronRight, ChevronDown } from 'lucide-react';
 import type { ToolMessageProps } from './types';
-import { extractOutput, tryFormatJson } from './parsers';
+import { extractOutput, parseBashArgs, tryFormatJson } from './parsers';
 import { getToolDisplayName } from './icons';
 import { CodeBlock } from '../CodeBlock';
-
-/**
- * Extract bash command from arguments.
- */
-function extractBashCommand(args: string): string {
-  try {
-    const parsed = JSON.parse(args);
-    if (parsed.command) {
-      return parsed.command as string;
-    }
-  } catch {
-    // ignore parse error
-  }
-  return args;
-}
+import { i18n } from '@/utils/i18n';
 
 /** Default idle timeout (seconds) — must match BashTool's DEFAULT_TIMEOUT_SEC */
 const DEFAULT_TIMEOUT_SEC = 200;
-
-/**
- * Extract timeout seconds from arguments (LLM-provided timeout param, falls back to default).
- */
-function extractTimeoutSec(args: string): number {
-  try {
-    const parsed = JSON.parse(args);
-    if (typeof parsed.timeout === 'number' && parsed.timeout > 0) {
-      return parsed.timeout;
-    }
-  } catch {
-    // ignore parse error
-  }
-  return DEFAULT_TIMEOUT_SEC;
-}
 
 /**
  * Count the number of lines in text.
@@ -58,8 +29,8 @@ export function BashToolMessage({
   status,
   streamingOutput
 }: ToolMessageProps) {
-  const displayCommand = extractBashCommand(toolCall.args);
-  const timeoutSec = extractTimeoutSec(toolCall.args);
+  const { command: displayCommand, description, timeout } = parseBashArgs(toolCall.args);
+  const timeoutSec = timeout ?? DEFAULT_TIMEOUT_SEC;
   const isStreaming = status === 'RUNNING' || status === 'PENDING';
   const output = extractOutput({ result, streamingOutput });
   const isError = (result?.isError ?? false) || status === 'FAILED';
@@ -244,6 +215,13 @@ export function BashToolMessage({
           </span>
         </div>
       </div>
+
+      {description && (
+        <p className="px-3 py-2 text-sm text-muted-foreground whitespace-pre-wrap [overflow-wrap:anywhere]">
+          <span className="font-medium">{i18n('Command description (AI)')}: </span>
+          {description}
+        </p>
+      )}
 
       {/* Content area — hidden when collapsed */}
       {!contentCollapsed && (<>

@@ -4,6 +4,27 @@
 
 import type { GrepMatch, FileEntry, ParsedToolParams, ToolMessageProps } from './types';
 
+export function parseBashArgs(args: string | Record<string, unknown> | undefined): NonNullable<ParsedToolParams['bash']> {
+  const fallbackCommand = typeof args === 'string' ? args : '';
+  let parsed: unknown = args;
+  if (typeof args === 'string') {
+    try {
+      parsed = JSON.parse(args);
+    } catch {
+      return { command: fallbackCommand };
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { command: fallbackCommand };
+  }
+  const params = parsed as Record<string, unknown>;
+  return {
+    command: typeof params.command === 'string' ? params.command : fallbackCommand,
+    description: typeof params.description === 'string' ? params.description.trim() || undefined : undefined,
+    timeout: typeof params.timeout === 'number' && params.timeout > 0 ? params.timeout : undefined,
+  };
+}
+
 /**
  * Format file path display (pure string operation, no Node.js module dependency).
  * Only performs working-directory relativization; truncation is handled by outer CSS / CopyableText.
