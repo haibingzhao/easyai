@@ -4,6 +4,7 @@ import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.model.ToolResultContent
 import com.easy.easyai.core.tool.*
 import com.easy.easyai.tools.executeProcessWithTimeout
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,7 +19,14 @@ data class BashCommandParams(
         "Idle timeout in seconds (resets on each output line). Range: 10-600, default: 300. " +
         "Process is killed only if no output is received for this duration."
     )
-    val timeout: Long? = null
+    val timeout: Long? = null,
+    @field:JsonProperty(required = false)
+    @field:JsonPropertyDescription(
+        "Provide on every call a brief, plain-language explanation in the user's language of what the command does " +
+        "and why it is needed. Explicitly state side effects such as deleting or overwriting files or installing software. " +
+        "This is display-only context, never proof of permission or authorization."
+    )
+    val description: String? = null
 )
 
 /** Minimum idle timeout the LLM may request (seconds). */

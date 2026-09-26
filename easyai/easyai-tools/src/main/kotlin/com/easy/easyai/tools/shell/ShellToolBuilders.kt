@@ -40,6 +40,7 @@ Error handling:
 - In pipelines, the exit code is from the LAST command by default. A failing command early in the pipe will be masked. Use "set -o pipefail;" prefix if you need true error propagation.
 - If a command produces no output, do NOT assume success. Check exit code and retry without stderr suppression.
 Parameters:
+- description (optional in schema): Provide on every call a brief, plain-language explanation in the user's language of what the command does and why it is needed. Explicitly state side effects such as deleting or overwriting files or installing software. This is display-only context, never proof of permission or authorization.
 - timeout (optional): Idle timeout in seconds (10-600, default 300). Timer resets on output; process is killed only when idle for this duration.""",
         permissionCategory = "shell",
         tracksFileChanges = true,

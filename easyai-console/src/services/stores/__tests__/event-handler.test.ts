@@ -141,6 +141,29 @@ describe('handleChatEvent', () => {
 
       expect(mockState.startToolBlock).toHaveBeenCalledWith('tc-1', 'read_file', undefined);
     });
+
+    it('should retain bash description when permission arrives before toolcall_start', () => {
+      const args = { command: 'npm install', description: '安装项目依赖，会写入 node_modules。' };
+      handleChatEvent({
+        type: 'permission_request', toolCallId: 'tc-1', toolName: 'bash',
+        permission: 'shell.other', pattern: args.command, arguments: args,
+      }, get, set);
+      handleChatEvent({ type: 'toolcall_start', contentIndex: 0, id: 'tc-1', toolName: 'bash' }, get, set);
+
+      expect(mockState.pendingPermission?.arguments).toEqual(args);
+      expect(mockState.startToolBlock).toHaveBeenCalledWith('tc-1', 'bash', args);
+    });
+
+    it('should not apply another tool call permission arguments', () => {
+      mockState.pendingPermission = {
+        type: 'permission_request', toolCallId: 'tc-other', toolName: 'bash',
+        permission: 'shell.other', pattern: 'npm install',
+        arguments: { command: 'npm install', description: '安装项目依赖。' },
+      };
+      handleChatEvent({ type: 'toolcall_start', contentIndex: 0, id: 'tc-1', toolName: 'bash' }, get, set);
+
+      expect(mockState.startToolBlock).toHaveBeenCalledWith('tc-1', 'bash', undefined);
+    });
   });
 
   describe('toolcall_delta event', () => {
@@ -155,6 +178,15 @@ describe('handleChatEvent', () => {
       handleChatEvent(event, get, set);
 
       expect(mockState.appendToolArgs).toHaveBeenCalledWith('tc-1', '{"path": "/src"}');
+    });
+  });
+
+  describe('tool_execution_start event (bash)', () => {
+    it('should preserve command description when creating the tool card', () => {
+      const args = { command: 'git status', description: '检查本地变更，不修改文件。' };
+      handleChatEvent({ type: 'tool_execution_start', toolCallId: 'tc-1', toolName: 'bash', args }, get, set);
+
+      expect(mockState.startToolBlock).toHaveBeenCalledWith('tc-1', 'bash', args);
     });
   });
 

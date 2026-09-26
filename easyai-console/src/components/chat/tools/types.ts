@@ -58,7 +58,7 @@ export interface ParsedToolParams {
   read?: { path: string; offset?: number; limit?: number };
   write?: { path: string; content: string };
   edit?: { path: string; oldString: string; newString: string; replaceAll?: boolean };
-  bash?: { command: string; timeout?: number };
+  bash?: { command: string; timeout?: number; description?: string };
   grep?: { pattern: string; path?: string };
   glob?: { pattern: string; path?: string };
   ls?: { path?: string };

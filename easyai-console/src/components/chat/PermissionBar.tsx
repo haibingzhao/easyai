@@ -3,6 +3,7 @@ import { useChatStore } from '@/services/stores/chat-store';
 import { replyPermission } from '@/services/chat-service';
 import type { DoneEvent, ErrorEvent, ChatStreamEvent } from '@/types/socket-event';
 import { i18n } from '@/utils/i18n';
+import { parseBashArgs } from './tools/parsers';
 
 /**
  * PermissionBar - displays a permission request and allows user to allow/deny.
@@ -106,6 +107,9 @@ export const PermissionBar: React.FC = () => {
   const formatPermission = (permission: string): string => {
     return PERMISSION_LABELS[permission] || permission;
   };
+  const bashArgs = pendingPermission.toolName === 'bash'
+    ? parseBashArgs(pendingPermission.arguments)
+    : null;
 
   return (
     <div className="mx-4 my-2 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
@@ -134,7 +138,21 @@ export const PermissionBar: React.FC = () => {
               {formatPermission(pendingPermission.permission)}
             </span>
           </p>
-          {pendingPermission.pattern && pendingPermission.pattern !== '*' && (
+          {bashArgs?.description && (
+            <p className="mt-2 text-sm text-amber-700 dark:text-amber-300 whitespace-pre-wrap [overflow-wrap:anywhere]">
+              <span className="font-medium">{i18n('Command description (AI)')}: </span>
+              {bashArgs.description}
+            </p>
+          )}
+          {bashArgs?.command && (
+            <div className="mt-2">
+              <p className="text-xs font-medium text-amber-700 dark:text-amber-300">{i18n('Command')}</p>
+              <pre className="mt-1 p-2 max-h-40 overflow-auto rounded bg-amber-100 dark:bg-amber-800/50 text-xs text-amber-800 dark:text-amber-200 whitespace-pre-wrap break-all">
+                {bashArgs.command}
+              </pre>
+            </div>
+          )}
+          {pendingPermission.pattern && pendingPermission.pattern !== '*' && pendingPermission.pattern !== bashArgs?.command && (
             <p className="mt-1 text-xs text-amber-600 dark:text-amber-400 font-mono truncate" title={pendingPermission.pattern}>
               {pendingPermission.pattern}
             </p>

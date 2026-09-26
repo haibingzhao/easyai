@@ -220,9 +220,12 @@ export function handleChatEvent(
       }
       break;
     }
-    case 'toolcall_start':
-      state.startToolBlock(event.id, event.toolName, undefined);
+    case 'toolcall_start': {
+      const permission = state.pendingPermission;
+      state.startToolBlock(event.id, event.toolName,
+        permission?.toolCallId === event.id ? permission.arguments : undefined);
       break;
+    }
     case 'toolcall_delta':
       state.appendToolArgs(event.id, event.delta);
       break;
