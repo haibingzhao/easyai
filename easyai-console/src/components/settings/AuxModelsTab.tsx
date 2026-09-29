@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { auxModelConfigService } from '@/services/aux-model-config-service';
 import { modelConfigService } from '@/services/model-config-service';
 import type { AuxModelConfig, AuxModelTaskKey, ModelProviderConfig } from '@/types/settings';
@@ -23,6 +23,7 @@ export const AuxModelsTab: React.FC = () => {
   const [loadError, setLoadError] = useState('');
   const [configs, setConfigs] = useState<AuxModelConfig[]>([]);
   const [models, setModels] = useState<ModelProviderConfig[]>([]);
+  const [groupNames, setGroupNames] = useState<Record<string, string>>({});
   // Draft selection per task, keyed by taskKey; initialized from the server on load.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [savingTask, setSavingTask] = useState<string | null>(null);
@@ -30,12 +31,16 @@ export const AuxModelsTab: React.FC = () => {
 
   const load = useCallback(async () => {
     try {
-      const [auxList, modelList] = await Promise.all([
+      const [auxList, modelList, groups] = await Promise.all([
         auxModelConfigService.list(),
         modelConfigService.getUserConfigurations(),
+        modelConfigService.getGroups(),
       ]);
       setConfigs(auxList);
       setModels(modelList);
+      const nameMap: Record<string, string> = {};
+      for (const g of groups) nameMap[g.id] = g.name;
+      setGroupNames(nameMap);
       setDrafts(Object.fromEntries(auxList.map((c) => [c.taskKey, c.modelConfigId])));
       setLoadError('');
     } catch (e) {
@@ -49,6 +54,27 @@ export const AuxModelsTab: React.FC = () => {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Mirror the Chat model picker: group options by group name, ungrouped configs last.
+  const grouped = useMemo(() => {
+    const byGroup = new Map<string, ModelProviderConfig[]>();
+    const ungrouped: ModelProviderConfig[] = [];
+    for (const config of models) {
+      if (config.groupId && groupNames[config.groupId]) {
+        const list = byGroup.get(config.groupId) || [];
+        list.push(config);
+        byGroup.set(config.groupId, list);
+      } else {
+        ungrouped.push(config);
+      }
+    }
+    return { byGroup, ungrouped };
+  }, [models, groupNames]);
+
+  const optionLabel = (config: ModelProviderConfig): string => {
+    const displayName = config.name || config.modelName || config.modelId;
+    return `${displayName} (${config.modelId})`;
+  };
 
   const handleSave = async (taskKey: AuxModelTaskKey) => {
     setSavingTask(taskKey);
@@ -116,10 +142,15 @@ export const AuxModelsTab: React.FC = () => {
                   className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                 >
                   <option value="">{i18n('Follow chat model (default)')}</option>
-                  {models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name || m.modelId}
-                    </option>
+                  {[...grouped.byGroup.entries()].map(([groupId, groupModels]) => (
+                    <optgroup key={groupId} label={groupNames[groupId]}>
+                      {groupModels.map((m) => (
+                        <option key={m.id} value={m.id}>{optionLabel(m)}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                  {grouped.ungrouped.map((m) => (
+                    <option key={m.id} value={m.id}>{optionLabel(m)}</option>
                   ))}
                 </select>
 
