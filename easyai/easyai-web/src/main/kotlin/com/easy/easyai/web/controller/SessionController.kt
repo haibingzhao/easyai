@@ -1,5 +1,7 @@
 package com.easy.easyai.web.controller
 
+import com.easy.easyai.web.model.ForkBranchInfo
+import com.easy.easyai.web.model.ForkSessionRequest
 import com.easy.easyai.web.model.SessionDetail
 import com.easy.easyai.web.model.SessionResponse
 import com.easy.easyai.web.security.getCurrentUserId
@@ -40,6 +42,23 @@ class SessionController(
             val userId = getCurrentUserId()
             val sessionId = sessionService.createSession(userId)
             SessionResponse(sessionId = sessionId)
+        }
+    }
+
+    @PostMapping("/session/{id}/fork")
+    fun forkSession(@PathVariable id: String, @RequestBody request: ForkSessionRequest): Mono<SessionResponse> {
+        return mono {
+            val userId = getCurrentUserId()
+            val sessionId = sessionService.forkSession(id, request.messageId, userId)
+            SessionResponse(sessionId = sessionId)
+        }
+    }
+
+    @GetMapping("/session/{id}/forks")
+    fun listForks(@PathVariable id: String): Mono<List<ForkBranchInfo>> {
+        return mono {
+            val userId = getCurrentUserId()
+            sessionService.listForks(id, userId)
         }
     }
 

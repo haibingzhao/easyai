@@ -4,13 +4,8 @@ import { useSessionStore } from '@/services/stores/session-store';
 import { useChatStore } from '@/services/stores/chat-store';
 import { useProjectStore } from '@/services/stores/project-store';
 import { useNavStore } from '@/services/stores/nav-store';
-import { useAgentStore } from '@/services/stores/agent-store';
-import { useSettingsStore } from '@/services/stores/settings-store';
+import { switchToSession } from '@/services/session-switch';
 import type { SessionListItem } from '@/services/session-service';
-import { sessionService } from '@/services/session-service';
-import { getCheckpoints, getFileReviewState } from '@/services/checkpoint-service';
-import { getStreamingStatus } from '@/services/chat-service';
-import type { CheckpointInfo } from '@/types/checkpoint';
 import { groupSessionsByTime } from '@/utils/session-time';
 import { i18n } from '@/utils/i18n';
 
@@ -20,7 +15,7 @@ import { i18n } from '@/utils/i18n';
  */
 export const SessionsTab: React.FC = () => {
   const { remoteSessions, remoteSessionHasMore, remoteSessionLoading, setCurrentSessionId, loadRemoteSessions, loadMoreRemoteSessions, deleteRemoteSession } = useSessionStore();
-  const { setSessionId, loadSessionMessages, clearChat, setTodos, setAllSubAgentTodos, setFileReviewOverrides, setRunningSessionId, setStreaming, sessionId: chatSessionId } = useChatStore();
+  const { clearChat, sessionId: chatSessionId } = useChatStore();
   const { currentProject } = useProjectStore();
 
   // Load sessions on mount
@@ -30,56 +25,14 @@ export const SessionsTab: React.FC = () => {
 
   const handleSelectSession = async (sessionId: string) => {
     try {
-      const streamingStatus = await getStreamingStatus(sessionId);
-
-      const [detail, checkpoints] = await Promise.all([
-        sessionService.getSessionDetail(sessionId),
-        getCheckpoints(sessionId).catch(() => [] as CheckpointInfo[]),
-      ]);
-      loadSessionMessages(detail!.messages, detail!.pendingPermission, checkpoints, detail!.endReason, detail!.variables, detail!.modelContextLength);
-      useNavStore.getState().setSelectedFile(null);
-
-      // Restore Agent and Model selectors from the last message's config
-      if (detail!.lastAgentId) {
-        useAgentStore.getState().selectAgent(detail!.lastAgentId);
-      }
-      if (detail!.lastConfigId) {
-        useSettingsStore.getState().setSelectedModelConfig(detail!.lastConfigId);
-      }
-
-      const [groupedTodos, reviewState] = await Promise.all([
-        sessionService.getGroupedTodos(sessionId),
-        getFileReviewState(sessionId).catch(() => null),
-      ]);
-      setTodos(groupedTodos.main);
-      setAllSubAgentTodos(
-        Object.fromEntries(groupedTodos.subAgents.map((g) => [g.agentName, { todos: g.todos, toolCallId: g.agentName }]))
-      );
-      if (reviewState?.reviews) {
-        setFileReviewOverrides(reviewState.reviews);
-      }
-
-      if (streamingStatus.local || streamingStatus.streaming) {
-        setSessionId(sessionId);
-        setRunningSessionId(sessionId);
-        if (!detail!.pendingPermission) {
-          setStreaming(true);
-        }
-        setCurrentSessionId(sessionId);
-        return;
-      }
-
-      // Session completed — stop any running polling and show this session
-      setRunningSessionId(null);
-      setCurrentSessionId(sessionId);
-      setSessionId(sessionId);
+      await switchToSession(sessionId);
     } catch (e) {
       console.error('Failed to load session:', e);
     }
   };
 
   const handleDeleteSession = async (sessionId: string) => {
-    if (confirm(i18n('Are you sure?'))) {
+    if (confirm(i18n('Delete session and its branches?'))) {
       const isCurrentSession = chatSessionId === sessionId;
       await deleteRemoteSession(sessionId);
       if (isCurrentSession) {

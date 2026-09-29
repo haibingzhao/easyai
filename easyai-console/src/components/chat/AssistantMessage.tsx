@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { AssistantMessage as AssistantMessageType, ToolResult, ToolCall, Message } from '../../types/message';
 import { ToolMessage } from './ToolMessage';
 import { ThinkingBlock } from './ThinkingBlock';
@@ -7,6 +7,11 @@ import { EditedGroupedMessage } from './tools/EditedGroupedMessage';
 import { SubAgentPanel, type SubAgentInnerBlock } from './tools/SubAgentPanel';
 import { markdownCodeComponents } from './markdownCodeComponents';
 import { useProjectStore } from '@/services/stores/project-store';
+import { useChatStore } from '@/services/stores/chat-store';
+import { sessionService } from '@/services/session-service';
+import { switchToSession } from '@/services/session-switch';
+import { i18n } from '@/utils/i18n';
+import { GitBranch } from 'lucide-react';
 import { formatTokenCount } from '../../utils/format';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -66,6 +71,21 @@ function convertMessagesToBlocks(messages: Message[]): SubAgentInnerBlock[] {
 
 export const AssistantMessage: React.FC<AssistantMessageProps> = ({ message, toolResults = [], isStreaming = false }) => {
   const workDir = useProjectStore((s) => s.currentProject?.path || '');
+  const sessionId = useChatStore((s) => s.sessionId);
+  const [forking, setForking] = useState(false);
+
+  const handleFork = async () => {
+    if (!sessionId || !message.messageId || forking) return;
+    setForking(true);
+    try {
+      const branchId = await sessionService.forkSession(sessionId, message.messageId);
+      await switchToSession(branchId);
+    } catch (e) {
+      console.error('Failed to fork session:', e);
+    } finally {
+      setForking(false);
+    }
+  };
 
   // Build a map from toolCallId to its result
   const resultMap = new Map<string, ToolResult>();
@@ -248,6 +268,22 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({ message, too
           />
         );
       })}
+
+      {/* Hover action row: fork a branch session from this message */}
+      {!isStreaming && sessionId && message.messageId && (
+        <div className="max-h-0 overflow-hidden group-hover:max-h-8 transition-[max-height] duration-200 ease-out">
+          <div className="flex items-center gap-1 pt-1">
+            <button
+              onClick={handleFork}
+              disabled={forking}
+              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+              title={i18n('Create a branch task from here')}
+            >
+              <GitBranch className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Inline token bar: shown on hover, embedded at the bottom of the message */}
       {(() => {

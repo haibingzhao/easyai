@@ -39,6 +39,29 @@ data class SessionListMetadata(
 )
 
 /**
+ * One fork branch of a root session, for the Summary panel branch list.
+ */
+data class ForkBranchMetadata(
+    val id: String,
+    val title: String?,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val messageCount: Int,
+    /** Direct source session of this fork (root session id when forked from the main session). */
+    val forkedFromSessionId: String
+)
+
+/**
+ * Fork lineage pointers of a session (both null for a main session).
+ */
+data class SessionForkInfo(
+    /** Direct source session id, or null when this is not a fork. */
+    val forkedFromSessionId: String?,
+    /** Root main session this fork descends from, or null when this is not a fork. */
+    val forkRootSessionId: String?
+)
+
+/**
  * Message with metadata including timestamp.
  * Used for loading messages with their original creation time.
  */
@@ -362,4 +385,30 @@ interface AsyncSessionStore {
      * @return JSON-serialized variables map, or null if no compaction summary contains variables
      */
     suspend fun loadVariablesFromCompactionSummary(sessionId: String, userId: String = "system"): String? = null
+
+    /**
+     * Fork a session: create a new session whose history is a copy of [sourceSessionId]'s
+     * messages up to and including the anchor message [anchorMessageId].
+     *
+     * Compaction-aware: copied messages keep their compactedAt marks, but messages not covered
+     * by any copied compaction summary are restored (compactedAt cleared) so the fork replays a
+     * non-empty context. Compaction indicators whose summary was not copied are skipped.
+     * Summary metadata compactedMessageIds and message parentMessageId are remapped to new ids.
+     *
+     * @return the new session id, or null when the source session is not accessible
+     *         for [userId] or the anchor message does not belong to it.
+     */
+    suspend fun createFork(sourceSessionId: String, anchorMessageId: String, userId: String = "system"): String? = null
+
+    /**
+     * List all fork branches descending from the root session [rootSessionId]
+     * (any nesting level), ordered by creation time ascending.
+     */
+    suspend fun listForks(rootSessionId: String, userId: String = "system"): List<ForkBranchMetadata> = emptyList()
+
+    /**
+     * Read the fork lineage pointers of a session (direct source + root).
+     * @return null when the session does not exist / is not visible to [userId].
+     */
+    suspend fun findForkInfo(sessionId: String, userId: String = "system"): SessionForkInfo? = null
 }
