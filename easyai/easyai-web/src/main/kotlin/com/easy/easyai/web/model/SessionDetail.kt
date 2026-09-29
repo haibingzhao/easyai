@@ -20,7 +20,11 @@ data class SessionDetail(
     /** Context window (tokens) of the last message's model — used by frontend token bar for the real percentage. */
     val modelContextLength: Int? = null,
     /** Session-scoped variables (key -> value) persisted for this session, for frontend display. */
-    val variables: Map<String, String>? = null
+    val variables: Map<String, String>? = null,
+    /** Direct source session when this session was created by forking (null = main session). */
+    val forkedFromSessionId: String? = null,
+    /** Root main session this fork descends from (null = main session). */
+    val forkRootSessionId: String? = null
 )
 
 /**

@@ -156,6 +156,21 @@ export interface SessionDetail {
   modelContextLength?: number | null;
   /** Session-scoped variables (key -> value) persisted for this session */
   variables?: Record<string, string> | null;
+  /** Direct source session when this session was created by forking (null/absent = main session) */
+  forkedFromSessionId?: string | null;
+  /** Root main session this fork descends from (null/absent = main session) */
+  forkRootSessionId?: string | null;
+}
+
+/** One fork branch entry for the Summary panel branch list. */
+export interface ForkBranchInfo {
+  id: string;
+  title: string | null;
+  createdAt: number;
+  updatedAt: number;
+  messageCount: number;
+  /** Direct source session of this fork (root session id when forked from the main session). */
+  forkedFromSessionId: string;
 }
 
 /**
@@ -217,6 +232,21 @@ export class SessionService {
 
   async deleteSession(sessionId: string): Promise<void> {
     return fetchVoid(`${API_BASE}/session/${sessionId}`, { method: 'DELETE' });
+  }
+
+  /** Fork a session up to and including [messageId]; returns the new branch session id. */
+  async forkSession(sessionId: string, messageId: string): Promise<string> {
+    const data = await fetchJson<SessionResponse>(`${API_BASE}/session/${sessionId}/fork`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ messageId }),
+    });
+    return data.sessionId;
+  }
+
+  /** List all fork branches descending from the root session [sessionId]. */
+  async listForks(sessionId: string): Promise<ForkBranchInfo[]> {
+    return fetchJson<ForkBranchInfo[]>(`${API_BASE}/session/${sessionId}/forks`);
   }
 
   async closeSession(sessionId: string): Promise<void> {

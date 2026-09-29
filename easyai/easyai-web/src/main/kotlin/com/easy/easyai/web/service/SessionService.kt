@@ -81,6 +81,9 @@ class SessionService(
         // Load persisted session variables for frontend display (Summary -> References)
         val variables = loadSessionVariablesMap(id, userId)
 
+        // Fork lineage so the frontend can locate this session in the branch list
+        val forkInfo = sessionStore.findForkInfo(id, userId)
+
         return SessionDetail(
             id = session.id,
             title = extractTitle(session.messages),
@@ -93,7 +96,9 @@ class SessionService(
             lastAgentId = lastConfig?.agentId,
             lastConfigId = lastConfig?.configId,
             modelContextLength = modelContextLength,
-            variables = variables
+            variables = variables,
+            forkedFromSessionId = forkInfo?.forkedFromSessionId,
+            forkRootSessionId = forkInfo?.forkRootSessionId
         )
     }
 
@@ -481,6 +486,30 @@ class SessionService(
         val session = sessionManager.getOrCreateSession(null, userId)
         logger.info("Created session: {}", session.id)
         return session.id
+    }
+
+    /**
+     * Fork [sourceSessionId] up to and including [messageId] into a new branch session.
+     * @throws IllegalArgumentException when the source session or anchor message is inaccessible.
+     */
+    suspend fun forkSession(sourceSessionId: String, messageId: String, userId: String = "system"): String {
+        val newSessionId = sessionStore.createFork(sourceSessionId, messageId, userId)
+            ?: throw IllegalArgumentException("Session or message not found: $sourceSessionId/$messageId")
+        logger.info("Forked session {} at message {} into {}", sourceSessionId, messageId, newSessionId)
+        return newSessionId
+    }
+
+    suspend fun listForks(rootSessionId: String, userId: String = "system"): List<ForkBranchInfo> {
+        return sessionStore.listForks(rootSessionId, userId).map {
+            ForkBranchInfo(
+                id = it.id,
+                title = it.title,
+                createdAt = it.createdAt,
+                updatedAt = it.updatedAt,
+                messageCount = it.messageCount,
+                forkedFromSessionId = it.forkedFromSessionId
+            )
+        }
     }
 
     suspend fun deleteSession(id: String, userId: String = "system") {

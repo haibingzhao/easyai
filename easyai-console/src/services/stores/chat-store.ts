@@ -78,7 +78,10 @@ interface ChatState {
   runningSessionId: string | null;
   /** Internal: raw MessageSnapshot[] from last full/incremental load, used for incremental merge. */
   _lastSnapshots: MessageSnapshot[];
+  /** Root main session the currently viewed session belongs to (own id for a main session; null before a session exists) */
+  forkRootId: string | null;
   setRunningSessionId: (id: string | null) => void;
+  setForkRootId: (id: string | null) => void;
 
   setSessionId: (id: string | null) => void;
   setAgentId: (id: string) => void;
@@ -166,6 +169,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   queuedMessages: [],
   runningSessionId: null,
   _lastSnapshots: [],
+  forkRootId: null,
 
   // When the session identity changes, clear streaming render state left over from the
   // old session (streamingBlocks / isStreaming / ...), otherwise the previous session's
@@ -182,6 +186,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     pendingMessageData: {},
   })),
   setRunningSessionId: (id) => set({ runningSessionId: id, ...(id !== null ? { _lastSnapshots: [] } : {}) }),
+  setForkRootId: (id) => set({ forkRootId: id }),
 
   setAgentId: (id) => set({ agentId: id }),
 
@@ -475,6 +480,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     queuedMessages: [],
     runningSessionId: null,
     _lastSnapshots: [],
+    forkRootId: null,
   }),
 
   commitStreamingMessage: () => set((state) => commitStreamingMessageImpl(state)),

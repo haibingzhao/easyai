@@ -160,8 +160,19 @@ object Tables {
         val endReason = varchar("end_reason", 32).nullable()
         /** JSON-serialized GoalState when a /goal is active; null when no goal is set. */
         val goalJson = text("goal_json").nullable()
+        /** Direct source session when this session was created by forking (null = not a fork). */
+        val forkedFromSessionId = varchar("forked_from_session_id", 255).nullable()
+        /** Anchor message id (belongs to forkedFromSessionId) up to which history was copied. */
+        val forkedFromMessageId = varchar("forked_from_message_id", 255).nullable()
+        /** Root main session this fork descends from (source's root, or source id when source is main). */
+        val forkRootSessionId = varchar("fork_root_session_id", 255).nullable()
 
         override val primaryKey = PrimaryKey(id)
+
+        init {
+            index(false, forkRootSessionId)
+            index(false, forkedFromSessionId)
+        }
     }
 
     object Message : Table("message") {

@@ -17,6 +17,7 @@ import tools.jackson.core.type.TypeReference
 import tools.jackson.databind.ObjectMapper
 import com.easy.easyai.common.util.SharedObjectMapper
 import java.time.Instant
+import java.util.UUID
 
 /**
  * R2DBC-based implementation of AsyncSessionStore.
@@ -92,6 +93,13 @@ class R2dbcAsyncSessionStore(
             .where { Tables.TeamMemberExecutionTable.memberSessionId eq Tables.Session.id }
     )
 
+    /**
+     * Condition excluding fork branches from session listings.
+     * Fork sessions are viewed via the Summary panel branch list of their root session,
+     * never in the History list.
+     */
+    private fun notForkSession(): Op<Boolean> = Tables.Session.forkRootSessionId.isNull()
+
     override suspend fun findIdsByLimit(limit: Int, offset: Int, projectId: String?, userId: String, excludeSwarm: Boolean): SessionPageResult {
         return suspendTransaction(db) {
             val fetchSize = limit + 1
@@ -110,7 +118,7 @@ class R2dbcAsyncSessionStore(
                     } else {
                         baseFilter
                     }
-                    swarmFilter and notTeamMemberSession()
+                    swarmFilter and notTeamMemberSession() and notForkSession()
                 }
                 .orderBy(Tables.Session.createdAt to SortOrder.DESC)
                 .limit(fetchSize)
@@ -147,7 +155,7 @@ class R2dbcAsyncSessionStore(
                     } else {
                         baseFilter
                     }
-                    swarmFilter and notTeamMemberSession()
+                    swarmFilter and notTeamMemberSession() and notForkSession()
                 }
                 .orderBy(Tables.Session.createdAt to SortOrder.DESC)
                 .limit(fetchSize)
@@ -278,13 +286,30 @@ class R2dbcAsyncSessionStore(
                 .count()
 
             if (ownedCount > 0) {
-                // Delete todos (all scopes) + messages (includes ToolResultMessage)
-                Tables.TodoTable.deleteWhere { sessionId eq id }
-                Tables.Message.deleteWhere { sessionId eq id }
-                Tables.Session.deleteWhere {
-                    (Tables.Session.id eq id) and UserScope.filterStrict(Tables.Session.userId, userId)
+                // Collect the full descendant chain (fork → sub-fork → ...) via direct-source links,
+                // then delete branches first and the requested session last.
+                val toDelete = mutableListOf(id)
+                var frontier = listOf(id)
+                while (frontier.isNotEmpty()) {
+                    val children = Tables.Session
+                        .select(Tables.Session.id)
+                        .where { (Tables.Session.forkedFromSessionId inList frontier) and UserScope.filterStrict(Tables.Session.userId, userId) }
+                        .toList()
+                        .map { it[Tables.Session.id] }
+                        .filterNot { it in toDelete }
+                    toDelete.addAll(children)
+                    frontier = children
                 }
-                logger.info("Deleted session: {}", id)
+
+                for (sid in toDelete) {
+                    // Delete todos (all scopes) + messages (includes ToolResultMessage)
+                    Tables.TodoTable.deleteWhere { sessionId eq sid }
+                    Tables.Message.deleteWhere { Tables.Message.sessionId eq sid }
+                    Tables.Session.deleteWhere {
+                        (Tables.Session.id eq sid) and UserScope.filterStrict(Tables.Session.userId, userId)
+                    }
+                }
+                logger.info("Deleted session {} with {} fork descendant(s)", id, toDelete.size - 1)
             }
         }
     }
@@ -1115,6 +1140,152 @@ class R2dbcAsyncSessionStore(
                 val meta = parseMetadata(it[Tables.Message.metadata])
                 meta["sessionVariables"]
             }
+        }
+    }
+
+    /**
+     * Fork [sourceSessionId] into a new session containing its messages up to and including
+     * [anchorMessageId]. See [AsyncSessionStore.createFork] for the compaction-aware rules:
+     * compactedAt marks survive only when a copied compaction summary still covers them,
+     * orphaned indicators are skipped, and all id references (parentMessageId,
+     * compactedMessageIds) are remapped to the new message ids.
+     */
+    override suspend fun createFork(sourceSessionId: String, anchorMessageId: String, userId: String): String? {
+        return suspendTransaction(db) {
+            val sourceRow = Tables.Session
+                .selectAll()
+                .where { (Tables.Session.id eq sourceSessionId) and UserScope.filterStrict(Tables.Session.userId, userId) }
+                .limit(1)
+                .firstOrNull()
+                ?: return@suspendTransaction null
+
+            val rows = Tables.Message
+                .selectAll()
+                .where { Tables.Message.sessionId eq sourceSessionId }
+                .orderBy(Tables.Message.createdAt to SortOrder.ASC, Tables.Message.id to SortOrder.ASC)
+                .toList()
+
+            val anchorIndex = rows.indexOfFirst { it[Tables.Message.id] == anchorMessageId }
+            if (anchorIndex < 0) return@suspendTransaction null
+            val copied = rows.take(anchorIndex + 1)
+
+            val copiedOldIds = copied.map { it[Tables.Message.id] }.toSet()
+            val newIdOf = copied.associate { it[Tables.Message.id] to UUID.randomUUID().toString() }
+
+            // New ids covered by compaction summaries that came along with the copy.
+            // A compacted message whose summary was cut away (fork anchor predates the compaction)
+            // is restored so the fork replays the full uncompressed history.
+            val coveredIds = mutableSetOf<String>()
+            val rewrittenMetadata = mutableMapOf<String, String?>()
+            for (row in copied) {
+                val meta = parseMetadata(row[Tables.Message.metadata])
+                if (meta["isCompactionSummary"] != "true") continue
+                val oldIds = try {
+                    objectMapper.readValue(meta["compactedMessageIds"] ?: "[]", object : TypeReference<List<String>>() {})
+                } catch (e: Exception) {
+                    logger.warn("Failed to parse compactedMessageIds in fork for message {}: {}", row[Tables.Message.id], e.message)
+                    emptyList()
+                }
+                val newIds = oldIds.mapNotNull { newIdOf[it] }
+                coveredIds.addAll(newIds)
+                val rewritten = meta.toMutableMap()
+                rewritten["compactedMessageIds"] = objectMapper.writeValueAsString(newIds)
+                rewrittenMetadata[row[Tables.Message.id]] = objectMapper.writeValueAsString(rewritten)
+            }
+
+            val newSessionId = UUID.randomUUID().toString()
+            val now = System.currentTimeMillis()
+            Tables.Session.insert {
+                it[Tables.Session.id] = newSessionId
+                it[Tables.Session.projectId] = sourceRow[Tables.Session.projectId]
+                it[Tables.Session.title] = sourceRow[Tables.Session.title]
+                it[Tables.Session.status] = "active"
+                it[Tables.Session.userId] = sourceRow[Tables.Session.userId]
+                it[Tables.Session.createdAt] = now
+                it[Tables.Session.updatedAt] = now
+                it[Tables.Session.forkedFromSessionId] = sourceSessionId
+                it[Tables.Session.forkedFromMessageId] = anchorMessageId
+                it[Tables.Session.forkRootSessionId] = sourceRow[Tables.Session.forkRootSessionId] ?: sourceSessionId
+            }
+
+            var skippedIndicators = 0
+            for (row in copied) {
+                val oldId = row[Tables.Message.id]
+                val meta = parseMetadata(row[Tables.Message.metadata])
+                val indicatorSummaryId = extractSummaryMessageId(row[Tables.Message.contentBlocks])
+                if (meta["isCompactionIndicator"] == "true" &&
+                    (indicatorSummaryId == null || indicatorSummaryId !in copiedOldIds)
+                ) {
+                    skippedIndicators++
+                    continue
+                }
+                val oldCompactedAt = row[Tables.Message.compactedAt]
+                val newId = newIdOf.getValue(oldId)
+                Tables.Message.insert {
+                    it[Tables.Message.id] = newId
+                    it[Tables.Message.sessionId] = newSessionId
+                    it[Tables.Message.agentId] = row[Tables.Message.agentId]
+                    it[Tables.Message.configId] = row[Tables.Message.configId]
+                    it[Tables.Message.modelId] = row[Tables.Message.modelId]
+                    it[Tables.Message.role] = row[Tables.Message.role]
+                    it[Tables.Message.contentBlocks] = row[Tables.Message.contentBlocks]
+                    it[Tables.Message.metadata] = rewrittenMetadata[oldId] ?: row[Tables.Message.metadata]
+                    it[Tables.Message.inputTokenCount] = row[Tables.Message.inputTokenCount]
+                    it[Tables.Message.outputTokenCount] = row[Tables.Message.outputTokenCount]
+                    it[Tables.Message.cacheReadTokenCount] = row[Tables.Message.cacheReadTokenCount]
+                    it[Tables.Message.cacheWriteTokenCount] = row[Tables.Message.cacheWriteTokenCount]
+                    it[Tables.Message.stopReason] = row[Tables.Message.stopReason]
+                    it[Tables.Message.compactedAt] = if (oldCompactedAt != null && newId in coveredIds) oldCompactedAt else null
+                    it[Tables.Message.durationMs] = row[Tables.Message.durationMs]
+                    it[Tables.Message.parentMessageId] = row[Tables.Message.parentMessageId]?.let { newIdOf[it] }
+                    it[Tables.Message.parentToolCallId] = row[Tables.Message.parentToolCallId]
+                    it[Tables.Message.createdAt] = row[Tables.Message.createdAt]
+                }
+            }
+
+            logger.info(
+                "Forked session {} into {} ({} messages, {} orphaned indicators skipped)",
+                sourceSessionId, newSessionId, copied.size - skippedIndicators, skippedIndicators
+            )
+            newSessionId
+        }
+    }
+
+    override suspend fun listForks(rootSessionId: String, userId: String): List<ForkBranchMetadata> {
+        return suspendTransaction(db) {
+            val userFilter = UserScope.filterStrict(Tables.Session.userId, userId)
+            val rows = Tables.Session
+                .select(Tables.Session.id, Tables.Session.title, Tables.Session.createdAt, Tables.Session.updatedAt, Tables.Session.forkedFromSessionId)
+                .where { (Tables.Session.forkRootSessionId eq rootSessionId) and userFilter }
+                .orderBy(Tables.Session.createdAt to SortOrder.ASC)
+                .toList()
+
+            rows.map { row ->
+                val msgCount = Tables.Message
+                    .selectAll()
+                    .where { Tables.Message.sessionId eq row[Tables.Session.id] }
+                    .count()
+                    .toInt()
+                ForkBranchMetadata(
+                    id = row[Tables.Session.id],
+                    title = row[Tables.Session.title],
+                    createdAt = row[Tables.Session.createdAt],
+                    updatedAt = row[Tables.Session.updatedAt],
+                    messageCount = msgCount,
+                    forkedFromSessionId = row[Tables.Session.forkedFromSessionId] ?: rootSessionId
+                )
+            }
+        }
+    }
+
+    override suspend fun findForkInfo(sessionId: String, userId: String): SessionForkInfo? {
+        return suspendTransaction(db) {
+            Tables.Session
+                .select(Tables.Session.forkedFromSessionId, Tables.Session.forkRootSessionId)
+                .where { (Tables.Session.id eq sessionId) and UserScope.filterStrict(Tables.Session.userId, userId) }
+                .limit(1)
+                .firstOrNull()
+                ?.let { SessionForkInfo(it[Tables.Session.forkedFromSessionId], it[Tables.Session.forkRootSessionId]) }
         }
     }
 }

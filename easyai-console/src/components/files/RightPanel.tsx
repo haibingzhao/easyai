@@ -7,6 +7,7 @@ import { ReferencePanel } from '../chat/ReferencePanel';
 import { TodoPanel } from '../chat/TodoPanel';
 import { GoalCard } from '../chat/GoalCard';
 import { SwarmRunCard } from '../chat/SwarmRunCard';
+import { ForkBranchesSection } from '../chat/ForkBranchesSection';
 import { TeamMemberPanel } from '../chat/team/TeamMemberPanel';
 import { useProjectStore } from '@/services/stores/project-store';
 import { useNavStore, type RightPanelTab } from '@/services/stores/nav-store';
@@ -141,6 +142,7 @@ const SummaryTab: React.FC<{
       <TodoPanel mainTodos={mainTodos || []} subAgentTodos={subAgentTodos || {}} swarmRuns={swarmRuns} />
       <div className="border-t border-dashed border-border my-2" />
       <ReferencePanel references={references || emptyRefs} sessionVariables={sessionVariables} />
+      <ForkBranchesSection />
     </div>
   );
 };
