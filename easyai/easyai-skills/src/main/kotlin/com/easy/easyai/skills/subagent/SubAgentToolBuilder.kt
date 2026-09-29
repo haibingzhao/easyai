@@ -11,10 +11,13 @@ import org.springframework.stereotype.Component
 
 /**
  * Builder for [SubAgentTool].
- * 
+ *
  * Returns null (tool not registered) when:
  * - The current agent is itself a sub-agent (parentAgentId != null) — prevents recursion
  * - No AsyncAgentStore is available — SubAgentTool requires it
+ *
+ * The tool is registered even when no predefined sub-agents are configured: primary agents
+ * can always create one-off sub-agents via agentType "dynamic" + agentSpec.
  *
  * Note: [subAgentContextResolver] uses `@Lazy` on the constructor parameter to break the
  * circular dependency chain: ToolFactory → SubAgentToolBuilder → SubAgentContextResolver → SessionToolResolver → ToolFactory.
@@ -30,7 +33,11 @@ class SubAgentToolBuilder(
         name = "task",
         description = "Launch a sub-agent for independent work. " +
             "Call this tool with name 'task' to delegate focused work to a specialized agent. " +
-            "Available sub-agent types are listed in the system prompt. " +
+            "Predefined sub-agent types are listed in the system prompt. " +
+            "If none fits, pass agentType='dynamic' with an agentSpec (name, systemPrompt, optional " +
+            "toolNames/skillNames/mcpServerNames) to create a one-off sub-agent. Omit a resource field " +
+            "to inherit all your resources of that kind; an explicit list grants a subset of your own " +
+            "(unknown names are rejected); an empty array grants none. " +
             "The sub-agent runs independently and returns its result.",
         permissionCategory = "subagent"
     )
@@ -40,11 +47,6 @@ class SubAgentToolBuilder(
     override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         // If this agent is itself a sub-agent, don't register the tool — prevents recursion
         if (context.parentAgentId != null) {
-            return null
-        }
-
-        // If no sub-agents are configured for this agent, don't register the tool
-        if (context.subAgents.isEmpty()) {
             return null
         }
 
