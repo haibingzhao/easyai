@@ -13,6 +13,7 @@ import org.springframework.ai.model.tool.StructuredOutputChatOptions
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Tests for the structuredOutput capability gate in [AnthropicChatModelFactory.build]:
@@ -85,6 +86,30 @@ class AnthropicChatModelFactoryTest {
             ) as AnthropicChatOptions
             assertNotNull(built.outputSchema)
             assertEquals(OutputConfig.Effort.HIGH, built.outputConfig?.effort()?.orElse(null))
+        }
+    }
+
+    @Nested
+    inner class `thinking toggle` {
+
+        @Test
+        fun `thinking=false sends explicit disabled config instead of omitting it`() {
+            // Some Anthropic-protocol models (e.g. qwen3.x-max) reason by DEFAULT, so the
+            // thinking field must be sent as {type: disabled}; omitting it leaves reasoning on.
+            val options = ModelOptions(temperature = 0.7, maxTokens = 1000, thinking = false)
+            val built = factory.build(config(null, options), emptyList(), null) as AnthropicChatOptions
+            val thinking = built.thinking
+            assertNotNull(thinking, "thinking config must be sent explicitly, not omitted")
+            assertTrue(thinking.isDisabled(), "thinking=false must map to a disabled thinking config")
+        }
+
+        @Test
+        fun `thinking=true sends enabled config`() {
+            val options = ModelOptions(temperature = 0.7, maxTokens = 20_000, thinking = true)
+            val built = factory.build(config(null, options), emptyList(), null) as AnthropicChatOptions
+            val thinking = built.thinking
+            assertNotNull(thinking)
+            assertTrue(thinking.isEnabled(), "thinking=true must map to an enabled thinking config")
         }
     }
 }

@@ -89,8 +89,12 @@ class AnthropicChatModelFactory : ChatModelFactory {
                 builder.effort(mapToOutputConfigEffort(effortValue))
             }
 
-            // 3. Temperature/maxTokens: only when thinking is not active
+            // 3. Thinking disabled + temperature/maxTokens: only when thinking is not active.
+            // thinkingDisabled() must be sent explicitly — some Anthropic-protocol models
+            // (e.g. qwen3.x-max) reason by DEFAULT, so merely omitting the thinking field
+            // leaves reasoning on; only an explicit {type: disabled} turns it off.
             if (!it.thinking) {
+                builder.thinkingDisabled()
                 builder.temperature(it.temperature)
                 builder.maxTokens(it.maxTokens)
             }
