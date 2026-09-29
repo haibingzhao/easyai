@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Send, Square, Loader2, Paperclip, ShieldCheck, Clock } from 'lucide-react';
 import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
+import { useSideAskStore } from '@/services/stores/side-ask-store';
 import { useProjectStore } from '@/services/stores/project-store';
 import { ChatService, sendMessageToBackend, abortAllActiveStreams, cancelChat } from '../../services/chat-service';
 import { SessionService, sessionService } from '../../services/session-service';
@@ -19,7 +20,7 @@ import { AttachmentPreviewBar } from './AttachmentPreviewBar';
 import type { SlashCommand } from '@/types/command';
 import type { CommandIdentity } from '@/utils/command-utils';
 import { parseCommand, serializeCommand } from '@/utils/command-utils';
-import { createCommandChip, populateMessageEditor, readMessageEditorText, copyMessageSelection } from '@/utils/attachment-utils';
+import { createCommandChip, createQuoteChip, populateMessageEditor, readMessageEditorText, copyMessageSelection } from '@/utils/attachment-utils';
 import type { Attachment, QueuedMessage } from '../../types/message';
 import type { ModelCapabilities } from '@/types/settings';
 import { i18n } from '../../utils/i18n';
@@ -752,6 +753,25 @@ export const MessageEditor: React.FC = () => {
       setClockDismissed(false);
     }
   }, [hasQueuedInput, isStreaming]);
+
+  // Consume quote chips requested from the selection toolbar
+  const pendingQuote = useSideAskStore((s) => s.pendingQuote);
+  const clearPendingQuote = useSideAskStore((s) => s.clearPendingQuote);
+  useEffect(() => {
+    if (!pendingQuote) return;
+    const editor = editorRef.current;
+    if (editor) {
+      editor.appendChild(createQuoteChip(pendingQuote));
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      setEditorValue(getEditorText());
+    }
+    clearPendingQuote();
+  }, [pendingQuote, clearPendingQuote, getEditorText]);
 
   // Handle green clock click:
   // - If there are pending queued messages: cancel them (clock stays visible for a second click)

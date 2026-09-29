@@ -9,9 +9,13 @@ import { ChevronDown } from 'lucide-react';
 
 interface ModelSelectorProps {
   onModelChange: (configId: string, capabilities?: ModelCapabilities) => void;
+  /** Controlled mode: display this config id instead of the global selection. */
+  selectedId?: string | null;
+  /** Controlled mode: skip writing the selection to settings store / localStorage. */
+  persistSelection?: boolean;
 }
 
-export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange }) => {
+export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange, selectedId, persistSelection = true }) => {
   const [enabledConfigs, setEnabledConfigs] = useState<ModelProviderConfig[]>([]);
   const [groupNames, setGroupNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -44,13 +48,13 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange }) =
           // Read directly from localStorage to avoid race condition:
           // React child effects run before parent effects, so loadSettings()
           // in App.tsx may not have populated the store yet.
-          const storedId = storageService.getSelectedModelConfigId();
-          const currentId = storedId || enabled[0].id;
+          const storedId = persistSelection ? storageService.getSelectedModelConfigId() : null;
+          const currentId = selectedId ?? storedId ?? enabled[0].id;
           const currentConfig = enabled.find(c => c.id === currentId) || enabled[0];
           if (currentConfig?.id) {
             // Sync store & localStorage so the UI reflects the resolved model
             // (handles stale IDs left over from a different user's session).
-            setSelectedModelConfig(currentConfig.id);
+            if (persistSelection) setSelectedModelConfig(currentConfig.id);
             onModelChange(currentConfig.id, currentConfig.capabilities);
           }
         }
@@ -64,7 +68,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange }) =
   }, []);
 
   const handleSelect = (config: ModelProviderConfig) => {
-    setSelectedModelConfig(config.id);
+    if (persistSelection) setSelectedModelConfig(config.id);
     onModelChange(config.id, config.capabilities);
     setDropdownOpen(false);
   };
@@ -119,7 +123,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange }) =
     };
   }, [dropdownOpen]);
 
-  const selectedConfig = enabledConfigs.find(c => c.id === selectedModelConfigId);
+  const effectiveSelectedId = selectedId !== undefined ? selectedId : selectedModelConfigId;
+  const selectedConfig = enabledConfigs.find(c => c.id === effectiveSelectedId);
 
   // Group configs by groupId for display; ungrouped configs go last
   const grouped = useMemo(() => {
@@ -184,7 +189,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange }) =
                   key={config.id}
                   onClick={() => handleSelect(config)}
                   className={`w-full text-left px-3 py-2 hover:bg-muted transition-colors ${
-                    selectedModelConfigId === config.id ? 'bg-muted' : ''
+                    effectiveSelectedId === config.id ? 'bg-muted' : ''
                   }`}
                 >
                   <div className="text-sm font-medium truncate">{config.name}</div>
@@ -198,7 +203,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange }) =
               key={config.id}
               onClick={() => handleSelect(config)}
               className={`w-full text-left px-3 py-2 hover:bg-muted transition-colors ${
-                selectedModelConfigId === config.id ? 'bg-muted' : ''
+                effectiveSelectedId === config.id ? 'bg-muted' : ''
               }`}
             >
               <div className="text-sm font-medium truncate">{config.name}</div>

@@ -20,7 +20,10 @@ import { Plus, PanelRight, PanelRightClose } from 'lucide-react';
 import { i18n } from '../../utils/i18n';
 import { RightPanel } from '../files/RightPanel';
 import { TeamMemberDetail } from './team/TeamMemberDetail';
+import { SelectionToolbar } from './SelectionToolbar';
+import { SideAskPanel } from './SideAskPanel';
 import { useNavStore } from '@/services/stores/nav-store';
+import { useSideAskStore } from '@/services/stores/side-ask-store';
 import { useTeamStore } from '@/services/stores/team-store';
 import { useResizable } from '@/hooks/useResizable';
 
@@ -65,6 +68,35 @@ export const ChatPanel: React.FC = () => {
     onResizeStart: () => setPanelResizing(true),
     onResizeEnd: () => setPanelResizing(false),
   });
+
+  // Side ask panel (ephemeral Q&A about selected text)
+  const sideAskOpen = useSideAskStore((s) => s.open);
+  const abortSideAsk = useSideAskStore((s) => s.abortAndClose);
+  const [sideAskWidth, setSideAskWidth] = useState(380);
+  const [sideAskResizing, setSideAskResizing] = useState(false);
+  const sideAskResizer = useResizable({
+    minWidth: 280,
+    maxWidth: 640,
+    onResize: (w) => setSideAskWidth(Math.round(w)),
+    direction: 'left',
+    onResizeStart: () => setSideAskResizing(true),
+    onResizeEnd: () => setSideAskResizing(false),
+  });
+
+  // Side ask owns the right side exclusively: close the other panels when it opens
+  useEffect(() => {
+    if (sideAskOpen) {
+      setShowArtifactPanel(false);
+      setRightPanelOpen(false);
+    }
+  }, [sideAskOpen, setRightPanelOpen]);
+
+  // Opening the right panel while side ask is open dismisses the ephemeral conversation
+  useEffect(() => {
+    if (rightPanelOpen && useSideAskStore.getState().open) {
+      abortSideAsk();
+    }
+  }, [rightPanelOpen, abortSideAsk]);
 
   // Auto-scroll related
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -617,6 +649,28 @@ export const ChatPanel: React.FC = () => {
           </div>
         </div>
 
+        {/* Drag handle between chat and side ask panel */}
+        {sideAskOpen && (
+          <div
+            className={`resize-handle ${sideAskResizing ? 'active' : ''}`}
+            onMouseDown={(e) => {
+              sideAskResizer.setCurrentWidth(sideAskWidth);
+              sideAskResizer.onMouseDown(e);
+            }}
+            onTouchStart={(e) => {
+              sideAskResizer.setCurrentWidth(sideAskWidth);
+              sideAskResizer.onTouchStart(e);
+            }}
+          />
+        )}
+
+        {/* Side ask panel — ephemeral Q&A about selected chat text */}
+        {sideAskOpen && (
+          <div className="h-full shrink-0 border-l border-border" style={{ width: sideAskWidth }}>
+            <SideAskPanel />
+          </div>
+        )}
+
         {/* Drag handle between chat and right panel */}
         {showRightPanel && (
           <div
@@ -674,6 +728,9 @@ export const ChatPanel: React.FC = () => {
           </Badge>
         </button>
       )}
+
+      {/* Floating toolbar for text selections inside the message list */}
+      <SelectionToolbar containerRef={messagesContainerRef} />
     </div>
   );
 };
