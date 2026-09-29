@@ -1,6 +1,7 @@
 package com.easy.easyai.autoconfigure.core
 
 import com.easy.easyai.api.config.ChatModelFactory
+import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.common.textio.template.JinjavaTemplateRenderer
 import com.easy.easyai.common.textio.template.TemplateRenderer
 import com.easy.easyai.core.agent.*
@@ -8,6 +9,8 @@ import com.easy.easyai.core.command.AsyncUserCommandStore
 import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.memory.MemoryStore
+import com.easy.easyai.core.model.aux.AuxModelResolver
+import com.easy.easyai.core.model.aux.AuxModelSettingsStore
 import com.easy.easyai.core.message.DefaultMessageConverter
 import com.easy.easyai.core.message.MessageConverter
 import com.easy.easyai.core.permission.PermissionService
@@ -77,6 +80,22 @@ open class EasyAiCoreAutoConfiguration(
     @Bean
     @ConditionalOnMissingBean
     open fun toolFactory(builders: List<ToolBuilder>): ToolFactory = SpringToolFactory(builders)
+
+    // ========== Auxiliary Model Beans ==========
+
+    /**
+     * Resolves a per-user configured model for a background [AuxModelTask] (e.g. compaction).
+     * Both the settings store (repository, R2DBC-gated) and the config store are optional: when
+     * either is absent the resolver simply yields null, so every consumer falls back to its own
+     * default (for compaction, the chat-session model).
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    open fun auxModelResolver(
+        @Autowired(required = false) settingsStore: AuxModelSettingsStore? = null,
+        @Autowired(required = false) configStore: ModelProviderConfigStore? = null,
+        chatModelFactories: List<ChatModelFactory>
+    ): AuxModelResolver = DefaultAuxModelResolver(settingsStore, configStore, chatModelFactories)
 
     // ========== Agent System Prompt Beans ==========
 

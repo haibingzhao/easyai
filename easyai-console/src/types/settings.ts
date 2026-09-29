@@ -188,3 +188,24 @@ export interface MediaProviderTestResult {
   success: boolean;
   message: string;
 }
+
+// Auxiliary (per-task) model settings types (Settings → Task Models)
+
+/** A background purpose that can be backed by its own model. Mirrors the backend AuxModelTask enum. */
+export type AuxModelTaskKey = 'compaction' | 'session_title';
+
+/** Which layer is in force for a task: the user's choice, or the default (chat-session model). */
+export type AuxModelEffectiveSource = 'user' | 'default';
+
+export interface AuxModelConfig {
+  taskKey: AuxModelTaskKey;
+  /** Referenced model_provider_config ID; blank means "follow the default model". */
+  modelConfigId: string;
+  effectiveSource: AuxModelEffectiveSource;
+}
+
+/** Save draft; a null/blank modelConfigId clears the choice and reverts to the default. */
+export interface SaveAuxModelRequest {
+  modelConfigId?: string | null;
+}
+

@@ -12,6 +12,7 @@ import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.agent.TransformContextService
 import com.easy.easyai.core.memory.MemoryFlushAgent
 import com.easy.easyai.core.memory.MemoryStore
+import com.easy.easyai.core.model.aux.AuxModelResolver
 import org.springframework.ai.chat.model.ChatModel
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Autowired
@@ -78,7 +79,8 @@ class CompactionAutoConfiguration(
         tokenEstimator: TokenEstimator,
         @Autowired(required = false) listener: CompactionListener?,
         @Autowired(required = false) originalMessageLoader: OriginalMessageLoader?,
-        @Autowired(required = false) memoryStore: MemoryStore?
+        @Autowired(required = false) memoryStore: MemoryStore?,
+        @Autowired(required = false) auxModelResolver: AuxModelResolver?
     ): TransformContextService {
         val memoryFlushAgent = memoryStore?.let {
             MemoryFlushAgent(
@@ -93,7 +95,8 @@ class CompactionAutoConfiguration(
             tokenEstimator = tokenEstimator,
             listener = listener,
             originalMessageLoader = originalMessageLoader,
-            memoryFlushAgent = memoryFlushAgent
+            memoryFlushAgent = memoryFlushAgent,
+            auxModelResolver = auxModelResolver
         )
     }
 }

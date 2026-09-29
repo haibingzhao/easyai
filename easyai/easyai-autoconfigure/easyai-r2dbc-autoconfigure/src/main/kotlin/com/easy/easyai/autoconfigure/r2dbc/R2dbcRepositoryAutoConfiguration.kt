@@ -12,6 +12,7 @@ import com.easy.easyai.core.goal.GoalCompletionCheck
 import com.easy.easyai.core.goal.GoalStatusNotifier
 import com.easy.easyai.core.goal.GoalStore
 import com.easy.easyai.core.media.MediaProviderStore
+import com.easy.easyai.core.model.aux.AuxModelSettingsStore
 import com.easy.easyai.core.permission.PermissionRuleStore
 import com.easy.easyai.core.permission.PermissionService
 import com.easy.easyai.core.permission.ShellAiRiskChecker
@@ -31,6 +32,7 @@ import com.easy.easyai.repository.database.DatabaseMigration
 import com.easy.easyai.repository.goal.SqlGoalStore
 import com.easy.easyai.repository.mcp.R2dbcMcpServerStore
 import com.easy.easyai.repository.media.R2dbcMediaProviderStore
+import com.easy.easyai.repository.model.R2dbcAuxModelSettingsStore
 import com.easy.easyai.repository.permission.R2dbcAsyncPermissionRuleStore
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.repository.project.R2dbcAsyncProjectStore
@@ -462,6 +464,17 @@ class R2dbcRepositoryAutoConfiguration(
     @ConditionalOnMissingBean(StorageSettingsStore::class)
     fun storageSettingsStore(initializer: R2dbcDatabaseInitializer): StorageSettingsStore {
         return R2dbcStorageSettingsStore(initializer.getDatabase())
+    }
+
+    /**
+     * Per-user auxiliary model choices (one row per task): the only source of which saved model
+     * config backs a background purpose such as compaction. Absent when `easyai.r2dbc.enabled=false`,
+     * which is how the resolver falls back to the session model and the endpoint reports 503.
+     */
+    @Bean
+    @ConditionalOnMissingBean(AuxModelSettingsStore::class)
+    fun auxModelSettingsStore(initializer: R2dbcDatabaseInitializer): AuxModelSettingsStore {
+        return R2dbcAuxModelSettingsStore(initializer.getDatabase())
     }
 
     /**
