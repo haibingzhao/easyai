@@ -152,12 +152,11 @@ class CommandService(
         if (template.isEmpty()) return arguments.ifBlank { "" }
         val parts = if (arguments.isBlank()) emptyList() else arguments.split(Regex("\\s+"))
         val hasNumbered = NUMBERED_PLACEHOLDER.containsMatchIn(template)
-        val hasArguments = template.contains("\$ARGUMENTS")
+        val hasArguments = template.contains($$"$ARGUMENTS")
         var rendered = template
         if (hasNumbered) {
-            val lastNumbered = NUMBERED_PLACEHOLDER.findAll(template)
-                .map { it.groupValues[1].toIntOrNull() ?: 0 }
-                .maxOrNull() ?: 0
+            val lastNumbered =
+                NUMBERED_PLACEHOLDER.findAll(template).maxOfOrNull { it.groupValues[1].toIntOrNull() ?: 0 } ?: 0
             rendered = NUMBERED_PLACEHOLDER.replace(rendered) { match ->
                 val idx = (match.groupValues[1].toIntOrNull() ?: 1) - 1
                 if (idx + 1 == lastNumbered) {
@@ -168,7 +167,7 @@ class CommandService(
             }
         }
         if (hasArguments) {
-            rendered = rendered.replace("\$ARGUMENTS", arguments)
+            rendered = rendered.replace($$"$ARGUMENTS", arguments)
         }
         if (!hasNumbered && !hasArguments && arguments.isNotBlank()) {
             rendered = "$rendered\n\n$arguments"
