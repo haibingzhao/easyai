@@ -139,4 +139,58 @@ class PromptTemplateServiceTest {
             assertTrue(first == second)
         }
     }
+
+    @Nested
+    inner class `sub-agent guidance` {
+
+        private fun contextWith(
+            toolNames: List<String>,
+            subAgents: List<Map<String, Any?>> = emptyList()
+        ): PromptContext = PromptContext(
+            tools = toolNames.map { mapOf<String, Any?>("name" to it, "description" to "desc") },
+            subAgents = subAgents
+        )
+
+        @Test
+        fun `renders ad-hoc section when task tool present without predefined sub-agents`() {
+            val rendered = service.build(null, contextWith(listOf("read", "task")))
+            assertTrue(rendered.contains("## Available Sub-Agents"))
+            assertTrue(rendered.contains("### Ad-hoc Sub-Agents"))
+            assertTrue(rendered.contains("agentType \"dynamic\""))
+        }
+
+        @Test
+        fun `renders predefined list and ad-hoc section together`() {
+            val rendered = service.build(
+                null,
+                contextWith(
+                    toolNames = listOf("task"),
+                    subAgents = listOf(mapOf("name" to "coder", "description" to "writes code"))
+                )
+            )
+            assertTrue(rendered.contains("`coder`: writes code"))
+            assertTrue(rendered.contains("### Ad-hoc Sub-Agents"))
+            assertTrue(rendered.contains("When delegating, provide a complete prompt"))
+        }
+
+        @Test
+        fun `omits ad-hoc section when task tool absent but predefined sub-agents exist`() {
+            val rendered = service.build(
+                null,
+                contextWith(
+                    toolNames = listOf("read"),
+                    subAgents = listOf(mapOf("name" to "coder", "description" to "writes code"))
+                )
+            )
+            assertTrue(rendered.contains("`coder`: writes code"))
+            assertFalse(rendered.contains("### Ad-hoc Sub-Agents"))
+        }
+
+        @Test
+        fun `omits section entirely without task tool and sub-agents`() {
+            val rendered = service.build(null, contextWith(listOf("read", "bash")))
+            assertFalse(rendered.contains("## Available Sub-Agents"))
+            assertFalse(rendered.contains("### Ad-hoc Sub-Agents"))
+        }
+    }
 }

@@ -48,8 +48,12 @@ class PromptTemplateService(
                     append(formatItemList(list))
                 }
             } else null,
-            subAgentsList = if (includeTools) context.subAgents.takeIf { it.isNotEmpty() }?.let { list ->
-                buildString {
+            subAgentsList = if (includeTools) {
+                // Render when predefined sub-agents exist OR the `task` tool is registered
+                // (primary agents can always create ad-hoc sub-agents dynamically).
+                val hasTaskTool = context.tools.any { it["name"] == "task" }
+                val list = context.subAgents
+                if (list.isEmpty() && !hasTaskTool) null else buildString {
                     appendLine("## Available Sub-Agents")
                     appendLine("You can delegate tasks to specialized sub-agents using the `task` tool.")
                     list.forEach { sa ->
@@ -62,9 +66,19 @@ class PromptTemplateService(
                             appendLine("  ```")
                         }
                     }
-                    appendLine("When delegating, provide a complete prompt with all necessary context.")
-                    appendLine("If the sub-agent defines an input schema, you MUST provide matching `inputData`.")
-                    appendLine("The subagent result will be returned to you as the tool output.")
+                    if (list.isNotEmpty()) {
+                        appendLine("When delegating, provide a complete prompt with all necessary context.")
+                        appendLine("If the sub-agent defines an input schema, you MUST provide matching `inputData`.")
+                        appendLine("The subagent result will be returned to you as the tool output.")
+                    }
+                    if (hasTaskTool) {
+                        appendLine()
+                        appendLine("### Ad-hoc Sub-Agents")
+                        appendLine("If no predefined sub-agent fits the task, call `task` with agentType \"dynamic\" and an `agentSpec`:")
+                        appendLine("- `name`: short identifier; `systemPrompt`: the sub-agent's role and instructions")
+                        appendLine("- `toolNames`, `skillNames`, `mcpServerNames` (MCP tools are named `<server>__<tool>`): omit a field to inherit ALL your resources of that kind, or pass an explicit list to grant a subset — names outside your own resources are rejected; pass an empty array to grant none")
+                        appendLine("The dynamic sub-agent runs once with only the selected resources and returns its result. Prefer a predefined type when one matches.")
+                    }
                 }
             } else null,
             teamMembersList = context.teamMembers.takeIf { it.isNotEmpty() }?.let { list ->
