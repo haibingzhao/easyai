@@ -405,6 +405,27 @@ object Tables {
         }
     }
 
+    /**
+     * Per-user auxiliary model choices — one row per `(user, task_key)`, edited from the frontend
+     * Settings page. `model_config_id` references an existing `model_provider_config`; a blank
+     * value means the task is unconfigured and its consumer falls back to the default (for
+     * compaction, the chat-session model).
+     */
+    object AuxModelSettingsTable : Table("aux_model_settings") {
+        val id = varchar("id", 255)
+        val userId = varchar("user_id", 255).default("system")
+        val taskKey = varchar("task_key", 64)
+        val modelConfigId = varchar("model_config_id", 255).default("")
+        val createdAt = long("created_at")
+        val updatedAt = long("updated_at")
+
+        override val primaryKey = PrimaryKey(id)
+
+        init {
+            uniqueIndex(userId, taskKey)  // one row per user+task
+        }
+    }
+
     // ---- Swarm tables ----
 
     /**

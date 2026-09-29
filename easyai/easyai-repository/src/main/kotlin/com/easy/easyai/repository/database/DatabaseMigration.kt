@@ -50,6 +50,7 @@ class DatabaseMigration(
                 Tables.McpServerConfigTable,
                 Tables.SkillTable,
                 Tables.StorageSettingsTable,
+                Tables.AuxModelSettingsTable,
                 Tables.UserCommandTable,
                 Tables.SwarmRunTable,
                 Tables.SwarmTaskTable,

@@ -1,0 +1,31 @@
+package com.easy.easyai.core.model.aux
+
+import com.easy.easyai.api.model.ModelProviderConfig
+import org.springframework.ai.chat.model.ChatModel
+
+/**
+ * A resolved auxiliary model: both the live [ChatModel] to call and the [ModelProviderConfig] it
+ * was built from. Callers need the config too, not just the model, so downstream option building
+ * (model name, protocol, thinking toggle) matches the configured provider rather than the session's.
+ */
+data class ResolvedAuxModel(
+    val chatModel: ChatModel,
+    val modelConfig: ModelProviderConfig
+)
+
+/**
+ * Resolves the per-user configured model for an [AuxModelTask].
+ *
+ * Resolution returns null when the task is unconfigured, the referenced config no longer exists,
+ * no factory supports its protocol, or persistence is unavailable — in every case the caller keeps
+ * its own default (for compaction, the chat-session model). Implementations cache the built
+ * [ChatModel]; [refresh] drops one entry so a saved choice takes effect without a restart.
+ */
+interface AuxModelResolver {
+
+    /** The user's configured model for [task]; null means "not configured — use the default". */
+    suspend fun resolve(userId: String?, task: AuxModelTask): ResolvedAuxModel?
+
+    /** Invalidate the cached model for one `(userId, task)` so the next [resolve] re-reads config. */
+    fun refresh(userId: String, task: AuxModelTask)
+}

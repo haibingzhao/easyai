@@ -2,11 +2,14 @@ package com.easy.easyai.compaction
 
 import com.easy.easyai.compaction.estimator.TokenEstimator
 import com.easy.easyai.compaction.strategy.CompactionStrategy
+import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.CompactionTriggerType
 import com.easy.easyai.core.agent.TransformContextInput
 import com.easy.easyai.core.agent.TransformContextService
 import com.easy.easyai.core.memory.MemoryFlushAgent
 import com.easy.easyai.core.model.EasyAiMessage
+import com.easy.easyai.core.model.aux.AuxModelResolver
+import com.easy.easyai.core.model.aux.AuxModelTask
 import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.model.ChatModel
 
@@ -22,7 +25,8 @@ class CompactionTransformContextService(
     private val tokenEstimator: TokenEstimator,
     listener: CompactionListener? = null,
     originalMessageLoader: OriginalMessageLoader? = null,
-    private val memoryFlushAgent: MemoryFlushAgent? = null
+    private val memoryFlushAgent: MemoryFlushAgent? = null,
+    private val auxModelResolver: AuxModelResolver? = null
 ) : TransformContextService {
 
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -34,6 +38,25 @@ class CompactionTransformContextService(
         compactionListener = listener,
         originalMessageLoader = originalMessageLoader
     )
+
+    /**
+     * The model compaction actually runs on: a per-user configured COMPACTION model overrides the
+     * session model, replacing both the [ChatModel] and the [AgentContext.modelConfig] (so option
+     * building — model name, protocol, thinking toggle — matches the configured provider).
+     *
+     * An absent resolver, an unconfigured task, or an unresolvable config all fall back to the
+     * session model. The trigger/range logic still uses the session model's context window, since
+     * it is the session conversation being compacted; the configured model should have a window at
+     * least as large as one summarization range.
+     */
+    private suspend fun effectiveCompactionModel(
+        agentContext: AgentContext,
+        sessionChatModel: ChatModel?
+    ): Pair<AgentContext, ChatModel?> {
+        val resolved = auxModelResolver?.resolve(agentContext.userId, AuxModelTask.COMPACTION)
+            ?: return agentContext to sessionChatModel
+        return agentContext.copy(modelConfig = resolved.modelConfig) to resolved.chatModel
+    }
 
     override suspend fun transform(input: TransformContextInput): List<EasyAiMessage> {
         if (!config.enabled) {
@@ -48,12 +71,14 @@ class CompactionTransformContextService(
         )
 
         if (shouldCompact) {
+            // Resolve the compaction model (per-user override, else the session model)
+            val (compactionContext, chatModel) = effectiveCompactionModel(input.agentContext, input.chatModel)
+
             // Flush memory before compaction to prevent losing important facts
-            val chatModel = input.chatModel
             if (memoryFlushAgent != null && chatModel != null) {
                 try {
                     memoryFlushAgent.maybeFlush(
-                        agentContext = input.agentContext,
+                        agentContext = compactionContext,
                         messages = input.messages,
                         modelContextLength = input.modelContextLength,
                         estimatedTokenCount = tokenEstimator.estimate(input.messages),
@@ -69,13 +94,13 @@ class CompactionTransformContextService(
                 ContextCompactionOrchestrator.EventPusher { event -> pusher(event) }
             }
             return orchestrator.compact(
-                agentContext = input.agentContext,
+                agentContext = compactionContext,
                 messages = input.messages,
                 turnId = input.turnId,
                 modelContextLength = input.modelContextLength,
                 eventScope = eventPusher,
                 messageTimestamps = input.messageTimestamps,
-                chatModel = input.chatModel
+                chatModel = chatModel
             )
         }
 
@@ -91,7 +116,7 @@ class CompactionTransformContextService(
      * @param chatModel Optional session-specific ChatModel for LLM-based strategies.
      */
     suspend fun manualCompactWithPusher(
-        agentContext: com.easy.easyai.core.agent.AgentContext,
+        agentContext: AgentContext,
         messages: List<EasyAiMessage>,
         turnId: Int,
         modelContextLength: Int,
@@ -103,15 +128,18 @@ class CompactionTransformContextService(
             return messages
         }
 
+        // Resolve the compaction model (per-user override, else the session model)
+        val (compactionContext, effectiveChatModel) = effectiveCompactionModel(agentContext, chatModel)
+
         // Flush memory before manual compaction (context is likely near window limit)
-        if (memoryFlushAgent != null && chatModel != null) {
+        if (memoryFlushAgent != null && effectiveChatModel != null) {
             try {
                 memoryFlushAgent.maybeFlush(
-                    agentContext = agentContext,
+                    agentContext = compactionContext,
                     messages = messages,
                     modelContextLength = modelContextLength,
                     estimatedTokenCount = tokenEstimator.estimate(messages),
-                    chatModel = chatModel
+                    chatModel = effectiveChatModel
                 )
             } catch (e: Exception) {
                 logger.warn("Memory flush failed before manual compaction: {}", e.message)
@@ -119,14 +147,14 @@ class CompactionTransformContextService(
         }
 
         return orchestrator.compact(
-            agentContext = agentContext,
+            agentContext = compactionContext,
             messages = messages,
             turnId = turnId,
             modelContextLength = modelContextLength,
             triggerType = CompactionTriggerType.Manual,
             eventScope = eventPusher,
             messageTimestamps = messageTimestamps,
-            chatModel = chatModel
+            chatModel = effectiveChatModel
         )
     }
 }
