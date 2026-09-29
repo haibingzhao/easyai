@@ -12,6 +12,7 @@ import { sessionService } from '@/services/session-service';
 import { switchToSession } from '@/services/session-switch';
 import { i18n } from '@/utils/i18n';
 import { GitBranch } from 'lucide-react';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { formatTokenCount } from '../../utils/format';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -73,6 +74,7 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({ message, too
   const workDir = useProjectStore((s) => s.currentProject?.path || '');
   const sessionId = useChatStore((s) => s.sessionId);
   const [forking, setForking] = useState(false);
+  const [forkConfirmOpen, setForkConfirmOpen] = useState(false);
 
   const handleFork = async () => {
     if (!sessionId || !message.messageId || forking) return;
@@ -269,67 +271,79 @@ export const AssistantMessage: React.FC<AssistantMessageProps> = ({ message, too
         );
       })}
 
-      {/* Hover action row: fork a branch session from this message */}
-      {!isStreaming && sessionId && message.messageId && (
-        <div className="max-h-0 overflow-hidden group-hover:max-h-8 transition-[max-height] duration-200 ease-out">
-          <div className="flex items-center gap-1 pt-1">
-            <button
-              onClick={handleFork}
-              disabled={forking}
-              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-              title={i18n('Create a branch task from here')}
-            >
-              <GitBranch className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Inline token bar: shown on hover, embedded at the bottom of the message */}
+      {/* Inline meta bar: shown on hover, embedded at the bottom of the message.
+          Ends with the fork button so the branch action sits right after the call time. */}
       {(() => {
         const usage = message.usage;
-        if (!usage || usage.outputTokens <= 0) return null;
-
-        const durationMs = usage.durationMs ?? 0;
-        const cacheRead = usage.cacheReadTokens ?? 0;
-        const cacheWrite = usage.cacheWriteTokens ?? 0;
-        const totalCache = cacheRead + cacheWrite;
+        const showUsage = !!usage && usage.outputTokens > 0;
+        const canFork = !isStreaming && !!sessionId && !!message.messageId;
+        if (!showUsage && !canFork) return null;
 
         let durationText = '';
-        if (durationMs > 0) {
-          const secs = Math.round(durationMs / 1000);
-          if (secs < 60) {
-            durationText = `${secs}s`;
-          } else {
-            const m = Math.floor(secs / 60);
-            const s = secs % 60;
-            durationText = `${m}m ${s}s`;
+        let totalCache = 0;
+        let callTime = '';
+        if (showUsage && usage) {
+          const durationMs = usage.durationMs ?? 0;
+          totalCache = (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0);
+
+          if (durationMs > 0) {
+            const secs = Math.round(durationMs / 1000);
+            if (secs < 60) {
+              durationText = `${secs}s`;
+            } else {
+              const m = Math.floor(secs / 60);
+              const s = secs % 60;
+              durationText = `${m}m ${s}s`;
+            }
           }
+
+          callTime = new Date(message.timestamp).toLocaleTimeString();
         }
-
-
-        // Format call time from message timestamp
-        const callTime = new Date(message.timestamp).toLocaleTimeString();
 
         return (
           <div className="max-h-0 overflow-hidden group-hover:max-h-8 transition-[max-height] duration-200 ease-out">
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground/60 tabular-nums pt-1">
-              {usage.modelName && (
-                <span className="font-mono">{usage.modelName}</span>
+              {showUsage && usage && (
+                <>
+                  {usage.modelName && (
+                    <span className="font-mono">{usage.modelName}</span>
+                  )}
+                  <span>↑ {formatTokenCount(usage.inputTokens)}</span>
+                  <span>↓ {formatTokenCount(usage.outputTokens)}</span>
+                  {totalCache > 0 && (
+                    <span>cache {formatTokenCount(totalCache)}</span>
+                  )}
+                  {durationText && (
+                    <span>· {durationText}</span>
+                  )}
+                  <span>· {callTime}</span>
+                </>
               )}
-              <span>↑ {formatTokenCount(usage.inputTokens)}</span>
-              <span>↓ {formatTokenCount(usage.outputTokens)}</span>
-              {totalCache > 0 && (
-                <span>cache {formatTokenCount(totalCache)}</span>
+              {canFork && (
+                <button
+                  onClick={() => setForkConfirmOpen(true)}
+                  disabled={forking}
+                  className="p-1 -my-1 rounded hover:bg-muted hover:text-foreground transition-colors disabled:opacity-50"
+                  title={i18n('Create a branch task from here')}
+                >
+                  <GitBranch className="w-3 h-3" />
+                </button>
               )}
-              {durationText && (
-                <span>· {durationText}</span>
-              )}
-              <span>· {callTime}</span>
             </div>
           </div>
         );
       })()}
+
+      <ConfirmDialog
+        open={forkConfirmOpen}
+        message={i18n('Create a new branch session from this message?')}
+        confirmLabel={i18n('Create')}
+        onConfirm={() => {
+          setForkConfirmOpen(false);
+          handleFork();
+        }}
+        onCancel={() => setForkConfirmOpen(false)}
+      />
     </div>
   );
 };
