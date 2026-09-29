@@ -311,6 +311,28 @@ body.sidebar-open {
   color: oklch(0.75 0.12 80);
 }
 
+.quote-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  padding: 0.1em 0.5em;
+  border-radius: 0.375rem;
+  font-size: 0.8125em;
+  font-weight: 500;
+  user-select: none;
+  cursor: default;
+  white-space: nowrap;
+  vertical-align: baseline;
+  line-height: 1.4;
+  background-color: oklch(0.55 0.15 150 / 0.12);
+  color: oklch(0.45 0.15 150);
+}
+
+.dark .quote-chip {
+  background-color: oklch(0.7 0.12 150 / 0.18);
+  color: oklch(0.75 0.12 150);
+}
+
 /* ===== Calc 工具代码高亮 ===== */
 
 .calc-code-highlight .line {

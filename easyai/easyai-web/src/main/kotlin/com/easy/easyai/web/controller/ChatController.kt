@@ -12,6 +12,7 @@ import com.easy.easyai.snapshot.SnapshotService
 import com.easy.easyai.web.model.*
 import com.easy.easyai.web.security.getCurrentUserId
 import com.easy.easyai.web.service.ChatStreamService
+import com.easy.easyai.web.service.QuickAskStreamService
 import com.easy.easyai.web.service.SessionService
 import com.easy.easyai.web.util.AttachmentValidationException
 import kotlinx.coroutines.reactor.asFlux
@@ -31,6 +32,7 @@ import java.time.Duration
  *
  * Endpoints:
  * - POST /api/chat - SSE streaming chat
+ * - POST /api/chat/quick-ask - Stateless side-panel Q&A about selected text (SSE)
  * - POST /api/chat/cancel - Cancel chat
  * - POST /api/chat/resume - Resume cancelled chat
  * - POST /api/chat/question/{sessionId}/{toolCallId}/answer - Answer a pending question (SSE)
@@ -42,6 +44,7 @@ import java.time.Duration
 @RequestMapping("/api/chat")
 class ChatController(
     private val chatStreamService: ChatStreamService,
+    private val quickAskStreamService: QuickAskStreamService,
     private val sessionManager: SessionManager,
     private val revertService: RevertService,
     private val sessionService: SessionService,
@@ -83,6 +86,21 @@ class ChatController(
             request.sessionId?.let { verifyOwnership(it) }
             chatStreamService.streamChat(request, userId)
         }.flatMapMany { it.asFlux() }
+    }
+
+    /**
+     * Stateless side-panel Q&A about selected chat text (SSE).
+     * Runs a dry-run agent: no session or message persistence.
+     */
+    @PostMapping(
+        value = ["/quick-ask"],
+        produces = [MediaType.TEXT_EVENT_STREAM_VALUE]
+    )
+    fun quickAsk(
+        @RequestBody request: QuickAskRequest
+    ): Flux<ServerSentEvent<ChatStreamEvent>> {
+        return mono { getCurrentUserId() }
+            .flatMapMany { userId -> quickAskStreamService.stream(userId, request) }
     }
 
     /**

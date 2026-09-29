@@ -220,6 +220,11 @@ export function readMessageEditorText(root: Node, includeCommand = false): strin
         parts.push(element.dataset.type === 'directory' ? buildFolderRef(name, path) : buildFileRef(name, path));
         return;
       }
+      if (element.classList.contains('quote-chip')) {
+        const quote = element.dataset.quote ?? '';
+        parts.push(`${quote.split('\n').map((line) => `> ${line}`).join('\n')}\n\n`);
+        return;
+      }
       if (element.tagName === 'BR') {
         parts.push('\n');
         return;
@@ -239,6 +244,20 @@ export function createCommandChip(command: CommandIdentity): HTMLSpanElement {
   chip.textContent = commandLabel(command);
   chip.title = command.source ?? `/${command.name}`;
   chip.dataset.commandToken = serializeCommand(command, '');
+  return chip;
+}
+
+const QUOTE_PREVIEW_LENGTH = 30;
+
+/** Atomic chip carrying text selected from a chat message; serializes as a markdown quote block. */
+export function createQuoteChip(quote: string): HTMLSpanElement {
+  const chip = document.createElement('span');
+  chip.className = 'quote-chip';
+  chip.contentEditable = 'false';
+  chip.dataset.quote = quote;
+  chip.title = quote;
+  const preview = quote.length > QUOTE_PREVIEW_LENGTH ? `${quote.slice(0, QUOTE_PREVIEW_LENGTH)}…` : quote;
+  chip.textContent = `❝ ${preview}`;
   return chip;
 }
 
@@ -272,7 +291,7 @@ export function copyMessageSelection(root: HTMLElement, clipboard: DataTransfer,
   if (!selection?.rangeCount || selection.isCollapsed) return false;
   const range = selection.getRangeAt(0);
   if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return false;
-  for (const chip of root.querySelectorAll('.command-chip, .mention-chip')) {
+  for (const chip of root.querySelectorAll('.command-chip, .mention-chip, .quote-chip')) {
     if (!range.intersectsNode(chip)) continue;
     if (chip.contains(range.startContainer)) range.setStartBefore(chip);
     if (chip.contains(range.endContainer)) range.setEndAfter(chip);
