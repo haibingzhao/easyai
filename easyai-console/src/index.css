@@ -343,24 +343,6 @@ body.sidebar-open {
   min-height: 1.4em;
 }
 
-/* ===== SubAgentPanel 工具卡片修复 ===== */
-
-/* 1. 强制卡片 header padding（修复高度坍塞） */
-.subagent-content .p-3 {
-  padding: 0.75rem !important;
-}
-
-/* 2. 强制卡片背景色与父容器形成对比，设置最小高度防止坍缩 */
-.subagent-content .bg-card {
-  background-color: var(--color-muted) !important;
-  min-height: 2.5rem !important;
-}
-
-/* 3. hover 状态适配 */
-.subagent-content .hover\:bg-muted\/50:hover {
-  background-color: oklch(0.32 0 0 / 0.5) !important;
-}
-
 /* Indeterminate progress bar animation for delete operations */
 @keyframes indeterminate {
   0% {

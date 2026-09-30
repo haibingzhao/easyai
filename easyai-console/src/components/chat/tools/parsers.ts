@@ -238,3 +238,26 @@ export function getGlobPattern(argsString: string): string {
     return '';
   }
 }
+
+/**
+ * One-line summary of a tool call, used by compact process-group rows.
+ */
+export function getToolRowSummary(toolName: string, argsString: string): string {
+  const singleLine = (text: string) => text.replace(/\s+/g, ' ').trim();
+  switch (toolName) {
+    case 'bash':
+      return singleLine(parseBashArgs(argsString).command);
+    case 'grep':
+      return singleLine(getGrepPattern(argsString));
+    case 'glob':
+      return singleLine(getGlobPattern(argsString));
+    case 'read':
+    case 'write':
+    case 'edit':
+      return singleLine(getToolPath(toolName, argsString));
+    case 'ls':
+      return singleLine(getSearchPath(argsString));
+    default:
+      return singleLine(argsString).slice(0, 120);
+  }
+}

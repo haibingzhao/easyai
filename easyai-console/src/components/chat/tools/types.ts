@@ -4,8 +4,7 @@
 
 import type { ToolCall, ToolResult } from '@/types/message';
 import type { ToolCallStatus } from '@/types/socket-event';
-import type { TodoInfo } from '@/types/todo';
-import type { SubAgentInnerBlock } from './SubAgentPanel';
+import type { ToolBlockData } from '@/services/stores/chat/types';
 
 /** Parsed read tool result */
 export interface ParsedReadResult {
@@ -72,20 +71,10 @@ export interface ToolMessageProps {
   status?: ToolCallStatus;
   streamingOutput?: string;
   workDir?: string;
+  /** Compact row mode: borderless single-line header with inline summary, used inside process groups */
+  compact?: boolean;
   /** Sub-agent streaming data (for SubAgentTool during streaming) */
-  subAgent?: {
-    agentName: string;
-    toolCallId: string;
-    prompt?: string;
-    blocks: SubAgentInnerBlock[];
-    isFinished: boolean;
-    streamingToolOutputs?: Record<string, string>;
-    errorMessage?: string;
-    /** Accumulated token usage from sub-agent's LLM calls */
-    accumulatedUsage?: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
-    /** Latest todo snapshot from the sub-agent's todo_write calls */
-    todos?: TodoInfo[];
-  };
+  subAgent?: ToolBlockData['subAgent'];
 }
 
 /** Props for collapsible section component */

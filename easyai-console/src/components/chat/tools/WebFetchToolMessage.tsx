@@ -6,9 +6,11 @@
  * - Running: pulsing dot
  */
 
+import { useState } from 'react';
 import { Globe, CheckCircle2, AlertCircle } from 'lucide-react';
 import type { ToolMessageProps } from './types';
-import { extractOutput } from './parsers';
+import { extractOutput, getToolRowSummary } from './parsers';
+import { ToolRowHeader } from './ToolRowHeader';
 
 /**
  * Extract URL from tool arguments
@@ -29,12 +31,39 @@ export function WebFetchToolMessage({
   toolCall,
   result,
   status,
-  streamingOutput
+  streamingOutput,
+  compact
 }: ToolMessageProps) {
   const url = extractUrl(toolCall.args);
   const isStreaming = (status === 'RUNNING' || status === 'PENDING') && !result;
   const isError = (result?.isError ?? false) || status === 'FAILED';
   const errorOutput = isError ? extractOutput({ result, streamingOutput }) : '';
+
+  const [errorOpen, setErrorOpen] = useState(false);
+
+  if (compact) {
+    const rowHeader = (
+      <ToolRowHeader
+        toolName={toolCall.toolName}
+        status={status ?? 'PENDING'}
+        summary={getToolRowSummary(toolCall.toolName, toolCall.args)}
+        expanded={errorOpen}
+        expandable={!!errorOutput}
+        onToggle={() => setErrorOpen(prev => !prev)}
+      />
+    );
+    if (!errorOutput) return rowHeader;
+    return (
+      <div className="overflow-hidden">
+        {rowHeader}
+        {errorOpen && (
+          <div className="px-3 pb-2 text-sm font-mono whitespace-pre-wrap break-all text-destructive">
+            {errorOutput}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="border border-border rounded-lg bg-card overflow-hidden">

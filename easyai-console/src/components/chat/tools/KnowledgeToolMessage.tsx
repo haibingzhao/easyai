@@ -15,6 +15,9 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import type { ToolMessageProps } from './types';
+import { getToolRowSummary } from './parsers';
+import { ToolRowHeader } from './ToolRowHeader';
+import { useStreamingRowExpand } from './useStreamingRowExpand';
 
 // ---------------------------------------------------------------------------
 // Argument parsing
@@ -83,22 +86,35 @@ function extractResultOutput(result?: ToolMessageProps['result'], streamingOutpu
 interface KnowledgeCardProps {
   toolName: string;
   summary: React.ReactNode;
+  /** Single-line summary for the compact row header */
+  rowSummary?: string;
   status: ToolMessageProps['status'];
   expandable: boolean;
   isExpanded: boolean;
   onToggle: () => void;
   result?: ToolMessageProps['result'];
   streamingOutput?: string;
+  compact?: boolean;
   children?: React.ReactNode;
 }
 
-function KnowledgeCard({ toolName, summary, status, expandable, isExpanded, onToggle, result, streamingOutput, children }: KnowledgeCardProps) {
+function KnowledgeCard({ toolName, summary, rowSummary, status, expandable, isExpanded, onToggle, result, streamingOutput, compact, children }: KnowledgeCardProps) {
   const isFailed = status === 'FAILED';
   const output = extractResultOutput(result, streamingOutput);
 
   return (
-    <div className="border border-border rounded-lg bg-card overflow-hidden">
+    <div className={compact ? 'overflow-hidden' : 'border border-border rounded-lg bg-card overflow-hidden'}>
       {/* Title row */}
+      {compact ? (
+        <ToolRowHeader
+          toolName={toolName}
+          status={status ?? 'PENDING'}
+          summary={rowSummary}
+          expanded={isExpanded}
+          expandable={expandable}
+          onToggle={onToggle}
+        />
+      ) : (
       <div
         className={`p-3 flex items-center justify-between gap-2 transition-colors ${expandable ? 'cursor-pointer hover:bg-muted/50' : ''}`}
         onClick={expandable ? onToggle : undefined}
@@ -120,6 +136,7 @@ function KnowledgeCard({ toolName, summary, status, expandable, isExpanded, onTo
           )}
         </div>
       </div>
+      )}
 
       {/* Expanded content (hidden on failure — error section below handles it) */}
       {isExpanded && children && !isFailed && (
@@ -152,8 +169,9 @@ function KnowledgeCard({ toolName, summary, status, expandable, isExpanded, onTo
 // knowledge_search
 // ---------------------------------------------------------------------------
 
-function KnowledgeSearchView({ toolCall, result, status, streamingOutput }: ToolMessageProps) {
+function KnowledgeSearchView({ toolCall, result, status, streamingOutput, compact }: ToolMessageProps) {
   const [expanded, setExpanded] = useState(false);
+  const markTouched = useStreamingRowExpand(status, setExpanded);
   const parsed = parseArgs<{ query: string; source?: string; kcategory?: string }>(toolCall.args);
   const output = extractResultOutput(result, streamingOutput);
 
@@ -168,6 +186,7 @@ function KnowledgeSearchView({ toolCall, result, status, streamingOutput }: Tool
   return (
     <KnowledgeCard
       toolName={toolCall.toolName}
+      rowSummary={getToolRowSummary(toolCall.toolName, toolCall.args)}
       summary={
         <span className="flex items-center gap-1">
           <span className="text-foreground/70">"{parsed?.query ?? '?'}"</span>
@@ -184,9 +203,10 @@ function KnowledgeSearchView({ toolCall, result, status, streamingOutput }: Tool
       status={status}
       expandable={!!output}
       isExpanded={expanded}
-      onToggle={() => setExpanded(!expanded)}
+      onToggle={() => { markTouched(); setExpanded(prev => !prev); }}
       result={result}
       streamingOutput={streamingOutput}
+      compact={compact}
     >
       {output && (
         <div className="p-3">
@@ -203,14 +223,16 @@ function KnowledgeSearchView({ toolCall, result, status, streamingOutput }: Tool
 // knowledge_read
 // ---------------------------------------------------------------------------
 
-function KnowledgeReadView({ toolCall, result, status, streamingOutput }: ToolMessageProps) {
+function KnowledgeReadView({ toolCall, result, status, streamingOutput, compact }: ToolMessageProps) {
   const [expanded, setExpanded] = useState(false);
+  const markTouched = useStreamingRowExpand(status, setExpanded);
   const parsed = parseArgs<{ key: string }>(toolCall.args);
   const output = extractResultOutput(result, streamingOutput);
 
   return (
     <KnowledgeCard
       toolName={toolCall.toolName}
+      rowSummary={getToolRowSummary(toolCall.toolName, toolCall.args)}
       summary={
         <span className="flex items-center gap-1">
           <code className="text-xs bg-muted px-1 py-0.5 rounded text-foreground/80">
@@ -221,9 +243,10 @@ function KnowledgeReadView({ toolCall, result, status, streamingOutput }: ToolMe
       status={status}
       expandable={!!output}
       isExpanded={expanded}
-      onToggle={() => setExpanded(!expanded)}
+      onToggle={() => { markTouched(); setExpanded(prev => !prev); }}
       result={result}
       streamingOutput={streamingOutput}
+      compact={compact}
     >
       {output && (
         <div className="p-3">

@@ -2,11 +2,12 @@
  * Grep tool message rendering component.
  */
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Search, ChevronDown } from 'lucide-react';
 import type { ToolMessageProps } from './types';
-import { parseGrepOutput, extractOutput, getGrepPattern } from './parsers';
+import { parseGrepOutput, extractOutput, getGrepPattern, getToolRowSummary } from './parsers';
 import { getToolDisplayName } from './icons';
+import { ToolRowHeader } from './ToolRowHeader';
 import { useNavStore } from '@/services/stores/nav-store';
 
 export function GrepToolMessage({ 
@@ -14,9 +15,11 @@ export function GrepToolMessage({
   result, 
   status, 
   streamingOutput,
-  workDir 
+  workDir,
+  compact
 }: ToolMessageProps) {
   const [isCollapsed, setIsCollapsed] = useState(true);
+  const userTouchedRef = useRef(false);
   const openFile = useNavStore((s) => s.openFile);
   
   const pattern = getGrepPattern(toolCall.args);
@@ -33,12 +36,27 @@ export function GrepToolMessage({
     ? 'bg-muted-foreground animate-pulse'
     : 'bg-foreground';
 
+  useEffect(() => {
+    if (userTouchedRef.current) return;
+    setIsCollapsed(!isStreaming);
+  }, [isStreaming]);
+
   return (
-    <div className="border border-border rounded-lg bg-card overflow-hidden">
+    <div className={compact ? 'overflow-hidden' : 'border border-border rounded-lg bg-card overflow-hidden'}>
+      {compact ? (
+        <ToolRowHeader
+          toolName={toolCall.toolName}
+          status={status ?? 'PENDING'}
+          summary={getToolRowSummary(toolCall.toolName, toolCall.args)}
+          expanded={!isCollapsed}
+          onToggle={() => { userTouchedRef.current = true; setIsCollapsed(prev => !prev); }}
+        />
+      ) : (
+      <>
       {/* Title bar */}
       <div 
         className="p-3 flex items-center justify-between gap-2 border-b border-border cursor-pointer hover:bg-muted/50"
-        onClick={() => setIsCollapsed(!isCollapsed)}
+        onClick={() => { userTouchedRef.current = true; setIsCollapsed(!isCollapsed); }}
       >
         <div className="flex items-center gap-2">
           <Search className="w-4 h-4 text-muted-foreground" />
@@ -66,6 +84,8 @@ export function GrepToolMessage({
             <span className="text-muted-foreground">Pattern:</span> {pattern}
           </div>
         </div>
+      )}
+      </>
       )}
 
       {/* Match results */}

@@ -1,4 +1,5 @@
 import type { Message, ToolCall, ToolResult, SubAgentMessageGroup, ContextReferences, QueuedMessage } from '@/types/message';
+import type { MessageSegment } from '@/types/message-segment';
 import type { PermissionRequestEvent } from '@/types/socket-event';
 import type { CheckpointInfo } from '@/types/checkpoint';
 import type {
@@ -43,6 +44,7 @@ export function commitStreamingMessageImpl(state: CommitStateShape): Partial<Com
   let currentThinking = '';
   let currentToolCalls: ToolCall[] = [];
   let currentToolResults: ToolResult[] = [];
+  let currentSegments: MessageSegment[] = [];
   let currentMessageId: string | undefined;
   let thinkingDurationMs = 0;
   let textDurationMs = 0;
@@ -72,11 +74,13 @@ export function commitStreamingMessageImpl(state: CommitStateShape): Partial<Com
         textDurationMs: textDurationMs > 0 ? textDurationMs : undefined,
         timestamp: Date.now(),
         references: pendingRefs,
+        segments: currentSegments.length > 0 ? currentSegments : undefined,
       });
       currentText = '';
       currentThinking = '';
       currentToolCalls = [];
       currentToolResults = [];
+      currentSegments = [];
       currentMessageId = undefined;
       thinkingDurationMs = 0;
       textDurationMs = 0;
@@ -92,6 +96,7 @@ export function commitStreamingMessageImpl(state: CommitStateShape): Partial<Com
       }
       if (!currentMessageId) currentMessageId = blockMsgId;
       currentText += (block as TextBlockData).content;
+      currentSegments.push({ kind: 'text', id: (block as TextBlockData).id, content: (block as TextBlockData).content });
       if ((block as TextBlockData).durationMs) {
         textDurationMs = (block as TextBlockData).durationMs!;
       }
@@ -103,6 +108,13 @@ export function commitStreamingMessageImpl(state: CommitStateShape): Partial<Com
       }
       if (!currentMessageId) currentMessageId = blockMsgId;
       currentThinking += (block as ThinkingBlockData).content;
+      currentSegments.push({
+        kind: 'thinking',
+        id: (block as ThinkingBlockData).id,
+        content: (block as ThinkingBlockData).content,
+        durationMs: (block as ThinkingBlockData).durationMs,
+        isFinished: (block as ThinkingBlockData).isFinished,
+      });
       if ((block as ThinkingBlockData).durationMs) {
         thinkingDurationMs = (block as ThinkingBlockData).durationMs!;
       }
@@ -113,6 +125,17 @@ export function commitStreamingMessageImpl(state: CommitStateShape): Partial<Com
         id: toolBlock.toolCall.id,
         toolName: toolBlock.toolCall.toolName,
         args: toolBlock.toolCall.args,
+      });
+      currentSegments.push({
+        kind: 'tool',
+        id: toolBlock.toolCall.id,
+        toolCall: {
+          id: toolBlock.toolCall.id,
+          toolName: toolBlock.toolCall.toolName,
+          args: toolBlock.toolCall.args,
+        },
+        toolResult: toolBlock.toolResult,
+        status: toolBlock.toolCall.status,
       });
       // Collect tool result if committed
       if (toolBlock.toolResult) {

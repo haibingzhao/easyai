@@ -2,12 +2,13 @@
  * Read工具消息渲染组件
  */
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { FileText } from 'lucide-react';
 import type { ToolMessageProps } from './types';
-import { formatFilePath, parseReadOutput, extractOutput, getToolPath } from './parsers';
+import { formatFilePath, parseReadOutput, extractOutput, getToolPath, getToolRowSummary } from './parsers';
 import { getToolDisplayName } from './icons';
 import { CopyableText } from './CopyableText';
+import { ToolRowHeader } from './ToolRowHeader';
 import { useCopyToast } from './useCopyToast';
 import { useNavStore } from '@/services/stores/nav-store';
 
@@ -21,9 +22,11 @@ export function ReadToolMessage({
   result, 
   status, 
   streamingOutput,
-  workDir 
+  workDir,
+  compact
 }: ToolMessageProps) {
   const [isCollapsed, setIsCollapsed] = useState(true);
+  const userTouchedRef = useRef(false);
   
   const filePath = getToolPath(toolCall.toolName, toolCall.args);
   const displayPath = formatFilePath(filePath, workDir || '');
@@ -46,13 +49,28 @@ export function ReadToolMessage({
       ? 'bg-destructive'
       : 'bg-foreground';
 
+  useEffect(() => {
+    if (userTouchedRef.current) return;
+    setIsCollapsed(!isStreaming);
+  }, [isStreaming]);
+
   return (
     <>
-    <div className="border border-border rounded-lg bg-card overflow-hidden">
+    <div className={compact ? 'overflow-hidden' : 'border border-border rounded-lg bg-card overflow-hidden'}>
+      {compact ? (
+        <ToolRowHeader
+          toolName={toolCall.toolName}
+          status={status ?? 'PENDING'}
+          summary={getToolRowSummary(toolCall.toolName, toolCall.args)}
+          expanded={!isCollapsed}
+          onToggle={() => { userTouchedRef.current = true; setIsCollapsed(prev => !prev); }}
+        />
+      ) : (
+      <>
       {/* Title bar */}
       <div 
         className="p-3 flex items-center justify-between gap-2 border-b border-border cursor-pointer hover:bg-muted/50"
-        onClick={() => setIsCollapsed(!isCollapsed)}
+        onClick={() => { userTouchedRef.current = true; setIsCollapsed(!isCollapsed); }}
       >
         <div className="flex items-center gap-2 flex-1 min-w-0">
           <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
@@ -73,6 +91,8 @@ export function ReadToolMessage({
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* Error message or file content */}
       {!isCollapsed && hasError && displayLines.length > 0 && (
