@@ -354,4 +354,61 @@ class LlmErrorClassifierTest {
             assertFalse(LlmErrorClassifier.isContentFiltered(RuntimeException("boom")))
         }
     }
+
+    /**
+     * DashScope (Bailian) failures reach the loop already normalized onto Spring AI's retry types by
+     * the adapter, whose message shape is "<statusCode>: code=<code> message=<message>
+     * requestId=<id>". These tests pin that contract end to end.
+     */
+    @Nested
+    inner class `DashScope normalized failures` {
+
+        @Test
+        fun `input length rejection triggers compaction instead of retry`() {
+            val e = NonTransientAiException(
+                "400: code=InvalidParameter message=Range of input length should be [1, 30000] requestId=0b1f"
+            )
+            assertTrue(LlmErrorClassifier.isContextOverflow(e))
+            assertFalse(LlmErrorClassifier.isRetryable(e))
+            assertFalse(LlmErrorClassifier.isEndpointOutage(e))
+        }
+
+        @Test
+        fun `data inspection failure is a content rejection`() {
+            val e = NonTransientAiException(
+                "400: code=DataInspectionFailed message=Input data may contain inappropriate content. requestId=0b1f"
+            )
+            assertTrue(LlmErrorClassifier.isContentFiltered(e))
+            assertFalse(LlmErrorClassifier.isEndpointOutage(e))
+            assertFalse(LlmErrorClassifier.isRetryable(e))
+        }
+
+        @Test
+        fun `throttling is retryable but never an outage`() {
+            val e = TransientAiException(
+                "429: code=Throttling.RateQuota message=Requests have been made too quickly. requestId=0b1f"
+            )
+            assertTrue(LlmErrorClassifier.isRetryable(e))
+            assertFalse(LlmErrorClassifier.isEndpointOutage(e))
+        }
+
+        @Test
+        fun `server side failure is retryable and an outage`() {
+            val e = TransientAiException(
+                "503: code=ServiceUnavailable message=The model service is overloaded. requestId=0b1f"
+            )
+            assertTrue(LlmErrorClassifier.isRetryable(e))
+            assertTrue(LlmErrorClassifier.isEndpointOutage(e))
+        }
+
+        @Test
+        fun `credential failures stay hard`() {
+            val e = NonTransientAiException(
+                "401: code=InvalidApiKey message=Invalid API-key provided. requestId=0b1f"
+            )
+            assertFalse(LlmErrorClassifier.isRetryable(e))
+            assertFalse(LlmErrorClassifier.isEndpointOutage(e))
+            assertFalse(LlmErrorClassifier.isContentFiltered(e))
+        }
+    }
 }

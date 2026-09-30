@@ -3,7 +3,7 @@
 This file provides guidance to Qoder (qoder.com) when working with code in this repository.
 
 ## OVERVIEW
-8 Spring Boot auto-configuration sub-modules, each with @ConditionalOnClass guards + EnvironmentPostProcessors.
+11 Spring Boot auto-configuration sub-modules, each with @ConditionalOnClass guards + EnvironmentPostProcessors.
 
 ## STRUCTURE
 
@@ -14,8 +14,11 @@ easyai-autoconfigure/
 ├── easyai-observability-autoconfigure/ # Micrometer, OTel SDK, tracing listeners
 ├── easyai-openai-autoconfigure/        # OpenAI ChatModelFactory + OptionsBuilder
 ├── easyai-anthropic-autoconfigure/     # Anthropic ChatModelFactory + OptionsBuilder
+├── easyai-dashscope-autoconfigure/     # DashScope (Bailian) native-protocol ChatModel adapter
 ├── easyai-r2dbc-autoconfigure/         # R2DBC init, DatabaseMigration, repository beans
 ├── easyai-compaction-autoconfigure/    # Compaction orchestrator + strategy beans
+├── easyai-rag-autoconfigure/           # RAG beans + RagProperties
+├── easyai-storage-autoconfigure/       # Object storage resolver + storage settings beans
 └── easyai-swarm-autoconfigure/         # SwarmRuntime, SwarmEventBridge, stores
 ```
 
@@ -25,7 +28,7 @@ easyai-autoconfigure/
 |------|----------|-------|
 | Core wiring | `easyai-core-autoconfigure/` | Main framework beans, `easyai.*` properties |
 | Env post-processing | `*EnvironmentPostProcessor` | Pre-startup property injection |
-| Provider-specific | `easyai-openai/anthropic-autoconfigure/` | ChatModel factories + options |
+| Provider-specific | `easyai-openai/anthropic/dashscope-autoconfigure/` | ChatModel factories + options |
 | Observability | `easyai-observability-autoconfigure/` | Micrometer, OTel SDK, listeners |
 | R2DBC beans | `easyai-r2dbc-autoconfigure/` | DatabaseMigration, stores, SessionManager |
 | Swarm beans | `easyai-swarm-autoconfigure/` | SwarmRuntime, preset/run stores |

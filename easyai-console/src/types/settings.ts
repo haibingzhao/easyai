@@ -15,7 +15,7 @@ export interface SessionMetadata {
 }
 
 // Model provider types
-export type Protocol = 'OPENAI' | 'ANTHROPIC';
+export type Protocol = 'OPENAI' | 'ANTHROPIC' | 'DASHSCOPE';
 
 export interface ModelInfo {
   id: string;

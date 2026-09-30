@@ -227,12 +227,21 @@ internal object LlmErrorClassifier {
      * treated as content filtering when it co-occurs with a content/sensitive keyword.
      */
     private fun isContentFilteredMessage(message: String): Boolean {
-        if (message.contains("inappropriate content")) {
+        if (message.contains("inappropriate content") ||
+            message.contains("inappropriate_content")
+        ) {
             return true
         }
         if (message.contains("content policy") ||
             message.contains("content security") ||
             message.contains("data may contain inappropriate")
+        ) {
+            return true
+        }
+        // Bailian's own moderation codes (DataInspectionFailed / data_inspection_failed)
+        // are unambiguous, so they need no co-occurring keyword.
+        if (message.contains("datainspectionfailed") ||
+            message.contains("data_inspection_failed")
         ) {
             return true
         }
@@ -250,7 +259,12 @@ internal object LlmErrorClassifier {
             message.contains("maximum context") ||
             message.contains("request too large") ||
             message.contains("token limit") ||
-            message.contains("too many tokens")
+            message.contains("too many tokens") ||
+            // Bailian rejects an over-long prompt as InvalidParameter with
+            // "Range of input length should be [1, N]".
+            message.contains("range of input length") ||
+            message.contains("input length") ||
+            message.contains("max input tokens")
     }
 
     /**

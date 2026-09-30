@@ -227,6 +227,16 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
               >
                 Anthropic
               </button>
+              <button
+                onClick={() => handleProtocolChange('DASHSCOPE')}
+                className={`flex-1 px-3 py-2 text-sm rounded-md border transition-colors ${
+                  selectedProtocol === 'DASHSCOPE'
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'border-input hover:bg-muted'
+                }`}
+              >
+                {i18n('DashScope')}
+              </button>
             </div>
           </div>
 

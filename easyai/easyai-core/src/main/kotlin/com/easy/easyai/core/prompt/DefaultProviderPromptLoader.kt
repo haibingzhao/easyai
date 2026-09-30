@@ -10,9 +10,12 @@ class DefaultProviderPromptLoader : ProviderPromptLoader {
     private val logger = LoggerFactory.getLogger(javaClass)
 
     private val prompts: Map<String, String> by lazy {
+        // The generic coding prompt is protocol-neutral, so OPENAI and DASHSCOPE share one copy.
+        val generic = loadResource("prompts/codex.txt")
         mapOf(
             "ANTHROPIC" to loadResource("prompts/anthropic.txt"),
-            "OPENAI" to loadResource("prompts/codex.txt")
+            "OPENAI" to generic,
+            "DASHSCOPE" to generic
         ).also { logger.info("Loaded {} provider prompt templates", it.size) }
     }
 

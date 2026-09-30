@@ -49,6 +49,10 @@
         </dependency>
         <dependency>
             <groupId>com.easy</groupId>
+            <artifactId>easyai-dashscope-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
             <artifactId>easyai-compaction-autoconfigure</artifactId>
         </dependency>
         <dependency>

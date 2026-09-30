@@ -211,6 +211,11 @@
                 <artifactId>easyai-anthropic-autoconfigure</artifactId>
                 <version>${revision}</version>
             </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-dashscope-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 

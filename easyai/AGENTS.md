@@ -25,7 +25,7 @@ easyai/
 ├── easyai-observability/  # @Tracked AOP, MDC propagation, OTel+Micrometer handlers
 ├── easyai-web/            # REST controllers (14), SSE streaming, security (JWT filter), services
 ├── easyai-common/         # 4 sub-modules: bom, core (marker interfaces, thinking), textio (Jinja), util
-├── easyai-autoconfigure/  # 8 auto-config sub-modules (core, web, observability, openai, anthropic, r2dbc, compaction, swarm)
+├── easyai-autoconfigure/  # 11 auto-config sub-modules (core, web, observability, openai, anthropic, dashscope, r2dbc, compaction, rag, storage, swarm)
 └── easyai-starters/       # Starter POM aggregation
 ```
 
