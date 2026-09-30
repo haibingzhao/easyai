@@ -56,7 +56,7 @@ export function dispatchSubAgentEvent(
 
   const subBlocks = parentToolBlock.subAgent.blocks;
 
-  // Snapshot sub-agent todo_write args so the SubAgentPanel can show progress.
+  // Snapshot sub-agent todo_write args so the SubAgentRow can show progress.
   if (event.type === 'tool_execution_start' && event.toolName === TOOL_NAMES.TODO_WRITE && event.args?.todos) {
     const rawTodos = event.args.todos as Array<{ content?: string; status?: string; priority?: string }>;
     if (Array.isArray(rawTodos)) {

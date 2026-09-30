@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Loader2, AlertCircle, FileText, Eye, Code } from 'lucide-react';
-import { readFileContent } from '@/services/file-browser-service';
+import { readFileContent, mediaFileUrl, IMAGE_EXTS, AUDIO_EXTS, VIDEO_EXTS } from '@/services/file-browser-service';
 import type { FileContentResponse } from '@/services/file-browser-service';
 import { getShikiHighlighter, stripPreCodeTransformer } from '@/utils/shiki-utils';
 import ReactMarkdown from 'react-markdown';
@@ -49,18 +49,38 @@ export const FileViewer: React.FC<FileViewerProps> = ({ filePath }) => {
   const [mdMode, setMdMode] = useState<'preview' | 'code'>('preview');
   const currentProject = useProjectStore((s) => s.currentProject);
 
+  // Extract filename and extension
+  const fileName = filePath.split('/').pop() || filePath;
+  const ext = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() || '' : '';
+  const isDotFile = fileName.startsWith('.') && !fileName.includes('.', 1);
+  const mediaKind: 'image' | 'audio' | 'video' | null = IMAGE_EXTS.has(ext)
+    ? 'image'
+    : AUDIO_EXTS.has(ext) ? 'audio' : VIDEO_EXTS.has(ext) ? 'video' : null;
+  const projectId = currentProject?.id || '';
+
+  // Media is streamed by the browser itself (Range requests), never buffered here
+  const mediaUrl = useMemo(
+    () => (mediaKind ? mediaFileUrl(filePath, projectId) : null),
+    [mediaKind, filePath, projectId]
+  );
+
   // Reset mdMode to preview when switching files
   useEffect(() => {
     setMdMode('preview');
   }, [filePath]);
 
   useEffect(() => {
+    if (mediaKind) {
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
     let cancelled = false;
     setLoading(true);
     setError(null);
     setData(null);
 
-    const projectId = currentProject?.id || '';
     readFileContent(filePath, projectId)
       .then((result) => {
         if (!cancelled) {
@@ -76,12 +96,7 @@ export const FileViewer: React.FC<FileViewerProps> = ({ filePath }) => {
       });
 
     return () => { cancelled = true; };
-  }, [filePath, currentProject?.id]);
-
-  // Extract filename and extension
-  const fileName = filePath.split('/').pop() || filePath;
-  const ext = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() || '' : '';
-  const isDotFile = fileName.startsWith('.') && !fileName.includes('.', 1);
+  }, [filePath, projectId, mediaKind]);
 
   if (loading) {
     return (
@@ -98,6 +113,29 @@ export const FileViewer: React.FC<FileViewerProps> = ({ filePath }) => {
         <AlertCircle className="w-5 h-5 text-destructive" />
         <span className="text-sm">{i18n('Failed to load file')}</span>
         <span className="text-xs text-muted-foreground">{error}</span>
+      </div>
+    );
+  }
+
+  if (mediaKind) {
+    if (!mediaUrl) return null;
+    const onMediaError = () => setError(`Failed to load ${mediaKind}`);
+    return (
+      <div className="h-full flex flex-col overflow-hidden">
+        <div className="flex items-center gap-3 px-4 py-1.5 border-b border-border shrink-0 bg-background">
+          <span className="text-xs text-muted-foreground font-medium">{fileName}</span>
+        </div>
+        <div className="flex-1 flex items-center justify-center overflow-auto p-4 bg-muted/30">
+          {mediaKind === 'image' && (
+            <img src={mediaUrl} alt={fileName} onError={onMediaError} className="max-w-full max-h-full object-contain" />
+          )}
+          {mediaKind === 'audio' && (
+            <audio src={mediaUrl} controls onError={onMediaError} className="w-full max-w-lg" />
+          )}
+          {mediaKind === 'video' && (
+            <video src={mediaUrl} controls onError={onMediaError} className="max-w-full max-h-full" />
+          )}
+        </div>
       </div>
     );
   }

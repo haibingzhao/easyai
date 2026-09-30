@@ -75,34 +75,44 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({ content, isStreami
   const showDuration = elapsed > 0 || (durationMs !== undefined && durationMs > 0);
   const durationText = showDuration ? formatDurationSeconds(durationMs !== undefined ? Math.floor(durationMs / 1000) : elapsed) : '';
 
+  const normalized = normalizeNewlines(content);
+  const preview = normalized.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+  const previewText = preview.length > 80 ? preview.slice(0, 80) + '…' : preview;
+
   return (
-    <div className="border-l-2 border-border bg-muted/50 rounded-l-md">
+    <div className="overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="group flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        className="w-full flex items-center gap-2 py-0.5 text-left text-sm text-muted-foreground hover:text-foreground hover:bg-muted/30 rounded transition-colors"
       >
-        <BrainIcon className="w-4 h-4 flex-shrink-0" />
-        <span>{i18n('Thinking')}</span>
+        {expanded ? (
+          <ChevronDown className="w-3.5 h-3.5 shrink-0" />
+        ) : (
+          <ChevronRight className="w-3.5 h-3.5 shrink-0" />
+        )}
+        <BrainIcon className="w-3.5 h-3.5 shrink-0" />
+        <span className="shrink-0">{isCurrentlyStreaming ? i18n('Thinking') : i18n('Thought')}</span>
         {showDuration && (
-          <span className="text-muted-foreground/60">· {durationText}</span>
+          <span className="text-muted-foreground/60 shrink-0">· {durationText}</span>
         )}
         {isCurrentlyStreaming && (
-          <div className="w-2 h-2 bg-muted-foreground animate-pulse rounded-full"></div>
+          <div className="w-1.5 h-1.5 bg-muted-foreground animate-pulse rounded-full shrink-0"></div>
         )}
-        <span className="ml-auto">
-          {expanded ? (
-            <ChevronDown className="w-4 h-4" />
-          ) : (
-            <ChevronRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
-          )}
-        </span>
+        {!expanded && previewText && (
+          <>
+            <span className="text-muted-foreground/50 shrink-0">·</span>
+            <span className="truncate">{previewText}</span>
+          </>
+        )}
       </button>
-      
+
       {expanded && (
-        <div className="px-3 pb-3 text-sm text-muted-foreground prose prose-sm dark:prose-invert max-w-none">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
-            {normalizeNewlines(content)}
-          </ReactMarkdown>
+        <div className="mt-1 mb-1 max-h-[24em] overflow-y-auto rounded-lg px-3 py-2.5 text-sm leading-relaxed text-muted-foreground bg-muted/60 border border-border dark:bg-white/[0.04] dark:border-white/[0.08] dark:text-muted-foreground/90">
+          <div className="prose prose-sm dark:prose-invert max-w-none">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
+              {normalized}
+            </ReactMarkdown>
+          </div>
         </div>
       )}
     </div>

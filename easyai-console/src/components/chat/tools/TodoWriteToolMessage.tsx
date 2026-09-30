@@ -2,9 +2,10 @@
  * TodoWrite tool message rendering component.
  */
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { ListTodo, AlertTriangle, ChevronDown } from 'lucide-react';
 import type { ToolMessageProps } from './types';
+import { ToolRowHeader } from './ToolRowHeader';
 
 /**
  * Parse todo_write tool arguments.
@@ -56,8 +57,10 @@ export function TodoWriteToolMessage({
   toolCall,
   result,
   status,
+  compact
 }: ToolMessageProps) {
   const [isCollapsed, setIsCollapsed] = useState(true);
+  const userTouchedRef = useRef(false);
   const parsedArgs = parseTodoArgs(toolCall.args);
   const output = extractOutput(result);
   const isError = result?.isError ?? false;
@@ -89,12 +92,33 @@ export function TodoWriteToolMessage({
       ? 'bg-muted-foreground animate-pulse'
       : 'bg-green-500';
 
+  const isStreaming = status === 'RUNNING' || status === 'PENDING';
+
+  useEffect(() => {
+    if (userTouchedRef.current) return;
+    setIsCollapsed(!isStreaming);
+  }, [isStreaming]);
+
+  const rowHeader = (
+    <ToolRowHeader
+      toolName={toolCall.toolName}
+      status={status ?? 'PENDING'}
+      summary={totalCount > 0 ? `${completedCount}/${totalCount}` : undefined}
+      expanded={!isCollapsed}
+      onToggle={() => { userTouchedRef.current = true; setIsCollapsed(prev => !prev); }}
+    />
+  );
+
+  if (compact && isCollapsed) return rowHeader;
+
   return (
-    <div className="border border-border rounded-lg bg-card overflow-hidden">
+    <div className={compact ? 'overflow-hidden' : 'border border-border rounded-lg bg-card overflow-hidden'}>
+      {compact ? rowHeader : (
+      <>
       {/* Title bar */}
       <div 
         className="p-3 flex items-center justify-between gap-2 border-b border-border cursor-pointer hover:bg-muted/50"
-        onClick={() => setIsCollapsed(!isCollapsed)}
+        onClick={() => { userTouchedRef.current = true; setIsCollapsed(!isCollapsed); }}
       >
         <div className="flex items-center gap-2">
           <ListTodo className="w-4 h-4 text-muted-foreground" />
@@ -115,6 +139,8 @@ export function TodoWriteToolMessage({
           />
         </div>
       </div>
+      </>
+      )}
 
       {/* TODO list */}
       {!isCollapsed && todos.length > 0 && (

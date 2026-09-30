@@ -3,10 +3,12 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Terminal, ChevronsDown, ChevronsUp, ChevronRight, ChevronDown } from 'lucide-react';
+import { Terminal, ChevronsDown, ChevronsUp, ChevronRight, ChevronDown, Copy } from 'lucide-react';
 import type { ToolMessageProps } from './types';
-import { extractOutput, parseBashArgs, tryFormatJson } from './parsers';
+import { extractOutput, parseBashArgs, tryFormatJson, getToolRowSummary } from './parsers';
 import { getToolDisplayName } from './icons';
+import { ToolRowHeader } from './ToolRowHeader';
+import { useCopyToast } from './useCopyToast';
 import { CodeBlock } from '../CodeBlock';
 import { i18n } from '@/utils/i18n';
 
@@ -27,9 +29,11 @@ export function BashToolMessage({
   toolCall,
   result,
   status,
-  streamingOutput
+  streamingOutput,
+  compact
 }: ToolMessageProps) {
   const { command: displayCommand, description, timeout } = parseBashArgs(toolCall.args);
+  const { copyToClipboard, toast } = useCopyToast();
   const timeoutSec = timeout ?? DEFAULT_TIMEOUT_SEC;
   const isStreaming = status === 'RUNNING' || status === 'PENDING';
   const output = extractOutput({ result, streamingOutput });
@@ -195,7 +199,17 @@ export function BashToolMessage({
   const displayName = getToolDisplayName(toolCall.toolName);
 
   return (
-    <div className="border border-border rounded-lg bg-card overflow-hidden">
+    <div className={compact ? 'overflow-hidden' : 'border border-border rounded-lg bg-card overflow-hidden'}>
+      {compact ? (
+        <ToolRowHeader
+          toolName={toolCall.toolName}
+          status={status ?? 'PENDING'}
+          summary={getToolRowSummary(toolCall.toolName, toolCall.args)}
+          expanded={!contentCollapsed}
+          onToggle={() => { userTouchedContentRef.current = true; setContentCollapsed(prev => !prev); }}
+        />
+      ) : (
+      <>
       {/* Title bar — click to collapse/expand content */}
       <div
         className="p-3 flex items-center justify-between gap-2 border-b border-border cursor-pointer hover:bg-muted/30 transition-colors"
@@ -215,8 +229,10 @@ export function BashToolMessage({
           </span>
         </div>
       </div>
+      </>
+      )}
 
-      {description && (
+      {description && (!compact || !contentCollapsed) && (
         <p className="px-3 py-2 text-sm text-muted-foreground whitespace-pre-wrap [overflow-wrap:anywhere]">
           <span className="font-medium">{i18n('Command description (AI)')}: </span>
           {description}
@@ -227,25 +243,35 @@ export function BashToolMessage({
       {!contentCollapsed && (<>
       {/* Command area */}
       <div className="p-3 flex items-center">
-        {(() => {
-          const formattedCommand = tryFormatJson(displayCommand);
-          if (formattedCommand) {
+        <div className="relative flex-1 min-w-0 group/cmd">
+          {(() => {
+            const formattedCommand = tryFormatJson(displayCommand);
+            if (formattedCommand) {
+              return (
+                <div className={`w-full overflow-hidden rounded-lg ${!isCommandExpanded && commandLines > 5 ? 'max-h-[5em] overflow-y-auto' : isCommandExpanded && commandLines > 15 ? 'max-h-[15em] overflow-y-auto' : ''}`}>
+                  <CodeBlock className="language-json">{formattedCommand}</CodeBlock>
+                </div>
+              );
+            }
             return (
-              <div className={`w-full overflow-hidden rounded-lg ${!isCommandExpanded && commandLines > 5 ? 'max-h-[5em] overflow-y-auto' : isCommandExpanded && commandLines > 15 ? 'max-h-[15em] overflow-y-auto' : ''}`}>
-                <CodeBlock className="language-json">{formattedCommand}</CodeBlock>
+              <div className="text-sm font-mono text-muted-foreground break-all p-2 bg-muted rounded w-full overflow-hidden">
+                <div
+                  className={`whitespace-pre-wrap ${!isCommandExpanded && commandLines > 5 ? 'max-h-[5em] overflow-y-auto' : isCommandExpanded && commandLines > 15 ? 'max-h-[15em] overflow-y-auto' : ''}`}
+                >
+                  <span className="text-green-600">$</span> {displayCommand}
+                </div>
               </div>
             );
-          }
-          return (
-            <div className="text-sm font-mono text-muted-foreground break-all p-2 bg-muted rounded w-full overflow-hidden">
-              <div
-                className={`whitespace-pre-wrap ${!isCommandExpanded && commandLines > 5 ? 'max-h-[5em] overflow-y-auto' : isCommandExpanded && commandLines > 15 ? 'max-h-[15em] overflow-y-auto' : ''}`}
-              >
-                <span className="text-green-600">$</span> {displayCommand}
-              </div>
-            </div>
-          );
-        })()}
+          })()}
+          <button
+            type="button"
+            title={i18n('Copy')}
+            onClick={(e) => copyToClipboard(displayCommand, e)}
+            className="absolute top-1 right-1 opacity-0 group-hover/cmd:opacity-100 transition-opacity p-1 rounded bg-muted/80 text-muted-foreground hover:text-foreground"
+          >
+            <Copy className="w-3 h-3" />
+          </button>
+        </div>
         {!isStreaming && shouldShowCommandExpand && (
           <button
             onClick={() => setIsCommandExpanded(!isCommandExpanded)}
@@ -322,6 +348,7 @@ export function BashToolMessage({
       )}
       </>
       )}
+      {toast}
     </div>
   );
 }

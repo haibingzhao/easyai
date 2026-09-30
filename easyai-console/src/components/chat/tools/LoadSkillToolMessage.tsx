@@ -12,7 +12,9 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Sparkles, CheckCircle2, AlertCircle, ChevronDown } from 'lucide-react';
 import type { ToolMessageProps } from './types';
-import { extractOutput } from './parsers';
+import { extractOutput, getToolRowSummary } from './parsers';
+import { ToolRowHeader } from './ToolRowHeader';
+import { useStreamingRowExpand } from './useStreamingRowExpand';
 import { markdownCodeComponents } from '../markdownCodeComponents';
 
 /** Extract skill name from tool call args */
@@ -59,8 +61,10 @@ export function LoadSkillToolMessage({
   result,
   status,
   streamingOutput,
+  compact,
 }: ToolMessageProps) {
   const [expanded, setExpanded] = useState(false);
+  const markTouched = useStreamingRowExpand(status, setExpanded);
 
   const skillName = extractSkillName(toolCall.args);
   const output = extractOutput({ result, streamingOutput });
@@ -70,12 +74,27 @@ export function LoadSkillToolMessage({
   const skillBody = !isError && output ? extractSkillBody(output) : '';
   const expandable = !isError && !!skillBody;
 
+  const toggleRow = () => { markTouched(); setExpanded(prev => !prev); };
+  const showBody = expanded && !!skillBody;
+  const rowHeader = (
+    <ToolRowHeader
+      toolName={toolCall.toolName}
+      status={status ?? 'PENDING'}
+      summary={getToolRowSummary(toolCall.toolName, toolCall.args)}
+      expanded={showBody}
+      onToggle={toggleRow}
+    />
+  );
+
+  if (compact && !showBody) return rowHeader;
+
   return (
-    <div className="border border-border rounded-lg bg-card overflow-hidden">
+    <div className={compact ? 'overflow-hidden' : 'border border-border rounded-lg bg-card overflow-hidden'}>
       {/* Header row */}
+      {compact ? rowHeader : (
       <div
         className={`px-3 py-2 flex items-center gap-2 transition-colors ${expandable ? 'cursor-pointer hover:bg-muted/50' : ''}`}
-        onClick={expandable ? () => setExpanded(!expanded) : undefined}
+        onClick={expandable ? toggleRow : undefined}
       >
         <Sparkles className="size-4 shrink-0 text-violet-500 dark:text-violet-400" />
         <span className="text-sm font-medium shrink-0">Load Skill</span>
@@ -101,9 +120,10 @@ export function LoadSkillToolMessage({
           />
         )}
       </div>
+      )}
 
       {/* Expanded: skill content as Markdown */}
-      {expanded && skillBody && (
+      {showBody && (
         <>
           <div className="border-t border-border" />
           <div className="p-3 max-h-[24em] overflow-y-auto">

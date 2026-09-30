@@ -20,6 +20,9 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import type { ToolMessageProps } from './types';
+import { getToolRowSummary } from './parsers';
+import { ToolRowHeader } from './ToolRowHeader';
+import { useStreamingRowExpand } from './useStreamingRowExpand';
 import { i18n } from '@/utils/i18n';
 
 // ---------------------------------------------------------------------------
@@ -162,22 +165,35 @@ function extractResultOutput(result?: ToolMessageProps['result'], streamingOutpu
 interface MemoryCardProps {
   toolName: string;
   summary: React.ReactNode;
+  /** Single-line summary for the compact row header */
+  rowSummary?: string;
   status: ToolMessageProps['status'];
   expandable: boolean;
   isExpanded: boolean;
   onToggle: () => void;
   result?: ToolMessageProps['result'];
   streamingOutput?: string;
+  compact?: boolean;
   children?: React.ReactNode;
 }
 
-function MemoryCard({ toolName, summary, status, expandable, isExpanded, onToggle, result, streamingOutput, children }: MemoryCardProps) {
+function MemoryCard({ toolName, summary, rowSummary, status, expandable, isExpanded, onToggle, result, streamingOutput, compact, children }: MemoryCardProps) {
   const isFailed = status === 'FAILED';
   const output = extractResultOutput(result, streamingOutput);
 
   return (
-    <div className="border border-border rounded-lg bg-card overflow-hidden">
+    <div className={compact ? 'overflow-hidden' : 'border border-border rounded-lg bg-card overflow-hidden'}>
       {/* Title row */}
+      {compact ? (
+        <ToolRowHeader
+          toolName={toolName}
+          status={status ?? 'PENDING'}
+          summary={rowSummary}
+          expanded={isExpanded}
+          expandable={expandable}
+          onToggle={onToggle}
+        />
+      ) : (
       <div
         className={`p-3 flex items-center justify-between gap-2 transition-colors ${expandable ? 'cursor-pointer hover:bg-muted/50' : ''}`}
         onClick={expandable ? onToggle : undefined}
@@ -199,6 +215,7 @@ function MemoryCard({ toolName, summary, status, expandable, isExpanded, onToggl
           )}
         </div>
       </div>
+      )}
 
       {/* Expanded content (hidden on failure — error section below handles it) */}
       {isExpanded && children && !isFailed && (
@@ -231,8 +248,9 @@ function MemoryCard({ toolName, summary, status, expandable, isExpanded, onToggl
 // memory_search
 // ---------------------------------------------------------------------------
 
-function MemorySearchView({ toolCall, result, status, streamingOutput }: ToolMessageProps) {
+function MemorySearchView({ toolCall, result, status, streamingOutput, compact }: ToolMessageProps) {
   const [expanded, setExpanded] = useState(false);
+  const markTouched = useStreamingRowExpand(status, setExpanded);
   const parsed = parseArgs<{ query: string }>(toolCall.args);
   const output = extractResultOutput(result, streamingOutput);
 
@@ -242,6 +260,7 @@ function MemorySearchView({ toolCall, result, status, streamingOutput }: ToolMes
   return (
     <MemoryCard
       toolName={toolCall.toolName}
+      rowSummary={getToolRowSummary(toolCall.toolName, toolCall.args)}
       summary={
         <span className="flex items-center gap-1">
           <span className="text-foreground/70">"{parsed?.query ?? '?'}"</span>
@@ -253,9 +272,10 @@ function MemorySearchView({ toolCall, result, status, streamingOutput }: ToolMes
       status={status}
       expandable={!!output}
       isExpanded={expanded}
-      onToggle={() => setExpanded(!expanded)}
+      onToggle={() => { markTouched(); setExpanded(prev => !prev); }}
       result={result}
       streamingOutput={streamingOutput}
+      compact={compact}
     >
       {output && (
         <div className="p-3">
@@ -272,14 +292,16 @@ function MemorySearchView({ toolCall, result, status, streamingOutput }: ToolMes
 // memory_read
 // ---------------------------------------------------------------------------
 
-function MemoryReadView({ toolCall, result, status, streamingOutput }: ToolMessageProps) {
+function MemoryReadView({ toolCall, result, status, streamingOutput, compact }: ToolMessageProps) {
   const [expanded, setExpanded] = useState(false);
+  const markTouched = useStreamingRowExpand(status, setExpanded);
   const parsed = parseArgs<{ path: string }>(toolCall.args);
   const output = extractResultOutput(result, streamingOutput);
 
   return (
     <MemoryCard
       toolName={toolCall.toolName}
+      rowSummary={getToolRowSummary(toolCall.toolName, toolCall.args)}
       summary={
         <span className="flex items-center gap-1">
           <code className="text-xs bg-muted px-1 py-0.5 rounded text-foreground/80">
@@ -290,9 +312,10 @@ function MemoryReadView({ toolCall, result, status, streamingOutput }: ToolMessa
       status={status}
       expandable={!!output}
       isExpanded={expanded}
-      onToggle={() => setExpanded(!expanded)}
+      onToggle={() => { markTouched(); setExpanded(prev => !prev); }}
       result={result}
       streamingOutput={streamingOutput}
+      compact={compact}
     >
       {output && (
         <div className="p-3">
@@ -319,8 +342,9 @@ function ActionBadge({ action }: { action: string }) {
   );
 }
 
-function MemoryWriteView({ toolCall, result, status, streamingOutput }: ToolMessageProps) {
+function MemoryWriteView({ toolCall, result, status, streamingOutput, compact }: ToolMessageProps) {
   const [expanded, setExpanded] = useState(false);
+  const markTouched = useStreamingRowExpand(status, setExpanded);
   const parsed = parseArgs<MemoryWriteArgs>(toolCall.args);
   const output = extractResultOutput(result, streamingOutput);
   const isFailed = status === 'FAILED';
@@ -341,6 +365,7 @@ function MemoryWriteView({ toolCall, result, status, streamingOutput }: ToolMess
   return (
     <MemoryCard
       toolName={toolCall.toolName}
+      rowSummary={getToolRowSummary(toolCall.toolName, toolCall.args)}
       summary={
         <span className="flex items-center gap-1.5">
           {isBatch ? (
@@ -362,9 +387,10 @@ function MemoryWriteView({ toolCall, result, status, streamingOutput }: ToolMess
       status={status}
       expandable={isFailed ? !!output : !!detailContent}
       isExpanded={expanded}
-      onToggle={() => setExpanded(!expanded)}
+      onToggle={() => { markTouched(); setExpanded(prev => !prev); }}
       result={result}
       streamingOutput={streamingOutput}
+      compact={compact}
     >
       {expanded && (
         <div className="p-3 space-y-2">
@@ -438,8 +464,9 @@ function MemoryWriteView({ toolCall, result, status, streamingOutput }: ToolMess
 // memory_list
 // ---------------------------------------------------------------------------
 
-function MemoryListView({ toolCall, result, status, streamingOutput }: ToolMessageProps) {
+function MemoryListView({ toolCall, result, status, streamingOutput, compact }: ToolMessageProps) {
   const [expanded, setExpanded] = useState(false);
+  const markTouched = useStreamingRowExpand(status, setExpanded);
   const parsed = parseArgs<{ type?: string }>(toolCall.args);
   const output = extractResultOutput(result, streamingOutput);
 
@@ -452,6 +479,7 @@ function MemoryListView({ toolCall, result, status, streamingOutput }: ToolMessa
   return (
     <MemoryCard
       toolName={toolCall.toolName}
+      rowSummary={getToolRowSummary(toolCall.toolName, toolCall.args)}
       summary={
         <span className="flex items-center gap-1.5">
           {parsed?.type && (
@@ -469,9 +497,10 @@ function MemoryListView({ toolCall, result, status, streamingOutput }: ToolMessa
       status={status}
       expandable={!!output}
       isExpanded={expanded}
-      onToggle={() => setExpanded(!expanded)}
+      onToggle={() => { markTouched(); setExpanded(prev => !prev); }}
       result={result}
       streamingOutput={streamingOutput}
+      compact={compact}
     >
       {output && (
         <div className="p-3">

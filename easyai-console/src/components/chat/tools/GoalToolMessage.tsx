@@ -21,6 +21,9 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import type { ToolMessageProps } from './types';
+import { getToolRowSummary } from './parsers';
+import { ToolRowHeader } from './ToolRowHeader';
+import { useStreamingRowExpand } from './useStreamingRowExpand';
 
 // ---------------------------------------------------------------------------
 // Argument parsing
@@ -114,8 +117,9 @@ function DetailPreview({ text, maxLen = 160 }: { text: string; maxLen?: number }
 // Main component
 // ---------------------------------------------------------------------------
 
-export function GoalToolMessage({ toolCall, result, status }: ToolMessageProps) {
+export function GoalToolMessage({ toolCall, result, status, compact }: ToolMessageProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const markTouched = useStreamingRowExpand(status, setIsExpanded);
   const parsed = parseGoalArgs(toolCall.args);
   const isFailed = status === 'FAILED';
 
@@ -149,12 +153,26 @@ export function GoalToolMessage({ toolCall, result, status }: ToolMessageProps) 
         ? parsed.evidence.length > 80 ? parsed.evidence.slice(0, 80) + '…' : parsed.evidence
         : null;
 
+  const rowHeader = (
+    <ToolRowHeader
+      toolName={toolCall.toolName}
+      status={status ?? 'PENDING'}
+      summary={getToolRowSummary(toolCall.toolName, toolCall.args)}
+      expanded={isExpanded}
+      onToggle={() => { markTouched(); setIsExpanded(prev => !prev); }}
+    />
+  );
+
+  if (compact && !isExpanded) return rowHeader;
+
   return (
-    <div className="border border-border rounded-lg bg-card overflow-hidden">
+    <div className={compact ? 'overflow-hidden' : 'border border-border rounded-lg bg-card overflow-hidden'}>
       {/* Title row */}
+      {compact ? rowHeader : (
+      <>
       <div
         className="p-3 flex items-center justify-between gap-2 cursor-pointer hover:bg-muted/50 transition-colors"
-        onClick={() => detailText ? setIsExpanded(!isExpanded) : undefined}
+        onClick={() => { if (!detailText) return; markTouched(); setIsExpanded(prev => !prev); }}
       >
         <div className="flex items-center gap-2 min-w-0">
           {/* Goal icon */}
@@ -194,6 +212,8 @@ export function GoalToolMessage({ toolCall, result, status }: ToolMessageProps) 
           )}
         </div>
       </div>
+      </>
+      )}
 
       {/* Expanded detail */}
       {isExpanded && detailText && (

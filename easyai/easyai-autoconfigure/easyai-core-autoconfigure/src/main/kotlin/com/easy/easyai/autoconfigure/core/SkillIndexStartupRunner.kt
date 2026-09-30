@@ -1,17 +1,12 @@
 package com.easy.easyai.autoconfigure.core
 
 import com.easy.easyai.skills.SkillRefreshService
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.DisposableBean
 import org.springframework.boot.context.event.ApplicationReadyEvent
 import org.springframework.context.event.EventListener
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Brings the skill index up to date after startup, without ever blocking readiness, then keeps it
@@ -43,7 +38,7 @@ class SkillIndexStartupRunner(
             }
             var pending = 0
             while (isActive) {
-                delay(if (pending > 0) RETRY_SWEEP_MS else IDLE_SWEEP_MS)
+                delay((if (pending > 0) RETRY_SWEEP_MS else IDLE_SWEEP_MS).milliseconds)
                 if (!isActive) break
                 try {
                     pending = refreshService.reconcilePending().pending

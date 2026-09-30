@@ -1,9 +1,10 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { Play } from 'lucide-react';
-import type { Message, ErrorMessage as ErrorMessageType, CustomMessage } from '../../types/message';
+import type { Message, AssistantMessage as AssistantMessageType, ErrorMessage as ErrorMessageType, CustomMessage } from '../../types/message';
 import { UserMessage } from './UserMessage';
 import { InlineEditMessage } from './InlineEditMessage';
 import { AssistantMessage } from './AssistantMessage';
+import { AssistantMessageCluster } from './AssistantMessageCluster';
 import { StreamingMessage } from './StreamingMessage';
 import { StreamingIndicator } from './StreamingIndicator';
 import { ErrorMessage } from './ErrorMessage';
@@ -19,6 +20,43 @@ interface MessageListProps {
   disableEdit?: boolean;
 }
 
+type RenderItem =
+  | { type: 'single'; index: number; message: Message }
+  | { type: 'cluster'; index: number; messages: AssistantMessageType[] };
+
+/**
+ * One backend turn produces an assistant message per LLM round. Consecutive
+ * assistant messages are folded into a single render item so their thinking and
+ * tool calls share process groups instead of stacking one group per round.
+ */
+function buildRenderItems(messages: Message[]): RenderItem[] {
+  const items: RenderItem[] = [];
+  let run: AssistantMessageType[] = [];
+  let runStart = 0;
+
+  const flushRun = () => {
+    if (run.length === 1) {
+      items.push({ type: 'single', index: runStart, message: run[0] });
+    } else if (run.length > 1) {
+      items.push({ type: 'cluster', index: runStart, messages: run });
+    }
+    run = [];
+  };
+
+  messages.forEach((message, index) => {
+    if (message.role === 'assistant') {
+      if (run.length === 0) runStart = index;
+      run.push(message);
+      return;
+    }
+    flushRun();
+    items.push({ type: 'single', index, message });
+  });
+  flushRun();
+
+  return items;
+}
+
 export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming, disableEdit = false }) => {
   const streamingBlocks = useChatStore((state) => state.streamingBlocks);
   const streamingToolOutputs = useChatStore((state) => state.streamingToolOutputs);
@@ -27,6 +65,8 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
   const pendingPermission = useChatStore((state) => state.pendingPermission);
   const retryInfo = useChatStore((state) => state.retryInfo);
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
+
+  const items = useMemo(() => buildRenderItems(messages), [messages]);
 
   const handleEditClick = useCallback((index: number) => {
     setEditingMessageIndex(index);
@@ -41,7 +81,17 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
   }, []);
   return (
     <div className="flex flex-col gap-3 py-4">
-      {messages.map((message, index) => {
+      {items.map((item) => {
+        if (item.type === 'cluster') {
+          return (
+            <div key={`cluster-${item.index}`} className="group relative">
+              <AssistantMessageCluster messages={item.messages} />
+            </div>
+          );
+        }
+
+        const index = item.index;
+        const message = item.message;
         switch (message.role) {
           case 'user':
           case 'user-with-attachments': {

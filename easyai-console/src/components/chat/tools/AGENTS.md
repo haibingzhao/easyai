@@ -13,9 +13,7 @@ tools/
 ├── GenericToolMessage.tsx         # Fallback for unknown tool types (JSON auto-detect)
 ├── BashToolMessage.tsx            # Bash command execution display
 ├── ReadToolMessage.tsx            # File read tool display
-├── ReadLsGroupedMessage.tsx       # Grouped read/ls operations
 ├── FileEditToolMessage.tsx        # File edit tool display
-├── EditedGroupedMessage.tsx       # Grouped edit operations
 ├── FileSearchToolMessage.tsx      # Glob/find tool display
 ├── GrepToolMessage.tsx            # Grep search display
 ├── AskQuestionToolMessage.tsx     # User clarification prompts
@@ -24,8 +22,9 @@ tools/
 ├── CalcToolMessage.tsx            # Calculator tool display
 ├── MemoryToolMessage.tsx          # Memory operations display
 ├── McpToolCard.tsx                # MCP tool execution card
-├── SubAgentToolMessage.tsx        # Sub-agent spawn display
-├── SubAgentPanel.tsx              # Sub-agent execution panel
+├── SubAgentToolMessage.tsx        # Sub-agent spawn display (thin adapter over segments/SubAgentRow)
+├── ToolRowHeader.tsx              # Shared compact single-line row header
+├── useStreamingRowExpand.ts       # Shared auto-expand-while-running hook
 ├── CollapsibleSection.tsx         # Shared collapsible UI primitive
 ├── CopyableText.tsx               # Copy-to-clipboard text
 ├── icons.tsx                      # Tool-specific Lucide icon mappings
@@ -46,6 +45,7 @@ tools/
 ## CONVENTIONS
 - Each tool: separate `*ToolMessage.tsx` component
 - Props: tool call data (id, name, args, result, status)
+- `compact?: boolean`: render as a borderless process-group row — header from `ToolRowHeader` with a one-line summary from `getToolRowSummary`, details body unchanged. Rows auto-expand only while `status` is RUNNING/PENDING via `useStreamingRowExpand`; a manual toggle wins (`userTouchedRef`).
 - Use `CollapsibleSection.tsx` for expandable details
 - Icons from `icons.tsx`, not inline Lucide imports
 - `parsers.ts` handles arg parsing — keep UI components pure

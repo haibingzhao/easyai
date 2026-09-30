@@ -3,21 +3,25 @@
  * MCP tool names follow the pattern "serverName__toolName".
  */
 
-import { useState, useEffect } from 'react';
-import { ChevronDown, ChevronRight, Plug, AlertTriangle } from 'lucide-react';
-import { CodeBlock } from '../CodeBlock';
+import { useState, useEffect, useRef } from 'react';
+import { AlertTriangle } from 'lucide-react';
 import type { ToolMessageProps } from './types';
-import { tryFormatJson } from './parsers';
+import { getToolRowSummary } from './parsers';
+import { ToolRowHeader } from './ToolRowHeader';
+import { ToolSection } from './ToolSection';
+import { getToolIcon } from './icons';
+import { i18n } from '@/utils/i18n';
 
-export function McpToolCard({ toolCall, result, status, streamingOutput }: ToolMessageProps) {
+export function McpToolCard({ toolCall, result, status, streamingOutput, compact }: ToolMessageProps) {
   const [expanded, setExpanded] = useState(false);
-  // Collapse args after streaming ends for compact display
-  const [argsExpanded, setArgsExpanded] = useState(true);
+  const userTouchedRef = useRef(false);
 
   // Parse server + tool name from "serverName__toolName"
   const parts = toolCall.toolName.split('__');
   const serverName = parts.slice(0, -1).join('__').replace(/_/g, '-') || toolCall.toolName;
   const toolName = parts[parts.length - 1]?.replace(/_/g, '-') || toolCall.toolName;
+
+  const Icon = getToolIcon(toolCall.toolName);
 
   const output = streamingOutput ?? (() => {
     if (!result) return '';
@@ -32,24 +36,67 @@ export function McpToolCard({ toolCall, result, status, streamingOutput }: ToolM
   const isRunning = status === 'RUNNING' || status === 'PENDING';
   const isFailed = status === 'FAILED' || result?.isError;
 
-  useEffect(() => {
-    if (!isRunning) setArgsExpanded(false);
-  }, [isRunning]);
-
   const statusDotColor = isRunning
     ? 'bg-blue-500 animate-pulse'
     : isFailed
       ? 'bg-destructive'
       : 'bg-green-500';
 
-  const statusText = isRunning ? '运行中...' : isFailed ? '失败' : '完成';
+  const statusText = isRunning ? i18n('Running...') : isFailed ? i18n('Failed') : i18n('Completed');
+
+  useEffect(() => {
+    if (userTouchedRef.current) return;
+    setExpanded(isRunning);
+  }, [isRunning]);
+
+  const hasArgs = Boolean(toolCall.args && toolCall.args !== '{}');
+
+  const rowHeader = (
+    <ToolRowHeader
+      toolName={toolCall.toolName}
+      status={status ?? 'PENDING'}
+      summary={getToolRowSummary(toolCall.toolName, toolCall.args)}
+      expanded={expanded}
+      onToggle={() => { userTouchedRef.current = true; setExpanded(e => !e); }}
+    />
+  );
+
+  if (compact) {
+    return (
+      <div className="overflow-hidden">
+        {rowHeader}
+        {expanded && (hasArgs || output || isFailed) && (
+          <div className="px-3 pb-2 space-y-2">
+            {isFailed && (
+              <div className="flex items-center gap-1.5 text-xs text-destructive">
+                <AlertTriangle className="w-3 h-3" />
+                <span>{i18n('Failed')}</span>
+              </div>
+            )}
+            {hasArgs && (
+              <ToolSection title={i18n('Arguments')} text={toolCall.args} maxHeightClass="max-h-32" />
+            )}
+            {output && (
+              <ToolSection
+                title={i18n('Result')}
+                text={output}
+                maxHeightClass="max-h-60"
+                followStreaming={isRunning}
+                tone={isFailed ? 'error' : 'default'}
+              />
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="border border-border rounded-lg bg-card overflow-hidden">
       {/* Header */}
       <div className="p-3 flex items-center justify-between gap-2 border-b border-border">
         <div className="flex items-center gap-2 min-w-0">
-          <Plug className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+          <Icon className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
           <span className="text-xs text-muted-foreground flex-shrink-0">{serverName}</span>
           <span className="text-muted-foreground">/</span>
           <span className="text-sm font-medium truncate">{toolName}</span>
@@ -62,72 +109,26 @@ export function McpToolCard({ toolCall, result, status, streamingOutput }: ToolM
         </div>
       </div>
 
-      {/* Args (collapsed by default after streaming ends) */}
-      {toolCall.args && toolCall.args !== '{}' && (
-        <div className="px-3 py-2">
-          <button
-            onClick={() => setArgsExpanded(e => !e)}
-            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mb-1"
-          >
-            {argsExpanded
-              ? <ChevronDown className="w-3 h-3" />
-              : <ChevronRight className="w-3 h-3" />}
-            <span>{argsExpanded ? '收起参数' : '查看参数'}</span>
-          </button>
-          {argsExpanded && (() => {
-            const formatted = tryFormatJson(toolCall.args);
-            if (formatted) {
-              return (
-                <div className="max-h-32 overflow-y-auto rounded-lg overflow-hidden">
-                  <CodeBlock className="language-json">{formatted}</CodeBlock>
-                </div>
-              );
-            }
-            return (
-              <div className="text-xs font-mono text-muted-foreground bg-muted/50 rounded p-2 break-all line-clamp-2">
-                {toolCall.args}
-              </div>
-            );
-          })()}
-        </div>
-      )}
-
-      {/* Output */}
-      {output && (
-        <div className="border-t border-border">
-          <button
-            onClick={() => setExpanded(e => !e)}
-            className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted/30 transition-colors"
-          >
-            {expanded
-              ? <ChevronDown className="w-3.5 h-3.5" />
-              : <ChevronRight className="w-3.5 h-3.5" />}
-            {isFailed && <AlertTriangle className="w-3 h-3 text-destructive" />}
-            <span>{expanded ? '收起结果' : '查看结果'}</span>
-          </button>
-          {expanded && (
-            <div className="px-3 pb-3">
-              {(() => {
-                const formatted = tryFormatJson(output);
-                if (formatted) {
-                  return (
-                    <div className="max-h-80 overflow-y-auto rounded-lg overflow-hidden">
-                      <CodeBlock className="language-json">{formatted}</CodeBlock>
-                    </div>
-                  );
-                }
-                return (
-                  <div className={`text-xs font-mono whitespace-pre-wrap break-all max-h-60 overflow-y-auto ${
-                    isFailed ? 'text-destructive' : 'text-foreground'
-                  }`}>
-                    {output}
-                  </div>
-                );
-              })()}
-            </div>
-          )}
-        </div>
-      )}
+      <div className="p-3 space-y-3">
+        {isFailed && (
+          <div className="flex items-center gap-1.5 text-xs text-destructive">
+            <AlertTriangle className="w-3 h-3" />
+            <span>{i18n('Failed')}</span>
+          </div>
+        )}
+        {hasArgs && (
+          <ToolSection title={i18n('Arguments')} text={toolCall.args} maxHeightClass="max-h-32" />
+        )}
+        {output && (
+          <ToolSection
+            title={i18n('Result')}
+            text={output}
+            maxHeightClass="max-h-80"
+            followStreaming={isRunning}
+            tone={isFailed ? 'error' : 'default'}
+          />
+        )}
+      </div>
     </div>
   );
 }

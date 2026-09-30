@@ -5,10 +5,13 @@
  */
 
 import { useState, useEffect } from 'react';
-import { Calculator, AlertCircle, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react';
+import { Calculator, ChevronDown } from 'lucide-react';
 import type { ToolMessageProps } from './types';
-import { extractOutput } from './parsers';
+import { extractOutput, getToolRowSummary } from './parsers';
 import { getToolDisplayName } from './icons';
+import { ToolRowHeader } from './ToolRowHeader';
+import { ToolSection } from './ToolSection';
+import { i18n } from '@/utils/i18n';
 import {
   getShikiHighlighter,
   getCachedHighlight,
@@ -35,7 +38,8 @@ export function CalcToolMessage({
   toolCall,
   result,
   status,
-  streamingOutput
+  streamingOutput,
+  compact
 }: ToolMessageProps) {
   const script = extractScript(toolCall.args);
   // Once result is committed the tool is finished, regardless of status field
@@ -45,18 +49,11 @@ export function CalcToolMessage({
 
   // Expand script while streaming, collapse by default when completed
   const [expanded, setExpanded] = useState(isStreaming);
-  // Result area collapsed by default (ref: MCP component: view/collapse result), auto-expand on error
-  const [resultExpanded, setResultExpanded] = useState(isError);
 
   // Auto-expand script when streaming state changes
   useEffect(() => {
     if (isStreaming) setExpanded(true);
   }, [isStreaming]);
-
-  // Auto-expand result area on error
-  useEffect(() => {
-    if (isError) setResultExpanded(true);
-  }, [isError]);
 
   // Shiki highlighting
   const [highlighted, setHighlighted] = useState('');
@@ -126,9 +123,22 @@ export function CalcToolMessage({
 
   const displayName = getToolDisplayName(toolCall.toolName);
 
+  const rowHeader = (
+    <ToolRowHeader
+      toolName={toolCall.toolName}
+      status={status ?? 'PENDING'}
+      summary={getToolRowSummary(toolCall.toolName, toolCall.args)}
+      expanded={expanded}
+      onToggle={() => setExpanded(!expanded)}
+    />
+  );
+
+  if (compact && !expanded) return rowHeader;
+
   return (
-    <div className="border border-border rounded-lg bg-card overflow-hidden">
+    <div className={compact ? 'overflow-hidden' : 'border border-border rounded-lg bg-card overflow-hidden'}>
       {/* Title bar — click to collapse/expand */}
+      {compact ? rowHeader : (
       <div
         className="p-3 flex items-center justify-between gap-2 cursor-pointer hover:bg-muted/50 transition-colors"
         onClick={() => setExpanded(!expanded)}
@@ -147,55 +157,37 @@ export function CalcToolMessage({
           />
         </div>
       </div>
+      )}
 
       {/* Expanded content */}
       {expanded && (
-        <>
-          <div className="border-t border-border" />
-
+        <div className={`space-y-3 ${compact ? 'px-3 pb-3' : 'p-3 border-t border-border'}`}>
           {/* Script area (Shiki highlighted) */}
-          <div className="p-3">
-            <div className="text-sm font-mono p-2 bg-muted rounded overflow-x-auto max-h-[20em] overflow-y-auto">
-              <div
-                className="whitespace-pre-wrap break-all calc-code-highlight"
-                dangerouslySetInnerHTML={{ __html: highlighted || plainTextHtml }}
-              />
-            </div>
-          </div>
-
-          {/* Result area (ref: MCP interaction: view/collapse result) */}
-          {(output || isStreaming) && (
-            <div className="border-t border-border">
-              {isStreaming ? (
-                <div className="px-3 py-2 text-xs text-muted-foreground animate-pulse">
-                  calculating...
-                </div>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setResultExpanded(e => !e)}
-                    className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted/30 transition-colors"
-                  >
-                    {resultExpanded
-                      ? <ChevronDown className="w-3.5 h-3.5" />
-                      : <ChevronRight className="w-3.5 h-3.5" />}
-                    {isError && <AlertTriangle className="w-3 h-3 text-destructive" />}
-                    <span>{resultExpanded ? '收起结果' : '查看结果'}</span>
-                  </button>
-                  {resultExpanded && (
-                    <div className={`px-3 pb-3 text-sm font-mono whitespace-pre-wrap break-all max-h-60 overflow-y-auto ${
-                      isError ? 'text-destructive' : 'text-foreground'
-                    }`}>
-                      {isError && <AlertCircle className="w-4 h-4 inline-block mr-1 mb-0.5" />}
-                      {output}
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
+          {script && (
+            <ToolSection title={i18n('Script')} text={script} maxHeightClass="max-h-[20em]">
+              <div className="text-sm font-mono p-2 bg-muted rounded overflow-x-auto max-h-[20em] overflow-y-auto">
+                <div
+                  className="whitespace-pre-wrap break-all calc-code-highlight"
+                  dangerouslySetInnerHTML={{ __html: highlighted || plainTextHtml }}
+                />
+              </div>
+            </ToolSection>
           )}
-        </>
+
+          {/* Result area */}
+          {isStreaming ? (
+            <div className="px-1 py-2 text-xs text-muted-foreground animate-pulse">
+              calculating...
+            </div>
+          ) : output ? (
+            <ToolSection
+              title={i18n('Result')}
+              text={output}
+              maxHeightClass="max-h-60"
+              tone={isError ? 'error' : 'default'}
+            />
+          ) : null}
+        </div>
       )}
     </div>
   );

@@ -1,4 +1,5 @@
 import type { Message, ToolCall, ToolResult, ToolResultContentBlock, ContextReferences, Attachment } from '@/types/message';
+import type { MessageSegment } from '@/types/message-segment';
 import type {
   MessageSnapshot,
   ToolResultContentBlock as ToolResultContentBlockData,
@@ -163,6 +164,34 @@ export function convertSnapshot(msg: MessageSnapshot): Message {
     const toolCalls: ToolCall[] = msg.content.filter(isToolCallBlock).map(tc => ({
       id: tc.id, toolName: tc.name, args: tc.arguments,
     }));
+    // Preserve the original interleaved block order for the process-group renderer;
+    // tool results are attached later at render time via resolveSegments.
+    const segments: MessageSegment[] = [];
+    let segIndex = 0;
+    for (const block of msg.content) {
+      if (isThinkingBlock(block)) {
+        if (block.thinking.trim()) {
+          segments.push({
+            kind: 'thinking',
+            id: `seg-${msg.id ?? 'msg'}-${segIndex++}`,
+            content: block.thinking,
+            durationMs: block.durationMs ?? undefined,
+            isFinished: true,
+          });
+        }
+      } else if (isTextBlock(block)) {
+        if (block.text.trim()) {
+          segments.push({ kind: 'text', id: `seg-${msg.id ?? 'msg'}-${segIndex++}`, content: block.text });
+        }
+      } else if (isToolCallBlock(block)) {
+        segments.push({
+          kind: 'tool',
+          id: block.id,
+          toolCall: { id: block.id, toolName: block.name, args: block.arguments },
+          status: block.status,
+        });
+      }
+    }
     const thinkingBlock = msg.content.find(isThinkingBlock);
     const textBlock = msg.content.find(isTextBlock);
     // Convert backend ReferencesSnapshot to frontend ContextReferences
@@ -196,6 +225,7 @@ export function convertSnapshot(msg: MessageSnapshot): Message {
       timestamp: msg.timestamp,
       compactedAt: msg.compactedAt ?? undefined,
       references,
+      segments: segments.length > 0 ? segments : undefined,
     } as Message;
   }
 

@@ -1,4 +1,5 @@
 import type { CommandCategory } from './command';
+import type { MessageSegment } from './message-segment';
 
 export interface Attachment {
   id: string;
@@ -160,6 +161,8 @@ export interface AssistantMessage {
   checkpoint?: MessageCheckpoint;
   /** Context references (memories and rules) used in this response */
   references?: ContextReferences;
+  /** Ordered render segments preserving thinking/text/tool interleaving (runtime-built, not persisted) */
+  segments?: MessageSegment[];
 }
 
 /**
