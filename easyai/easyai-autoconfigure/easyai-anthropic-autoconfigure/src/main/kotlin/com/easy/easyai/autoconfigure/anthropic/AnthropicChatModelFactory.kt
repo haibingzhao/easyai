@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.ai.anthropic.AnthropicChatModel
 import org.springframework.ai.anthropic.AnthropicChatOptions
 import org.springframework.ai.anthropic.AnthropicSetup
+import org.springframework.ai.anthropic.http.okhttp.AnthropicHttpClientBuilderCustomizer
 import org.springframework.ai.chat.model.ChatModel
 import org.springframework.ai.chat.prompt.ChatOptions
 import org.springframework.ai.tool.ToolCallback
@@ -32,6 +33,13 @@ class AnthropicChatModelFactory : ChatModelFactory {
         val baseUrl = config.baseUrl ?: "https://api.anthropic.com"
         val timeout = Duration.ofSeconds(config.timeoutSeconds)
 
+        // Log raw non-2xx bodies so gateway errors returned inside SSE frames — which the
+        // Anthropic SDK otherwise reduces to "400: Unknown" with body=JsonMissing — remain
+        // diagnosable. Applied to both sync and async clients via the http customizer seam.
+        val httpCustomizers = listOf(
+            AnthropicHttpClientBuilderCustomizer { it.interceptor(AnthropicErrorLoggingInterceptor()) }
+        )
+
         val syncClient = AnthropicSetup.setupSyncClient(
             baseUrl,
             apiKey,
@@ -40,7 +48,9 @@ class AnthropicChatModelFactory : ChatModelFactory {
             null,   // proxy
             null,   // customHeaders
             observationRegistry,
-            null    // meterRegistry
+            null,   // meterRegistry
+            null,   // dispatcherExecutor
+            httpCustomizers
         )
 
         val asyncClient = AnthropicSetup.setupAsyncClient(
@@ -51,7 +61,9 @@ class AnthropicChatModelFactory : ChatModelFactory {
             null,   // proxy
             null,   // customHeaders
             observationRegistry,
-            null    // meterRegistry
+            null,   // meterRegistry
+            null,   // dispatcherExecutor
+            httpCustomizers
         )
 
         val defaultOptions = AnthropicChatOptions.builder().model(config.modelId).build()
@@ -76,24 +88,20 @@ class AnthropicChatModelFactory : ChatModelFactory {
             .toolCallbacks(toolCallbacks)
 
         config.options?.let {
-            // 1. Thinking: pass thinking.budget_tokens when enabled
             if (it.thinking) {
+                // Thinking: pass thinking.budget_tokens when enabled.
                 builder.thinkingEnabled(DEFAULT_THINKING_BUDGET_TOKENS)
                 // max_tokens must be > budget_tokens; enforce a safe floor
                 builder.maxTokens(maxOf(it.maxTokens, DEFAULT_THINKING_BUDGET_TOKENS.toInt() + 1))
-            }
-
-            // 2. Effort: independent of thinking, always applied when set
-            val effortValue = it.effort
-            if (effortValue != null) {
-                builder.effort(mapToOutputConfigEffort(effortValue))
-            }
-
-            // 3. Thinking disabled + temperature/maxTokens: only when thinking is not active.
-            // thinkingDisabled() must be sent explicitly — some Anthropic-protocol models
-            // (e.g. qwen3.x-max) reason by DEFAULT, so merely omitting the thinking field
-            // leaves reasoning on; only an explicit {type: disabled} turns it off.
-            if (!it.thinking) {
+            } else {
+                // Effort maps to reasoning_effort. Some Anthropic-compatible gateways (e.g.
+                // Bailian token-plan) reject reasoning_effort alongside thinking.budget_tokens
+                // ("'reasoning_effort' and 'thinking_budget' cannot be set simultaneously"), so
+                // it is only emitted when thinking is off.
+                it.effort?.let { effort -> builder.effort(mapToOutputConfigEffort(effort)) }
+                // thinkingDisabled() must be sent explicitly — some Anthropic-protocol models
+                // (e.g. qwen3.x-max) reason by DEFAULT, so merely omitting the thinking field
+                // leaves reasoning on; only an explicit {type: disabled} turns it off.
                 builder.thinkingDisabled()
                 builder.temperature(it.temperature)
                 builder.maxTokens(it.maxTokens)

@@ -111,5 +111,23 @@ class AnthropicChatModelFactoryTest {
             assertNotNull(thinking)
             assertTrue(thinking.isEnabled(), "thinking=true must map to an enabled thinking config")
         }
+
+        @Test
+        fun `thinking=true suppresses effort - reasoning_effort and thinking_budget are mutually exclusive`() {
+            // Bailian token-plan rejects both being set at once; thinking budget wins so the
+            // explicit thinking=true intent is honored and effort is dropped.
+            val options = ModelOptions(temperature = 0.7, maxTokens = 20_000, thinking = true, effort = "high")
+            val built = factory.build(config(null, options), emptyList(), null) as AnthropicChatOptions
+            assertTrue(built.thinking!!.isEnabled())
+            assertNull(built.outputConfig?.effort()?.orElse(null), "effort must not be sent when thinking is enabled")
+        }
+
+        @Test
+        fun `thinking=false still emits effort`() {
+            val options = ModelOptions(temperature = 0.7, maxTokens = 1000, thinking = false, effort = "high")
+            val built = factory.build(config(null, options), emptyList(), null) as AnthropicChatOptions
+            assertTrue(built.thinking!!.isDisabled())
+            assertEquals(OutputConfig.Effort.HIGH, built.outputConfig?.effort()?.orElse(null))
+        }
     }
 }

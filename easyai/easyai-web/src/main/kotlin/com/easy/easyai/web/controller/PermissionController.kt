@@ -9,7 +9,11 @@ import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.web.model.*
 import com.easy.easyai.web.security.getCurrentUserId
 import kotlinx.coroutines.reactor.mono
+import org.springframework.core.io.FileSystemResource
+import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
+import org.springframework.http.MediaType
+import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import org.springframework.web.server.ResponseStatusException
 import reactor.core.publisher.Mono
@@ -48,6 +52,19 @@ class PermissionController(
         )
         private const val MAX_SEARCH_RESULTS = 50
         private const val SEARCH_TIMEOUT_MS = 5000L
+        private const val MAX_MEDIA_BYTES = 500L * 1024 * 1024
+        // Extension → MIME whitelist. Files.probeContentType is unreliable across platforms
+        // (returns null for mp4/mkv on many Linux hosts), so the served type is derived here.
+        private val MEDIA_MIME_BY_EXT: Map<String, String> = mapOf(
+            "png" to "image/png", "jpg" to "image/jpeg", "jpeg" to "image/jpeg",
+            "gif" to "image/gif", "webp" to "image/webp", "bmp" to "image/bmp",
+            "svg" to "image/svg+xml", "avif" to "image/avif", "ico" to "image/x-icon",
+            "mp3" to "audio/mpeg", "wav" to "audio/wav", "ogg" to "audio/ogg",
+            "oga" to "audio/ogg", "aac" to "audio/aac", "m4a" to "audio/mp4",
+            "flac" to "audio/flac",
+            "mp4" to "video/mp4", "webm" to "video/webm", "mov" to "video/quicktime",
+            "m4v" to "video/mp4", "avi" to "video/x-msvideo", "mkv" to "video/x-matroska"
+        )
     }
 
     /**
@@ -241,21 +258,7 @@ class PermissionController(
         @RequestParam projectId: String
     ): Mono<Map<String, Any>> {
         return mono {
-            // Validate path is within the authenticated user's project directory
-            val projectPath = resolveProjectPath(projectId)
-                ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found: $projectId")
-            val projectDir = Path.of(projectPath).toAbsolutePath().normalize()
-            // Resolve relative paths against the project directory; absolute paths used as-is
-            val rawPath = Path.of(path)
-            val filePath = (if (rawPath.isAbsolute) rawPath else projectDir.resolve(rawPath)).normalize()
-            if (!filePath.startsWith(projectDir) && !isPathAllowedByRules(projectId, filePath, projectDir)) {
-                logger.warn("Access denied: path outside project directory: {} (project: {})", filePath, projectDir)
-                throw ResponseStatusException(HttpStatus.FORBIDDEN, "Access denied: path is outside project directory")
-            }
-            if (!Files.isRegularFile(filePath)) {
-                logger.warn("File not found: {}", filePath)
-                throw ResponseStatusException(HttpStatus.NOT_FOUND, "File not found: $path")
-            }
+            val filePath = validateReadablePath(path, projectId)
             val fileSize = Files.size(filePath)
             if (fileSize > 1_048_576) {
                 throw ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "File too large: $fileSize bytes (max 1MB)")
@@ -268,6 +271,56 @@ class PermissionController(
             val mimeType = Files.probeContentType(filePath) ?: "text/plain"
             mapOf("content" to content, "mimeType" to mimeType, "size" to fileSize)
         }
+    }
+
+    /**
+     * Serve an audio/image/video file from the server filesystem as binary content.
+     * Path must be within the specified project directory (or allowed by permission rules).
+     * Restricted to extensions in [MEDIA_MIME_BY_EXT] and files ≤ 500MB; Range requests are
+     * answered by the reactive resource writer, so playback transfers only requested bytes.
+     */
+    @GetMapping("/serve-media")
+    fun serveMedia(
+        @RequestParam path: String,
+        @RequestParam projectId: String
+    ): Mono<ResponseEntity<FileSystemResource>> {
+        return mono {
+            val filePath = validateReadablePath(path, projectId)
+            val extension = filePath.fileName.toString().substringAfterLast('.', "").lowercase()
+            val mimeType = MEDIA_MIME_BY_EXT[extension]
+                ?: throw ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Not a servable media type: $extension")
+            val fileSize = Files.size(filePath)
+            if (fileSize > MAX_MEDIA_BYTES) {
+                throw ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "Media file too large: $fileSize bytes (max 500MB)")
+            }
+            ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(mimeType))
+                .header(HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
+                .header("X-Content-Type-Options", "nosniff")
+                .body(FileSystemResource(filePath))
+        }
+    }
+
+    /**
+     * Resolve and validate a file path for reading: must exist as a regular file and be
+     * within the authenticated user's project directory, or allowed by permission rules.
+     */
+    private suspend fun validateReadablePath(path: String, projectId: String): Path {
+        val projectPath = resolveProjectPath(projectId)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found: $projectId")
+        val projectDir = Path.of(projectPath).toAbsolutePath().normalize()
+        // Resolve relative paths against the project directory; absolute paths used as-is
+        val rawPath = Path.of(path)
+        val filePath = (if (rawPath.isAbsolute) rawPath else projectDir.resolve(rawPath)).normalize()
+        if (!filePath.startsWith(projectDir) && !isPathAllowedByRules(projectId, filePath, projectDir)) {
+            logger.warn("Access denied: path outside project directory: {} (project: {})", filePath, projectDir)
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "Access denied: path is outside project directory")
+        }
+        if (!Files.isRegularFile(filePath)) {
+            logger.warn("File not found: {}", filePath)
+            throw ResponseStatusException(HttpStatus.NOT_FOUND, "File not found: $path")
+        }
+        return filePath
     }
 
     private suspend fun resolveProjectPath(projectId: String): String? {
