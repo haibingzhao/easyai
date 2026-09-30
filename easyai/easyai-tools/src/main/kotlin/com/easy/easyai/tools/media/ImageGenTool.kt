@@ -1,6 +1,7 @@
 package com.easy.easyai.tools.media
 
 import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.media.MediaProviderResolver
 import com.easy.easyai.core.media.MediaProviderSettings
 import com.easy.easyai.core.model.ToolResultContent
 import com.easy.easyai.core.storage.ObjectStorage
@@ -21,26 +22,28 @@ data class ImageGenParams(
     /** Number of images to generate in one call (1-10). Default 1. */
     val n: Int? = null,
     /** Optional size hint, e.g. "1024x1024". Provider-specific. */
-    val size: String? = null
+    val size: String? = null,
+    /** Optional generation-model name; matches a configured entry's model id or display name. */
+    val model: String? = null
 )
 
 /**
  * Generates images from a text prompt through an OpenAI-compatible provider, persisting each result
  * to object storage and returning only references.
  *
- * The tool is offered solely when the builder found an enabled image credential *and* usable storage;
+ * The tool is offered solely when the builder found an enabled IMAGE entry *and* usable storage;
  * produced bytes never enter the LLM context or the DB message body — [MediaResult] carries a stable
- * `/api/media/file` URL the frontend renders.
+ * `/api/media/file` URL the frontend renders. The concrete provider is resolved per call from the
+ * optional [ImageGenParams.model] against the user's enabled entries.
  */
 class ImageGenTool(
     metadata: ToolMetadata,
-    private val settings: MediaProviderSettings,
+    private val resolver: MediaProviderResolver,
     private val storage: ObjectStorage,
     private val userId: String
 ) : BaseToolDefinition(metadata) {
 
     private val logger = LoggerFactory.getLogger(javaClass)
-    private val client = OpenAiCompatibleClient(settings)
 
     override val executionMode = ToolExecutionMode.PARALLEL
     override fun parameterType() = ImageGenParams::class.java
@@ -57,10 +60,14 @@ class ImageGenTool(
             ?: return errorResult(toolCallId, name, "'prompt' is required")
         val n = (args["n"] as? Number)?.toInt() ?: 1
         val size = args["size"] as? String
+        val model = (args["model"] as? String)?.takeIf { it.isNotBlank() }
+
+        val settings = resolver.resolveEntry(userId, MediaProviderSettings.SERVICE_KIND_IMAGE, model)
+            ?: return errorResult(toolCallId, name, "no enabled image model is configured${model?.let { " for '$it'" } ?: ""}")
 
         onUpdate(ToolUpdate.Progress("Generating $n image(s)…"))
         return try {
-            val generated = client.generateImages(prompt, n, size)
+            val generated = OpenAiCompatibleClient(settings).generateImages(prompt, n, size)
             if (generated.isEmpty()) return errorResult(toolCallId, name, "provider returned no images")
             val items = generated.map { (bytes, mime) -> MediaArtifacts.store(storage, userId, bytes, mime) }
             val result = MediaResult(MediaProviderSettings.SERVICE_KIND_IMAGE, MediaResult.STATUS_COMPLETED, items)
@@ -78,7 +85,7 @@ class ImageGenToolBuilder : AbstractMediaToolBuilder(MediaProviderSettings.SERVI
         name = "generate_image",
         description = """Generate image(s) from a text prompt.
 - Provide a detailed 'prompt' describing the desired image
-- Optionally set 'n' (1-10) for how many variations to create, and a 'size' like "1024x1024"
+- Optionally set 'n' (1-10) for how many variations to create, a 'size' like "1024x1024", and a 'model' when several image models are configured
 - Returns references to stored images (a URL the interface renders inline); the current year is available in the prompt if timing matters
 - Costs quota; use only when the user asks for generated imagery""",
         permissionCategory = "media",
@@ -88,8 +95,8 @@ class ImageGenToolBuilder : AbstractMediaToolBuilder(MediaProviderSettings.SERVI
     )
 
     override fun createTool(
-        settings: MediaProviderSettings,
+        resolver: MediaProviderResolver,
         storage: ObjectStorage,
         userId: String
-    ): ToolDefinition = ImageGenTool(metadata, settings, storage, userId)
+    ): ToolDefinition = ImageGenTool(metadata, resolver, storage, userId)
 }

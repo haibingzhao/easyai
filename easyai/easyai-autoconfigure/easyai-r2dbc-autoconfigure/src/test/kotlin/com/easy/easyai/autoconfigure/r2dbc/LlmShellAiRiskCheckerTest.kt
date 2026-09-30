@@ -4,6 +4,7 @@ import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.api.model.ModelType
 import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.permission.PermissionAction
 import io.mockk.every
@@ -43,7 +44,10 @@ class LlmShellAiRiskCheckerTest {
         override suspend fun saveConfig(config: ModelProviderConfig, userId: String) {}
         override suspend fun deleteConfig(id: String, userId: String): Boolean = false
         override suspend fun getAllConfigs(userId: String): List<ModelProviderConfig> =
-            listOfNotNull(config)
+            getModelConfigs(ModelType.CHAT, userId)
+
+        override suspend fun getModelConfigs(modelType: ModelType, userId: String): List<ModelProviderConfig> =
+            listOfNotNull(config).filter { it.modelType == modelType }
     }
 
     private fun checkerWithModel(

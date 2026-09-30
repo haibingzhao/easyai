@@ -1,17 +1,16 @@
 package com.easy.easyai.core.media
 
 /**
- * Which configuration layer a user's effective [MediaProviderSettings] came from.
+ * Which configuration layer a user's effective media entries came from.
  *
- * Surfaced by the media settings endpoint so the UI can show what is actually in force —
- * a saved row, the shared `system` row, or nothing at all. Mirrors
- * [com.easy.easyai.core.storage.StorageSource].
+ * Surfaced so the UI can show what is actually in force — the user's own rows, the shared
+ * `system` rows, or nothing at all. Mirrors [com.easy.easyai.core.storage.StorageSource].
  */
 enum class MediaProviderSource {
-    /** The user's own `media_provider_settings` row for this kind. */
+    /** The user's own `model_provider_config` rows of this generation type. */
     USER,
 
-    /** The shared `system` row other users fall back to. */
+    /** The shared `system` rows other users fall back to. */
     SYSTEM,
 
     /** No enabled configuration in the database for this kind. */
@@ -19,27 +18,36 @@ enum class MediaProviderSource {
 }
 
 /**
- * Per-user access point to media-generation credentials.
+ * Read access point to media-generation model entries, one kind per generation tool.
  *
- * Resolution order per user+kind: own DB row → `system` DB row → nothing. The database is the
- * only configuration source; with no R2DBC or no stored row the resolver answers null everywhere
- * and the corresponding generation tool hides itself. [refresh] invalidates cached entries so a
- * saved credential takes effect without a restart, mirroring
- * [com.easy.easyai.core.storage.ObjectStorageResolver].
+ * Entries are `model_provider_config` rows partitioned by `model_type` (user rows plus shared
+ * `system` rows are visible together; [MediaProviderSource] reports which owner the first entry
+ * belongs to). With no R2DBC or no stored rows the resolver answers empty everywhere and the
+ * corresponding generation tool hides itself. [refresh] invalidates cached entries so a saved
+ * model takes effect without a restart, mirroring [com.easy.easyai.core.storage.ObjectStorageResolver].
  */
 interface MediaProviderResolver {
 
-    /** The user's effective credential for [serviceKind]; null when nothing in the chain is enabled. */
-    suspend fun resolve(userId: String, serviceKind: String): MediaProviderSettings?
+    /** Every effective entry for [serviceKind], in stable order; empty when nothing is configured. */
+    suspend fun resolveEntries(userId: String, serviceKind: String): List<MediaProviderSettings>
 
-    /** Which layer [resolve] would use (or [MediaProviderSource.NONE] when it yields null). */
+    /**
+     * The single entry a tool should use for an optional `model` name.
+     *
+     * Match order: [model] equal to a entry's model id (ignoring case), then its display name,
+     * then — when [model] is blank or unmatched — the default entry, a sole entry, the first.
+     * Null when the kind has no effective entry.
+     */
+    suspend fun resolveEntry(userId: String, serviceKind: String, model: String?): MediaProviderSettings?
+
+    /** Which layer [resolveEntries] reads (or [MediaProviderSource.NONE] when it yields nothing). */
     suspend fun sourceOf(userId: String, serviceKind: String): MediaProviderSource
 
     /**
-     * Drop cached entries so the next [resolve] re-reads the configuration.
+     * Drop cached entries so the next [resolveEntries] re-reads the configuration.
      *
      * Refreshing the shared `system` owner must also invalidate every user that falls back to
-     * that row; implementations are expected to handle that case broadly (e.g. drop all).
+     * those rows; implementations are expected to handle that case broadly (e.g. drop all).
      */
     fun refresh(userId: String)
 }

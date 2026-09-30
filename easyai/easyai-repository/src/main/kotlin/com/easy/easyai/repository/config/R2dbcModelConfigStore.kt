@@ -2,6 +2,7 @@ package com.easy.easyai.repository.config
 
 import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.api.model.ModelProviderConfig
+import com.easy.easyai.api.model.ModelType
 import com.easy.easyai.repository.database.Tables
 import com.easy.easyai.repository.database.UserScope
 import tools.jackson.databind.ObjectMapper
@@ -69,6 +70,9 @@ class R2dbcModelConfigStore(
                     it[capabilities] = capabilitiesJson
                     it[timeoutSeconds] = config.timeoutSeconds
                     it[groupId] = config.groupId
+                    it[modelType] = config.modelType.name
+                    it[mediaOptions] = config.mediaOptions
+                    it[isDefault] = config.isDefault
                     it[updatedAt] = now
                 }
                 logger.info("Updated model config: {}", config.id)
@@ -88,11 +92,27 @@ class R2dbcModelConfigStore(
                     it[capabilities] = capabilitiesJson
                     it[timeoutSeconds] = config.timeoutSeconds
                     it[groupId] = config.groupId
+                    it[modelType] = config.modelType.name
+                    it[mediaOptions] = config.mediaOptions
+                    it[isDefault] = config.isDefault
                     it[Tables.ModelProviderConfigTable.userId] = userId
                     it[createdAt] = now
                     it[updatedAt] = now
                 }
                 logger.info("Inserted model config: {}", config.id)
+            }
+
+            // One default per owner+modelType: clearing siblings stays inside this transaction.
+            if (config.isDefault) {
+                Tables.ModelProviderConfigTable.update(
+                    where = {
+                        (Tables.ModelProviderConfigTable.modelType eq config.modelType.name) and
+                            (Tables.ModelProviderConfigTable.id neq config.id) and
+                            UserScope.filterStrict(Tables.ModelProviderConfigTable.userId, userId)
+                    }
+                ) {
+                    it[isDefault] = false
+                }
             }
         }
     }
@@ -116,11 +136,17 @@ class R2dbcModelConfigStore(
         }
     }
 
-    override suspend fun getAllConfigs(userId: String): List<ModelProviderConfig> {
+    override suspend fun getAllConfigs(userId: String): List<ModelProviderConfig> =
+        getModelConfigs(ModelType.CHAT, userId)
+
+    override suspend fun getModelConfigs(modelType: ModelType, userId: String): List<ModelProviderConfig> {
         return suspendTransaction(db) {
             Tables.ModelProviderConfigTable
                 .selectAll()
-                .where(UserScope.filter(Tables.ModelProviderConfigTable.userId, userId))
+                .where {
+                    UserScope.filter(Tables.ModelProviderConfigTable.userId, userId) and
+                        (Tables.ModelProviderConfigTable.modelType eq modelType.name)
+                }
                 .map { row -> mapToModelProviderConfig(row, objectMapper) }
                 .toList()
         }

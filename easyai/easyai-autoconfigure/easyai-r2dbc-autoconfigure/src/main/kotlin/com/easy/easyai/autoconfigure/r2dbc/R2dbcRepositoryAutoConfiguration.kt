@@ -11,7 +11,6 @@ import com.easy.easyai.core.command.AsyncUserCommandStore
 import com.easy.easyai.core.goal.GoalCompletionCheck
 import com.easy.easyai.core.goal.GoalStatusNotifier
 import com.easy.easyai.core.goal.GoalStore
-import com.easy.easyai.core.media.MediaProviderStore
 import com.easy.easyai.core.model.aux.AuxModelSettingsStore
 import com.easy.easyai.core.permission.PermissionRuleStore
 import com.easy.easyai.core.permission.PermissionService
@@ -31,7 +30,6 @@ import com.easy.easyai.repository.config.R2dbcModelConfigStore
 import com.easy.easyai.repository.database.DatabaseMigration
 import com.easy.easyai.repository.goal.SqlGoalStore
 import com.easy.easyai.repository.mcp.R2dbcMcpServerStore
-import com.easy.easyai.repository.media.R2dbcMediaProviderStore
 import com.easy.easyai.repository.model.R2dbcAuxModelSettingsStore
 import com.easy.easyai.repository.permission.R2dbcAsyncPermissionRuleStore
 import com.easy.easyai.repository.project.AsyncProjectStore
@@ -475,18 +473,6 @@ class R2dbcRepositoryAutoConfiguration(
     @ConditionalOnMissingBean(AuxModelSettingsStore::class)
     fun auxModelSettingsStore(initializer: R2dbcDatabaseInitializer): AuxModelSettingsStore {
         return R2dbcAuxModelSettingsStore(initializer.getDatabase())
-    }
-
-    /**
-     * Per-user media-generation provider credentials: the only source of media-provider
-     * configuration, read by the resolver through the core interface. Absent when
-     * `easyai.r2dbc.enabled=false`, which is how the settings endpoint reports that media
-     * providers cannot be configured at all.
-     */
-    @Bean
-    @ConditionalOnMissingBean(MediaProviderStore::class)
-    fun mediaProviderStore(initializer: R2dbcDatabaseInitializer): MediaProviderStore {
-        return R2dbcMediaProviderStore(initializer.getDatabase())
     }
 
     // ─── Swarm Beans ─────────────────────────────────────────────────────────────

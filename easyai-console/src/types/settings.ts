@@ -15,7 +15,10 @@ export interface SessionMetadata {
 }
 
 // Model provider types
-export type Protocol = 'OPENAI' | 'ANTHROPIC' | 'DASHSCOPE';
+export type Protocol = 'OPENAI' | 'ANTHROPIC' | 'DASHSCOPE' | 'KLING';
+
+/** Model population: CHAT rows drive the ReAct loop and pickers; the rest are tool-reached generation backends. */
+export type ModelType = 'CHAT' | 'IMAGE' | 'VIDEO' | 'SPEECH' | 'MUSIC' | 'ASR';
 
 export interface ModelInfo {
   id: string;
@@ -67,6 +70,12 @@ export interface ModelProviderConfig {
   capabilities?: ModelCapabilities;
   /** Group ID this config belongs to. Null for ungrouped configs. */
   groupId?: string;
+  /** Model population; omitted/unset means CHAT. */
+  modelType?: ModelType;
+  /** Generation parameters as a raw JSON object string (generation rows only; never parsed as ModelOptions). */
+  mediaOptions?: string;
+  /** True for at most one entry per owner + modelType: the fallback when a tool names no model. */
+  isDefault?: boolean;
 }
 
 export interface SaveModelProviderConfigRequest {
@@ -86,6 +95,9 @@ export interface SaveModelProviderConfigRequest {
   capabilities?: ModelCapabilities;
   /** Group ID to associate this config with. */
   groupId?: string;
+  modelType?: ModelType;
+  mediaOptions?: string;
+  isDefault?: boolean;
 }
 
 export interface ModelConfigGroup {
@@ -144,47 +156,8 @@ export interface StorageTestResult {
   message: string;
 }
 
-// Media-generation provider settings types (Settings → Media)
-
-/** Which service a credential row drives. One row per (user, kind). */
-export type MediaServiceKind = 'speech' | 'image' | 'video';
-
-/** Which layer is in force right now: the user's row, the shared system row, or nothing configured. */
-export type MediaProviderEffectiveSource = 'user' | 'system' | 'none';
-
-export interface MediaProviderConfig {
-  serviceKind: MediaServiceKind;
-  enabled: boolean;
-  /** Vendor adapter selector: openai | dashscope | kling. */
-  providerType: string;
-  baseUrl: string;
-  region: string;
-  /** Masked by the server; null means nothing stored yet. */
-  apiKey: string | null;
-  accessKeyId: string;
-  /** Masked by the server; null means nothing stored yet. */
-  accessKeySecret: string | null;
-  defaultModel: string;
-  options: string;
-  timeoutSeconds: number;
-  effectiveSource: MediaProviderEffectiveSource;
-}
-
-/** Save draft; a null/blank apiKey/accessKeySecret keeps the stored credential. */
-export interface SaveMediaProviderRequest {
-  enabled?: boolean;
-  providerType?: string;
-  baseUrl?: string;
-  region?: string;
-  apiKey?: string;
-  accessKeyId?: string;
-  accessKeySecret?: string;
-  defaultModel?: string;
-  options?: string;
-  timeoutSeconds?: number;
-}
-
-export interface MediaProviderTestResult {
+/** Outcome of a generation-config structural probe (POST /model-configs/test). */
+export interface ModelConfigTestResult {
   success: boolean;
   message: string;
 }

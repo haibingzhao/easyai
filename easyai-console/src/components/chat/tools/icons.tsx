@@ -27,6 +27,7 @@ import {
   CircleHelp,
   Image as ImageIcon,
   AudioLines,
+  Music,
   Video,
   Download,
   Plug,
@@ -67,6 +68,8 @@ export const TOOL_ICONS: Record<string, LucideIcon> = {
   generate_image: ImageIcon,
   generate_speech: AudioLines,
   generate_video: Video,
+  generate_music: Music,
+  transcribe_audio: AudioLines,
   fetch_media: Download,
 };
 

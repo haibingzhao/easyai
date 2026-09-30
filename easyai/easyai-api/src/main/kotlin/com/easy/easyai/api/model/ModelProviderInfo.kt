@@ -15,6 +15,6 @@ data class ModelProviderInfo(
     val description: String? = null
 ) {
     enum class Protocol {
-        OPENAI, ANTHROPIC, DASHSCOPE
+        OPENAI, ANTHROPIC, DASHSCOPE, KLING
     }
 }

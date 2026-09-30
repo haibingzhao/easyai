@@ -5,6 +5,8 @@ import com.easy.easyai.api.model.ModelInfo
 import com.easy.easyai.api.model.ModelOptions
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo
+import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.api.model.ModelType
 import com.easy.easyai.api.model.SaveModelConfigGroupRequest
 import com.easy.easyai.api.model.SaveModelProviderConfigRequest
 import java.util.UUID
@@ -39,8 +41,8 @@ class DefaultModelConfigService(
             ?: emptyList()
     }
 
-    override suspend fun getUserConfigurations(userId: String): List<ModelProviderConfig> {
-        return configStore.getAllConfigs(userId)
+    override suspend fun getUserConfigurations(modelType: ModelType, userId: String): List<ModelProviderConfig> {
+        return configStore.getModelConfigs(modelType, userId)
             .filter { it.isCustom }
     }
 
@@ -51,12 +53,18 @@ class DefaultModelConfigService(
 
     override suspend fun saveUserConfiguration(request: SaveModelProviderConfigRequest, userId: String): ModelProviderConfig {
         request.options?.let { validateOptions(it) }
+        validateGenerationRow(request)
         val id = request.id ?: UUID.randomUUID().toString()
         // When apiKey is null, preserve existing key or resolve from group
         // (frontend sends null for masked/unchanged keys to avoid overwriting with masked values)
         val effectiveApiKey = request.apiKey
             ?: configStore.getConfig(id, userId)?.apiKey
             ?: request.groupId?.let { groupStore?.getGroup(it, userId)?.apiKey }
+        if (request.modelType != ModelType.CHAT && effectiveApiKey.isNullOrBlank()) {
+            throw IllegalArgumentException(
+                "a ${request.modelType.name.lowercase()} model needs an api key on itself or its group"
+            )
+        }
         val config = ModelProviderConfig(
             id = id,
             name = request.name,
@@ -71,7 +79,10 @@ class DefaultModelConfigService(
             options = request.options,
             timeoutSeconds = request.timeoutSeconds,
             capabilities = request.capabilities,
-            groupId = request.groupId
+            groupId = request.groupId,
+            modelType = request.modelType,
+            mediaOptions = request.mediaOptions?.trim()?.takeIf { it.isNotEmpty() },
+            isDefault = request.isDefault
         )
         configStore.saveConfig(config, userId)
         return config
@@ -82,6 +93,23 @@ class DefaultModelConfigService(
             ?.takeIf { it.isCustom }
             ?.let { configStore.deleteConfig(id, userId) }
             ?: false
+    }
+
+    override suspend fun testGenerationConfiguration(request: SaveModelProviderConfigRequest, userId: String): String? {
+        if (request.modelType == ModelType.CHAT) return "the test endpoint only covers generation models"
+        return try {
+            validateGenerationRow(request)
+            val effectiveApiKey = request.apiKey
+                ?: request.id?.let { configStore.getConfig(it, userId)?.apiKey }
+                ?: request.groupId?.let { groupStore?.getGroup(it, userId)?.apiKey }
+            if (effectiveApiKey.isNullOrBlank()) {
+                "a ${request.modelType.name.lowercase()} model needs an api key on itself or its group"
+            } else {
+                null
+            }
+        } catch (e: IllegalArgumentException) {
+            e.message
+        }
     }
 
     // ─── Group operations ────────────────────────────────────────────────────────
@@ -115,6 +143,22 @@ class DefaultModelConfigService(
         )
     }
 
+    private fun validateGenerationRow(request: SaveModelProviderConfigRequest) {
+        if (request.modelType == ModelType.CHAT) {
+            require(request.protocol != Protocol.KLING) {
+                "KLING is a generation-only protocol and cannot back a chat model"
+            }
+            return
+        }
+        require(request.protocol in GENERATION_PROTOCOLS) {
+            "protocol ${request.protocol} cannot back a ${request.modelType.name.lowercase()} model " +
+                "(supported: ${GENERATION_PROTOCOLS.joinToString { it.name.lowercase() }})"
+        }
+        require(request.modelId.isNotBlank()) {
+            "${request.modelType.name.lowercase()} models need a model id"
+        }
+    }
+
     private fun validateOptions(options: ModelOptions) {
         require(options.temperature in 0.0..2.0) {
             "temperature must be between 0.0 and 2.0, got: ${options.temperature}"
@@ -131,5 +175,10 @@ class DefaultModelConfigService(
         require(options.contextToken <= options.maxContextTokens) {
             "contextToken (${options.contextToken}) must not exceed maxContextTokens (${options.maxContextTokens})"
         }
+    }
+
+    companion object {
+        /** Protocols the media tools can drive: OpenAI-compatible gateways (incl. DashScope compat), DashScope, Kling. */
+        private val GENERATION_PROTOCOLS: Set<Protocol> = setOf(Protocol.OPENAI, Protocol.DASHSCOPE, Protocol.KLING)
     }
 }

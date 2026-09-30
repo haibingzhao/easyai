@@ -227,6 +227,10 @@ object Tables {
      * Model provider configuration table for user-saved and pre-defined providers.
      * isCustom=false: pre-defined provider (OpenAI, Anthropic, etc.)
      * isCustom=true: user-saved provider configuration.
+     *
+     * Rows are partitioned by `model_type`: CHAT rows feed the ChatModel and model pickers;
+     * IMAGE/VIDEO/SPEECH/MUSIC/ASR rows are media-generation backends consumed by tools
+     * (the former `media_provider_settings` table, merged in via V11).
      */
     object ModelProviderConfigTable : Table("model_provider_config") {
         val id = varchar("id", 255)
@@ -243,6 +247,9 @@ object Tables {
         val capabilities = text("capabilities").nullable()  // JSON storage for ModelCapabilities
         val timeoutSeconds = long("timeout_seconds").default(600L)
         val groupId = varchar("group_id", 255).nullable()  // FK → model_config_group.id
+        val modelType = varchar("model_type", 32).default("CHAT")
+        val mediaOptions = text("media_options").nullable()  // raw JSON object, generation rows only
+        val isDefault = bool("is_default").default(false)
         val userId = varchar("user_id", 255).default("system")
         val createdAt = long("created_at")
         val updatedAt = long("updated_at")
@@ -383,36 +390,6 @@ object Tables {
 
         init {
             uniqueIndex(userId)  // one storage row per user
-        }
-    }
-
-    /**
-     * Per-user media-generation provider credentials — one row per `(user, service_kind)`, edited
-     * from the frontend Settings page and hot-applied by the resolver. The database is the only
-     * media-provider configuration source. Credentials stay server-side; read endpoints mask them.
-     * This table is deliberately separate from `model_provider_config` (which feeds the ChatModel).
-     */
-    object MediaProviderSettingsTable : Table("media_provider_settings") {
-        val id = varchar("id", 255)
-        val userId = varchar("user_id", 255).default("system")
-        val serviceKind = varchar("service_kind", 16)
-        val enabled = bool("enabled").default(false)
-        val providerType = varchar("provider_type", 32).default("openai")
-        val baseUrl = varchar("base_url", 512).default("")
-        val region = varchar("region", 64).default("")
-        val apiKey = text("api_key").nullable()
-        val accessKeyId = varchar("access_key_id", 256).default("")
-        val accessKeySecret = text("access_key_secret").nullable()
-        val defaultModel = varchar("default_model", 128).default("")
-        val options = text("options").nullable()
-        val timeoutSeconds = long("timeout_seconds").default(600L)
-        val createdAt = long("created_at")
-        val updatedAt = long("updated_at")
-
-        override val primaryKey = PrimaryKey(id)
-
-        init {
-            uniqueIndex(userId, serviceKind)  // one credential row per user+kind
         }
     }
 
