@@ -76,9 +76,8 @@ class SkillCatalogSyncService(
                     continue
                 }
                 val (scope, root) = identity
-                val shared = isExplicitGlobal(dir)
-                if ((scope == SkillScope.GLOBAL && !shared) ||
-                    (owner == SkillCatalogEntry.DEFAULT_USER_ID && !shared) ||
+                val shared = scope == SkillScope.GLOBAL
+                if ((owner == SkillCatalogEntry.DEFAULT_USER_ID && !shared) ||
                     (scope == SkillScope.PROJECT && (projectPath == null ||
                         SkillPaths.canonicalize(projectPath) != root?.let { SkillPaths.canonicalize(it) }))) {
                     unclaimed++
@@ -109,10 +108,6 @@ class SkillCatalogSyncService(
         }
         SkillClaimSummary(created, failed, unclaimed)
     }
-
-    /** Reuse the same explicit shared-root classification as the access layer. */
-    internal fun isExplicitGlobal(installPath: Path): Boolean =
-        SkillScopeResolver.classify(installPath, config)?.first == SkillScope.GLOBAL
 
     suspend fun snapshotOf(entry: SkillCatalogEntry): SkillSnapshot? = snapshotOf(Path.of(entry.installPath))
 
