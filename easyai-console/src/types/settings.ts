@@ -51,6 +51,8 @@ export interface ModelCapabilities {
   vision?: boolean;
   /** API-level structured output support. Undefined = undeclared (treated as JSON_SCHEMA). */
   structuredOutput?: StructuredOutputSupport;
+  /** Reasoning / tool-calling support. Undefined or true = capable; false marks decision models. */
+  supportsToolCalling?: boolean;
 }
 
 export interface ModelProviderConfig {
@@ -165,7 +167,7 @@ export interface ModelConfigTestResult {
 // Auxiliary (per-task) model settings types (Settings → Task Models)
 
 /** A background purpose that can be backed by its own model. Mirrors the backend AuxModelTask enum. */
-export type AuxModelTaskKey = 'compaction' | 'session_title';
+export type AuxModelTaskKey = 'compaction' | 'session_title' | 'skill_selection';
 
 /** Which layer is in force for a task: the user's choice, or the default (chat-session model). */
 export type AuxModelEffectiveSource = 'user' | 'default';

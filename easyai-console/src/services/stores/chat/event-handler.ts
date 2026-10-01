@@ -13,6 +13,7 @@ import type {
   CompactionEndEvent,
   RetryEvent,
   SessionContextEvent,
+  BackgroundTaskEvent,
 } from '@/types/socket-event';
 import type { Message, ToolResult, ToolResultContentBlock, ContextReferences, QueuedMessage } from '@/types/message';
 import type { TodoInfo, SubAgentTodoGroup } from '@/types/todo';
@@ -59,6 +60,7 @@ export interface ChatStateShape {
   fileReviewOverrides: Record<string, 'accepted' | 'rejected'>;
   currentGoal: GoalStatusEvent | null;
   queuedMessages: QueuedMessage[];
+  backgroundTasks: Record<string, BackgroundTaskEvent>;
 
   // Actions
   appendToTextBlock: (delta: string, messageId?: string) => void;
@@ -457,6 +459,15 @@ export function handleChatEvent(
       if (ctxEvent.modelContextLength > 0) {
         set({ contextWindow: ctxEvent.modelContextLength });
       }
+      break;
+    }
+    case 'background_task': {
+      // Background task lifecycle events (launched, progress, completed, failed, cancelled).
+      // Store in a map keyed by taskId so the UI can update task cards in real-time.
+      const bgEvent = event as BackgroundTaskEvent;
+      const tasks = { ...get().backgroundTasks };
+      tasks[bgEvent.taskId] = bgEvent;
+      set({ backgroundTasks: tasks });
       break;
     }
     case 'user_message_added': {

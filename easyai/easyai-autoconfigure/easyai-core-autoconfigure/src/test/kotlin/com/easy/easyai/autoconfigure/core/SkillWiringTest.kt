@@ -11,6 +11,7 @@ import com.easy.easyai.skills.SkillInfo
 import com.easy.easyai.skills.SkillRefreshService
 import com.easy.easyai.skills.SkillRegistry
 import com.easy.easyai.skills.SkillSyncService
+import com.easy.easyai.skills.selection.SkillSelectionClient
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -20,8 +21,10 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.springframework.beans.factory.ObjectProvider
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import java.nio.file.Path
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -45,6 +48,11 @@ class SkillWiringTest {
 
     /** Same wiring with on-demand discovery switched on, which is what suppression keys off. */
     private val ragConfiguration = EasyAiCoreAutoConfiguration(
+        EasyAiProperties(skills = SkillProperties(rag = SkillRagProperties(enabled = true), directInjectMaxCount = 0))
+    )
+
+    /** Rag on with the shipped default threshold: small catalogs must stay injected. */
+    private val ragThresholded = EasyAiCoreAutoConfiguration(
         EasyAiProperties(skills = SkillProperties(rag = SkillRagProperties(enabled = true)))
     )
 
@@ -199,6 +207,36 @@ class SkillWiringTest {
                 .skillsForPrompt("alice", listOf("pdf-report"), skillSearchAvailable = true)
 
             assertEquals(emptyList(), skills)
+        }
+
+        @Test
+        fun `the default threshold keeps a small indexed catalog injected`() = runBlocking {
+            stubCatalogView(ownRow(enabled = true, indexed = true))
+
+            val skills = promptSource(ragThresholded, store)
+                .skillsForPrompt("alice", listOf("pdf-report"), skillSearchAvailable = true)
+
+            assertEquals(listOf("pdf-report"), skills.map { it["name"] }, "one skill is below the shipped direct-inject cap")
+        }
+
+        @Test
+        fun `routing beans sit behind the selection switch and the router needs the client`() {
+            val client = assertNotNull(
+                conditionOn("skillSelectionClient"),
+                "skillSelectionClient must be gated on easyai.skills.selection.enabled"
+            )
+            assertEquals("easyai.skills", client.prefix)
+            assertContentEquals(listOf("selection.enabled"), client.name.toList())
+            assertTrue(client.matchIfMissing, "routing is on by default until switched off")
+            assertNotNull(
+                conditionOn("skillTurnRouter"),
+                "skillTurnRouter must keep the skills master switch"
+            )
+            val onBean = EasyAiCoreAutoConfiguration::class.java.declaredMethods
+                .first { it.name == "skillTurnRouter" }
+                .getAnnotation(ConditionalOnBean::class.java)
+            assertNotNull(onBean)
+            assertContentEquals(listOf(SkillSelectionClient::class.java), onBean.value.map { it.java })
         }
 
         @Test

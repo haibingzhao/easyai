@@ -37,7 +37,10 @@ import {
   Mail,
   CalendarDays,
   CodeXml,
-  MessageSquare
+  MessageSquare,
+  Play,
+  CircleDot,
+  ListChecks
 } from 'lucide-react';
 
 export const TOOL_ICONS: Record<string, LucideIcon> = {
@@ -65,6 +68,9 @@ export const TOOL_ICONS: Record<string, LucideIcon> = {
   wait_for_member_events: Clock,
   resume_member: RefreshCw,
   run_swarm: Network,
+  run_background: Play,
+  task_status: CircleDot,
+  task_list: ListChecks,
   generate_image: ImageIcon,
   generate_speech: AudioLines,
   generate_video: Video,
@@ -140,6 +146,9 @@ export function getToolDisplayName(toolName: string): string {
     wait_for_member_events: 'Wait for Member Events',
     resume_member: 'Resume Member',
     run_swarm: 'Run Swarm',
+    run_background: 'Run Background',
+    task_status: 'Task Status',
+    task_list: 'Task List',
   };
   return displayNames[toolName] || toolName;
 }

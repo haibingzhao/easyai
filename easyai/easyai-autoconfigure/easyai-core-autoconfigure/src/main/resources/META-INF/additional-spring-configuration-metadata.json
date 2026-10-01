@@ -63,6 +63,34 @@
       "defaultValue": true
     },
     {
+      "name": "easyai.skills.direct-inject-max-count",
+      "type": "java.lang.Integer",
+      "description": "Owners with at most this many effective skills keep the full listing in the system prompt even when the RAG index is ready; 0 suppresses whenever the index is usable.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": 8
+    },
+    {
+      "name": "easyai.skills.selection.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Master switch for per-message System One skill routing; inactive until the user configures a SKILL_SELECTION aux model.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": true
+    },
+    {
+      "name": "easyai.skills.selection.min-confidence",
+      "type": "java.lang.Double",
+      "description": "Choices below this confidence keep the baseline skill visibility instead of narrowing to one skill.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": 0.5
+    },
+    {
+      "name": "easyai.skills.selection.timeout-ms",
+      "type": "java.lang.Long",
+      "description": "HTTP budget in milliseconds for one decision call; a timeout degrades to the baseline.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": 5000
+    },
+    {
       "name": "easyai.skills.package-max-bytes",
       "type": "java.lang.Long",
       "description": "Hard cap on one packed skill package in bytes; larger skill directories are refused before upload.",

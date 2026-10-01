@@ -26,6 +26,12 @@ interface AuxModelResolver {
     /** The user's configured model for [task]; null means "not configured — use the default". */
     suspend fun resolve(userId: String?, task: AuxModelTask): ResolvedAuxModel?
 
+    /**
+     * The raw config row for [task] without building a ChatModel — for consumers that speak their
+     * own protocol to the endpoint (e.g. System One skill routing) and only need apiKey/baseUrl/modelId.
+     */
+    suspend fun resolveConfig(userId: String?, task: AuxModelTask): ModelProviderConfig?
+
     /** Invalidate the cached model for one `(userId, task)` so the next [resolve] re-reads config. */
     fun refresh(userId: String, task: AuxModelTask)
 }

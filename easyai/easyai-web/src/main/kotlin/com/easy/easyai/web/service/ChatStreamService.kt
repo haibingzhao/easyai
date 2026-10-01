@@ -23,7 +23,9 @@ import com.easy.easyai.repository.session.SessionExecutionService
 import com.easy.easyai.skills.command.CommandCategory
 import com.easy.easyai.skills.command.CommandReferenceException
 import com.easy.easyai.skills.command.CommandService
+import com.easy.easyai.skills.selection.SkillTurnRouter
 import com.easy.easyai.snapshot.SnapshotService
+import com.easy.easyai.tools.background.BackgroundTaskManagerRegistry
 import java.nio.file.Files
 import java.nio.file.Path
 import com.easy.easyai.web.handler.ChatEventConverter
@@ -64,7 +66,14 @@ class ChatStreamService(
     private val goalStore: GoalStore? = null,
     private val fileStorageService: FileStorageService? = null,
     private val scriptEnvProvider: ScriptEnvProvider? = null,
-    private val executionService: SessionExecutionService? = null
+    private val executionService: SessionExecutionService? = null,
+    /**
+     * Per-message decision-model skill routing (v1): fires only for fresh user messages on the
+     * chat and resume entry points. Steer/followUp queue messages and swarm tasks do not route;
+     * sub-agents keep the whitelist + suppression baseline with `skill_search` as the escape hatch.
+     */
+    private val skillTurnRouter: SkillTurnRouter? = null,
+    private val backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null
 ) : DisposableBean {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper: ObjectMapper = SharedObjectMapper.instance
@@ -150,6 +159,69 @@ class ChatStreamService(
      * Replaces the old SessionManager.getActiveSessionCount() which was based on a global cache.
      */
     fun getActiveSessionCount(): Int = executionService?.getActiveSessionCount() ?: 0
+
+    /**
+     * Auto-resume a session when a background task completes and the agent loop is idle.
+     * Loads the session's message history and triggers a new agent loop to process
+     * the steering message injected by [com.easy.easyai.tools.background.BackgroundTaskManager].
+     *
+     * SSE events are broadcast via the sessionTaps mechanism so any connected clients receive them.
+     *
+     * @param sessionId Session to resume
+     * @param userId User who owns the session
+     */
+    suspend fun autoResumeForBackgroundTask(sessionId: String, userId: String) {
+        val session = executionService?.getActiveSession(sessionId) ?: run {
+            logger.warn("Cannot auto-resume: session not found or inactive: {}", sessionId)
+            return
+        }
+
+        try {
+            val messages = sessionManager.loadMessages(sessionId)
+            if (messages.isEmpty()) {
+                logger.warn("Cannot auto-resume: no messages found for session {}", sessionId)
+                return
+            }
+
+            logger.info("Auto-resuming session {} for background task completion", sessionId)
+
+            // Create per-session broadcast tap BEFORE starting the stream to avoid missing early events
+            val tap = MutableSharedFlow<ServerSentEvent<ChatStreamEvent>>(
+                replay = 0, extraBufferCapacity = 256, onBufferOverflow = BufferOverflow.DROP_OLDEST
+            )
+            sessionTaps[sessionId] = tap
+
+            val stream = session.promptWithHistory(messages)
+
+            // Launch detached pump to process the steering message
+            backgroundScope.launch {
+                val handle = executionService?.beginExecution(sessionId, userId, session)
+                var endReason = "normal"
+                try {
+                    stream.asFlow().collect { event ->
+                        if (event is AgentEndEvent) {
+                            endReason = event.endReason
+                            session.lastEndReason = event.endReason
+                        }
+                        val chatEvents = ChatEventConverter.convert(event, customEventConverters)
+                        chatEvents.forEach { chatEvent ->
+                            tap.tryEmit(chatEvent.toSse())
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    logger.info("Auto-resume cancelled for session {}", sessionId)
+                } catch (e: Exception) {
+                    logger.error("Error in auto-resume for session {}", sessionId, e)
+                } finally {
+                    sessionTaps.remove(sessionId)
+                    handle?.let { executionService.endExecution(it, endReason) }
+                    logger.debug("Auto-resume terminated for session {}", sessionId)
+                }
+            }
+        } catch (e: Exception) {
+            logger.error("Failed to auto-resume session {} for background task", sessionId, e)
+        }
+    }
 
     // ==================== Helper functions ====================
 
@@ -385,6 +457,8 @@ class ChatStreamService(
                 val content = AttachmentProcessor.buildContentBlocks(message, session.agentContext.projectPath)
                 val prepared = prepareCommandMessage(message, UserMessage(content = content), session)
                 sessionManager.saveSessionMessages(session.agentContext, listOf(prepared))
+                skillTurnRouter?.route(userId, session.agentContext.allowedSkillNames, message)
+                    ?.let { session.updateTurnSkills(it) }
                 session.promptWithHistory(messages + prepared)
             }
 
@@ -484,6 +558,8 @@ class ChatStreamService(
         sessionManager.saveSessionMessages(session.agentContext, listOf(userMessage))
         // Update session agent with fresh inputVariables from current request
         session.updateInputVariables(agentContext.inputVariables)
+        skillTurnRouter?.route(session.agentContext.userId, session.agentContext.allowedSkillNames, messageText)
+            ?.let { session.updateTurnSkills(it) }
         val stream = session.promptWithHistory(messages)
 
         // Wrap: emit user_message_ack first so the frontend can associate the persisted
@@ -555,7 +631,16 @@ class ChatStreamService(
             projectPath = projectPath,
             memoryAutoGeneration = project?.memoryAutoGeneration ?: true,
             modelContextLength = config.options?.contextToken ?: 204_800,
-            scriptEnv = scriptEnv
+            scriptEnv = scriptEnv,
+            sessionLookup = { sessionId?.let { executionService?.getActiveSession(it) } },
+            isSessionExecuting = { sessionId?.let { executionService?.isLocallyExecuting(it) } ?: false },
+            backgroundEventPublisher = { event ->
+                val chatEvents = ChatEventConverter.convert(event, customEventConverters)
+                chatEvents.forEach { chatEvent ->
+                    sessionId?.let { sessionTaps[it]?.tryEmit(chatEvent.toSse()) }
+                }
+            },
+            backgroundAutoResume = { sid, uid -> autoResumeForBackgroundTask(sid, uid) }
         )
     }
 
@@ -854,11 +939,30 @@ class ChatStreamService(
         val userId = session.agentContext.userId ?: "system"
         // Register execution (in-memory + DB streaming status)
         val handle = executionService?.beginExecution(session.id, userId, session)
+        // Wire up background task cleanup: cancel all running background tasks when session is aborted
+        session.onAbortCallback = {
+            backgroundTaskManagerRegistry?.get(session.id)?.cancelAll()
+        }
         // Create per-session broadcast tap for secondary subscribers (historical session viewer)
         val tap = MutableSharedFlow<ServerSentEvent<ChatStreamEvent>>(
             replay = 0, extraBufferCapacity = 256, onBufferOverflow = BufferOverflow.DROP_OLDEST
         )
         sessionTaps[session.id] = tap
+        // Create or retrieve BackgroundTaskManager for this session (lazy initialization)
+        backgroundTaskManagerRegistry?.getOrCreate(
+            sessionId = session.id,
+            sessionLookup = { executionService?.getActiveSession(session.id) },
+            isExecutingCheck = { executionService?.isLocallyExecuting(session.id) == true },
+            eventPublisher = { event ->
+                val chatEvents = ChatEventConverter.convert(event, customEventConverters)
+                chatEvents.forEach { chatEvent ->
+                    tap.tryEmit(chatEvent.toSse())
+                }
+            },
+            autoResumeTrigger = { sessionId, uid ->
+                autoResumeForBackgroundTask(sessionId, uid)
+            }
+        )
 
         // Bridge channel: background pump -> this HTTP consumer. UNLIMITED so the pump never
         // blocks while the client is disconnected (events are bounded by the execution itself).

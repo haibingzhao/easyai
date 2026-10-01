@@ -9,6 +9,13 @@ import { Cpu, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 const TASK_LABEL: Record<AuxModelTaskKey, string> = {
   compaction: 'Compaction Model',
   session_title: 'Session Title Model',
+  skill_selection: 'Skill Selection Model',
+};
+
+/** Extra hint rendered under a specific task's picker. */
+const TASK_HINT: Partial<Record<AuxModelTaskKey, string>> = {
+  skill_selection:
+    'Routes each new user message through a decision model to pick the single best-matching skill; leave unset to rely on skill_search.',
 };
 
 const SOURCE_BADGE: Record<AuxModelConfig['effectiveSource'], { label: string; tone: string }> = {
@@ -73,7 +80,8 @@ export const AuxModelsTab: React.FC = () => {
 
   const optionLabel = (config: ModelProviderConfig): string => {
     const displayName = config.name || config.modelName || config.modelId;
-    return `${displayName} (${config.modelId})`;
+    const decisionHint = config.capabilities?.supportsToolCalling === false ? ' (decision model)' : '';
+    return `${displayName} (${config.modelId})${decisionHint}`;
   };
 
   const handleSave = async (taskKey: AuxModelTaskKey) => {
@@ -153,6 +161,11 @@ export const AuxModelsTab: React.FC = () => {
                     <option key={m.id} value={m.id}>{optionLabel(m)}</option>
                   ))}
                 </select>
+
+                {TASK_HINT[config.taskKey] && (
+                  <p className="text-xs text-muted-foreground">{i18n(TASK_HINT[config.taskKey]!)}
+                  </p>
+                )}
 
                 <div className="flex justify-end">
                   <button

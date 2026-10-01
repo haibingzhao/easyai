@@ -11,6 +11,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -143,6 +144,72 @@ class DefaultAuxModelResolverTest {
             assertNull(r.resolve("user-1", AuxModelTask.SESSION_TITLE))
 
             coVerify(exactly = 1) { store.get("user-1", AuxModelTask.COMPACTION) }
+        }
+    }
+
+    @Nested
+    inner class `resolveConfig returns the raw row` {
+
+        private fun stubSelectionConfig() {
+            coEvery { store.get("user-1", AuxModelTask.SKILL_SELECTION) } returns
+                AuxModelSettings(AuxModelTask.SKILL_SELECTION.key, "cfg-1")
+            coEvery { configStore.getConfig("cfg-1", "user-1") } returns config
+        }
+
+        @Test
+        fun `never consults chat model factories`() = runTest {
+            stubSelectionConfig()
+            val r = resolver(factory)
+
+            assertSame(config, r.resolveConfig("user-1", AuxModelTask.SKILL_SELECTION))
+
+            verify(exactly = 0) { factory.supports(any()) }
+            verify(exactly = 0) { factory.create(any(), any()) }
+        }
+
+        @Test
+        fun `second resolve is served from cache and refresh re-reads`() = runTest {
+            stubSelectionConfig()
+            val r = resolver(factory)
+
+            r.resolveConfig("user-1", AuxModelTask.SKILL_SELECTION)
+            r.resolveConfig("user-1", AuxModelTask.SKILL_SELECTION)
+            coVerify(exactly = 1) { configStore.getConfig("cfg-1", "user-1") }
+
+            r.refresh("user-1", AuxModelTask.SKILL_SELECTION)
+            r.resolveConfig("user-1", AuxModelTask.SKILL_SELECTION)
+            coVerify(exactly = 2) { configStore.getConfig("cfg-1", "user-1") }
+        }
+
+        @Test
+        fun `unconfigured blank or missing returns null`() = runTest {
+            val r = resolver(factory)
+            coEvery { store.get("user-1", AuxModelTask.SKILL_SELECTION) } returns null
+            assertNull(r.resolveConfig("user-1", AuxModelTask.SKILL_SELECTION))
+
+            coEvery { store.get("user-1", AuxModelTask.SKILL_SELECTION) } returns
+                AuxModelSettings(AuxModelTask.SKILL_SELECTION.key, "")
+            assertNull(r.resolveConfig("user-1", AuxModelTask.SKILL_SELECTION))
+
+            coEvery { store.get("user-1", AuxModelTask.SKILL_SELECTION) } returns
+                AuxModelSettings(AuxModelTask.SKILL_SELECTION.key, "cfg-1")
+            coEvery { configStore.getConfig("cfg-1", "user-1") } returns null
+            assertNull(r.resolveConfig("user-1", AuxModelTask.SKILL_SELECTION))
+
+            assertNull(r.resolveConfig(null, AuxModelTask.SKILL_SELECTION))
+        }
+
+        @Test
+        fun `config cache is independent from the chat model cache`() = runTest {
+            stubSelectionConfig()
+            stubResolvedConfig()
+            coEvery { store.get("user-1", AuxModelTask.COMPACTION) } returns
+                AuxModelSettings(AuxModelTask.COMPACTION.key, "cfg-1")
+            val r = resolver(factory)
+
+            r.refresh("user-1", AuxModelTask.SKILL_SELECTION)
+            assertSame(config, r.resolveConfig("user-1", AuxModelTask.SKILL_SELECTION))
+            assertSame(chatModel, r.resolve("user-1", AuxModelTask.COMPACTION)?.chatModel)
         }
     }
 }

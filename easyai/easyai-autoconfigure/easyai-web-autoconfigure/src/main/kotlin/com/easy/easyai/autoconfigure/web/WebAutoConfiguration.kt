@@ -21,13 +21,16 @@ import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.repository.session.SessionExecutionService
 import com.easy.easyai.skills.SkillAccessResolver
 import com.easy.easyai.skills.command.CommandService
+import com.easy.easyai.skills.selection.SkillTurnRouter
 import com.easy.easyai.skills.team.TeamCoordinationStateRegistry
 import com.easy.easyai.snapshot.GitSnapshotService
 import com.easy.easyai.snapshot.RevertService
 import com.easy.easyai.snapshot.SnapshotEventListener
 import com.easy.easyai.snapshot.SnapshotService
+import com.easy.easyai.tools.background.BackgroundTaskManagerRegistry
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.web.controller.ChatController
+import com.easy.easyai.web.handler.BackgroundTaskCustomEventConverter
 import com.easy.easyai.web.handler.CheckpointCustomEventConverter
 import com.easy.easyai.web.handler.CustomEventConverter
 import com.easy.easyai.web.handler.GoalStatusCustomEventConverter
@@ -104,12 +107,16 @@ open class WebAutoConfiguration {
         @Autowired(required = false)
         scriptEnvProvider: ScriptEnvProvider? = null,
         @Autowired(required = false)
-        executionService: SessionExecutionService? = null
+        executionService: SessionExecutionService? = null,
+        @Autowired(required = false)
+        skillTurnRouter: SkillTurnRouter? = null,
+        @Autowired(required = false)
+        backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null
     ): ChatStreamService {
         return ChatStreamService(sessionManager, configStore, modelFactories,
             transformContextService, permissionService, sessionStore, projectStore, snapshotService,
             customEventConverters ?: emptyList(), commandService, goalStatusNotifier, goalStore, fileStorageService,
-            scriptEnvProvider, executionService)
+            scriptEnvProvider, executionService, skillTurnRouter, backgroundTaskManagerRegistry)
     }
 
     @Bean
@@ -179,9 +186,11 @@ open class WebAutoConfiguration {
         @Autowired(required = false)
         teamExecutionStore: TeamExecutionStore? = null,
         @Autowired(required = false)
-        configStore: ModelProviderConfigStore? = null
+        configStore: ModelProviderConfigStore? = null,
+        @Autowired(required = false)
+        backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null
     ): SessionService {
-        return SessionService(sessionManager, sessionStore, snapshotService, fileStorageService, teamStateRegistry, teamExecutionStore, configStore)
+        return SessionService(sessionManager, sessionStore, snapshotService, fileStorageService, teamStateRegistry, teamExecutionStore, configStore, backgroundTaskManagerRegistry)
     }
 
     @Bean
@@ -220,6 +229,12 @@ open class WebAutoConfiguration {
     @ConditionalOnMissingBean(GoalStatusCustomEventConverter::class)
     open fun goalStatusCustomEventConverter(): CustomEventConverter {
         return GoalStatusCustomEventConverter()
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(BackgroundTaskCustomEventConverter::class)
+    open fun backgroundTaskCustomEventConverter(): CustomEventConverter {
+        return BackgroundTaskCustomEventConverter()
     }
 
     // ─── AI Config Generation Beans ────────────────────────────────────────────

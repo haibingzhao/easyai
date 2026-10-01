@@ -115,7 +115,14 @@ data class ModelCapabilities(
      * [StructuredOutputSupport.JSON_SCHEMA] (current enforcement behavior). Mark models
      * explicitly when their gateway rejects response_format/output_config (HTTP 400).
      */
-    val structuredOutput: StructuredOutputSupport? = null
+    val structuredOutput: StructuredOutputSupport? = null,
+    /**
+     * Whether the model reasons and accepts tool calls. Null/true means capable (legacy rows
+     * predate the flag); explicit false marks single-forward decision models (e.g. Bailian
+     * decision-model-preview) that answer structured classification queries instead of chat.
+     * Metadata only — surfaced in the model pickers, it never gates tool registration.
+     */
+    val supportsToolCalling: Boolean? = null
 )
 
 /**

@@ -10,6 +10,7 @@ import com.easy.easyai.repository.session.MessageWithTimestamp
 import com.easy.easyai.skills.team.TeamCoordinationStateRegistry
 import com.easy.easyai.snapshot.SnapshotService
 import com.easy.easyai.snapshot.model.FileDiff
+import com.easy.easyai.tools.background.BackgroundTaskManagerRegistry
 import com.easy.easyai.web.model.*
 import kotlinx.coroutines.CancellationException
 import org.slf4j.LoggerFactory
@@ -25,7 +26,9 @@ class SessionService(
     /** Optional: cascade-deletes Team Agent execution/round records + member sub-sessions. */
     private val teamExecutionStore: TeamExecutionStore? = null,
     /** Optional: resolves the last message's model config to report its context window. */
-    private val configStore: ModelProviderConfigStore? = null
+    private val configStore: ModelProviderConfigStore? = null,
+    /** Optional: cleans up background task manager on session deletion. */
+    private val backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper = SharedObjectMapper.instance
@@ -559,6 +562,12 @@ class SessionService(
             teamStateRegistry?.remove(id)
         } catch (e: Exception) {
             logger.warn("Failed to clean up team coordination state for session {}: {}", id, e.message)
+        }
+        // Clean up background task manager (cancels any running background tasks)
+        try {
+            backgroundTaskManagerRegistry?.remove(id)
+        } catch (e: Exception) {
+            logger.warn("Failed to clean up background task manager for session {}: {}", id, e.message)
         }
         // Cascade-delete Team Agent persistence: member execution/round records + member sub-sessions.
         // Without this, deleting a team session orphans rows in team_member_execution / team_round_record

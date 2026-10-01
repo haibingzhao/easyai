@@ -7,6 +7,7 @@ import { Box, Pencil, Trash2, ChevronRight, ChevronDown, Plus, FolderOpen, Folde
 import { InlineAddModelForm } from '@/components/models/InlineAddModelForm';
 import { AddModelToGroupForm } from '@/components/models/AddModelToGroupForm';
 import { GroupEditDialog } from '@/components/models/GroupEditDialog';
+import { ToolCallingToggle } from '@/components/ui/ToolCallingToggle';
 import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, ModelConfigGroup, SaveModelProviderConfigRequest, SaveModelConfigGroupRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
 
 interface ModelProviderSelectorProps {
@@ -343,6 +344,11 @@ const ModelRow: React.FC<ModelRowProps> = ({
       <div className="flex items-center gap-2 min-w-0">
         <Box className="w-4 h-4 text-muted-foreground flex-shrink-0" />
         <span className="font-medium truncate">{displayName}</span>
+        {config.capabilities?.supportsToolCalling === false && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 flex-shrink-0">
+            {i18n('No Tool Calling')}
+          </span>
+        )}
       </div>
       <div className="text-muted-foreground truncate">{providerName}</div>
       <div className="flex items-center justify-end gap-2">
@@ -466,7 +472,7 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
       isCustomModel,
       enabled: config.enabled,
       options: Object.keys(options).length > 0 ? options : undefined,
-      capabilities: (capabilities.vision || capabilities.structuredOutput) ? capabilities : undefined,
+      capabilities: (capabilities.vision || capabilities.structuredOutput || capabilities.supportsToolCalling === false) ? capabilities : undefined,
       groupId: config.groupId,
     };
 
@@ -582,6 +588,14 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
               <option value="NONE">{i18n('None (prompt fallback)')}</option>
             </select>
           </div>
+
+          <ToolCallingToggle
+            checked={capabilities.supportsToolCalling !== false}
+            onChange={(val) => setCapabilities(prev => ({
+              ...prev,
+              supportsToolCalling: val ? undefined : false,
+            }))}
+          />
 
           <div>
             <button

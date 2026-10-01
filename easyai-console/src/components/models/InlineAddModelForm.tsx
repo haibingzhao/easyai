@@ -3,6 +3,7 @@ import { i18n } from '../../utils/i18n';
 import { TokenInput } from '../TokenInput';
 import { modelConfigService } from '@/services/model-config-service';
 import { ChevronRight, ChevronDown, Trash2 } from 'lucide-react';
+import { ToolCallingToggle } from '@/components/ui/ToolCallingToggle';
 import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, ModelConfigGroup, Protocol, SaveModelProviderConfigRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
 
 interface InlineAddModelFormProps {
@@ -153,7 +154,7 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
         isCustomModel: effectiveIsCustomModel,
         enabled: true,
         options: Object.keys(options).length > 0 ? options : undefined,
-        capabilities: (capabilities.vision || capabilities.structuredOutput) ? capabilities : undefined,
+        capabilities: (capabilities.vision || capabilities.structuredOutput || capabilities.supportsToolCalling === false) ? capabilities : undefined,
         groupId: currentGroupId,
       };
 
@@ -399,6 +400,14 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
               <option value="NONE">{i18n('None (prompt fallback)')}</option>
             </select>
           </div>
+
+          <ToolCallingToggle
+            checked={capabilities.supportsToolCalling !== false}
+            onChange={(val) => setCapabilities(prev => ({
+              ...prev,
+              supportsToolCalling: val ? undefined : false,
+            }))}
+          />
 
           <div>
             <button
