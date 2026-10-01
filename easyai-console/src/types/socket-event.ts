@@ -29,7 +29,8 @@ export type EventType =
   | 'revert'
   | 'goal_status'
   | 'user_message_ack'
-  | 'session_context';
+  | 'session_context'
+  | 'background_task';
 
 interface BaseEvent {
   type: EventType;
@@ -299,6 +300,17 @@ export interface SessionContextEvent extends BaseEvent {
   modelId?: string;
 }
 
+export interface BackgroundTaskEvent extends BaseEvent {
+  type: 'background_task';
+  event: 'launched' | 'progress' | 'completed' | 'failed' | 'cancelled';
+  taskId: string;
+  toolName?: string;
+  message?: string;
+  result?: string;
+  error?: string;
+  durationMs?: number;
+}
+
 export type ChatStreamEvent =
   | StartEvent
   | TextStartEvent
@@ -327,7 +339,8 @@ export type ChatStreamEvent =
   | RevertEvent
   | GoalStatusEvent
   | UserMessageAckEvent
-  | SessionContextEvent;
+  | SessionContextEvent
+  | BackgroundTaskEvent;
 
 // Re-export for backward compatibility
 export type SocketEvent = ChatStreamEvent;

@@ -22,6 +22,7 @@ import { WebFetchToolMessage } from './WebFetchToolMessage';
 import { LoadSkillToolMessage } from './LoadSkillToolMessage';
 import { TeamToolMessage } from './TeamToolMessage';
 import { SwarmToolMessage } from './SwarmToolMessage';
+import { BackgroundTaskToolMessage } from './BackgroundTaskToolMessage';
 import { MediaResultCard } from './MediaResultCard';
 import { GenericToolMessage } from './GenericToolMessage';
 import { McpToolCard } from './McpToolCard';
@@ -52,6 +53,9 @@ const TOOL_RENDERERS: Record<string, React.ComponentType<ToolMessageProps>> = {
   wait_for_member_events: TeamToolMessage,
   resume_member: TeamToolMessage,
   run_swarm: SwarmToolMessage,
+  run_background: BackgroundTaskToolMessage,
+  task_status: BackgroundTaskToolMessage,
+  task_list: BackgroundTaskToolMessage,
   generate_image: MediaResultCard,
   generate_speech: MediaResultCard,
   generate_video: MediaResultCard,

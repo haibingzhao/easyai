@@ -42,6 +42,9 @@ class ChatSession(
     @Volatile
     var lastEndReason: String = "normal"
 
+    /** Optional callback invoked when abort() is called. Used for cleanup of external resources. */
+    var onAbortCallback: (() -> Unit)? = null
+
     /**
      * Add a steering message to be injected at the next agent loop iteration.
      */
@@ -174,6 +177,8 @@ class ChatSession(
         // after abort and would otherwise linger as orphaned state.
         steeringQueue.poll(PendingMessageQueue.Mode.ALL)
         followUpQueue.poll(PendingMessageQueue.Mode.ALL)
+        // Invoke cleanup callback (e.g., cancel background tasks)
+        onAbortCallback?.invoke()
     }
 
     /**
@@ -231,6 +236,16 @@ class ChatSession(
     fun updateInputVariables(inputVariables: Map<String, Any?>) {
         if (inputVariables.isNotEmpty()) {
             agent = agent.copy(context = agent.context.copy(inputVariables = inputVariables))
+        }
+    }
+
+    /**
+     * Override the skills list rendered into this turn's system prompt (decision-model routing).
+     * Sessions are rebuilt per user message, so the override is naturally turn-scoped.
+     */
+    fun updateTurnSkills(skills: List<Map<String, Any?>>) {
+        if (skills.isNotEmpty()) {
+            agent = agent.copy(context = agent.context.copy(skills = skills))
         }
     }
 

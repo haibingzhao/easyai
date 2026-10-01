@@ -23,6 +23,12 @@
             <artifactId>jackson-dataformat-yaml</artifactId>
         </dependency>
 
+        <!-- WebClient for the System One skill-selection endpoint (easyai-rag's EasyRagClient pattern) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+
         <!-- Test dependencies -->
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
@@ -39,6 +45,12 @@
             <groupId>io.mockk</groupId>
             <artifactId>mockk</artifactId>
             <version>1.13.16</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>mockwebserver</artifactId>
+            <version>4.12.0</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

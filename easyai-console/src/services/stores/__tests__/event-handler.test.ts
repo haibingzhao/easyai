@@ -38,6 +38,7 @@ function createMockState(overrides: Partial<ChatStateShape> = {}): ChatStateShap
     fileReviewOverrides: {},
     currentGoal: null,
     queuedMessages: [],
+    backgroundTasks: {},
     appendToTextBlock: vi.fn(),
     appendToThinkingBlock: vi.fn(),
     finishThinkingBlock: vi.fn(),

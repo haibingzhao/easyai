@@ -32,6 +32,8 @@ import com.easy.easyai.skills.*
 import com.easy.easyai.skills.a2a.AgentSkillFactory
 import com.easy.easyai.skills.a2a.DefaultAgentSkillFactory
 import com.easy.easyai.skills.command.*
+import com.easy.easyai.skills.selection.SkillSelectionClient
+import com.easy.easyai.skills.selection.SkillTurnRouter
 import com.easy.easyai.storage.local.LocalDirObjectStorage
 import com.easy.easyai.tools.SpringToolFactory
 import io.micrometer.observation.ObservationRegistry
@@ -42,6 +44,7 @@ import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.AutoConfiguration
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.boot.context.properties.EnableConfigurationProperties
@@ -231,7 +234,37 @@ open class EasyAiCoreAutoConfiguration(
         // store to have been built from. Without this conjunction, `rag on + r2dbc off` would
         // suppress the listing while skill_search returns empty forever — the worst of both worlds.
         ragDiscoveryReady = skillStore != null && catalog != null,
-        firstAccessSync = { userId -> refreshService.ifAvailable?.ensureSynced(userId) }
+        firstAccessSync = { userId -> refreshService.ifAvailable?.ensureSynced(userId) },
+        directInjectMaxSkills = properties.skills.directInjectMaxCount
+    )
+
+    /**
+     * Decision-model transport for skill routing. Cheap to keep registered: without a
+     * `SKILL_SELECTION` aux model row the router never fires an HTTP call.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = SKILL_PREFIX, name = ["selection.enabled"], havingValue = "true", matchIfMissing = true)
+    open fun skillSelectionClient(): SkillSelectionClient = SkillSelectionClient.http()
+
+    /**
+     * Per-message skill routing consumer. Absent when skills or selection are off, or when the
+     * decision client bean was not created — the chat chain treats a missing router as "no routing".
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(SkillSelectionClient::class)
+    @ConditionalOnProperty(prefix = SKILL_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = true)
+    open fun skillTurnRouter(
+        promptSource: SkillPromptSource,
+        auxResolver: AuxModelResolver,
+        client: SkillSelectionClient,
+    ): SkillTurnRouter = SkillTurnRouter(
+        promptSource = promptSource,
+        auxResolver = auxResolver,
+        client = client,
+        minConfidence = properties.skills.selection.minConfidence,
+        timeoutMs = properties.skills.selection.timeoutMs
     )
 
     @Bean

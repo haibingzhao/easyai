@@ -21,8 +21,9 @@ class SkillPromptSourceTest {
         rag: Boolean = false,
         inject: Boolean = true,
         ready: Boolean = rag,
-        firstAccessSync: (suspend (String?) -> Unit)? = null
-    ) = SkillPromptSource(f.registry, f.catalog, inject, rag, ready, firstAccessSync)
+        firstAccessSync: (suspend (String?) -> Unit)? = null,
+        directMax: Int = 0
+    ) = SkillPromptSource(f.registry, f.catalog, inject, rag, ready, firstAccessSync, directMax)
 
     @Nested
     inner class EffectiveView {
@@ -146,6 +147,74 @@ class SkillPromptSourceTest {
             val bare = f.register("wordless", "alice", description = "")
             f.rows = listOf(f.row(bare))
             assertTrue(source().skillsForPrompt("alice", listOf("wordless")).isEmpty())
+        }
+    }
+
+    @Nested
+    inner class ScaleThreshold {
+        @Test
+        fun `catalogs at or below the threshold stay injected with the index ready`() = runTest {
+            val second = f.register("deploy", "alice")
+            f.rows = listOf(f.row(own), f.row(second))
+            val prompt = source(rag = true, directMax = 2)
+            assertEquals(
+                listOf("deploy", "review"),
+                prompt.skillsForPrompt("alice", listOf("review", "deploy"), true).map { it["name"] }
+            )
+        }
+
+        @Test
+        fun `catalogs above the threshold are suppressed`() = runTest {
+            val second = f.register("deploy", "alice")
+            val third = f.register("triage", "alice")
+            f.rows = listOf(f.row(own), f.row(second), f.row(third))
+            assertTrue(source(rag = true, directMax = 2).skillsForPrompt("alice", listOf("review", "deploy", "triage"), true).isEmpty())
+        }
+
+        @Test
+        fun `threshold counts the owner catalog, not the whitelist subset`() = runTest {
+            val second = f.register("deploy", "alice")
+            val third = f.register("triage", "alice")
+            f.rows = listOf(f.row(own), f.row(second), f.row(third))
+            // One whitelisted skill but three effective ones: the owner is above the threshold.
+            assertTrue(source(rag = true, directMax = 2).skillsForPrompt("alice", listOf("review"), true).isEmpty())
+        }
+
+        @Test
+        fun `rag off never suppresses whatever the size`() = runTest {
+            val second = f.register("deploy", "alice")
+            val third = f.register("triage", "alice")
+            f.rows = listOf(f.row(own), f.row(second), f.row(third))
+            assertEquals(3, source(directMax = 0).skillsForPrompt("alice", listOf("review", "deploy", "triage"), true).size)
+        }
+
+        @Test
+        fun `zero threshold keeps legacy suppress-when-ready`() = runTest {
+            f.rows = listOf(f.row(own))
+            assertTrue(source(rag = true, directMax = 0).skillsForPrompt("alice", listOf("review"), true).isEmpty())
+        }
+    }
+
+    @Nested
+    inner class SelectionCandidates {
+        @Test
+        fun `candidates are whitelist intersect effective, described only, suppression-blind`() = runTest {
+            val blank = f.register("sparse", "alice", description = "")
+            val deploy = f.register("deploy", "alice")
+            f.rows = listOf(f.row(own), f.row(deploy), f.row(blank))
+            // Baseline listing is suppressed (rag ready, threshold 0) but routing candidates remain.
+            assertTrue(source(rag = true, directMax = 0).skillsForPrompt("alice", listOf("review", "deploy", "sparse"), true).isEmpty())
+            assertEquals(
+                listOf("deploy", "review"),
+                source(rag = true, directMax = 0).candidatesForSelection("alice", listOf("review", "deploy", "sparse")).map { it["name"] }
+            )
+        }
+
+        @Test
+        fun `empty whitelist and injection-off yield no candidates`() = runTest {
+            f.rows = listOf(f.row(own))
+            assertTrue(source().candidatesForSelection("alice", emptyList()).isEmpty())
+            assertTrue(source(inject = false).candidatesForSelection("alice", listOf("review")).isEmpty())
         }
     }
 }

@@ -17,7 +17,14 @@ enum class AuxModelTask(val key: String) {
      * Session title summarization. Declared so it is configurable today; its consumer lands with
      * the title-generation feature, which only has to resolve this task and fall back when unset.
      */
-    SESSION_TITLE("session_title");
+    SESSION_TITLE("session_title"),
+
+    /**
+     * Per-turn skill routing over the Bailian System One decision endpoint. Consumed through
+     * [AuxModelResolver.resolveConfig] — the referenced row supplies endpoint material
+     * (apiKey/baseUrl/modelId) only; no ChatModel is built for it.
+     */
+    SKILL_SELECTION("skill_selection");
 
     companion object {
         /** The task for a persisted key; null when the key is unknown (e.g. from an older/newer build). */

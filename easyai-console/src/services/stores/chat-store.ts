@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { SocketEvent, PermissionRequestEvent, GoalStatusEvent } from '@/types/socket-event';
+import type { SocketEvent, PermissionRequestEvent, GoalStatusEvent, BackgroundTaskEvent } from '@/types/socket-event';
 import type { TodoInfo, SubAgentTodoGroup } from '@/types/todo';
 import type { TaskSummary } from '@/services/swarm-service';
 import type { Message, ToolResult, ToolResultContentBlock, ContextReferences, QueuedMessage } from '@/types/message';
@@ -74,6 +74,8 @@ interface ChatState {
   queuedMessages: QueuedMessage[];
   /** Pending message data keyed by messageId (usage stored on message_end, used in commitStreamingMessage) */
   pendingMessageData: Record<string, { usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number; durationMs?: number; modelName?: string }; references?: ContextReferences }>;
+  /** Background task events keyed by taskId (for real-time status updates in tool cards) */
+  backgroundTasks: Record<string, BackgroundTaskEvent>;
   /** ID of a session detected as still running on the backend */
   runningSessionId: string | null;
   /** Internal: raw MessageSnapshot[] from last full/incremental load, used for incremental merge. */
@@ -162,6 +164,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   isCompacting: false,
   retryInfo: null,
   pendingMessageData: {},
+  backgroundTasks: {},
   checkpointsByMessageId: {},
   revertState: null,
   fileReviewOverrides: {},
@@ -184,6 +187,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     isCompacting: false,
     retryInfo: null,
     pendingMessageData: {},
+    backgroundTasks: {},
   })),
   setRunningSessionId: (id) => set({ runningSessionId: id, ...(id !== null ? { _lastSnapshots: [] } : {}) }),
   setForkRootId: (id) => set({ forkRootId: id }),
@@ -473,6 +477,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     swarmRuns: {},
     pendingPermission: null,
     pendingMessageData: {},
+    backgroundTasks: {},
     checkpointsByMessageId: {},
     revertState: null,
     fileReviewOverrides: {},

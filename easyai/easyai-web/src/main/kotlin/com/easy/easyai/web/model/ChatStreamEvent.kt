@@ -39,7 +39,8 @@ import com.fasterxml.jackson.annotation.JsonIgnore
     JsonSubTypes.Type(value = ChatStreamEvent.Revert::class, name = "revert"),
     JsonSubTypes.Type(value = ChatStreamEvent.GoalStatus::class, name = "goal_status"),
     JsonSubTypes.Type(value = ChatStreamEvent.UserMessageAck::class, name = "user_message_ack"),
-    JsonSubTypes.Type(value = ChatStreamEvent.SessionContext::class, name = "session_context")
+    JsonSubTypes.Type(value = ChatStreamEvent.SessionContext::class, name = "session_context"),
+    JsonSubTypes.Type(value = ChatStreamEvent.BackgroundTaskEvent::class, name = "background_task")
 ])
 sealed interface ChatStreamEvent {
     @get:JsonIgnore
@@ -376,6 +377,20 @@ sealed interface ChatStreamEvent {
         val blockedReason: String? = null
     ) : ChatStreamEvent {
         override val type: String get() = "goal_status"
+    }
+
+    /** Background task lifecycle event (launched, progress, completed, failed, cancelled) */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    data class BackgroundTaskEvent(
+        val event: String,
+        val taskId: String,
+        val toolName: String? = null,
+        val message: String? = null,
+        val result: String? = null,
+        val error: String? = null,
+        val durationMs: Long? = null
+    ) : ChatStreamEvent {
+        override val type: String get() = "background_task"
     }
 
     /** Todo item for SSE serialization */

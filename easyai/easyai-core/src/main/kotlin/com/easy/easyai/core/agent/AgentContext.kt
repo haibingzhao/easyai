@@ -1,6 +1,7 @@
 package com.easy.easyai.core.agent
 
 import com.easy.easyai.api.model.ModelProviderConfig
+import com.easy.easyai.core.event.CustomEvent
 import com.easy.easyai.core.memory.MemoryAccessTracker
 import com.easy.easyai.core.model.EasyAiMessage
 import com.easy.easyai.core.prompt.InstructionInfo
@@ -102,7 +103,31 @@ data class AgentContext(
      */
     val dryRun: Boolean = false,
     /** Environment variables for script LLM access. Non-empty when script-llm feature is enabled. */
-    val scriptEnv: Map<String, String> = emptyMap()
+    val scriptEnv: Map<String, String> = emptyMap(),
+    /**
+     * Runtime session lookup for background task result injection.
+     * Returns the ChatSession instance for the current sessionId, or null if not found.
+     * Only populated when executing in a session context (not for sub-agents or ephemeral agents).
+     */
+    val sessionLookup: (() -> ChatSession?)? = null,
+    /**
+     * Runtime check for whether the session is currently executing locally.
+     * Used by background tasks to determine if auto-resume is needed.
+     * Only populated when executing in a session context.
+     */
+    val isSessionExecuting: (() -> Boolean)? = null,
+    /**
+     * Event publisher for background task SSE events.
+     * Publishes CustomEvent to the session's event stream.
+     * Only populated when executing in a session context.
+     */
+    val backgroundEventPublisher: ((CustomEvent) -> Unit)? = null,
+    /**
+     * Auto-resume trigger for background task completion.
+     * Called when a background task completes and the session is idle.
+     * Only populated when executing in a session context.
+     */
+    val backgroundAutoResume: (suspend (sessionId: String, userId: String) -> Unit)? = null
 ) {
     /** Model ID derived from modelConfig, or empty string if not configured. */
     val modelId: String get() = modelConfig?.modelId ?: ""

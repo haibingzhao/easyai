@@ -2,6 +2,7 @@ package com.easy.easyai.autoconfigure.core
 
 import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.config.ModelProviderConfigStore
+import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.core.model.aux.AuxModelResolver
 import com.easy.easyai.core.model.aux.AuxModelSettingsStore
 import com.easy.easyai.core.model.aux.AuxModelTask
@@ -27,6 +28,7 @@ class DefaultAuxModelResolver(
     private val logger = LoggerFactory.getLogger(javaClass)
 
     private val cache = ConcurrentHashMap<String, ResolvedAuxModel>()
+    private val configCache = ConcurrentHashMap<String, ModelProviderConfig>()
 
     override suspend fun resolve(userId: String?, task: AuxModelTask): ResolvedAuxModel? {
         val store = settingsStore ?: return null
@@ -57,8 +59,31 @@ class DefaultAuxModelResolver(
         return resolved
     }
 
+    override suspend fun resolveConfig(userId: String?, task: AuxModelTask): ModelProviderConfig? {
+        val store = settingsStore ?: return null
+        val configs = configStore ?: return null
+        val owner = userId ?: return null
+
+        val cacheKey = cacheKey(owner, task)
+        configCache[cacheKey]?.let { return it }
+
+        val settings = store.get(owner, task) ?: return null
+        val modelConfigId = settings.modelConfigId
+        if (modelConfigId.isBlank()) return null
+
+        val config = configs.getConfig(modelConfigId, owner)
+        if (config == null) {
+            logger.warn("Aux model config '{}' not found for task '{}' (user '{}'); using default", modelConfigId, task.key, owner)
+            return null
+        }
+        configCache[cacheKey] = config
+        return config
+    }
+
     override fun refresh(userId: String, task: AuxModelTask) {
-        cache.remove(cacheKey(userId, task))
+        val key = cacheKey(userId, task)
+        cache.remove(key)
+        configCache.remove(key)
     }
 
     private fun cacheKey(userId: String, task: AuxModelTask): String = "$userId::${task.key}"
