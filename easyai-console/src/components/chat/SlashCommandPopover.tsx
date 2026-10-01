@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Settings } from 'lucide-react';
 import type { SlashCommand } from '@/types/command';
-import { commandGroup, commandLabel } from '@/utils/command-utils';
+import { commandGroup, commandLabel, commandTooltip } from '@/utils/command-utils';
 
 interface SlashCommandPopoverProps {
   commands: SlashCommand[];
@@ -81,7 +81,7 @@ export const SlashCommandPopover: React.FC<SlashCommandPopoverProps> = ({
           const isSelected = index === selectedIndex;
           const group = commandGroup(cmd);
           return (
-            <React.Fragment key={cmd.source ?? `${cmd.category}-${cmd.name}`}>
+            <React.Fragment key={`${cmd.category}-${cmd.name}`}>
               {(index === 0 || commandGroup(commands[index - 1]) !== group) && (
                 <div className="px-3 pt-2 pb-1 text-[11px] font-semibold text-muted-foreground tracking-wider">
                   {group}
@@ -89,7 +89,7 @@ export const SlashCommandPopover: React.FC<SlashCommandPopoverProps> = ({
               )}
               <div
                 ref={isSelected ? selectedRef : undefined}
-                title={cmd.source}
+                title={commandTooltip(cmd)}
                 className={`flex items-start gap-2 px-3 py-1.5 cursor-pointer transition-colors ${
                   isSelected ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/50'
                 }`}

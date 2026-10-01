@@ -19,7 +19,7 @@ import com.easy.easyai.core.tool.ScriptEnvProvider
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.repository.session.SessionExecutionService
-import com.easy.easyai.skills.SkillRegistry
+import com.easy.easyai.skills.SkillAccessResolver
 import com.easy.easyai.skills.command.CommandService
 import com.easy.easyai.skills.team.TeamCoordinationStateRegistry
 import com.easy.easyai.snapshot.GitSnapshotService
@@ -229,7 +229,7 @@ open class WebAutoConfiguration {
     open fun configValidator(
         toolRegistry: ToolRegistry,
         agentStore: AsyncAgentStore,
-        @Autowired(required = false) skillRegistry: SkillRegistry? = null,
+        @Autowired(required = false) skillAccessResolver: SkillAccessResolver? = null,
         @Autowired(required = false) mcpClientManager: McpClientManager? = null,
         @Autowired(required = false) templateRenderer: TemplateRenderer? = null,
     ): ConfigValidator {
@@ -237,7 +237,7 @@ open class WebAutoConfiguration {
             toolRegistry = toolRegistry,
             agentStore = agentStore,
             objectMapper = com.easy.easyai.common.util.SharedObjectMapper.instance,
-            skillRegistry = skillRegistry,
+            skillAccessResolver = skillAccessResolver,
             mcpClientManager = mcpClientManager,
             templateRenderer = templateRenderer,
         )
@@ -274,7 +274,7 @@ open class WebAutoConfiguration {
         toolRegistry: ToolRegistry,
         agentStore: AsyncAgentStore,
         modelConfigStore: ModelProviderConfigStore,
-        @Autowired(required = false) skillRegistry: SkillRegistry? = null,
+        @Autowired(required = false) skillAccessResolver: SkillAccessResolver? = null,
         @Autowired(required = false) mcpClientManager: McpClientManager? = null,
     ): AgentBasedConfigGenerator {
         return AgentBasedConfigGenerator(
@@ -282,7 +282,7 @@ open class WebAutoConfiguration {
             configValidator = configValidator,
             toolRegistry = toolRegistry,
             agentStore = agentStore,
-            skillRegistry = skillRegistry,
+            skillAccessResolver = skillAccessResolver,
             mcpClientManager = mcpClientManager,
             modelConfigStore = modelConfigStore,
         )

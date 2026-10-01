@@ -17,7 +17,7 @@ Use this as the authoritative reference when generating agent JSON configuration
 | `toolNames` | string[] | no | `[]` | Each name must exist in the available tools list | Tool whitelist. **Empty array = ALL tools available.** Non-empty = only listed tools. |
 | `subAgentIds` | string[] | no | `[]` | Each ID must reference an existing agent | Sub-agents this agent can delegate tasks to. |
 | `memberIds` | string[] | no | `[]` | Each ID must reference an existing non-TEAM agent | Team members. **Required when `agentType=TEAM`** (≥2 recommended). Members execute the work; the TEAM leader only coordinates. |
-| `skillNames` | string[] | no | `[]` | Each name must exist in the available skills list | Skill whitelist. Skills are discovered from markdown files. |
+| `skillNames` | string[] | no | `[]` | Each name must exist in the available skills list | Skill whitelist. Only skills installed for the requesting user (their own plus the shared `system` layer) can be listed. |
 | `mcpConfigs` | object[] | no | `[]` | `serverName` must be a connected MCP server | MCP server bindings. See **MCP Configs** below. |
 | `commandNames` | string[] | no | `[]` | — | Command whitelist. |
 | `maxIterations` | integer | no | 50 | ≥ 1 | Maximum ReAct loop iterations per conversation turn. Too low = incomplete complex tasks. Too high = wasted tokens. |

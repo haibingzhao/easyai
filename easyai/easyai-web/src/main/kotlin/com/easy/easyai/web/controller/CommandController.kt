@@ -8,13 +8,8 @@ import com.easy.easyai.skills.command.CommandCategory
 import com.easy.easyai.skills.command.CommandInfo
 import com.easy.easyai.skills.command.CommandRegistry
 import com.easy.easyai.skills.command.CommandService
-import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.web.security.getCurrentUserId
 import com.fasterxml.jackson.annotation.JsonInclude
-import java.nio.file.Files
-import java.nio.file.Path
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.springframework.http.HttpStatus
 import org.springframework.web.server.ResponseStatusException
 import kotlinx.coroutines.reactor.mono
@@ -46,31 +41,19 @@ class CommandController(
     private val userCommandStore: AsyncUserCommandStore? = null,
     @param:Autowired(required = false)
     private val commandService: CommandService? = null,
-    @param:Autowired(required = false)
-    private val projectStore: AsyncProjectStore? = null,
 ) {
 
     private val objectMapper: ObjectMapper = SharedObjectMapper.instance
 
     @GetMapping
     fun listCommands(
-        @RequestParam(required = false) agentId: String?,
-        @RequestParam(required = false) projectId: String? = null
+        @RequestParam(required = false) agentId: String?
     ): Mono<List<CommandDto>> {
         return mono {
             val userId = getCurrentUserId()
-            val projectPath = if (projectId.isNullOrBlank()) null else {
-                val project = projectStore?.findById(projectId, userId)
-                    ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found")
-                val path = Path.of(project.path).toAbsolutePath().normalize()
-                if (project.path.isBlank() || !withContext(Dispatchers.IO) { Files.isDirectory(path) }) {
-                    throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Project directory is unavailable")
-                }
-                path
-            }
             val userCommands = userCommandStore?.findAll(userId)?.map { it.toCommandInfo() } ?: emptyList()
             val registryCommands = commandRegistry?.all().orEmpty().filter { it.category != CommandCategory.SKILL }
-            val skills = commandService?.listSkillCommands(userId, projectPath).orEmpty()
+            val skills = commandService?.listSkillCommands(userId).orEmpty()
             val all = userCommands + registryCommands + skills
 
             if (agentId == null || agentStore == null) {
@@ -145,8 +128,7 @@ class CommandController(
         category = category.name,
         hints = hints,
         source = source.takeIf { category == CommandCategory.SKILL },
-        scope = scope,
-        projectPath = projectPath,
+        shared = shared,
     )
 }
 
@@ -158,6 +140,6 @@ data class CommandDto(
     val category: String,
     val hints: List<String>,
     val source: String? = null,
-    val scope: String? = null,
-    val projectPath: String? = null,
+    /** SKILL category only: the command comes from the read-only shared `system` layer. */
+    val shared: Boolean = false,
 )

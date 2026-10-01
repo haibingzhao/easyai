@@ -12,117 +12,63 @@ class SkillDiscoveryTest {
 
     private val discovery = DefaultSkillDiscovery()
 
+    private fun skill(root: Path, dirName: String, name: String = dirName) {
+        root.resolve(dirName).createDirectories().resolve("SKILL.md")
+            .writeText("---\nname: $name\ndescription: $name skill\n---\nContent")
+    }
+
     @Nested
-    inner class ScanDirectory {
+    inner class OwnerRoot {
         @Test
-        fun `finds SKILL md files recursively`(@TempDir tempDir: Path) {
-            val subDir = tempDir.resolve("sub").createDirectories()
-            val skillFile = subDir.resolve("SKILL.md")
-            skillFile.writeText("---\nname: test-skill\ndescription: A test skill\n---\nContent")
+        fun `discovers every skill directory under one owner root`(@TempDir ownerRoot: Path) {
+            skill(ownerRoot, "alpha")
+            skill(ownerRoot, "beta")
 
-            val results = discovery.scanDirectory(tempDir)
-
-            assertEquals(1, results.size)
-            assertEquals("test-skill", results[0].name)
+            assertEquals(setOf("alpha", "beta"), discovery.discoverOwnerRoot(ownerRoot).map { it.name }.toSet())
         }
 
         @Test
-        fun `returns empty for non-existent directory`() {
-            val results = discovery.scanDirectory(Path.of("/nonexistent/path"))
-            assertTrue(results.isEmpty())
+        fun `an absent owner root yields nothing`() {
+            assertTrue(discovery.discoverOwnerRoot(Path.of("/nonexistent/owner")).isEmpty())
         }
 
         @Test
-        fun `skips files with invalid yaml frontmatter`(@TempDir tempDir: Path) {
-            val skillFile = tempDir.resolve("SKILL.md")
-            skillFile.writeText("---\nbroken: [yaml\n---\nbody")
+        fun `a root holding no skill directory yields nothing`(@TempDir ownerRoot: Path) {
+            ownerRoot.resolve("notes.md").writeText("not a skill")
+            ownerRoot.resolve("empty-dir").createDirectories()
 
-            val results = discovery.scanDirectory(tempDir)
-
-            assertTrue(results.isEmpty())
+            assertTrue(discovery.discoverOwnerRoot(ownerRoot).isEmpty())
         }
 
         @Test
-        fun `finds multiple skills in different subdirectories`(@TempDir tempDir: Path) {
-            val dir1 = tempDir.resolve("skill-a").createDirectories()
-            val dir2 = tempDir.resolve("skill-b").createDirectories()
-            dir1.resolve("SKILL.md").writeText("---\nname: skill-a\ndescription: First skill\n---\nA")
-            dir2.resolve("SKILL.md").writeText("---\nname: skill-b\ndescription: Second skill\n---\nB")
+        fun `one unparsable skill does not hide the others`(@TempDir ownerRoot: Path) {
+            ownerRoot.resolve("broken").createDirectories().resolve("SKILL.md")
+                .writeText("---\nbroken: [yaml\n---\nbody")
+            skill(ownerRoot, "fine")
 
-            val results = discovery.scanDirectory(tempDir)
-
-            assertEquals(2, results.size)
-            val names = results.map { it.name }.toSet()
-            assertTrue(names.containsAll(setOf("skill-a", "skill-b")))
+            assertEquals(listOf("fine"), discovery.discoverOwnerRoot(ownerRoot).map { it.name })
         }
     }
 
     /**
-     * A re-scan runs per tool call now, so the walk has to be bounded: an unbounded one would follow
-     * vendored trees and every nested checkout under a skill root on each call.
+     * A skill's payload (scripts, references, a vendored checkout) lives below its own directory and
+     * is copied verbatim by the package codec — only `{root}/{name}/SKILL.md` is ever a skill.
      */
     @Nested
-    inner class ScanLimits {
+    inner class ScanShape {
         @Test
-        fun `finds a skill within the scan depth`(@TempDir tempDir: Path) {
-            val deep = tempDir.resolve("a/b/c").createDirectories()
-            deep.resolve("SKILL.md").writeText("---\nname: within\ndescription: Inside the bound\n---\nContent")
+        fun `ignores SKILL md files nested below a skill directory`(@TempDir ownerRoot: Path) {
+            ownerRoot.resolve("alpha/references").createDirectories().resolve("SKILL.md")
+                .writeText("---\nname: nested\ndescription: Payload, not a skill\n---\nContent")
 
-            assertEquals(listOf("within"), discovery.scanDirectory(tempDir).map { it.name })
+            assertTrue(discovery.discoverOwnerRoot(ownerRoot).isEmpty())
         }
 
         @Test
-        fun `stops below the scan depth`(@TempDir tempDir: Path) {
-            val tooDeep = tempDir.resolve("a/b/c/d").createDirectories()
-            tooDeep.resolve("SKILL.md").writeText("---\nname: beyond\ndescription: Out of reach\n---\nContent")
+        fun `ignores dot directories`(@TempDir ownerRoot: Path) {
+            skill(ownerRoot, ".restore-123", "staged")
 
-            assertTrue(discovery.scanDirectory(tempDir).isEmpty(), "a skill that deep is vendored content")
-        }
-
-        @Test
-        fun `does not walk into vendored or generated trees`(@TempDir tempDir: Path) {
-            for (ignored in listOf("node_modules", ".git", "__pycache__")) {
-                val nested = tempDir.resolve(ignored).resolve("pkg").createDirectories()
-                nested.resolve("SKILL.md").writeText("---\nname: $ignored\ndescription: Not a skill\n---\nContent")
-            }
-
-            assertTrue(discovery.scanDirectory(tempDir).isEmpty(), "dependency and cache directories hold no skills")
-        }
-    }
-
-    @Nested
-    inner class DiscoverFromHome {
-        @Test
-        fun `discovers skills from valid home subdirs`(@TempDir homeDir: Path) {
-            val skillsDir = homeDir.resolve(".agents/skills").createDirectories()
-            val skillDir = skillsDir.resolve("test").createDirectories()
-            skillDir.resolve("SKILL.md").writeText("---\nname: home-skill\ndescription: From home dir\n---\nContent")
-
-            val results = discovery.discoverFromHome(homeDir, listOf(".agents/skills"))
-
-            assertEquals(1, results.size)
-            assertEquals("home-skill", results[0].name)
-        }
-
-        @Test
-        fun `skips non-existent home subdirs`(@TempDir homeDir: Path) {
-            val results = discovery.discoverFromHome(homeDir, listOf(".agents/skills"))
-            assertTrue(results.isEmpty())
-        }
-    }
-
-    @Nested
-    inner class DiscoverFromPaths {
-        @Test
-        fun `batch scans multiple directories`(@TempDir tempDir: Path) {
-            val dir1 = tempDir.resolve("path1").createDirectories()
-            val dir2 = tempDir.resolve("path2").createDirectories()
-            dir1.resolve("SKILL.md").writeText("---\nname: path-skill-1\ndescription: First\n---\nA")
-            dir2.resolve("SKILL.md").writeText("---\nname: path-skill-2\ndescription: Second\n---\nB")
-
-            val results = discovery.discoverFromPaths(listOf(dir1, dir2))
-
-            assertEquals(2, results.size)
+            assertTrue(discovery.discoverOwnerRoot(ownerRoot).isEmpty(), "staged restores are working state")
         }
     }
 }

@@ -1,7 +1,5 @@
 package com.easy.easyai.rag
 
-import com.easy.easyai.core.skill.SkillOwnerContext
-import com.easy.easyai.core.skill.SkillScope
 import org.junit.jupiter.api.Test
 import java.nio.file.Path
 import kotlin.test.assertEquals
@@ -110,73 +108,45 @@ class RagBizIdResolverTest {
 
     @Test
     fun `skill slices live in the same family as memory and knowledge`() {
-        assertEquals("u_alice_s", RagBizIdResolver.globalBizId("alice", RagBizIdResolver.SKILL_TYPE))
+        assertEquals("u_alice_s", RagBizIdResolver.skillBizId("alice"))
     }
 
     @Test
-    fun `an absent user degrades to the system tenant slice`() {
+    fun `an absent owner degrades to the system tenant slice`() {
         // Single-user desktop/dev deployments degrade to this slice; it must stay addressable.
-        assertEquals("u_system_s", RagBizIdResolver.globalBizId(null, RagBizIdResolver.SKILL_TYPE))
+        assertEquals("u_system_s", RagBizIdResolver.skillBizId(null))
     }
 
     @Test
-    fun `skillBizIds returns both slices when a project path exists`() {
-        val owner = SkillOwnerContext(userId = "alice", projectPath = Path.of("/tmp/demo-project"))
+    fun `skillBizIds yields one slice per owner, in the order the owners are given`() {
+        val bizIds = RagBizIdResolver.skillBizIds(listOf("alice", "system"))
 
-        val bizIds = RagBizIdResolver.skillBizIds(listOf(SkillScope.GLOBAL, SkillScope.PROJECT), owner)
-
-        assertEquals(2, bizIds.size)
-        assertEquals("u_alice_s", bizIds.first())
-        assertTrue(bizIds[1].startsWith("u_alice-demo-project-"), bizIds[1])
+        assertEquals(listOf("u_alice_s", "u_system_s"), bizIds)
         assertTrue(bizIds.all { scopeCharset.matches(it) }, bizIds.toString())
     }
 
     @Test
-    fun `skillBizIds drops the project slice when there is no project path`() {
-        val owner = SkillOwnerContext(userId = "alice")
-
+    fun `skillBizIds collapses repeated owners and keeps the first position`() {
         assertEquals(
-            listOf("u_alice_s"),
-            RagBizIdResolver.skillBizIds(listOf(SkillScope.GLOBAL, SkillScope.PROJECT), owner)
+            listOf("u_alice_s", "u_system_s"),
+            RagBizIdResolver.skillBizIds(listOf("alice", "system", "alice"))
         )
+        // Two ids that sanitize to the same slice would otherwise be queried twice.
+        assertEquals(listOf("u_a_b_s"), RagBizIdResolver.skillBizIds(listOf("a/b", "a_b")))
     }
 
     @Test
-    fun `skillScopeOf maps a slice back to its granularity`() {
-        val projectPath = Path.of("/tmp/demo-project")
-        val owner = SkillOwnerContext(userId = "alice", projectPath = projectPath)
-
-        assertEquals(
-            SkillScope.GLOBAL,
-            RagBizIdResolver.skillScopeOf(RagBizIdResolver.globalBizId("alice", RagBizIdResolver.SKILL_TYPE), owner)
-        )
-        assertEquals(
-            SkillScope.PROJECT,
-            RagBizIdResolver.skillScopeOf(
-                RagBizIdResolver.projectBizId("alice", projectPath, RagBizIdResolver.SKILL_TYPE), owner
-            )
-        )
+    fun `no owner means no slice, not an unrestricted query`() {
+        assertTrue(RagBizIdResolver.skillBizIds(emptyList()).isEmpty())
     }
 
     @Test
-    fun `skillScopeOf refuses to label a foreign slice as one of ours`() {
-        val owner = SkillOwnerContext(userId = "alice", projectPath = Path.of("/tmp/demo-project"))
-
-        assertNull(RagBizIdResolver.skillScopeOf(null, owner))
-        // another tenant's slice must never resolve to a scope for this owner
-        assertNull(RagBizIdResolver.skillScopeOf("u_bob_s", owner))
-        // the same path owned by somebody else implies a different slice
-        assertNull(RagBizIdResolver.skillScopeOf("u_alice-demo-project-00000000_s", owner))
-    }
-
-    @Test
-    fun `project skill slices of different users never collide`() {
-        val path = Path.of("/shared/team-project")
-        val alice = RagBizIdResolver.projectBizId("alice", path, RagBizIdResolver.SKILL_TYPE)
-        val bob = RagBizIdResolver.projectBizId("bob", path, RagBizIdResolver.SKILL_TYPE)
+    fun `skill slices of different owners never collide`() {
+        val alice = RagBizIdResolver.skillBizId("alice")
+        val bob = RagBizIdResolver.skillBizId("bob")
 
         assertNotEquals(alice, bob)
-        assertTrue(scopeCharset.matches(alice!!))
-        assertTrue(scopeCharset.matches(bob!!))
+        assertTrue(scopeCharset.matches(alice))
+        assertTrue(scopeCharset.matches(bob))
     }
 }

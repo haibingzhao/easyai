@@ -2,6 +2,7 @@ package com.easy.easyai.skills
 
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.model.TextContent
+import com.easy.easyai.core.skill.SkillCatalogEntry
 import com.easy.easyai.core.tool.BaseToolDefinition
 import com.easy.easyai.core.tool.ToolExecutionMode
 import com.easy.easyai.core.tool.ToolMetadata
@@ -11,10 +12,17 @@ import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import kotlinx.coroutines.CoroutineScope
 import org.slf4j.LoggerFactory
 
+/**
+ * Publishes skills the agent just wrote: re-reconciles the requester's owner root (claim new
+ * directories, push drifted content to package + catalog) and re-indexes both the personal and
+ * the shared layer. The shared `system` root is read-only for regular users, so a skill written
+ * by an agent is always claimed into the writer's own root.
+ */
 internal class RefreshSkillsTool(
     metadata: ToolMetadata,
     private val registry: SkillRegistry,
     private val refresher: SkillRefreshService?,
+    private val config: SkillConfig,
     private val allowedSkillNames: List<String> = emptyList()
 ) : BaseToolDefinition(metadata) {
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -35,21 +43,34 @@ internal class RefreshSkillsTool(
         coroutineScope: CoroutineScope,
         onUpdate: suspend (ToolUpdate) -> Unit
     ): ToolResult {
-        val outcome = refresher?.refreshFor(agentContext.userId, agentContext.projectPath)
-        val delta = outcome?.delta ?: registry.rescan(setOfNotNull(agentContext.projectPath))
-        logger.info("refresh_skills: note={} owner={} claimed={} submitted={} failed={}",
-            args["note"], outcome?.owner, outcome?.claimed, outcome?.submitted, outcome?.summary?.failed)
+        val owner = refresher?.ownersFor(agentContext.userId) ?: emptyList()
+        val outcome = refresher?.refreshFor(agentContext.userId)
+        val delta = outcome?.delta ?: run {
+            val viewer = agentContext.userId?.takeIf { it.isNotBlank() } ?: SkillCatalogEntry.DEFAULT_USER_ID
+            registry.rescan(setOf(SkillPaths.ownerRoot(config, viewer)))
+        }
+        logger.info(
+            "refresh_skills: note={} owners={} claimed={} pushed={} restored={} submitted={} failed={}",
+            args["note"], owner, outcome?.sync?.claimed, outcome?.sync?.pushed, outcome?.sync?.restored,
+            outcome?.summary?.submitted, outcome?.summary?.failed
+        )
         return ToolResult(content = listOf(TextContent(report(delta, outcome))))
     }
 
     private fun report(delta: RegistryDelta, outcome: RefreshOutcome?): String = buildString {
-        appendLine("Re-read the skill directories: registered=${delta.total} added=${delta.added} " +
-            "updated=${delta.updatedKeys.map { it.name }} removed=${delta.removed}.")
+        appendLine("Re-read the skill directories: registered=${delta.total} added=${delta.added.map { it.name }} " +
+            "updated=${delta.updatedKeys.map { it.name }} removed=${delta.removed.map { it.name }}.")
         if (outcome == null) {
             appendLine("Catalog coordination is unavailable. Registration alone does not establish ownership or search readiness.")
         } else {
-            appendLine("Catalogued ${outcome.claimed} new skill(s) for owner '${outcome.owner}'; " +
-                "claimFailed=${outcome.claimFailed}, unclaimed=${outcome.unclaimed}.")
+            val sync = outcome.sync
+            if (sync == null) {
+                appendLine("Catalog/package reconciliation could not run; local files were only registered.")
+            } else {
+                appendLine("For owners ${outcome.owners}: claimed=${sync.claimed}, pushed=${sync.pushed} " +
+                    "(local content re-uploaded to the package store), restored=${sync.restored}, " +
+                    "skipped=${sync.skipped}, failed=${sync.failed}.")
+            }
             val summary = outcome.summary
             if (summary == null) {
                 appendLine("Index synchronization could not be inspected; readiness is unknown.")
@@ -63,10 +84,10 @@ internal class RefreshSkillsTool(
         if (delta.added.isEmpty() && delta.updatedKeys.isEmpty()) {
             appendLine("No new or changed source was registered. Check parse warnings if a file looks stale.")
         }
-        val notAllowed = delta.added.filter { it !in allowedSkillNames }
+        val notAllowed = delta.added.map { it.name }.filter { it !in allowedSkillNames }
         if (notAllowed.isNotEmpty()) {
             appendLine("Not enabled for this agent yet: $notAllowed. Ask the user to select them in the agent's skill settings.")
         }
-        append("load_skill additionally requires the current user/project, catalog enablement and agent allowlist to permit the source.")
+        append("load_skill additionally requires the current user, catalog enablement and agent allowlist to permit the source.")
     }
 }

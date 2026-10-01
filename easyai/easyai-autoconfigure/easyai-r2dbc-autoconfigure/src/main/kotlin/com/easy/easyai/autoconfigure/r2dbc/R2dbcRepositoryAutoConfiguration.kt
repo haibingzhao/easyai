@@ -78,22 +78,22 @@ class R2dbcRepositoryAutoConfiguration(
     private fun skillsForPrompt(
         promptSource: SkillPromptSource?,
         skillRegistry: SkillRegistry?
-    ): suspend (String?, Path?, List<String>) -> List<Map<String, Any?>> =
-        { userId, projectPath, allowedSkillNames ->
+    ): suspend (String?, List<String>) -> List<Map<String, Any?>> =
+        { userId, allowedSkillNames ->
             // Mirrors SkillSearchToolBuilder.build: the tool exists per agent only when a registry
             // is present, RAG is on and the agent has a non-empty skill whitelist.
             val searchAvailable = skillRegistry != null && easyAiProperties.skills.rag.enabled &&
                 allowedSkillNames.isNotEmpty()
-            promptSource?.skillsForPrompt(userId, projectPath, allowedSkillNames, searchAvailable)
+            promptSource?.skillsForPrompt(userId, allowedSkillNames, searchAvailable)
                 ?: emptyList()
         }
 
     /** Effective-view names for the default local agent; independent of the prompt-injection switch. */
     private fun skillNamesForDefaultAgent(
         promptSource: SkillPromptSource?
-    ): suspend (String?, Path?) -> List<String> =
-        { userId, projectPath ->
-            promptSource?.effectiveNames(userId, projectPath) ?: emptyList()
+    ): suspend (String?) -> List<String> =
+        { userId ->
+            promptSource?.effectiveNames(userId) ?: emptyList()
         }
 
     @Bean
@@ -193,7 +193,7 @@ class R2dbcRepositoryAutoConfiguration(
                 } else {
                     val allowedSet = effectiveSkillNames.toSet()
                     // Re-read per call: disablement must take effect without restarting the session pool.
-                    skillsForPrompt(parentContext.userId, parentContext.projectPath, effectiveSkillNames)
+                    skillsForPrompt(parentContext.userId, effectiveSkillNames)
                         .filter { (it["name"] as? String) in allowedSet } to effectiveSkillNames
                 }
                 // Resolve instructions based on sub-agent's own instructionsEnabled flag

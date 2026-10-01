@@ -36,7 +36,6 @@ class PendingMessageQueueTest {
             UserMessage.COMMAND_SOURCE to "user",
             UserMessage.COMMAND_CATEGORY to "command",
             UserMessage.COMMAND_USER_ID to "alice",
-            UserMessage.COMMAND_PROJECT_PATH to "/project",
             "attachmentOwner" to "alice"
         ),
         usage = Usage(inputTokens = 7)

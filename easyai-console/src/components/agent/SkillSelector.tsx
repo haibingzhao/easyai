@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { useProjectStore } from '@/services/stores/project-store';
 import { useAuthStore } from '@/services/stores/auth-store';
 import { agentService } from '@/services/agent-service';
 import type { SkillInfo } from '@/types/agent';
@@ -12,26 +11,26 @@ interface SkillSelectorProps {
 }
 
 export const SkillSelector: React.FC<SkillSelectorProps> = ({ selectedSkills, onChange, disabled }) => {
-  const projectId = useProjectStore((state) => state.currentProject?.id);
   const userId = useAuthStore((state) => state.user?.id);
-  const scopeKey = JSON.stringify([userId, projectId]);
-  const [snapshot, setSnapshot] = useState<{ scopeKey: string; skills: SkillInfo[] } | null>(null);
+  const [snapshot, setSnapshot] = useState<{ userId: string | undefined; skills: SkillInfo[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const skills = snapshot?.scopeKey === scopeKey ? snapshot.skills : [];
+  // Gate synchronously on the owner, so a render after switching user never shows another's skills.
+  const skills = snapshot !== null && snapshot.userId === userId ? snapshot.skills : [];
 
   useEffect(() => {
     const controller = new AbortController();
     setError(null);
-    agentService.listSkills(projectId, controller.signal).then((items) => {
-      if (!controller.signal.aborted) setSnapshot({ scopeKey, skills: items });
+    agentService.listSkills(controller.signal).then((items) => {
+      // Disabled skills cannot be loaded by the agent, so they are not offered here.
+      if (!controller.signal.aborted) setSnapshot({ userId, skills: items.filter((item) => item.enabled) });
     }).catch((err: unknown) => {
       if (!controller.signal.aborted) {
-        setSnapshot({ scopeKey, skills: [] });
+        setSnapshot({ userId, skills: [] });
         setError(err instanceof Error ? err.message : 'Failed to load skills');
       }
     });
     return () => controller.abort();
-  }, [projectId, scopeKey]);
+  }, [userId]);
 
   const toggleSkill = (skillName: string) => {
     if (selectedSkills.includes(skillName)) {
@@ -51,22 +50,15 @@ export const SkillSelector: React.FC<SkillSelectorProps> = ({ selectedSkills, on
       </div>
 
       {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
-      {!projectId && (
-        <p className="text-xs text-muted-foreground">
-          No project selected: only global skills are listed. Choose a project to see its project skills.
-        </p>
-      )}
       {skills.length === 0 ? (
         <p className="text-xs text-muted-foreground italic">No skills available.</p>
       ) : (
         <div className="space-y-2">
           {skills.map((skill) => {
             const isSelected = selectedSkills.includes(skill.name);
-            // Same-named skills of two projects must not collide as React keys or look identical.
-            const isProject = skill.scope?.toUpperCase() === 'PROJECT';
             return (
               <label
-                key={`${skill.name}@${skill.projectPath ?? 'global'}`}
+                key={skill.name}
                 className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
                   disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
                 } ${
@@ -87,8 +79,8 @@ export const SkillSelector: React.FC<SkillSelectorProps> = ({ selectedSkills, on
                 </span>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium">
-                    {isProject && (
-                      <span className="text-xs font-normal text-muted-foreground" title={skill.projectPath || undefined}>[project] </span>
+                    {skill.shared && (
+                      <span className="text-xs font-normal text-muted-foreground" title={skill.installPath}>[shared] </span>
                     )}
                     {skill.name}
                   </div>

@@ -14,111 +14,138 @@ import kotlin.test.assertTrue
 
 class SkillPromptSourceTest {
     private val f = SkillModelFixture()
-    private val global = f.skill("review")
-    private val local = f.skill("review", f.project)
+    private val shared = f.register("review", SkillModelFixture.SYSTEM)
+    private val own = f.register("review", "alice")
 
-    private fun source(rag: Boolean = false, inject: Boolean = true, ready: Boolean = rag) = SkillPromptSource(
-        f.registry, f.catalog, inject, rag, ready, f.config
-    )
+    private fun source(
+        rag: Boolean = false,
+        inject: Boolean = true,
+        ready: Boolean = rag,
+        firstAccessSync: (suspend (String?) -> Unit)? = null
+    ) = SkillPromptSource(f.registry, f.catalog, inject, rag, ready, firstAccessSync)
 
     @Nested
     inner class EffectiveView {
         @Test
-        fun `project override is selected before disabled filtering`() = runTest {
-            f.skills = listOf(global, local)
-            f.rows = listOf(f.row(global, "system"), f.row(local, enabled = false))
+        fun `personal override is selected before enablement filtering`() = runTest {
+            f.rows = listOf(f.row(shared), f.row(own, enabled = false))
             val prompt = source()
-            assertTrue(prompt.skillsForPrompt("alice", f.project, listOf("review")).isEmpty())
-            assertEquals("Does review tasks", prompt.skillsForPrompt("alice", null, listOf("review")).single()["description"])
+            assertTrue(prompt.skillsForPrompt("alice", listOf("review")).isEmpty())
+            assertEquals(
+                "Does review tasks",
+                prompt.skillsForPrompt("bob", listOf("review")).single()["description"]
+            )
         }
 
         @Test
-        fun `whitelist is required and unrelated projects never appear`() = runTest {
-            val other = f.skill("private", f.project.resolve("child"))
-            f.skills = listOf(global, other)
-            f.rows = listOf(f.row(global, "system"), f.row(other))
+        fun `whitelist is required and unbound skills never appear`() = runTest {
+            val other = f.register("private", "alice")
+            f.rows = listOf(f.row(shared), f.row(own), f.row(other))
             val prompt = source()
-            assertTrue(prompt.skillsForPrompt("alice", f.project).isEmpty())
-            coVerify(exactly = 0) { f.catalog.listByUser(any()) }
-            assertEquals(listOf("review"), prompt.skillsForPrompt("alice", f.project, listOf("review", "private")).map { it["name"] })
+            assertTrue(prompt.skillsForPrompt("alice", emptyList()).isEmpty())
+            assertEquals(
+                listOf("private", "review"),
+                prompt.skillsForPrompt("alice", listOf("review", "private")).map { it["name"] }
+            )
+            // Without alice's own row her registry entry is unbound, and the shared namesake does not
+            // substitute for an install path the winning row never pinned.
+            f.rows = listOf(f.row(shared), f.row(other))
+            assertEquals(listOf("private"), prompt.skillsForPrompt("alice", listOf("review", "private")).map { it["name"] })
         }
 
         @Test
         fun `toggle and owner changes are visible without refresh`() = runTest {
-            f.skills = listOf(global)
-            f.rows = listOf(f.row(global, "system"))
+            f.rows = listOf(f.row(shared), f.row(own))
             val prompt = source()
-            assertEquals(1, prompt.skillsForPrompt("alice", null, listOf("review")).size)
-            f.rows = f.rows + f.row(global, enabled = false)
-            assertTrue(prompt.skillsForPrompt("alice", null, listOf("review")).isEmpty())
-            assertEquals(1, prompt.skillsForPrompt("bob", null, listOf("review")).size)
+            assertEquals(1, prompt.skillsForPrompt("alice", listOf("review")).size)
+            f.rows = listOf(f.row(shared), f.row(own, enabled = false))
+            assertTrue(prompt.skillsForPrompt("alice", listOf("review")).isEmpty())
+            assertEquals(listOf("review"), prompt.effectiveNames("bob"))
         }
 
         @Test
         fun `catalog failure propagates on first and subsequent reads`() = runTest {
-            f.skills = listOf(global)
-            f.rows = listOf(f.row(global))
+            f.rows = listOf(f.row(shared))
             val prompt = source()
-            prompt.skillsForPrompt("alice", null, listOf("review"))
+            prompt.skillsForPrompt("alice", listOf("review"))
             coEvery { f.catalog.listByUser("alice") } throws IllegalStateException("catalog down")
-            assertFailsWith<IllegalStateException> { prompt.skillsForPrompt("alice", null, listOf("review")) }
-            assertFailsWith<IllegalStateException> { source().skillsForPrompt("alice", null, listOf("review")) }
+            assertFailsWith<IllegalStateException> { prompt.skillsForPrompt("alice", listOf("review")) }
+            assertFailsWith<IllegalStateException> { source().skillsForPrompt("alice", listOf("review")) }
         }
 
         @Test
         fun `cancellation propagates`() = runTest {
             coEvery { f.catalog.listByUser(any()) } throws CancellationException("cancelled")
-            assertFailsWith<CancellationException> { source().skillsForPrompt("alice", null, listOf("review")) }
+            assertFailsWith<CancellationException> { source().skillsForPrompt("alice", listOf("review")) }
         }
 
         @Test
-        fun `without catalog only explicit globals are advertised`() = runTest {
-            f.skills = listOf(global, local, f.skill("private", f.project))
-            val prompt = SkillPromptSource(f.registry, null, true, false, config = f.config)
-            assertEquals(listOf("review"), prompt.skillsForPrompt("alice", f.project, listOf("review", "private")).map { it["name"] })
+        fun `without catalog registry skills stay unbound and never suppress`() = runTest {
+            val prompt = SkillPromptSource(f.registry, null, true, true)
+            assertEquals(
+                listOf("review"),
+                prompt.skillsForPrompt("alice", listOf("review", "private"), true).map { it["name"] }
+            )
+        }
+
+        @Test
+        fun `lazy sync gate runs before every read`() = runTest {
+            f.rows = listOf(f.row(shared))
+            var gates = 0
+            val prompt = source(firstAccessSync = { gates++ })
+            prompt.skillsForPrompt("alice", listOf("review"))
+            prompt.effectiveNames("alice")
+            assertEquals(2, gates)
         }
     }
 
     @Nested
     inner class DiscoveryReadiness {
         @Test
-        fun `store availability alone never suppresses pending or stale skills`() = runTest {
-            f.skills = listOf(global)
+        fun `unindexed or drifted skills are never suppressed`() = runTest {
             val prompt = source(rag = true)
             assertTrue(prompt.fullInjectionActive)
             for (state in listOf(SkillSyncState.PENDING_INDEX, SkillSyncState.SUBMITTED, SkillSyncState.ABSENT)) {
-                f.rows = listOf(f.row(global, state = state))
-                assertEquals(1, prompt.skillsForPrompt("alice", null, listOf("review"), true).size)
+                f.rows = listOf(f.row(shared, state = state))
+                assertEquals(1, prompt.skillsForPrompt("bob", listOf("review"), true).size)
             }
-            f.rows = listOf(f.row(global).copy(indexedChecksum = "old"))
-            assertEquals(1, prompt.skillsForPrompt("alice", null, listOf("review"), true).size)
+            f.rows = listOf(f.row(shared).copy(indexedChecksum = "old"))
+            assertEquals(1, prompt.skillsForPrompt("bob", listOf("review"), true).size)
         }
 
         @Test
         fun `suppression requires ready effective view and agent search tool`() = runTest {
-            f.skills = listOf(global, local)
-            f.rows = listOf(f.row(global, "system"), f.row(local, state = SkillSyncState.PENDING_INDEX))
+            f.rows = listOf(f.row(shared), f.row(own, state = SkillSyncState.PENDING_INDEX))
             val prompt = source(rag = true)
-            assertEquals(1, prompt.skillsForPrompt("alice", null, listOf("review")).size)
-            assertTrue(prompt.skillsForPrompt("alice", null, listOf("review"), true).isEmpty())
-            assertEquals(1, prompt.skillsForPrompt("alice", f.project, listOf("review"), true).size)
-            assertEquals(1, source(rag = true, ready = false).skillsForPrompt("alice", null, listOf("review"), true).size)
+            // Alice's winner is her own still-pending row: the name must stay in the prompt.
+            assertEquals(1, prompt.skillsForPrompt("alice", listOf("review")).size)
+            assertEquals(1, prompt.skillsForPrompt("alice", listOf("review"), true).size)
+            // Bob's whole effective view is the ready shared row, so the search tool replaces it.
+            assertTrue(prompt.skillsForPrompt("bob", listOf("review"), true).isEmpty())
+            assertEquals(1, prompt.skillsForPrompt("bob", listOf("review")).size)
+            assertEquals(1, source(rag = true, ready = false).skillsForPrompt("bob", listOf("review"), true).size)
         }
 
         @Test
         fun `disabled injection and absent registry return empty`() = runTest {
             assertFalse(source(inject = false).fullInjectionActive)
-            assertTrue(source(inject = false).skillsForPrompt("alice", null, listOf("review")).isEmpty())
+            assertTrue(source(inject = false).skillsForPrompt("alice", listOf("review")).isEmpty())
             val absent = SkillPromptSource(null, f.catalog, true, false)
             assertFalse(absent.fullInjectionActive)
-            assertTrue(absent.skillsForPrompt("alice", null, listOf("review")).isEmpty())
+            assertTrue(absent.skillsForPrompt("alice", listOf("review")).isEmpty())
         }
 
         @Test
         fun `blank descriptions are not advertised`() = runTest {
-            f.skills = listOf(global.copy(description = "  "))
-            f.rows = listOf(f.row(global))
-            assertTrue(source().skillsForPrompt("alice", null, listOf("review")).isEmpty())
+            val named = f.register("explicit", "alice")
+            f.rows = listOf(f.row(named))
+            assertEquals(1, source().skillsForPrompt("alice", listOf("explicit")).size, "a described skill is advertised")
+            val blank = f.register("sparse", "alice", description = "   ")
+            f.rows = listOf(f.row(blank))
+            assertTrue(source().skillsForPrompt("alice", listOf("sparse")).isEmpty())
+            val bare = f.register("wordless", "alice", description = "")
+            f.rows = listOf(f.row(bare))
+            assertTrue(source().skillsForPrompt("alice", listOf("wordless")).isEmpty())
         }
     }
 }

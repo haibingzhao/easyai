@@ -36,7 +36,6 @@ class CommandMessageProjectionTest {
                     UserMessage.COMMAND_SOURCE to "user",
                     UserMessage.COMMAND_CATEGORY to "command",
                     UserMessage.COMMAND_USER_ID to "alice",
-                    UserMessage.COMMAND_PROJECT_PATH to "/project",
                     "unrelated" to "preserved"
                 ),
                 usage = Usage(inputTokens = 42)

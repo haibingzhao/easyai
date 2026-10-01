@@ -267,7 +267,6 @@ data class UserMessage(
         const val COMMAND_SOURCE = "commandSource"
         const val COMMAND_CATEGORY = "commandCategory"
         const val COMMAND_USER_ID = "commandUserId"
-        const val COMMAND_PROJECT_PATH = "commandProjectPath"
     }
 }
 

@@ -1,7 +1,5 @@
 package com.easy.easyai.rag
 
-import com.easy.easyai.core.skill.SkillOwnerContext
-import com.easy.easyai.core.skill.SkillScope
 import java.nio.file.Path
 import java.security.MessageDigest
 
@@ -17,8 +15,10 @@ import java.security.MessageDigest
  * - GLOBAL knowledge -> `u_{userId}_k`
  * - PROJECT memory   -> `u_{userId}-{projectKey}-{hash8}_m`
  * - PROJECT knowledge -> `u_{userId}-{projectKey}-{hash8}_k`
- * - GLOBAL skill    -> `u_{userId}_s`
- * - PROJECT skill   -> `u_{userId}-{projectKey}-{hash8}_s`
+ * - one skill owner  -> `u_{userId}_s`
+ *
+ * Skills are owner-granular only: every skill of one user — including the `system` shared
+ * layer — lives in that owner's single `_s` slice, so no skill is ever project-addressed.
  *
  * This means vector search, keyword search, and all storage operations
  * are filtered at the storage layer — no metadata post-filter needed.
@@ -75,31 +75,17 @@ internal object RagBizIdResolver {
     }
 
     /**
-     * biz_ids of every slice the given scopes resolve to for [owner], de-duplicated and
-     * in order. [SkillScope.PROJECT] contributes nothing when the owner has no project path,
-     * so the set naturally degrades to the global slice alone.
+     * biz_id of the slice holding every skill of one owner, `system` (the shared read-only layer)
+     * included. A blank owner degrades to the `system` slice.
      */
-    fun skillBizIds(scopes: List<SkillScope>, owner: SkillOwnerContext): List<String> =
-        scopes.mapNotNull { scope ->
-            when (scope) {
-                SkillScope.GLOBAL -> globalBizId(owner.userId, SKILL_TYPE)
-                SkillScope.PROJECT -> projectBizId(owner.userId, owner.projectPath, SKILL_TYPE)
-            }
-        }.distinct()
+    fun skillBizId(userId: String?): String = globalBizId(userId, SKILL_TYPE)
 
     /**
-     * Reverse mapping used to label search results: which granularity produced this chunk?
-     * Returns null for foreign/unrecognised biz_ids, so a mislabelled hit never masquerades as
-     * one of the caller's own slices.
+     * biz_ids of every owner's skill slice, in the order the owners are given — de-duplicated, so
+     * an early owner keeps priority for a name a later owner also indexes (shadowing).
      */
-    fun skillScopeOf(bizId: String?, owner: SkillOwnerContext): SkillScope? {
-        if (bizId == null) return null
-        return when (bizId) {
-            globalBizId(owner.userId, SKILL_TYPE) -> SkillScope.GLOBAL
-            projectBizId(owner.userId, owner.projectPath, SKILL_TYPE) -> SkillScope.PROJECT
-            else -> null
-        }
-    }
+    fun skillBizIds(ownerUserIds: List<String>): List<String> =
+        ownerUserIds.map { skillBizId(it) }.distinct()
 
     /** First [HASH_LENGTH] hex chars of the SHA-256 of [value]. */
     private fun shortHash(value: String): String {

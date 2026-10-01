@@ -120,12 +120,28 @@ class DefaultModelConfigService(
 
     override suspend fun saveGroup(request: SaveModelConfigGroupRequest, userId: String): ModelConfigGroup {
         val store = groupStore ?: throw UnsupportedOperationException("ModelConfigGroupStore not available")
+        requireGroupNameAvailable(request, userId, excludeGroupId = request.id)
         return store.saveGroup(request, userId)
     }
 
     override suspend fun updateGroup(id: String, request: SaveModelConfigGroupRequest, userId: String): ModelConfigGroup {
         val store = groupStore ?: throw UnsupportedOperationException("ModelConfigGroupStore not available")
+        requireGroupNameAvailable(request, userId, excludeGroupId = id)
         return store.updateGroupConnection(id, request, userId)
+    }
+
+    /**
+     * Group names address the shared-connection entry point for a vendor, so a duplicate is always a
+     * mistake: the caller meant to reuse the existing group. Rejecting it here covers both the Text and
+     * the generation write paths, which create groups from their own inline forms.
+     */
+    private suspend fun requireGroupNameAvailable(request: SaveModelConfigGroupRequest, userId: String, excludeGroupId: String?) {
+        val groups = groupStore?.getAllGroups(userId) ?: return
+        val name = request.name.trim()
+        val clash = groups.firstOrNull { it.id != excludeGroupId && it.name.trim().equals(name, ignoreCase = true) }
+        require(clash == null) {
+            "group \"$name\" already exists — add this model from that group's entry instead"
+        }
     }
 
     override suspend fun deleteGroup(id: String, userId: String): Boolean {

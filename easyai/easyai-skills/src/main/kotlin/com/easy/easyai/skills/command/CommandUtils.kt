@@ -3,7 +3,6 @@ package com.easy.easyai.skills.command
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import java.nio.file.Path
 
 class CommandReferenceException(message: String) : IllegalArgumentException(message)
 
@@ -25,11 +24,10 @@ object CommandUtils {
             } catch (_: IllegalArgumentException) {
                 throw CommandReferenceException("Invalid Skill reference encoding")
             }
-            val path = try { Path.of(source) } catch (_: Exception) {
-                throw CommandReferenceException("Invalid Skill reference path")
-            }
-            if (!path.isAbsolute || path.fileName?.toString() != "SKILL.md" || source.any { it.code < 32 || it.code == 127 }) {
-                throw CommandReferenceException("Skill reference must identify an absolute SKILL.md path")
+            // The token is a skill NAME (post-shadowing it is unique for the viewer). Old
+            // absolute-path tokens simply fail the lookup with a clear reference error.
+            if (source.isBlank() || source.any { it.code < 32 || it.code == 127 }) {
+                throw CommandReferenceException("Skill reference must identify an installed skill by name")
             }
             return ParsedCommand(skill.groupValues[1], skill.groupValues[3], source)
         }
@@ -41,6 +39,7 @@ object CommandUtils {
         return null
     }
 
+    /** Builds the `skill:` link token from the skill name as source. */
     @JvmStatic
     fun skillReference(name: String, source: String): String {
         val encoded = URLEncoder.encode(source, StandardCharsets.UTF_8).replace("+", "%20").replace("*", "%2A")

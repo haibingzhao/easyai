@@ -1,7 +1,7 @@
 import React from 'react';
 import type { Message, Attachment } from '../../types/message';
 import { getAttachmentIcon, isImageAttachment, parseFileRefs, splitByFileRefs, copyMessageSelection } from '../../utils/attachment-utils';
-import { commandLabel, parseCommand, serializeCommand } from '@/utils/command-utils';
+import { commandLabel, commandTooltip, parseCommand, serializeCommand } from '@/utils/command-utils';
 import { RotateCw } from 'lucide-react';
 import { AttachmentImage } from './AttachmentImage';
 
@@ -9,7 +9,7 @@ import { AttachmentImage } from './AttachmentImage';
 export function UserMessageContent({ content, attachments = [] }: { content: string; attachments?: Attachment[] }) {
   const parsed = parseCommand(content);
   const cmdChip = parsed ? (
-    <span className="command-chip" title={parsed.command.source} data-command-token={serializeCommand(parsed.command, '')}>
+    <span className="command-chip" title={commandTooltip(parsed.command)} data-command-token={serializeCommand(parsed.command, '')}>
       {commandLabel(parsed.command)}
     </span>
   ) : null;

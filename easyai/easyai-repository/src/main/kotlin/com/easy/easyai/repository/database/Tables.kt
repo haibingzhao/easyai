@@ -329,14 +329,14 @@ object Tables {
     }
 
     /**
-     * Skill catalog table — provenance and lifecycle truth for skills.
+     * Skill catalog table — existence, ownership and lifecycle truth for skills.
      *
-     * Content itself stays on disk (install_path/SKILL.md); this table records ownership,
-     * enablement, source, and the content checksum used for index reconciliation. Because
-     * every row carries its owner, startup can enumerate which per-user RAG slices to
-     * reconcile without a request context. One row addresses one
-     * (owner, name, granularity) triple: `project_hash` distinguishes a GLOBAL skill
-     * ('') from same-named PROJECT skills of different workspaces.
+     * One row addresses one **(user_id, name)** pair: a user's own skills plus the read-only
+     * `system` shared layer, an own row shadowing a same-named shared one. Content lives in the
+     * zip at `object_key`; `install_path` is the local copy the agent reads and `checksum` is the
+     * whole-directory digest that decides whether that copy or the package is the newer one.
+     * Because every row carries its owner, startup can enumerate which per-user RAG slices to
+     * reconcile without a request context.
      */
     object SkillTable : Table("skill") {
         val id = varchar("id", 255)
@@ -345,12 +345,12 @@ object Tables {
         /** Column stays `source`; the Kotlin name avoids clashing with `ColumnSet.source`. */
         val skillSource = varchar("source", 16).default("LOCAL")   // LOCAL
         val version = varchar("version", 32).default("0.0.0")
-        val checksum = varchar("checksum", 64)                // SHA-256 hex of SKILL.md bytes
+        val checksum = varchar("checksum", 64)                // SHA-256 hex over the whole skill directory
         val enabled = bool("enabled").default(true)
+        val rootPath = varchar("root_path", 512)              // owner's skill root, e.g. ~/.easyai/skills/alice
         val installPath = varchar("install_path", 512)        // absolute skill directory path
-        val origin = varchar("origin", 512).nullable()        // market object key / URL, provenance only
+        val objectKey = varchar("object_key", 512).default("")  // zip package key in object storage
         val userId = varchar("user_id", 255).default("system")
-        val projectHash = varchar("project_hash", 16).default("")  // granularity key: '' = GLOBAL, else sha256(projectPath) prefix
         val createdAt = long("created_at")
         val updatedAt = long("updated_at")
         val indexedChecksum = varchar("indexed_checksum", 64).nullable()
@@ -358,13 +358,12 @@ object Tables {
         val revision = long("revision").default(0L)
         val nextAttemptAt = long("next_attempt_at").nullable()
         val lastError = varchar("last_error", 2000).nullable()
-        val indexProjectPath = varchar("index_project_path", 512).nullable()
 
         override val primaryKey = PrimaryKey(id)
 
         init {
             index(false, userId)
-            uniqueIndex(userId, name, projectHash)  // unique skill name per user per granularity
+            uniqueIndex(userId, name)  // unique skill name per owner
         }
     }
 

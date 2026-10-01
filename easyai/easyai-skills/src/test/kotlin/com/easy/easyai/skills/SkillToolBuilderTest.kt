@@ -20,13 +20,13 @@ class SkillToolBuilderTest {
     private val f = SkillModelFixture()
     private val agentService = mockk<AgentService>()
     private val catalogProvider = mockk<ObjectProvider<AsyncSkillCatalogStore>>()
-    private val configProvider = mockk<ObjectProvider<SkillConfig>>()
+    private val refresherProvider = mockk<ObjectProvider<SkillRefreshService>>()
     private val storeProvider = mockk<ObjectProvider<SkillStore>>()
     private val context = AgentContext(agentId = "agent", userId = "alice", allowedSkillNames = listOf("review"))
 
     init {
         every { catalogProvider.getIfAvailable() } returns f.catalog
-        every { configProvider.getIfAvailable() } returns f.config
+        every { refresherProvider.getIfAvailable() } returns null
         every { storeProvider.getIfAvailable() } returns null
     }
 
@@ -34,38 +34,44 @@ class SkillToolBuilderTest {
     inner class Wiring {
         @Test
         fun `load keeps catalog gate when rag is off`() = runTest {
-            val skill = f.skill("review")
-            f.skills = listOf(skill)
+            val skill = f.register("review", "alice")
             f.rows = listOf(f.row(skill, enabled = false))
-            val tool = assertNotNull(SkillToolBuilder(f.registry, catalogProvider, configProvider, false).build(context, agentService))
+            val tool = assertNotNull(
+                SkillToolBuilder(f.registry, catalogProvider, refresherProvider, false).build(context, agentService)
+            )
             val result = tool.execute(context, "load", args = mapOf("name" to "review"), coroutineScope = this)
             assertTrue(result.isError)
         }
 
         @Test
         fun `search keeps authorized fallback when index bean is absent`() = runTest {
-            val skill = f.skill("review")
-            f.skills = listOf(skill)
+            val skill = f.register("review", "alice")
             f.rows = listOf(f.row(skill))
             val tool = assertNotNull(SkillSearchToolBuilder(
-                storeProvider, catalogProvider, 5, f.registry, configProvider, true
+                storeProvider, catalogProvider, 5, f.registry, true, refresherProvider
             ).build(context, agentService))
             val result = tool.execute(context, "search", args = mapOf("query" to "review"), coroutineScope = this)
             assertFalse(result.isError)
-            assertTrue(result.content.filterIsInstance<TextContent>().single().text.contains("[global] review:"))
+            assertTrue(result.content.filterIsInstance<TextContent>().single().text.contains("[mine] review:"))
         }
 
         @Test
         fun `search is absent for empty whitelist or disabled discovery`() {
-            val builder = SkillSearchToolBuilder(storeProvider, catalogProvider, 5, f.registry, configProvider, true)
+            val builder = SkillSearchToolBuilder(storeProvider, catalogProvider, 5, f.registry, true, refresherProvider)
             assertNull(builder.build(context.copy(allowedSkillNames = emptyList()), agentService))
-            assertNull(SkillSearchToolBuilder(storeProvider, catalogProvider, 5, f.registry, configProvider, false).build(context, agentService))
+            assertNull(
+                SkillSearchToolBuilder(storeProvider, catalogProvider, 5, f.registry, false, refresherProvider)
+                    .build(context, agentService)
+            )
         }
 
         @Test
         fun `no registry means neither tool is registered`() {
-            assertNull(SkillToolBuilder(null, catalogProvider, configProvider, true).build(context, agentService))
-            assertNull(SkillSearchToolBuilder(storeProvider, catalogProvider, 5, null, configProvider, true).build(context, agentService))
+            assertNull(SkillToolBuilder(null, catalogProvider, refresherProvider, true).build(context, agentService))
+            assertNull(
+                SkillSearchToolBuilder(storeProvider, catalogProvider, 5, null, true, refresherProvider)
+                    .build(context, agentService)
+            )
         }
     }
 }

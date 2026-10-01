@@ -46,7 +46,6 @@ class AgentLoopCommandProjectionTest {
             UserMessage.COMMAND_EXPANSION to "Use the server-authorized captured review instructions.",
             UserMessage.COMMAND_NAME to "review",
             UserMessage.COMMAND_USER_ID to "alice",
-            UserMessage.COMMAND_PROJECT_PATH to "/project",
             "attachmentOwner" to "alice"
         )
     )

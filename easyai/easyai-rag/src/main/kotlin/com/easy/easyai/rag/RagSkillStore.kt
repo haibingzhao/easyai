@@ -4,7 +4,6 @@ import com.easy.easyai.core.skill.SkillDeleteResult
 import com.easy.easyai.core.skill.SkillDocumentState
 import com.easy.easyai.core.skill.SkillEntry
 import com.easy.easyai.core.skill.SkillOwnerContext
-import com.easy.easyai.core.skill.SkillScope
 import com.easy.easyai.core.skill.SkillStore
 import com.easy.easyai.core.skill.SkillSubmitResult
 import kotlinx.coroutines.CancellationException
@@ -19,10 +18,10 @@ import java.time.Instant
  * [SkillStore] implementation on top of EasyRAG.
  *
  * Each SKILL.md becomes one document:
- * - isolation: `biz_id` slices from [RagBizIdResolver] (`u_{userId}_s` /
- *   `u_{userId}-{seg}-{hash8}_s`), one slice per owner and granularity
- * - key layout: `skills/{name}.md` — GLOBAL and PROJECT may hold the same name, they are
- *   separate documents because they sit in separate slices
+ * - isolation: `biz_id = u_{userId}_s`, one slice per skill owner; the `system` shared layer is
+ *   the `u_system_s` slice
+ * - key layout: `skills/{name}.md` — two owners may hold the same name, they are separate
+ *   documents because they sit in separate slices
  * - externalId: `easyai:{key}` (idempotent upsert, deterministic docId)
  * - content: YAML frontmatter (name/description/tags/examples/origin/location) + full body,
  *   mirroring [RagMemoryStore]; indexing the body is what makes semantic discovery work at all
@@ -43,12 +42,10 @@ internal class RagSkillStore(
 
     override suspend fun submit(
         entries: List<SkillEntry>,
-        scope: SkillScope,
         owner: SkillOwnerContext,
         awaitIndexing: Boolean
     ): List<SkillSubmitResult> {
-        val bizId = bizIdOf(scope, owner)
-            ?: return entries.map { SkillSubmitResult(it.key, SkillDocumentState.Failed("Missing project path")) }
+        val bizId = RagBizIdResolver.skillBizId(owner.userId)
         return entries.chunked(INDEX_CONCURRENCY).flatMap { chunk ->
             coroutineScope {
                 chunk.map { entry ->
@@ -58,7 +55,7 @@ internal class RagSkillStore(
                             val result = client.upsert(documentOf(entry, bizId), bizId, awaitIndexing)
                             if (result.indexed) {
                                 // Verify the stored version too: another revision may have won the upsert.
-                                inspect(entry.name, scope, owner)
+                                inspect(entry.name, owner)
                             } else {
                                 SkillDocumentState.Submitted(entry.checksum)
                             }
@@ -74,8 +71,8 @@ internal class RagSkillStore(
         }
     }
 
-    override suspend fun inspect(name: String, scope: SkillScope, owner: SkillOwnerContext): SkillDocumentState {
-        val bizId = bizIdOf(scope, owner) ?: return SkillDocumentState.Failed("Missing project path")
+    override suspend fun inspect(name: String, owner: SkillOwnerContext): SkillDocumentState {
+        val bizId = RagBizIdResolver.skillBizId(owner.userId)
         return try {
             val document = client.inspectByExternalId(RagConstants.externalIdOf(keyOf(name)), bizId)
                 ?: return SkillDocumentState.Absent
@@ -119,55 +116,53 @@ internal class RagSkillStore(
 
     override suspend fun search(
         query: String,
-        scopes: List<SkillScope>,
-        owner: SkillOwnerContext,
+        ownerUserIds: List<String>,
         topK: Int
     ): List<SkillEntry> {
-        val bizIds = RagBizIdResolver.skillBizIds(scopes, owner)
+        val bizIds = RagBizIdResolver.skillBizIds(ownerUserIds)
         if (bizIds.isEmpty()) return emptyList()
         // Over-fetch: the server ranks one global top-k over the union of slices, so without a
-        // larger window a project with many skills would crowd the global slice out entirely.
+        // larger window an owner with many skills would crowd the other slices out entirely.
         // Still a single HTTP round trip.
         val chunks = runCatchingRag("search bizIds=$bizIds") {
             client.search(query = query, topK = topK * bizIds.size, bizIds = bizIds)
         } ?: // A server rejecting the set (400 on an element) must not lose discovery:
-        // degrade to the global slice alone, the one address that always exists.
+        // degrade to the first slice, which is the requesting user's own.
         runCatchingRag("search degraded bizId=${bizIds.first()}") {
             client.search(query = query, topK = topK, bizId = bizIds.first())
         } ?: return emptyList()
-        return mergeBySlice(chunks, owner, scopes, topK)
+        return mergeByOwner(chunks, bizIds, topK)
     }
 
     /**
-     * Parse chunks, re-apply the per-slice quota, and merge.
+     * Parse chunks, re-apply the per-owner quota, and merge.
      *
-     * Deduplication is keyed on `(scope, name)` — not `name` — precisely because GLOBAL and
-     * PROJECT skills may legitimately share a name; collapsing them would hide one granularity
-     * from the agent.
+     * Deduplication runs over the slices in the order the owners were given, so an earlier owner
+     * (the requesting user) shadows a same-named skill of a later one (the shared `system` layer)
+     * instead of letting the server-side score decide ownership.
      */
-    private fun mergeBySlice(
+    private fun mergeByOwner(
         chunks: List<RagChunk>,
-        owner: SkillOwnerContext,
-        scopes: List<SkillScope>,
+        bizIds: List<String>,
         topK: Int
     ): List<SkillEntry> {
-        val perSlice = scopes.associateWith { mutableListOf<SkillEntry>() }
+        val perOwner = bizIds.associateWith { mutableListOf<SkillEntry>() }
         for (chunk in chunks) {
-            val scope = RagBizIdResolver.skillScopeOf(chunk.bizId, owner) ?: continue
-            val entry = entryFromChunk(chunk, owner) ?: continue
-            perSlice[scope]?.add(entry)
+            val bucket = perOwner[chunk.bizId] ?: continue
+            val entry = entryFromChunk(chunk) ?: continue
+            bucket.add(entry)
         }
-        return perSlice.values
+        return perOwner.values
             .flatMap { it.sortedByDescending { e -> e.score ?: 0.0 }.take(topK) }
-            .distinctBy { it.scope to it.name }
+            .distinctBy { it.name }
             .sortedByDescending { e -> e.score ?: 0.0 }
             .take(topK)
     }
 
     // ── delete ──────────────────────────────────────────────────────
 
-    override suspend fun ensureAbsent(name: String, scope: SkillScope, owner: SkillOwnerContext): SkillDeleteResult {
-        val bizId = bizIdOf(scope, owner) ?: return SkillDeleteResult.Failed("Missing project path")
+    override suspend fun ensureAbsent(name: String, owner: SkillOwnerContext): SkillDeleteResult {
+        val bizId = RagBizIdResolver.skillBizId(owner.userId)
         val externalId = RagConstants.externalIdOf(keyOf(name))
         return try {
             try {
@@ -186,13 +181,7 @@ internal class RagSkillStore(
 
     // ── Mapping helpers ────────────────────────────────────────────────
 
-    /** Derive the EasyRAG slice; null when PROJECT scope has no project path to address. */
-    private fun bizIdOf(scope: SkillScope, owner: SkillOwnerContext): String? = when (scope) {
-        SkillScope.GLOBAL -> RagBizIdResolver.globalBizId(owner.userId, RagBizIdResolver.SKILL_TYPE)
-        SkillScope.PROJECT -> RagBizIdResolver.projectBizId(owner.userId, owner.projectPath, RagBizIdResolver.SKILL_TYPE)
-    }
-
-    /** Best-effort user extraction from `u_{user}[_s]` / `u_{user}-{seg}-{hash}_s`. */
+    /** Best-effort user extraction from `u_{user}[_s]`, for log-inspectable metadata. */
     private fun userOfBizId(bizId: String): String {
         val body = bizId.removePrefix("u_")
         val user = body.substringBefore('_').substringBefore('-')
@@ -215,18 +204,17 @@ internal class RagSkillStore(
         return Instant.now().epochSecond
     }
 
-    private fun entryFromChunk(chunk: RagChunk, owner: SkillOwnerContext): SkillEntry? {
+    private fun entryFromChunk(chunk: RagChunk): SkillEntry? {
         val parsed = parseChunkToEntry(chunk.content, chunk.filePath) ?: return null
         val description = parsed.description.ifBlank { chunk.metadata["description"] as? String ?: "" }
         val tags = parsed.tags.ifEmpty {
             (chunk.metadata["tags"] as? String)
                 ?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
         }
-        val scope = RagBizIdResolver.skillScopeOf(chunk.bizId, owner)
-        if (description == parsed.description && tags == parsed.tags && scope == null && chunk.score == null) {
+        if (description == parsed.description && tags == parsed.tags && chunk.score == null) {
             return parsed
         }
-        return parsed.copy(description = description, tags = tags, scope = scope, score = chunk.score)
+        return parsed.copy(description = description, tags = tags, score = chunk.score)
     }
 
     /**

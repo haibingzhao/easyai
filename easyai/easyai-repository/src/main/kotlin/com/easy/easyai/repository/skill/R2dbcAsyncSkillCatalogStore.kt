@@ -13,6 +13,7 @@ import org.jetbrains.exposed.v1.core.ResultRow
 import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
+import org.jetbrains.exposed.v1.core.inList
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
 import org.jetbrains.exposed.v1.r2dbc.deleteWhere
 import org.jetbrains.exposed.v1.r2dbc.insert
@@ -31,8 +32,7 @@ class R2dbcAsyncSkillCatalogStore(private val db: R2dbcDatabase) : AsyncSkillCat
             try {
                 return suspendTransaction(db) {
                     val existing = table.selectAll().where {
-                        (table.userId eq entry.userId) and (table.name eq entry.name) and
-                            (table.projectHash eq entry.projectHash)
+                        (table.userId eq entry.userId) and (table.name eq entry.name)
                     }.firstOrNull()
                     if (existing != null) return@suspendTransaction toEntry(existing)
                     val now = System.currentTimeMillis()
@@ -48,15 +48,14 @@ class R2dbcAsyncSkillCatalogStore(private val db: R2dbcDatabase) : AsyncSkillCat
                         it[version] = row.version
                         it[checksum] = row.checksum
                         it[enabled] = row.enabled
+                        it[rootPath] = row.rootPath
                         it[installPath] = row.installPath
-                        it[origin] = row.origin
+                        it[objectKey] = row.objectKey
                         it[userId] = row.userId
-                        it[projectHash] = row.projectHash
                         it[createdAt] = now
                         it[updatedAt] = now
                         it[syncState] = row.syncState.name
                         it[revision] = row.revision
-                        it[indexProjectPath] = row.indexProjectPath
                     }
                     row
                 }
@@ -73,8 +72,9 @@ class R2dbcAsyncSkillCatalogStore(private val db: R2dbcDatabase) : AsyncSkillCat
         table.selectAll().where { table.id eq id }.firstOrNull()?.let { toEntry(it) }
     }
 
-    override suspend fun listByName(name: String, userId: String): List<SkillCatalogEntry> = suspendTransaction(db) {
-        table.selectAll().where { (table.userId eq userId) and (table.name eq name) }.map { toEntry(it) }.toList()
+    override suspend fun findByName(userId: String, name: String): SkillCatalogEntry? = suspendTransaction(db) {
+        table.selectAll().where { (table.userId eq userId) and (table.name eq name) }
+            .firstOrNull()?.let { toEntry(it) }
     }
 
     override suspend fun listByUser(userId: String): List<SkillCatalogEntry> = suspendTransaction(db) {
@@ -82,9 +82,13 @@ class R2dbcAsyncSkillCatalogStore(private val db: R2dbcDatabase) : AsyncSkillCat
             .map { toEntry(it) }.toList()
     }
 
-    override suspend fun listAll(): List<SkillCatalogEntry> = suspendTransaction(db) {
-        table.selectAll().orderBy(table.userId to SortOrder.ASC, table.name to SortOrder.ASC)
-            .map { toEntry(it) }.toList()
+    override suspend fun listByOwners(userIds: List<String>): List<SkillCatalogEntry> {
+        if (userIds.isEmpty()) return emptyList()
+        return suspendTransaction(db) {
+            table.selectAll().where { table.userId inList userIds }
+                .orderBy(table.userId to SortOrder.ASC, table.name to SortOrder.ASC)
+                .map { toEntry(it) }.toList()
+        }
     }
 
     override suspend fun listDistinctUserIds(): List<String> = suspendTransaction(db) {
@@ -155,11 +159,11 @@ class R2dbcAsyncSkillCatalogStore(private val db: R2dbcDatabase) : AsyncSkillCat
     private fun toEntry(row: ResultRow) = SkillCatalogEntry(
         id = row[table.id], name = row[table.name], source = row[table.skillSource],
         version = row[table.version], checksum = row[table.checksum], enabled = row[table.enabled],
-        installPath = row[table.installPath], origin = row[table.origin], userId = row[table.userId],
-        projectHash = row[table.projectHash], createdAt = row[table.createdAt], updatedAt = row[table.updatedAt],
+        rootPath = row[table.rootPath], installPath = row[table.installPath],
+        objectKey = row[table.objectKey], userId = row[table.userId],
+        createdAt = row[table.createdAt], updatedAt = row[table.updatedAt],
         indexedChecksum = row[table.indexedChecksum], syncState = SkillSyncState.valueOf(row[table.syncState]),
-        revision = row[table.revision], nextAttemptAt = row[table.nextAttemptAt], lastError = row[table.lastError],
-        indexProjectPath = row[table.indexProjectPath]
+        revision = row[table.revision], nextAttemptAt = row[table.nextAttemptAt], lastError = row[table.lastError]
     )
 
     private fun isUniqueViolation(error: Throwable): Boolean {

@@ -13,31 +13,32 @@ import java.io.IOException
 import java.nio.file.Path
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SkillAccessResolverTest {
 
-    private val project = Path.of("/projects/repo")
-    private val config = SkillConfig(enabled = false, paths = listOf("/shared"))
+    private val config = SkillConfig(rootDir = "/.easyai-skill-test-root")
     private val registry = DefaultSkillRegistry(DefaultSkillDiscovery(), config)
 
-    private fun skill(name: String, root: Path? = project, folder: String = name): SkillInfo {
-        val install = root?.resolve(".easyai/skills/$folder") ?: Path.of("/shared/$folder")
-        return SkillInfo(name, name, install.resolve("SKILL.md"), "body")
+    private fun skill(name: String, owner: String = "alice", folder: String = name): SkillInfo {
+        val dir = Path.of(config.rootDir, SkillPaths.safeSegment(owner), folder)
+        return SkillInfo(name, name, dir.resolve(SkillPaths.SKILL_FILE_NAME), "body")
     }
 
-    private fun row(skill: SkillInfo, owner: String = "system", enabled: Boolean = true) = SkillCatalogEntry(
-        id = "$owner:${skill.location}",
-        name = skill.name,
-        checksum = "a".repeat(64),
-        installPath = SkillPaths.canonicalize(skill.location.parent),
-        userId = owner,
-        enabled = enabled,
-        projectHash = SkillScopeResolver.projectHashOf(SkillScopeResolver.resolve(skill, config).second),
-        indexProjectPath = SkillScopeResolver.resolve(skill, config).second?.let { SkillPaths.canonicalize(it) }
-    )
+    private fun row(
+        skill: SkillInfo,
+        owner: String = "alice",
+        enabled: Boolean = true
+    ): SkillCatalogEntry {
+        val installDir = skill.location.parent!!
+        return SkillCatalogEntry(
+            id = "$owner:${skill.name}", name = skill.name, checksum = "a".repeat(64),
+            rootPath = SkillPaths.canonicalize(installDir.parent!!),
+            installPath = SkillPaths.canonicalize(installDir),
+            userId = owner, enabled = enabled
+        )
+    }
 
     private fun catalog(vararg rows: SkillCatalogEntry): AsyncSkillCatalogStore {
         val store = mockk<AsyncSkillCatalogStore>()
@@ -45,83 +46,65 @@ class SkillAccessResolverTest {
             val owner = firstArg<String>()
             rows.filter { it.userId == owner }
         }
-        coEvery { store.listByName(any(), any()) } answers {
-            val name = firstArg<String>()
-            val owner = secondArg<String>()
-            rows.filter { it.name == name && it.userId == owner }
-        }
         return store
     }
 
     @Nested
-    inner class Candidates {
+    inner class NameBinding {
 
         @Test
-        fun `PROJECT and GLOBAL of one name stay separate even with mixed owners`() = runTest {
-            val local = skill("pdf", folder = "group/local-folder")
-            val global = skill("pdf", null, "different-folder")
-            registry.register(local)
-            registry.register(global)
-            val localRow = row(local)
-            val globalRow = row(global, "alice")
-            val store = catalog(localRow, globalRow)
+        fun `own skill shadows the shared namesake for the viewer`() = runTest {
+            val own = skill("pdf")
+            val shared = skill("pdf", owner = "system")
+            registry.register("alice", own)
+            registry.register("system", shared)
+            val ownRow = row(own, "alice")
+            val store = catalog(ownRow, row(shared, SkillCatalogEntry.DEFAULT_USER_ID))
 
-            val result = SkillAccessResolver(registry, store, config).listScopedSkills("alice", project)
+            val result = SkillAccessResolver(registry, store).listScopedSkills("alice")
 
-            assertEquals(listOf(ScopedSkill(local, localRow), ScopedSkill(global, globalRow)), result)
-            coVerify(exactly = 1) { store.listByUser("alice") }
-            coVerify(exactly = 1) { store.listByUser("system") }
-            coVerify(exactly = 0) { store.listAll() }
+            assertEquals(listOf(ownRow), result.map { it.catalogEntry })
+            assertTrue(result.single().shared.not())
         }
 
         @Test
-        fun `requester override is per identity and unrelated system items remain`() = runTest {
+        fun `unrelated shared and personal names both stay visible`() = runTest {
             val own = skill("owned")
-            val shared = skill("system-only")
-            val global = skill("owned", null)
-            listOf(own, shared, global).forEach { registry.register(it) }
+            val shared = skill("system-only", owner = "system")
+            registry.register("alice", own)
+            registry.register("system", shared)
             val ownRow = row(own, "alice", enabled = false)
-            val sharedRow = row(shared)
-            val globalRow = row(global)
-            val store = catalog(row(own), ownRow, sharedRow, globalRow)
+            val sharedRow = row(shared, SkillCatalogEntry.DEFAULT_USER_ID)
+            val store = catalog(ownRow, sharedRow)
 
-            val result = SkillAccessResolver(registry, store, config).listScopedSkills("alice", project)
+            val result = SkillAccessResolver(registry, store).listScopedSkills("alice")
 
-            assertEquals(listOf(ownRow, sharedRow, globalRow), result.map { it.catalogEntry })
-            assertFalse(result.first().catalogEntry!!.enabled)
-            assertEquals(
-                SkillLoadPermission.Disabled,
-                SkillOwnership.checkLoad(store, "owned", "alice", project, config)
-            )
+            assertEquals(listOf(ownRow, sharedRow), result.map { it.catalogEntry })
+            assertTrue(result.first { it.catalogEntry === sharedRow }.shared)
+            // Binding keeps disabled rows; enablement filtering belongs to the model view.
+            assertTrue(result.first { it.catalogEntry === ownRow }.catalogEntry!!.enabled.not())
         }
 
         @Test
-        fun `parent child and prefix sibling are excluded despite matching owner`() = runTest {
-            val local = skill("local")
-            val parent = skill("parent", project.parent)
-            val child = skill("child", project.resolve("module"))
-            val sibling = skill("sibling", Path.of("/projects/repo-other"))
-            val global = skill("global", null)
-            val skills = listOf(local, parent, child, sibling, global)
-            skills.forEach { registry.register(it) }
-            val store = catalog(*skills.map { row(it, "alice") }.toTypedArray())
-            val resolver = SkillAccessResolver(registry, store, config)
-
-            assertEquals(listOf(local, global), resolver.listScopedSkills("alice", project.resolve("other/..")).map { it.skill })
-            assertEquals(listOf(global), resolver.listScopedSkills("alice", null).map { it.skill })
+        fun `registry candidate without any winning row stays hidden`() = runTest {
+            val orphan = skill("orphan")
+            registry.register("alice", orphan)
+            val result = SkillAccessResolver(registry, catalog()).listScopedSkills("alice")
+            assertTrue(result.isEmpty())
         }
 
         @Test
-        fun `anonymous blank and system requests never query another owner`() = runTest {
-            val global = skill("global", null)
-            registry.register(global)
-            val store = catalog(row(global), row(global, "alice"))
-            val resolver = SkillAccessResolver(registry, store, config)
+        fun `blank null and system requests resolve to the shared owner only`() = runTest {
+            val shared = skill("shared", owner = "system")
+            registry.register("system", shared)
+            val sharedRow = row(shared, SkillCatalogEntry.DEFAULT_USER_ID)
+            val store = catalog(sharedRow, row(skill("shared"), "alice"))
+            val resolver = SkillAccessResolver(registry, store)
 
             for (user in listOf(null, " ", "system")) {
-                assertEquals("system", resolver.listScopedSkills(user, null).single().catalogEntry?.userId)
+                assertEquals(SkillCatalogEntry.DEFAULT_USER_ID, resolver.listScopedSkills(user).single().catalogEntry?.userId)
             }
-            coVerify(exactly = 3) { store.listByUser("system") }
+            coVerify(exactly = 3) { store.listByUser(SkillCatalogEntry.DEFAULT_USER_ID) }
             coVerify(exactly = 0) { store.listByUser("alice") }
         }
     }
@@ -130,59 +113,57 @@ class SkillAccessResolverTest {
     inner class InstallAuthorization {
 
         @Test
-        fun `a registry winner at another users install path is not exposed`() = runTest {
-            val owned = skill("pdf", folder = "alice-folder")
-            val other = skill("pdf", folder = "bob-folder")
-            registry.register(owned)
-            registry.register(other)
-            val store = catalog(row(owned, "alice"), row(other, "bob"))
+        fun `a candidate whose location no row of the winner pins is not exposed`() = runTest {
+            val misplaced = skill("pdf", owner = "bob", folder = "bob-folder")
+            registry.register("alice", misplaced)
+            // Alice's row pins her own root. A directory inside bob's tree is nothing alice's row
+            // authorizes, so the scanned candidate stays hidden instead of leaking another owner's files.
+            val store = catalog(
+                row(misplaced, "alice").copy(
+                    installPath = "${config.rootDir}/alice/pdf",
+                    rootPath = "${config.rootDir}/alice"
+                )
+            )
 
-            assertTrue(SkillAccessResolver(registry, store, config).listScopedSkills("alice", project).isEmpty())
-            assertEquals(listOf(other), registry.all(), "access resolution must not replace the registry root winner")
+            assertTrue(SkillAccessResolver(registry, store).listScopedSkills("alice").isEmpty())
         }
 
         @Test
-        fun `a mismatched requester row blocks fallback to a matching system install`() = runTest {
-            val owned = skill("pdf", folder = "alice-folder")
-            val shared = skill("pdf", folder = "system-folder")
-            registry.register(shared)
-            val store = catalog(row(owned, "alice"), row(shared))
+        fun `a mismatched own row blocks fallback to the matching system install`() = runTest {
+            val shared = skill("pdf", owner = "system")
+            val drifted = skill("pdf", owner = "alice", folder = "pdf-old")
+            registry.register("alice", drifted)
+            registry.register("system", shared)
+            // Alice's stale row pins a path the registry no longer carries: binding fails closed
+            // because the winner of the name is alice, and alice's install path does not match.
+            val store = catalog(row(drifted, "alice").copy(installPath = "/.easyai-skill-test-root/alice/removed"), row(shared, SkillCatalogEntry.DEFAULT_USER_ID))
 
-            assertTrue(SkillAccessResolver(registry, store, config).listScopedSkills("alice", project).isEmpty())
+            assertTrue(SkillAccessResolver(registry, store).listScopedSkills("alice").isEmpty())
         }
 
         @Test
         fun `catalog install path comparison is exact but lexically normalized`() = runTest {
-            val local = skill("pdf", folder = "folder")
-            registry.register(local)
-            val wrongPrefix = row(local, "alice").copy(installPath = "$project/.easyai/skills/folder-other")
-            assertTrue(SkillAccessResolver(registry, catalog(wrongPrefix), config).listScopedSkills("alice", project).isEmpty())
-            val equivalent = row(local, "alice").copy(installPath = "$project/.easyai/skills/group/../folder")
+            val pdf = skill("pdf")
+            registry.register("alice", pdf)
+            val wrongPrefix = row(pdf).copy(installPath = "${config.rootDir}/alice/pdf-other")
+            assertTrue(
+                SkillAccessResolver(registry, catalog(wrongPrefix)).listScopedSkills("alice").isEmpty()
+            )
+            val equivalent = row(pdf).copy(installPath = "${config.rootDir}/alice/group/../pdf")
             assertEquals(
-                listOf(ScopedSkill(local, equivalent)),
-                SkillAccessResolver(registry, catalog(equivalent), config).listScopedSkills("alice", project)
+                listOf(ScopedSkill(pdf, equivalent)),
+                SkillAccessResolver(registry, catalog(equivalent)).listScopedSkills("alice")
             )
         }
 
         @Test
         fun `rows for another owner returned by a store are still rejected`() = runTest {
-            val local = skill("pdf")
-            registry.register(local)
+            val pdf = skill("pdf")
+            registry.register("alice", pdf)
             val store = mockk<AsyncSkillCatalogStore>()
-            coEvery { store.listByUser(any()) } returns listOf(row(local, "bob"))
+            coEvery { store.listByUser(any()) } returns listOf(row(pdf, "bob"))
 
-            assertTrue(SkillAccessResolver(registry, store, config).listScopedSkills("alice", project).isEmpty())
-        }
-
-        @Test
-        fun `unclaimed skills and unknown catalog locations do not authorize a registry candidate`() = runTest {
-            val global = skill("global", null)
-            registry.register(global)
-            val unknown = row(global).copy(installPath = "/unknown/folder")
-            assertFailsWith<IllegalArgumentException> {
-                SkillAccessResolver(registry, catalog(unknown), config).listScopedSkills("alice", null)
-            }
-            assertTrue(SkillAccessResolver(registry, catalog(), config).listScopedSkills("alice", null).isEmpty())
+            assertTrue(SkillAccessResolver(registry, store).listScopedSkills("alice").isEmpty())
         }
     }
 
@@ -190,31 +171,17 @@ class SkillAccessResolverTest {
     inner class WithoutCatalog {
 
         @Test
-        fun `only explicitly shared sources are exposed without inferring project ownership`() = runTest {
-            val global = skill("global", null)
-            val local = skill("local")
-            val other = skill("other", Path.of("/users/bob/project"))
-            val home = SkillInfo(
-                "home", location = Path.of(System.getProperty("user.home"), ".agents/skills/folder/SKILL.md"), content = "body"
-            )
-            listOf(global, local, other, home).forEach { registry.register(it) }
-            val resolver = SkillAccessResolver(registry, null, config)
+        fun `registry snapshot is exposed unbound`() = runTest {
+            val own = skill("own")
+            val shared = skill("shared", owner = "system")
+            registry.register("alice", own)
+            registry.register("system", shared)
+            val resolver = SkillAccessResolver(registry, null)
 
-            for (requestedProject in listOf(project, Path.of("/users/bob/project"), null)) {
-                val result = resolver.listScopedSkills("alice", requestedProject)
-                assertEquals(listOf(global, home), result.map { it.skill })
-                result.forEach { assertNull(it.catalogEntry) }
-            }
-        }
-
-        @Test
-        fun `config paths inside a project root do not make it shared without catalog`() = runTest {
-            val local = skill("local")
-            val configured = config.copy(paths = listOf(project.resolve(".easyai/skills").toString()))
-            val underTest = DefaultSkillRegistry(DefaultSkillDiscovery(), configured)
-            underTest.register(local)
-
-            assertTrue(SkillAccessResolver(underTest, null, configured).listScopedSkills("alice", project).isEmpty())
+            val result = resolver.listScopedSkills("alice")
+            assertEquals(listOf("own", "shared"), result.map { it.skill.name })
+            result.forEach { assertNull(it.catalogEntry) }
+            assertTrue(result.none { it.shared })
         }
     }
 
@@ -222,38 +189,19 @@ class SkillAccessResolverTest {
     inner class FailClosed {
 
         @Test
-        fun `inconsistent identity fails the request instead of exposing system or GLOBAL fallbacks`() = runTest {
-            val local = skill("pdf")
-            val global = skill("pdf", null)
-            registry.register(local)
-            registry.register(global)
-            val invalid = row(local, "alice", enabled = false).copy(projectHash = "", indexProjectPath = null)
-            val store = catalog(invalid, row(local), row(global), row(global, "alice"))
-            assertFailsWith<IllegalArgumentException> {
-                SkillAccessResolver(registry, store, config).listScopedSkills("alice", project)
-            }
-            val prompt = SkillPromptSource(registry, store, true, false, config = config)
-            assertFailsWith<IllegalArgumentException> {
-                prompt.skillsForPrompt("alice", project, listOf("pdf"))
-            }
-            assertFailsWith<IllegalArgumentException> { prompt.effectiveNames("alice", project) }
-            coVerify(exactly = 0) { store.listByUser("system") }
-        }
-
-        @Test
-        fun `catalog read errors propagate instead of exposing shared candidates`() = runTest {
-            registry.register(skill("global", null))
+        fun `catalog read errors propagate instead of exposing unbound candidates`() = runTest {
+            registry.register("system", skill("shared", owner = "system"))
             val store = mockk<AsyncSkillCatalogStore>()
             coEvery { store.listByUser("alice") } throws IOException("unavailable")
-            assertFailsWith<IOException> { SkillAccessResolver(registry, store, config).listScopedSkills("alice", null) }
+            assertFailsWith<IOException> { SkillAccessResolver(registry, store).listScopedSkills("alice") }
         }
 
         @Test
-        fun `catalog cancellation propagates`() = runTest {
+        fun `cancellation propagates`() = runTest {
             val store = mockk<AsyncSkillCatalogStore>()
             coEvery { store.listByUser("alice") } throws CancellationException("cancelled")
             assertFailsWith<CancellationException> {
-                SkillAccessResolver(registry, store, config).listScopedSkills("alice", project)
+                SkillAccessResolver(registry, store).listScopedSkills("alice")
             }
         }
     }

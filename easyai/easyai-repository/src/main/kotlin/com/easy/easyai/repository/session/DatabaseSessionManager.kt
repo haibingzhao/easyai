@@ -42,12 +42,12 @@ class DatabaseSessionManager(
     /** Optional: team execution store for TEAM session status recovery */
     private val teamExecutionStore: TeamExecutionStore? = null,
     /** Re-read the catalog per request; missing wiring exposes no skills. */
-    private val skillsSupplier: (suspend (String?, Path?, List<String>) -> List<Map<String, Any?>>)? = null,
+    private val skillsSupplier: (suspend (String?, List<String>) -> List<Map<String, Any?>>)? = null,
     /**
      * Default local agents authorize every skill in the effective model view (independent of the
      * prompt-injection switch and of RAG suppression); configured DB agents never consult it.
      */
-    private val skillNamesSupplier: (suspend (String?, Path?) -> List<String>)? = null
+    private val skillNamesSupplier: (suspend (String?) -> List<String>)? = null
 ) : SessionManager {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val saveMutex = Mutex()
@@ -61,7 +61,7 @@ class DatabaseSessionManager(
         baseContext: AgentContext,
         projectPath: Path?
     ): Pair<AgentContext, List<ToolDefinition>> {
-        val (agentSkills, allowedSkillNames) = resolveSkillsForAgent(agentDef.id, baseContext.userId, projectPath)
+        val (agentSkills, allowedSkillNames) = resolveSkillsForAgent(agentDef.id, baseContext.userId)
         val enrichedContext = baseContext.copy(
             skills = agentSkills,
             allowedSkillNames = allowedSkillNames,
@@ -200,22 +200,22 @@ class DatabaseSessionManager(
      * Returns (filtered skills data, allowed skill names list).
      * Empty allowedSkillNames means no skills are allowed (consistent with toolNames semantics).
      */
-    private suspend fun resolveSkillsForAgent(agentId: String, userId: String?, projectPath: Path?): Pair<List<Map<String, Any?>>, List<String>> {
+    private suspend fun resolveSkillsForAgent(agentId: String, userId: String?): Pair<List<Map<String, Any?>>, List<String>> {
         val store = agentStore ?: return emptyList<Map<String, Any?>>() to emptyList()
         val allowedConfigs = store.getAgentToolConfigs(agentId, TargetType.SKILL)
         if (allowedConfigs.isEmpty()) return emptyList<Map<String, Any?>>() to emptyList()  // No whitelist = no skills
         val allowedNames = allowedConfigs.map { it.targetName }
-        return skillsFor(userId, projectPath, allowedNames) to allowedNames
+        return skillsFor(userId, allowedNames) to allowedNames
     }
 
     /** Live, whitelist-filtered view; missing supplier exposes no skills. */
-    private suspend fun skillsFor(userId: String?, projectPath: Path?, allowedSkillNames: List<String>): List<Map<String, Any?>> =
-        (skillsSupplier?.invoke(userId, projectPath, allowedSkillNames) ?: emptyList())
+    private suspend fun skillsFor(userId: String?, allowedSkillNames: List<String>): List<Map<String, Any?>> =
+        (skillsSupplier?.invoke(userId, allowedSkillNames) ?: emptyList())
             .filter { (it["name"] as? String) in allowedSkillNames.toSet() }
 
     /** Fail-closed: an unavailable effective view leaves the default agent with no authorized skills. */
-    private suspend fun effectiveSkillNames(userId: String?, projectPath: Path?): List<String> = try {
-        skillNamesSupplier?.invoke(userId, projectPath) ?: emptyList()
+    private suspend fun effectiveSkillNames(userId: String?): List<String> = try {
+        skillNamesSupplier?.invoke(userId) ?: emptyList()
     } catch (e: kotlinx.coroutines.CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -304,11 +304,11 @@ class DatabaseSessionManager(
         }
         // Default local agent: whitelist from the effective view, built before the tools.
         val defaultSkillNames = agentContext.allowedSkillNames.ifEmpty {
-            effectiveSkillNames(agentContext.userId, projectPath)
+            effectiveSkillNames(agentContext.userId)
         }
         val defaultContext = resolvedContext.copy(
             allowedSkillNames = defaultSkillNames,
-            skills = resolvedContext.skills.ifEmpty { skillsFor(agentContext.userId, projectPath, defaultSkillNames) }
+            skills = resolvedContext.skills.ifEmpty { skillsFor(agentContext.userId, defaultSkillNames) }
         )
         val resolvedTools = explicitTools ?: toolResolver.createSessionTools(defaultContext)
 
@@ -462,7 +462,7 @@ class DatabaseSessionManager(
     ): ChatSession {
         val subAgentsData = resolveSubAgentsData(DEFAULT_AGENT_ID, userId)
         // Default local agent: explicit whitelist from the effective view, built before tools.
-        val defaultSkillNames = effectiveSkillNames(userId, projectPath)
+        val defaultSkillNames = effectiveSkillNames(userId)
         val agentContext = AgentContext(
             agentId = DEFAULT_AGENT_ID,
             modelConfig = config,
@@ -470,7 +470,7 @@ class DatabaseSessionManager(
             userId = userId,
             projectId = projectId,
             projectPath = projectPath,
-            skills = skillsFor(userId, projectPath, defaultSkillNames),
+            skills = skillsFor(userId, defaultSkillNames),
             allowedSkillNames = defaultSkillNames,
             subAgents = subAgentsData,
             instructions = emptyList(),

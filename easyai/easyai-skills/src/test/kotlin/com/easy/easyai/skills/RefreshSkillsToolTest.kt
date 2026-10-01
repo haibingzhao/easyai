@@ -28,15 +28,16 @@ import kotlin.test.assertTrue
 /**
  * Tests for [RefreshSkillsTool] — the step an agent calls after it has written a SKILL.md.
  *
- * The tool has no business arguments, so its whole value is the *answer*: a bare count ("registered=3")
- * leaves an agent guessing whether its own file made it, while naming what was added, what failed to
- * parse, and what still needs enabling is what lets it act. Most assertions are therefore on text.
+ * The tool has no business arguments, so its whole value is the *answer*: a bare count leaves an
+ * agent guessing whether its own file made it, while naming what was added, what failed, and what
+ * still needs enabling is what lets it act. Most assertions are therefore on text.
  */
 class RefreshSkillsToolTest {
 
     private val registry = mockk<SkillRegistry>()
-    private val refresher = mockk<SkillRefreshService>()
-    private val project = Path.of("/work/repo")
+    private val refresher = mockk<SkillRefreshService>(relaxed = true)
+    private val config = SkillConfig(rootDir = "/.easyai-fixture-skills")
+    private val aliceRoot = SkillPaths.ownerRoot(config, "alice")
 
     private val metadata = ToolMetadata(
         name = "refresh_skills",
@@ -47,24 +48,40 @@ class RefreshSkillsToolTest {
     )
 
     private fun tool(allowed: List<String> = emptyList(), withRefresher: Boolean = true) =
-        RefreshSkillsTool(metadata, registry, if (withRefresher) refresher else null, allowed)
+        RefreshSkillsTool(metadata, registry, if (withRefresher) refresher else null, config, allowed)
 
-    private fun delta(added: List<String>, removed: List<String> = emptyList(), total: Int = added.size) =
-        RegistryDelta(added = added, removed = removed, total = total)
+    private fun delta(
+        added: List<String> = emptyList(),
+        removed: List<String> = emptyList(),
+        updated: List<String> = emptyList(),
+        total: Int = added.size + updated.size + removed.size,
+        owner: String = "alice"
+    ) = RegistryDelta(
+        added = added.map { SkillKey(owner, it) },
+        removed = removed.map { SkillKey(owner, it) },
+        updatedKeys = updated.map { SkillKey(owner, it) },
+        total = total
+    )
 
     private fun outcome(
-        added: List<String>,
-        removed: List<String> = emptyList(),
+        delta: RegistryDelta,
+        owners: List<String> = listOf("system", "alice"),
         claimed: Int = 1,
+        pushed: Int = 0,
+        restored: Int = 0,
         submitted: Int = 1,
         delisted: Int = 0,
-        summaryPresent: Boolean = true
+        summaryPresent: Boolean = true,
+        syncPresent: Boolean = true,
+        updated: Int = 0,
+        confirmed: Int = 2
     ) = RefreshOutcome(
-        delta = delta(added, removed, total = added.size),
-        owner = "alice",
-        claimed = claimed,
-        submitted = submitted,
-        summary = if (summaryPresent) ReconcileSummary(owners = 1, confirmed = 2, submitted = submitted, delisted = delisted) else null
+        owners = owners,
+        delta = delta,
+        sync = if (syncPresent) SkillSyncOutcome(owners, claimed = claimed, pushed = pushed, restored = restored) else null,
+        summary = if (summaryPresent) ReconcileSummary(
+            owners = owners.size, confirmed = confirmed, submitted = submitted, delisted = delisted, updated = updated
+        ) else null
     )
 
     /** Hands the tool a real [CoroutineScope], the way the agent loop does. */
@@ -74,7 +91,7 @@ class RefreshSkillsToolTest {
         userId: String? = "alice"
     ): String {
         val result: ToolResult = tool.execute(
-            agentContext = AgentContext(agentId = "a", userId = userId, projectPath = project),
+            agentContext = AgentContext(agentId = "a", userId = userId),
             toolCallId = "tc-1",
             args = args,
             coroutineScope = this,
@@ -99,8 +116,6 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `the argument the schema declares is the argument the tool reads`() {
-            // Guards against the drift where a schema advertises `dry_run` while the code reads `dryRun`:
-            // the model obeys the schema, so this spelling is the one doExecute must use.
             val declared = Regex("\"properties\"\\s*:\\s*\\{\\s*\"([^\"]+)\"").find(tool().inputSchema)
                 ?: error("no property in the generated schema: ${tool().inputSchema}")
 
@@ -119,24 +134,25 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `a re-scan is still worth reporting, with its blind spot named`() = runTest {
-            every { registry.rescan(setOf(project)) } returns delta(listOf("pdf"), total = 4)
+            every { registry.rescan(setOf(aliceRoot)) } returns delta(added = listOf("pdf"), total = 4)
 
             val text = call(tool(withRefresher = false))
 
-            verify(exactly = 1) { registry.rescan(setOf(project)) }
-            coVerify(exactly = 0) { refresher.refreshFor(any(), any()) }
+            verify(exactly = 1) { registry.rescan(setOf(aliceRoot)) }
+            coVerify(exactly = 0) { refresher.refreshFor(any()) }
             assertTrue(text.contains("registered=4 added=[pdf]"), "got: $text")
             assertTrue(text.contains("Catalog coordination is unavailable"), "got: $text")
             assertTrue(text.contains("does not establish ownership or search readiness"), "got: $text")
         }
 
         @Test
-        fun `a request with no identity still re-scans the session project`() = runTest {
-            every { registry.rescan(setOf(project)) } returns delta(emptyList())
+        fun `a request with no identity re-scans the shared root`() = runTest {
+            val systemRoot = SkillPaths.ownerRoot(config, "system")
+            every { registry.rescan(setOf(systemRoot)) } returns delta()
 
             call(tool(withRefresher = false), userId = null)
 
-            verify(exactly = 1) { registry.rescan(setOf(project)) }
+            verify(exactly = 1) { registry.rescan(setOf(systemRoot)) }
         }
     }
 
@@ -144,20 +160,22 @@ class RefreshSkillsToolTest {
     inner class `with the catalog layer` {
 
         @Test
-        fun `the refresh is asked for the requesting user and session project`() = runTest {
-            coEvery { refresher.refreshFor("alice", project) } returns outcome(listOf("pdf"))
+        fun `the refresh is asked for the requesting user`() = runTest {
+            coEvery { refresher.ownersFor("alice") } returns listOf("system", "alice")
+            coEvery { refresher.refreshFor("alice") } returns outcome(delta(added = listOf("pdf")))
 
             val text = call(tool())
 
-            coVerify(exactly = 1) { refresher.refreshFor("alice", project) }
+            coVerify(exactly = 1) { refresher.refreshFor("alice") }
             verify(exactly = 0) { registry.rescan(any()) }
-            assertTrue(text.contains("owner 'alice'"), "the tenant the rows landed in must be visible: $text")
+            assertTrue(text.contains("For owners [system, alice]"), "the tenants the rows landed in must be visible: $text")
+            assertTrue(text.contains("claimed=1"), "got: $text")
             assertTrue(text.contains("submitted=1"), "got: $text")
         }
 
         @Test
         fun `an index outage is reported, not hidden behind the counts`() = runTest {
-            coEvery { refresher.refreshFor(any(), any()) } returns outcome(listOf("pdf"), summaryPresent = false)
+            coEvery { refresher.refreshFor(any()) } returns outcome(delta(added = listOf("pdf")), summaryPresent = false)
 
             val text = call(tool())
 
@@ -165,10 +183,23 @@ class RefreshSkillsToolTest {
         }
 
         @Test
+        fun `a sync outage still reports the registry delta`() = runTest {
+            coEvery { refresher.refreshFor(any()) } returns outcome(
+                delta(added = listOf("pdf")), syncPresent = false, summaryPresent = false
+            )
+
+            val text = call(tool())
+
+            assertTrue(text.contains("added=[pdf]"), "got: $text")
+            assertTrue(text.contains("Catalog/package reconciliation could not run"), "got: $text")
+        }
+
+        @Test
         fun `a submitted document is not claimed as already searchable`() = runTest {
-            // The refresh never waits on the backend, so the answer must not imply the embedding finished:
-            // an agent that trusts it would report a missing skill_search hit as a lost skill.
-            coEvery { refresher.refreshFor(any(), any()) } returns outcome(listOf("pdf", "csv", "docx"), submitted = 3)
+            // The refresh never waits on the backend, so the answer must not imply the embedding finished.
+            coEvery { refresher.refreshFor(any()) } returns outcome(
+                delta(added = listOf("pdf", "csv", "docx")), submitted = 3
+            )
 
             val text = call(tool(allowed = listOf("pdf", "csv", "docx")))
 
@@ -179,7 +210,7 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `a clean refresh points at the verification step`() = runTest {
-            coEvery { refresher.refreshFor(any(), any()) } returns outcome(listOf("pdf"))
+            coEvery { refresher.refreshFor(any()) } returns outcome(delta(added = listOf("pdf")))
 
             val text = call(tool(allowed = listOf("pdf")))
 
@@ -194,7 +225,9 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `a file that was not parsed is said plainly`() = runTest {
-            coEvery { refresher.refreshFor(any(), any()) } returns outcome(emptyList(), claimed = 0, submitted = 0)
+            coEvery { refresher.refreshFor(any()) } returns outcome(
+                delta(total = 0), claimed = 0, submitted = 0
+            )
 
             val text = call(tool())
 
@@ -204,12 +237,9 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `a body update is reported apart from new sources`() = runTest {
-            coEvery { refresher.refreshFor(any(), any()) } returns RefreshOutcome(
-                delta = RegistryDelta(added = emptyList(), total = 2, updatedKeys = listOf(SkillKey("pdf", project))),
-                owner = "alice",
-                claimed = 0,
-                submitted = 1,
-                summary = ReconcileSummary(owners = 1, updated = 1, submitted = 1)
+            coEvery { refresher.refreshFor(any()) } returns outcome(
+                delta(updated = listOf("pdf"), total = 2),
+                claimed = 0, submitted = 1, updated = 1, confirmed = 0
             )
 
             val text = call(tool(allowed = listOf("pdf")))
@@ -220,8 +250,20 @@ class RefreshSkillsToolTest {
         }
 
         @Test
+        fun `a pushed local edit says the package store was re-uploaded`() = runTest {
+            coEvery { refresher.refreshFor(any()) } returns outcome(
+                delta(updated = listOf("pdf")), pushed = 1, claimed = 0
+            )
+
+            val text = call(tool(allowed = listOf("pdf")))
+
+            assertTrue(text.contains("pushed=1"), "got: $text")
+            assertTrue(text.contains("re-uploaded to the package store"), "got: $text")
+        }
+
+        @Test
         fun `a skill this agent has not been given is called out by name`() = runTest {
-            coEvery { refresher.refreshFor(any(), any()) } returns outcome(listOf("pdf"))
+            coEvery { refresher.refreshFor(any()) } returns outcome(delta(added = listOf("pdf")))
 
             val text = call(tool(allowed = listOf("review")))
 
@@ -231,7 +273,7 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `skills that vanished from disk are listed so the user hears about them`() = runTest {
-            coEvery { refresher.refreshFor(any(), any()) } returns outcome(listOf("pdf"), delisted = 2)
+            coEvery { refresher.refreshFor(any()) } returns outcome(delta(added = listOf("pdf")), delisted = 2)
 
             val text = call(tool(allowed = listOf("pdf")))
 
@@ -241,12 +283,8 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `a pass that only removed skills still says what moved`() = runTest {
-            coEvery { refresher.refreshFor(any(), any()) } returns RefreshOutcome(
-                delta = RegistryDelta(added = emptyList(), removed = listOf("stale"), total = 1),
-                owner = "alice",
-                claimed = 0,
-                submitted = 0,
-                summary = ReconcileSummary(owners = 1)
+            coEvery { refresher.refreshFor(any()) } returns outcome(
+                delta(removed = listOf("stale")), claimed = 0, submitted = 0, confirmed = 0
             )
 
             val text = call(tool())
@@ -256,18 +294,14 @@ class RefreshSkillsToolTest {
         }
     }
 
-    /**
-     * The builder decides whether an agent can reach this tool at all, and that is a correctness
-     * question rather than a preference: hidden behind a per-agent whitelist, nothing could publish
-     * a SKILL.md it had just written.
-     */
     @Nested
     inner class `how it is offered to agents` {
 
         private val registryProvider = mockk<ObjectProvider<SkillRegistry>>()
         private val refresherProvider = mockk<ObjectProvider<SkillRefreshService>>()
+        private val configProvider = mockk<ObjectProvider<SkillConfig>>()
 
-        private fun builder() = RefreshSkillsToolBuilder(registryProvider, refresherProvider)
+        private fun builder() = RefreshSkillsToolBuilder(registryProvider, refresherProvider, configProvider)
 
         @Test
         fun `it reaches every agent without a whitelist entry and without asking permission`() {
@@ -292,13 +326,13 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `the tool is handed the registry, the refresher and this agent's skill whitelist`() {
-            val agentService = mockk<AgentService>()
             every { registryProvider.getIfAvailable() } returns registry
             every { refresherProvider.getIfAvailable() } returns refresher
+            every { configProvider.getIfAvailable() } returns config
 
             val built = builder().build(
-                AgentContext(agentId = "a", userId = "alice", projectPath = project, allowedSkillNames = listOf("pdf")),
-                agentService
+                AgentContext(agentId = "a", userId = "alice", allowedSkillNames = listOf("pdf")),
+                mockk<AgentService>()
             )
 
             assertNotNull(built)
@@ -307,11 +341,11 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `the tool stays offered when the catalog layer is off`() {
-            val agentService = mockk<AgentService>()
             every { registryProvider.getIfAvailable() } returns registry
             every { refresherProvider.getIfAvailable() } returns null
+            every { configProvider.getIfAvailable() } returns null
 
-            assertNotNull(builder().build(AgentContext(agentId = "a"), agentService))
+            assertNotNull(builder().build(AgentContext(agentId = "a"), mockk<AgentService>()))
         }
     }
 
@@ -320,7 +354,7 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `a note is accepted without changing the answer`() = runTest {
-            every { registry.rescan(setOf(project)) } returns delta(listOf("pdf"), total = 2)
+            every { registry.rescan(setOf(aliceRoot)) } returns delta(added = listOf("pdf"), total = 2)
 
             val text = call(tool(withRefresher = false), mapOf("note" to "after writing pdf-report"))
 
@@ -329,7 +363,7 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `a blank note is not an error`() = runTest {
-            every { registry.rescan(setOf(project)) } returns delta(emptyList())
+            every { registry.rescan(setOf(aliceRoot)) } returns delta()
 
             assertTrue(call(tool(withRefresher = false), mapOf("note" to "  ")).isNotBlank())
         }

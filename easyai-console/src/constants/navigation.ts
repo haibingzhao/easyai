@@ -5,6 +5,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'chat', label: 'Chat', labelKey: 'Chat', icon: 'MessageSquare', path: '/' },
   { id: 'workflow', label: 'Workflow', labelKey: 'Workflow', icon: 'GitBranch', path: '/workflow' },
   { id: 'agents', label: 'Agents', labelKey: 'Agents', icon: 'Bot', path: '/agents' },
+  { id: 'skills', label: 'Skills', labelKey: 'Skills', icon: 'Sparkles', path: '/skills' },
   { id: 'commands', label: 'Commands', labelKey: 'Commands', icon: 'Terminal', path: '/commands' },
   { id: 'memories', label: 'Memories', labelKey: 'Memories', icon: 'Brain', path: '/memories' },
   { id: 'knowledge', label: 'Knowledge', labelKey: 'Knowledge Base', icon: 'BookOpen', path: '/knowledge' },

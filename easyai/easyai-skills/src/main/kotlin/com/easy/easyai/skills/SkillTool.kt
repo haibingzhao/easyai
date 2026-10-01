@@ -15,19 +15,20 @@ import kotlin.streams.asSequence
  * Tool that allows the LLM agent to load a skill by name during conversation.
  * Returns the skill's content + a sampled list of associated files.
  *
- * Resolves the same name-bound, enabled and whitelisted instance advertised by prompt and search.
- * Catalog failures never fall back to a registry-only read.
+ * Resolves the same name-bound, enabled and whitelisted instance advertised by prompt and search
+ * (own skills shadow the shared `system` layer). Catalog failures never fall back to a
+ * registry-only read.
  */
 class SkillTool(
     metadata: ToolMetadata,
     private val registry: SkillRegistry,
     private val allowedSkillNames: List<String> = emptyList(),
     private val catalog: AsyncSkillCatalogStore? = null,
-    private val config: SkillConfig = SkillConfig(),
+    private val refresher: SkillRefreshService? = null
 ) : BaseToolDefinition(metadata) {
 
     private val logger = LoggerFactory.getLogger(javaClass)
-    private val modelView = SkillModelView(registry, catalog, config)
+    private val modelView = SkillModelView(registry, catalog)
 
     override fun parameterType() = SkillToolParams::class.java
     override val executionMode = ToolExecutionMode.SEQUENTIAL
@@ -65,8 +66,9 @@ class SkillTool(
             )
         }
 
+        refresher?.ensureSynced(agentContext.userId)
         val visible = try {
-            modelView.list(agentContext.userId, agentContext.projectPath, allowedSkillNames)
+            modelView.list(agentContext.userId, allowedSkillNames)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -76,20 +78,20 @@ class SkillTool(
                 isError = true
             )
         }
-        val skill = visible.firstOrNull { it.skill.name == skillName }?.skill
+        val scoped = visible.firstOrNull { it.skill.name == skillName }
             ?: return ToolResult(
                 content = listOf(TextContent(
-                    "Error: Skill '$skillName' is not available for this agent in the current project " +
+                    "Error: Skill '$skillName' is not available for this agent " +
                         "(not installed, disabled, or out of sync). Call refresh_skills after writing a skill."
                 )),
                 isError = true
             )
+        val skill = scoped.skill
 
         // Sample files in the skill's directory
         val skillDir = skill.location.parent
         val sampleFiles = listSampleFiles(skillDir)
 
-        val baseDir = skill.location.parent
         val sb = StringBuilder()
         sb.append("<skill_content name=\"${skill.name}\">\n")
         sb.append("# Skill: ${skill.name}\n\n")
@@ -99,11 +101,14 @@ class SkillTool(
         if (skill.tags.isNotEmpty()) {
             sb.append("**Tags**: ${skill.tags.joinToString(", ")}\n\n")
         }
+        if (scoped.shared) {
+            sb.append("**Shared**: this skill belongs to the read-only `system` layer; edit a copy, not this directory.\n\n")
+        }
         sb.append("---\n\n")
         sb.append(skill.content)
         sb.append("\n\n")
-        if (baseDir != null) {
-            sb.append("Base directory for this skill: file://${baseDir.toAbsolutePath()}\n")
+        if (skillDir != null) {
+            sb.append("Base directory for this skill: file://${skillDir.toAbsolutePath()}\n")
             sb.append("Relative paths in this skill are relative to this base directory.\n\n")
         }
         if (sampleFiles.isNotEmpty()) {
@@ -134,7 +139,7 @@ class SkillTool(
         return try {
             Files.walk(skillDir).use { stream ->
                 stream.asSequence()
-                    .filter { Files.isRegularFile(it) && it.fileName.toString() != "SKILL.md" }
+                    .filter { Files.isRegularFile(it) && it.fileName.toString() != SkillPaths.SKILL_FILE_NAME }
                     .take(SAMPLE_FILE_LIMIT.toInt())
                     .map { it.toAbsolutePath().toString() }
                     .toList()

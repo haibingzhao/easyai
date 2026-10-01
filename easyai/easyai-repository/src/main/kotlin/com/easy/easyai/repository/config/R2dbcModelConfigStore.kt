@@ -147,6 +147,11 @@ class R2dbcModelConfigStore(
                     UserScope.filter(Tables.ModelProviderConfigTable.userId, userId) and
                         (Tables.ModelProviderConfigTable.modelType eq modelType.name)
                 }
+                // Deterministic fallback for "no explicit default" resolution: default first, then oldest.
+                .orderBy(
+                    Tables.ModelProviderConfigTable.isDefault to SortOrder.DESC,
+                    Tables.ModelProviderConfigTable.createdAt to SortOrder.ASC,
+                )
                 .map { row -> mapToModelProviderConfig(row, objectMapper) }
                 .toList()
         }

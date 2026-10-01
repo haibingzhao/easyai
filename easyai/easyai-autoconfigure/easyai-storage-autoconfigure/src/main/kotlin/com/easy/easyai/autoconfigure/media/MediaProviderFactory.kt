@@ -34,6 +34,9 @@ object MediaProviderFactory {
         if (settings.providerType.lowercase() !in SUPPORTED_PROVIDERS) {
             return "unsupported media protocol '${settings.providerType}'"
         }
+        if (settings.baseUrl.isBlank()) {
+            return "a media model needs a base url — media endpoints are not inferred from the protocol"
+        }
         if (settings.defaultModel.isBlank()) {
             return "a media model needs a model id"
         }

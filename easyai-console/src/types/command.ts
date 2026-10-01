@@ -8,10 +8,10 @@ export interface SlashCommand {
   aliases: string[];
   category: CommandCategory;
   hints: string[];
-  /** Normalized absolute SKILL.md path for SKILL commands. */
-  source?: string;
-  scope?: 'GLOBAL' | 'PROJECT';
-  projectPath?: string;
+  /** SKILL commands only: the installed skill this command loads, addressed by name. */
+  skillName?: string;
+  /** SKILL commands only: the skill comes from the read-only shared layer. */
+  shared?: boolean;
 }
 
 // User command CRUD types (DB-persisted)

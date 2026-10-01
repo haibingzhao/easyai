@@ -4,6 +4,7 @@ import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
 import com.easy.easyai.api.model.ModelType
 import com.easy.easyai.repository.database.DatabaseMigration
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
 import org.jetbrains.exposed.v1.r2dbc.transactions.TransactionManager
@@ -143,6 +144,34 @@ class R2dbcModelConfigStoreTest {
             store.saveConfig(config("bob-image", ModelType.IMAGE, isDefault = true), bob)
 
             assertTrue(store.getConfig(aliceDefault.id, alice)!!.isDefault)
+        }
+    }
+
+    @Nested
+    inner class `read ordering` {
+
+        @Test
+        fun `the default row leads and the rest keep creation order`() = runTest {
+            val store = createStore()
+            val user = "user-${UUID.randomUUID()}"
+            store.saveConfig(config("image-old", ModelType.IMAGE), user)
+            delay(2)
+            store.saveConfig(config("image-new", ModelType.IMAGE), user)
+            delay(2)
+            store.saveConfig(config("image-default", ModelType.IMAGE, isDefault = true), user)
+
+            assertEquals(
+                listOf("image-default", "image-old", "image-new"),
+                store.getModelConfigs(ModelType.IMAGE, user).map { it.name }
+            )
+
+            store.deleteConfig(store.getModelConfigs(ModelType.IMAGE, user).first { it.isDefault }.id, user)
+
+            assertEquals(
+                listOf("image-old", "image-new"),
+                store.getModelConfigs(ModelType.IMAGE, user).map { it.name },
+                "without an explicit default the oldest row wins"
+            )
         }
     }
 }

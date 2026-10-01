@@ -11,6 +11,7 @@ import { McpPage } from './pages/McpPage';
 import { MemoriesPage } from './pages/MemoriesPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { CommandsPage } from './pages/CommandsPage';
+import { SkillsPage } from './pages/SkillsPage';
 import { SwarmPresetEditorPage } from './pages/SwarmPresetEditorPage';
 import { WorkflowRunPage } from './pages/WorkflowRunPage';
 import { LoginPage } from './pages/LoginPage';
@@ -139,6 +140,10 @@ function App() {
           <Route
             path="/mcp"
             element={<McpPage />}
+          />
+          <Route
+            path="/skills"
+            element={<SkillsPage />}
           />
           <Route
             path="/memories"

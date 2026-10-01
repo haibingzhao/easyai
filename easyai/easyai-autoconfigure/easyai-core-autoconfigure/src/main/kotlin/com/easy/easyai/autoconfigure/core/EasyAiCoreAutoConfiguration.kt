@@ -32,9 +32,11 @@ import com.easy.easyai.skills.*
 import com.easy.easyai.skills.a2a.AgentSkillFactory
 import com.easy.easyai.skills.a2a.DefaultAgentSkillFactory
 import com.easy.easyai.skills.command.*
+import com.easy.easyai.storage.local.LocalDirObjectStorage
 import com.easy.easyai.tools.SpringToolFactory
 import io.micrometer.observation.ObservationRegistry
 import jakarta.annotation.PostConstruct
+import java.nio.file.Path
 import org.springframework.ai.chat.model.ChatModel
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Autowired
@@ -122,46 +124,94 @@ open class EasyAiCoreAutoConfiguration(
 
     // ========== Skill Beans ==========
 
-    @Bean
-    @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "easyai.skills", name = ["enabled"], havingValue = "true", matchIfMissing = true)
-    open fun skillDiscovery(): SkillDiscovery = DefaultSkillDiscovery()
-
-    @Bean
-    @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "easyai.skills", name = ["enabled"], havingValue = "true", matchIfMissing = true)
-    open fun skillRegistry(discovery: SkillDiscovery, properties: EasyAiProperties): SkillRegistry {
-        return DefaultSkillRegistry(discovery, skillConfigOf(properties))
-    }
-
     /**
      * Registry-facing view of `easyai.skills.*` as a bean, so collaborators outside this class
-     * (e.g. [com.easy.easyai.skills.SkillToolBuilder]) resolve granularity the same way the
+     * (e.g. [com.easy.easyai.skills.SkillToolBuilder]) resolve the owner root the same way the
      * registry does instead of re-deriving from properties.
      */
     @Bean
     @ConditionalOnMissingBean
-    open fun skillConfig(properties: EasyAiProperties): SkillConfig = skillConfigOf(properties)
+    open fun skillConfig(): SkillConfig = SkillConfig(
+        enabled = properties.skills.enabled,
+        rootDir = properties.skills.rootDir,
+        injectIntoSystemPrompt = properties.skills.injectIntoSystemPrompt,
+        packageMaxBytes = properties.skills.packageMaxBytes,
+    )
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "easyai.skills", name = ["enabled"], havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = SKILL_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = true)
+    open fun skillDiscovery(): SkillDiscovery = DefaultSkillDiscovery()
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = SKILL_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = true)
+    open fun skillRegistry(discovery: SkillDiscovery, skillConfig: SkillConfig): SkillRegistry =
+        DefaultSkillRegistry(discovery, skillConfig)
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = SKILL_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = true)
     open fun skillAccessResolver(
         skillRegistry: SkillRegistry,
         catalog: ObjectProvider<AsyncSkillCatalogStore>,
-        skillConfig: SkillConfig
-    ): SkillAccessResolver = SkillAccessResolver(skillRegistry, catalog.getIfAvailable(), skillConfig)
+    ): SkillAccessResolver = SkillAccessResolver(skillRegistry, catalog.getIfAvailable())
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "easyai.skills", name = ["enabled"], havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = SKILL_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = true)
     open fun agentSkillFactory(): AgentSkillFactory = DefaultAgentSkillFactory()
+
+    // ========== Skill Package / Sync Beans ==========
+
+    /**
+     * Skill packages are stored per owner in the same object storage chat attachments use. With no
+     * row configured for anybody, the zip tree falls back to a directory under the skill root, so
+     * desktop and single-machine deployments keep full restore/push semantics without an OSS bucket.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = SKILL_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = true)
+    open fun skillPackageStore(
+        storageResolver: ObjectProvider<ObjectStorageResolver>,
+        skillConfig: SkillConfig,
+    ): SkillPackageStore = SkillPackageStore(
+        resolver = storageResolver.getIfAvailable(),
+        localFallback = LocalDirObjectStorage(Path.of(skillConfig.rootDir, PACKAGE_FALLBACK_DIR)),
+    )
+
+    /**
+     * The single write direction of the pipeline: catalog row + object-storage package + local
+     * directory converge here. Present whenever skills are enabled — retrieval indexing is optional
+     * on top, restoring a user's skills to disk is not.
+     *
+     * Without an [AsyncSkillCatalogStore] (r2dbc off) it degrades to rescanning the roots from disk.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = SKILL_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = true)
+    open fun skillSyncService(
+        catalog: ObjectProvider<AsyncSkillCatalogStore>,
+        registry: ObjectProvider<SkillRegistry>,
+        discovery: SkillDiscovery,
+        packages: SkillPackageStore,
+        skillConfig: SkillConfig,
+    ): SkillSyncService = SkillSyncService(
+        catalog = catalog.getIfAvailable(),
+        registry = registry.getIfAvailable(),
+        discovery = discovery,
+        packages = packages,
+        config = skillConfig,
+    )
 
     // ========== Skill Prompt / RAG Beans ==========
 
     /**
      * Not RAG-gated: it also carries the `enabled` filtering that must apply while the full list is
      * still injected, so both prompt paths (default agent and DB sessions) share one decision.
+     *
+     * [SkillPromptSource.firstAccessSync] is the lazy gate a request hits before its first read, so
+     * a user who signs in on a machine that has never synced their skills sees them anyway.
      */
     @Bean
     @ConditionalOnMissingBean
@@ -169,104 +219,69 @@ open class EasyAiCoreAutoConfiguration(
         @Autowired(required = false) skillRegistry: SkillRegistry? = null,
         @Autowired(required = false) catalog: AsyncSkillCatalogStore? = null,
         @Autowired(required = false) skillStore: SkillStore? = null,
-        properties: EasyAiProperties
+        skillConfig: SkillConfig,
+        refreshService: ObjectProvider<SkillRefreshService>,
     ): SkillPromptSource = SkillPromptSource(
         registry = skillRegistry,
         catalog = catalog,
-        injectIntoSystemPrompt = properties.skills.injectIntoSystemPrompt,
+        injectIntoSystemPrompt = skillConfig.injectIntoSystemPrompt,
         ragEnabled = properties.skills.rag.enabled,
         // Discovery is only "ready" when the whole chain exists. RagAutoConfiguration hands out a
-        // SkillStore whenever the flag is on, but the write side (SkillIndexStartupRunner → 
-        // SkillCatalogSyncService.claimUnclaimed) needs the R2DBC catalog to have anything to index.
-        // Without this conjunction, `rag on + r2dbc off` would suppress the prompt listing while 
-        // skill_search returns empty forever — the worst of both worlds.
+        // SkillStore whenever the flag is on, but suppressing the prompt listing needs rows for that
+        // store to have been built from. Without this conjunction, `rag on + r2dbc off` would
+        // suppress the listing while skill_search returns empty forever — the worst of both worlds.
         ragDiscoveryReady = skillStore != null && catalog != null,
-        config = skillConfigOf(properties)
+        firstAccessSync = { userId -> refreshService.ifAvailable?.ensureSynced(userId) }
     )
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = SKILL_RAG_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = false)
-    open fun skillCatalogSyncService(
-        @Autowired(required = false) catalog: AsyncSkillCatalogStore? = null,
-        skillConfig: SkillConfig
-    ): SkillCatalogSyncService = SkillCatalogSyncService(catalog, skillConfig)
-
-    @Bean
-    @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = SKILL_RAG_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = false)
+    @ConditionalOnProperty(prefix = SKILL_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = true)
     open fun skillIndexer(
-        skillCatalogSyncService: SkillCatalogSyncService,
+        syncService: SkillSyncService,
         @Autowired(required = false) skillStore: SkillStore? = null,
         @Autowired(required = false) catalog: AsyncSkillCatalogStore? = null,
-        properties: EasyAiProperties
     ): SkillIndexer = SkillIndexer(
         skillStore = skillStore,
         catalog = catalog,
-        syncService = skillCatalogSyncService,
-        config = skillConfigOf(properties),
+        syncService = syncService,
         indexConcurrency = properties.skills.rag.indexConcurrency
     )
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = SKILL_RAG_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = false)
+    @ConditionalOnProperty(prefix = SKILL_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = true)
     open fun skillCatalogService(
-        skillIndexer: SkillIndexer,
-        @Autowired(required = false) skillStore: SkillStore? = null,
+        indexer: SkillIndexer,
         @Autowired(required = false) catalog: AsyncSkillCatalogStore? = null,
-        properties: EasyAiProperties
     ): SkillCatalogService = SkillCatalogService(
         catalog = catalog,
-        indexer = skillIndexer,
-        skillStore = skillStore,
-        config = skillConfigOf(properties)
+        indexer = indexer
     )
 
     /**
-     * The one refresh chain — re-read the disk, claim catalog rows and reconcile the index — shared
-     * by the startup pass below and by the `refresh_skills` tool.
-     *
-     * Created only when the whole chain is present: a registry with nothing to index into or no table
-     * to read owners from would make the pass a no-op that still costs a listener.
+     * The one refresh chain — reconcile catalog/package/disk, then project the rows into the
+     * retrieval index — shared by the startup pass, the login hook and the `refresh_skills` tool.
      */
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = SKILL_RAG_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = false)
+    @ConditionalOnProperty(prefix = SKILL_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = true)
     open fun skillRefreshService(
-        skillIndexer: SkillIndexer,
-        skillCatalogSyncService: SkillCatalogSyncService,
-        skillConfig: SkillConfig,
-        @Autowired(required = false) skillRegistry: SkillRegistry? = null,
-        @Autowired(required = false) catalog: AsyncSkillCatalogStore? = null,
-        @Autowired(required = false) skillStore: SkillStore? = null
-    ): SkillRefreshService? {
-        if (skillRegistry == null || catalog == null || skillStore == null) {
-            logger.warn(
-                "Skill RAG is enabled but registry={}, catalog={}, skillStore={}: skill refresh is off",
-                skillRegistry != null, catalog != null, skillStore != null
-            )
-            return null
-        }
-        return SkillRefreshService(
-            registry = skillRegistry,
-            catalog = catalog,
-            syncService = skillCatalogSyncService,
-            indexer = skillIndexer,
-            config = skillConfig
-        )
-    }
+        syncService: SkillSyncService,
+        indexer: SkillIndexer,
+    ): SkillRefreshService = SkillRefreshService(syncService, indexer)
 
     /**
-     * Thin event shell over [SkillRefreshService]: without that service there is nothing to run, so the
-     * runner is absent as well and only the application-event wiring is missing.
+     * Thin event shell over [SkillRefreshService]: no skills, no runner. Owners come from the
+     * catalog, never from a guess about who is logged in.
      */
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = SKILL_RAG_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = false)
+    @ConditionalOnProperty(prefix = SKILL_PREFIX, name = ["enabled"], havingValue = "true", matchIfMissing = true)
     open fun skillIndexStartupRunner(
-        @Autowired(required = false) skillRefreshService: SkillRefreshService? = null
-    ): SkillIndexStartupRunner? = skillRefreshService?.let { SkillIndexStartupRunner(it) }
+        refreshService: SkillRefreshService,
+        catalog: ObjectProvider<AsyncSkillCatalogStore>,
+    ): SkillIndexStartupRunner = SkillIndexStartupRunner(refreshService, catalog.getIfAvailable())
 
     // ========== Validation Beans ==========
 
@@ -301,13 +316,12 @@ open class EasyAiCoreAutoConfiguration(
     open fun commandService(
         commandRegistry: CommandRegistry,
         skillAccessResolver: ObjectProvider<SkillAccessResolver>,
-        skillConfig: SkillConfig,
         @Autowired(required = false) promptProvider: McpPromptProvider? = null,
         @Autowired(required = false) userCommandStore: AsyncUserCommandStore? = null,
         @Autowired(required = false) builtinHandlers: List<BuiltinCommandHandler>? = null,
     ): CommandService = CommandService(
         commandRegistry, promptProvider, userCommandStore, builtinHandlers ?: emptyList(),
-        skillAccessResolver.getIfAvailable(), skillConfig
+        skillAccessResolver.getIfAvailable()
     )
 
     @Bean
@@ -366,17 +380,11 @@ open class EasyAiCoreAutoConfiguration(
         )
     }
 
-    /** Registry-facing view of `easyai.skills.*`; shared by the registry and every RAG service. */
-    private fun skillConfigOf(properties: EasyAiProperties): SkillConfig = SkillConfig(
-        enabled = properties.skills.enabled,
-        paths = properties.skills.paths,
-        homeSkillDirs = properties.skills.homeSkillDirs,
-        injectIntoSystemPrompt = properties.skills.injectIntoSystemPrompt,
-        workDir = properties.workDir,
-    )
-
     companion object {
-        /** Master switch of the whole skill retrieval chain. */
-        private const val SKILL_RAG_PREFIX = "easyai.skills.rag"
+        /** Master switch of the skill subsystem (prompt, registry, sync, retrieval on top). */
+        private const val SKILL_PREFIX = "easyai.skills"
+
+        /** Directory under the skill root holding packages when no object storage is configured. */
+        private const val PACKAGE_FALLBACK_DIR = ".packages"
     }
 }

@@ -14,25 +14,26 @@ import org.springframework.stereotype.Component
  * Builder for [RefreshSkillsTool].
  *
  * The tool needs a [SkillRegistry] to re-read at all, so with the skill system switched off it is not
- * offered — the same guard `load_skill` uses. The [SkillRefreshService] behind the catalog and index
- * bookkeeping only exists once skill RAG is wired up; without it the tool still refreshes what the
- * process knows and says so, rather than disappearing and leaving the agent with no way to pick up a
- * file it just wrote.
+ * offered — the same guard `load_skill` uses. The [SkillSyncService] behind the catalog, package and
+ * index bookkeeping only exists once the persistence stack is wired up; without it the tool still
+ * refreshes what the process knows and says so, rather than disappearing and leaving the agent with
+ * no way to pick up a file it just wrote.
  */
 @Component
 class RefreshSkillsToolBuilder(
     private val registryProvider: ObjectProvider<SkillRegistry>,
-    private val refresherProvider: ObjectProvider<SkillRefreshService>
+    private val refresherProvider: ObjectProvider<SkillRefreshService>,
+    private val skillConfigProvider: ObjectProvider<SkillConfig>
 ) : ToolBuilder {
 
     override val metadata = ToolMetadata(
         name = "refresh_skills",
-        description = "Make skills you just wrote with `write` usable. Re-reads the skill directories, " +
-            "claims a catalog row for anything new, and updates the `skill_search` index: a SKILL.md is " +
-            "only a file until this runs. Call it once after creating or editing a skill, after every " +
-            "attachment has been written. Its only argument is an optional `note` for the log; the answer " +
-            "lists what was added, which file failed to parse, and which skills still need enabling for " +
-            "this agent.",
+        description = "Make skills you just wrote with `write` usable. Reconciles the current user's " +
+            "skill root: claims new directories, uploads drifted local content back to the package " +
+            "store and catalog, and updates the `skill_search` index — a SKILL.md is only a file " +
+            "until this runs. Call it once after creating or editing a skill, after every attachment " +
+            "has been written. Its only argument is an optional `note` for the log; the answer lists " +
+            "what was added, which file failed, and which skills still need enabling for this agent.",
         permissionCategory = "skill",
         isDefaultTool = false,
         // Writing a skill is a `write` away, so being able to publish it must not depend on the agent's
@@ -48,6 +49,9 @@ class RefreshSkillsToolBuilder(
 
     override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         val registry = registryProvider.getIfAvailable() ?: return null
-        return RefreshSkillsTool(metadata, registry, refresherProvider.getIfAvailable(), context.allowedSkillNames)
+        return RefreshSkillsTool(
+            metadata, registry, refresherProvider.getIfAvailable(),
+            skillConfigProvider.getIfAvailable() ?: SkillConfig(), context.allowedSkillNames
+        )
     }
 }

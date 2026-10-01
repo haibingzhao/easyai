@@ -21,12 +21,10 @@ import kotlin.test.assertTrue
 
 class SkillToolTest {
     private val f = SkillModelFixture()
-    private val global = f.skill("review")
-    private val local = f.skill("review", f.project)
-    private val context = AgentContext(agentId = "test", userId = "alice", projectPath = f.project)
+    private val context = AgentContext(agentId = "test", userId = "alice")
 
     private fun tool(allowed: List<String> = listOf("review"), catalog: AsyncSkillCatalogStore? = f.catalog) = SkillTool(
-        ToolMetadata("load_skill", "Load skill", permissionCategory = "skill"), f.registry, allowed, catalog, f.config
+        ToolMetadata("load_skill", "Load skill", permissionCategory = "skill"), f.registry, allowed, catalog
     )
 
     private suspend fun load(scope: CoroutineScope, tool: SkillTool = tool(), name: String = "review"): ToolResult =
@@ -40,7 +38,7 @@ class SkillToolTest {
         fun `empty whitelist and unknown names are rejected before registry or catalog reads`() = runTest {
             assertTrue(load(this, tool(emptyList())).isError)
             assertTrue(load(this, name = "secret").isError)
-            verify(exactly = 0) { f.registry.all() }
+            verify(exactly = 0) { f.registry.visibleFor(any()) }
             coVerify(exactly = 0) { f.catalog.listByUser(any()) }
         }
 
@@ -50,64 +48,72 @@ class SkillToolTest {
         }
 
         @Test
-        fun `project overrides global and disabled override cannot resurrect global`() = runTest {
-            f.skills = listOf(global, local)
-            f.rows = listOf(f.row(global, "system"), f.row(local))
+        fun `own skill shadows the shared namesake and a disabled own row cannot resurrect it`() = runTest {
+            val shared = f.register("review", SkillModelFixture.SYSTEM)
+            val own = f.register("review")
+            f.rows = listOf(f.row(shared), f.row(own))
             val tool = tool()
             val first = load(this, tool)
             assertFalse(first.isError)
-            assertTrue(text(first).contains(local.content))
-            assertFalse(text(first).contains(global.content))
-            f.rows = listOf(f.row(global, "system"), f.row(local, enabled = false))
+            assertTrue(text(first).contains(own.content))
+            assertFalse(text(first).contains(shared.content))
+            f.rows = listOf(f.row(shared), f.row(own, enabled = false))
             assertTrue(load(this, tool).isError)
         }
 
         @Test
-        fun `fallback is per identity and honors shared disabled state`() = runTest {
-            val unrelated = f.skill("other")
-            f.skills = listOf(global, unrelated)
-            f.rows = listOf(f.row(global, "system"), f.row(unrelated))
+        fun `shared disabled state is honored per identity`() = runTest {
+            val shared = f.register("review", SkillModelFixture.SYSTEM)
+            val unrelated = f.register("other")
+            f.rows = listOf(f.row(shared), f.row(unrelated))
             val tool = tool()
             assertFalse(load(this, tool).isError)
-            f.rows = listOf(f.row(global, "system", enabled = false), f.row(unrelated))
+            f.rows = listOf(f.row(shared, enabled = false), f.row(unrelated))
             assertTrue(load(this, tool).isError)
         }
 
         @Test
         fun `other tenants and mismatched install paths cannot supply content`() = runTest {
-            f.skills = listOf(global)
-            f.rows = listOf(f.row(global, "bob"))
+            val shared = f.register("review", SkillModelFixture.SYSTEM)
+            f.rows = listOf(f.row(shared, user = "bob"))
             assertTrue(load(this).isError)
-            f.rows = listOf(f.row(global).copy(installPath = "/shared/skills/other"))
+            f.rows = listOf(f.row(shared).copy(installPath = "/.easyai-fixture-skills/system/other"))
             assertTrue(load(this).isError)
             coVerify(exactly = 0) { f.catalog.listByUser("bob") }
         }
 
         @Test
-        fun `without catalog only explicitly shared globals load`() = runTest {
-            f.skills = listOf(local)
-            assertTrue(load(this, tool(catalog = null)).isError)
-            f.skills = listOf(global)
-            assertFalse(load(this, tool(catalog = null)).isError)
-            f.skills = listOf(global.copy(location = global.location.resolveSibling("../../unknown/SKILL.md")))
-            assertTrue(load(this, tool(catalog = null)).isError)
+        fun `without catalog the registry snapshot loads unbound`() = runTest {
+            // Single-machine dev mode has no rows at all: the scanned snapshot is the authorization.
+            val own = f.register("own")
+            val unbound = tool(allowed = listOf("own"), catalog = null)
+            assertFalse(load(this, unbound, name = "own").isError)
+            assertTrue(text(load(this, unbound, name = "own")).contains(own.content))
+        }
+
+        @Test
+        fun `shared binding is announced in the loaded content`() = runTest {
+            val shared = f.register("review", SkillModelFixture.SYSTEM)
+            f.rows = listOf(f.row(shared))
+            assertTrue(text(load(this)).contains("read-only"))
         }
 
         @Test
         fun `catalog outage does not reuse a previously authorized view`() = runTest {
-            f.skills = listOf(global)
-            f.rows = listOf(f.row(global))
+            val own = f.register("review")
+            f.rows = listOf(f.row(own))
             val tool = tool()
             assertFalse(load(this, tool).isError)
             coEvery { f.catalog.listByUser("alice") } throws IllegalStateException("db down")
             val failure = load(this, tool)
             assertTrue(failure.isError)
             assertTrue(text(failure).contains("catalog is unavailable"))
-            assertFalse(text(failure).contains(global.content))
+            assertFalse(text(failure).contains(own.content))
         }
 
         @Test
         fun `catalog cancellation propagates`() = runTest {
+            f.register("review")
             coEvery { f.catalog.listByUser(any()) } throws CancellationException("cancelled")
             assertFailsWith<CancellationException> { load(this) }
         }
@@ -117,11 +123,11 @@ class SkillToolTest {
     inner class Content {
         @Test
         fun `load includes authoritative content description and tags`() = runTest {
-            f.skills = listOf(global.copy(tags = setOf("coding", "review")))
-            f.rows = listOf(f.row(global))
+            val own = f.register("review", tags = setOf("coding", "review"))
+            f.rows = listOf(f.row(own))
             val result = load(this)
             assertFalse(result.isError)
-            assertTrue(text(result).contains(global.content))
+            assertTrue(text(result).contains(own.content))
             assertTrue(text(result).contains("coding, review"))
             assertTrue(text(result).contains("Base directory"))
             assertEquals(ToolExecutionMode.SEQUENTIAL, tool().executionMode)

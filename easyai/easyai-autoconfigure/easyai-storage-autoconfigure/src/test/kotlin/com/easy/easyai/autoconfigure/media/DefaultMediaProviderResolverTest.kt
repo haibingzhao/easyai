@@ -45,6 +45,7 @@ class DefaultMediaProviderResolverTest {
         owner: String,
         modelId: String = name.lowercase(),
         apiKey: String = "sk-test",
+        baseUrl: String = "https://example.invalid/v1",
         enabled: Boolean = true,
         isCustom: Boolean = true,
         protocol: Protocol = Protocol.OPENAI,
@@ -54,7 +55,7 @@ class DefaultMediaProviderResolverTest {
         name = name,
         protocol = protocol,
         isCustom = isCustom,
-        baseUrl = "https://example.invalid/v1",
+        baseUrl = baseUrl,
         apiKey = apiKey,
         modelId = modelId,
         enabled = enabled,
@@ -72,8 +73,9 @@ class DefaultMediaProviderResolverTest {
             val good = row("wan", ModelType.IMAGE, "alice")
             val disabled = row("off", ModelType.IMAGE, "alice", enabled = false)
             val noKey = row("keyless", ModelType.IMAGE, "alice", apiKey = " ")
+            val noUrl = row("pathless", ModelType.IMAGE, "alice", baseUrl = " ")
             val builtin = row("catalog", ModelType.IMAGE, "alice", isCustom = false)
-            store.rows += listOf(good, disabled, noKey, builtin)
+            store.rows += listOf(good, disabled, noKey, noUrl, builtin)
 
             val resolver = DefaultMediaProviderResolver(store)
             val entries = resolver.resolveEntries("alice", MediaProviderSettings.SERVICE_KIND_IMAGE)

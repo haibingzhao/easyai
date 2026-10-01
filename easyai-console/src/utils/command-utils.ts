@@ -1,12 +1,14 @@
 import type { CommandCategory, SlashCommand } from '@/types/command';
+import { i18n } from '@/utils/i18n';
 
 /** History has a name, not necessarily a known command category. Never guess BUILTIN. */
 export interface CommandIdentity {
   name: string;
   category?: CommandCategory;
-  source?: string;
-  scope?: 'GLOBAL' | 'PROJECT';
-  projectPath?: string;
+  /** Set for skill-derived commands: the installed skill this invocation loads. */
+  skillName?: string;
+  /** Menu rows only: the skill comes from the read-only shared layer. */
+  shared?: boolean;
 }
 
 export interface ParsedCommand {
@@ -23,10 +25,16 @@ export function parseCommand(text: string): ParsedCommand | null {
   const skill = text.match(SKILL_PREFIX);
   if (skill) {
     try {
-      // Exactly one decode: a literal "%20" in a filename must remain "%20".
-      const source = decodeURIComponent(skill[2]);
-      if (!isAbsoluteSkillPath(source)) return null;
-      return { command: { name: skill[1], category: 'SKILL', source }, args: skill[3] };
+      // Exactly one decode: a literal "%20" in a name must remain "%20".
+      const reference = decodeURIComponent(skill[2]);
+      // Old links carried the absolute SKILL.md path. The bracket label was always the skill name,
+      // so those render and re-serialize as the current name-only form.
+      const legacyPath = reference.includes('/') || reference.includes('\\');
+      if (!reference || legacyPath && !reference.endsWith('SKILL.md')) return null;
+      return {
+        command: { name: skill[1], category: 'SKILL', skillName: legacyPath ? skill[1] : reference },
+        args: skill[3],
+      };
     } catch {
       return null;
     }
@@ -38,51 +46,48 @@ export function parseCommand(text: string): ParsedCommand | null {
   return goal ? { command: { name: 'goal' }, args: goal[1] } : null;
 }
 
-function isAbsoluteSkillPath(source: string): boolean {
-  return /^(?:\/|[A-Za-z]:[\\/])/.test(source)
-    && /[\\/]SKILL\.md$/.test(source)
-    && !/[\u0000-\u001f\u007f]/.test(source);
-}
-
 export function serializeCommand(command: CommandIdentity | null | undefined, args: string): string {
   if (!command) return args.trim();
-  const prefix = command.source
-    ? `[/${command.name}](skill:${encodeURIComponent(command.source).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)})`
+  const prefix = command.skillName
+    ? `[/${command.name}](skill:${encodeURIComponent(command.skillName).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)})`
     : `/${command.name}`;
   return args.trim() ? `${prefix} ${args.trim()}` : prefix;
 }
 
-/** Derive a display-only location for historical links even when no menu is loaded. */
-export function commandLocation(command: CommandIdentity): string {
-  if (command.scope === 'GLOBAL') return 'GLOBAL';
-  const projectPath = command.projectPath ?? command.source?.match(/^(.*)[\\/]\.(?:easyai|agents|claude)[\\/]skills[\\/]/)?.[1];
-  if (projectPath) {
-    // Known home skill roots are GLOBAL; the source remains authoritative either way.
-    if (!command.scope && /^(?:\/Users\/[^/]+|\/home\/[^/]+|[A-Za-z]:[\\/]Users[\\/][^\\/]+)$/.test(projectPath)) return 'GLOBAL';
-    return projectPath.split(/[\\/]/).filter(Boolean).pop() ?? projectPath;
-  }
-  return command.source?.split(/[\\/]/).filter(Boolean).slice(-3, -2)[0] ?? 'SKILL';
+export function commandLabel(command: CommandIdentity): string {
+  return command.skillName ? `/${command.name}·skill` : `/${command.name}`;
 }
 
-export function commandLabel(command: CommandIdentity): string {
-  return `/${command.name}${command.source ? `·${commandLocation(command)}` : ''}`;
+export function commandTooltip(command: CommandIdentity): string {
+  if (!command.skillName) return `/${command.name}`;
+  return `${command.shared ? i18n('Shared skill') : i18n('Skill')}: ${command.skillName}`;
+}
+
+/** Identity of a menu row, as the invocation token needs it. */
+export function commandIdentity(command: SlashCommand): CommandIdentity {
+  return {
+    name: command.name,
+    category: command.category,
+    skillName: command.skillName,
+    shared: command.shared,
+  };
 }
 
 export function commandGroup(command: SlashCommand): string {
-  if (command.category === 'SKILL') return command.scope === 'GLOBAL' ? 'Skills (Global)' : 'Skills (Project)';
+  if (command.category === 'SKILL') return 'Skills';
   return command.category === 'USER' ? 'Commands (User)' : 'Commands';
 }
 
 /** This is the only ordering used by both the popover and keyboard selection. */
 export function flattenCommands(commands: SlashCommand[]): SlashCommand[] {
-  return ['Commands (User)', 'Commands', 'Skills (Global)', 'Skills (Project)']
+  return ['Commands (User)', 'Commands', 'Skills']
     .flatMap((group) => commands.filter((command) => commandGroup(command) === group));
 }
 
 /** /goal changes session state; editing a queued invocation cannot safely replay it. */
 export function isSideEffectCommand(content: string, category?: CommandCategory): boolean {
   const parsed = parseCommand(content);
-  if (!parsed || parsed.command.source) return false;
+  if (!parsed || parsed.command.skillName) return false;
   if (category && category !== 'BUILTIN') return false;
   return parsed.command.name === 'goal';
 }

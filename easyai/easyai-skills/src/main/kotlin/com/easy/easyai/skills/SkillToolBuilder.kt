@@ -16,11 +16,11 @@ import org.springframework.stereotype.Component
 class SkillToolBuilder(
     private val registry: SkillRegistry?,
     private val catalogProvider: ObjectProvider<AsyncSkillCatalogStore>,
-    private val skillConfigProvider: ObjectProvider<SkillConfig>,
+    private val refresherProvider: ObjectProvider<SkillRefreshService>,
     @param:Value("\${easyai.skills.rag.enabled:false}") private val ragEnabled: Boolean,
 ) : ToolBuilder {
     private val baseDescription =
-        "Load an authorized skill by name to get detailed instructions and context for the current project."
+        "Load an authorized skill by name to get detailed instructions and context for the current task."
 
     override val metadata = ToolMetadata(
         name = "load_skill",
@@ -40,8 +40,8 @@ class SkillToolBuilder(
         } else metadata
         // Catalog access control is independent of whether semantic indexing is enabled.
         return SkillTool(
-            effectiveMetadata, reg, context.allowedSkillNames, catalogProvider.getIfAvailable(),
-            skillConfigProvider.getIfAvailable() ?: SkillConfig()
+            effectiveMetadata, reg, context.allowedSkillNames,
+            catalogProvider.getIfAvailable(), refresherProvider.getIfAvailable()
         )
     }
 }

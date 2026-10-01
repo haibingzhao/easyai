@@ -16,7 +16,6 @@ package com.easy.easyai.core.skill
  *   for materialization when the store holds the authoritative text
  * @param location absolute path of the on-disk SKILL.md for local skills (load_skill hint)
  * @param origin provenance info for local skills (the catalog row keeps the detailed record)
- * @param scope granularity back-derived from the chunk's `biz_id` (search results only)
  * @param score retrieval relevance (search results only)
  */
 data class SkillEntry(
@@ -28,7 +27,6 @@ data class SkillEntry(
     val content: String,
     val location: String? = null,
     val origin: String? = null,
-    val scope: SkillScope? = null,
     val score: Double? = null,
     /** SHA-256 of the raw source bytes, not the generated RAG document. */
     val checksum: String? = null
@@ -40,9 +38,8 @@ data class SkillEntry(
         /**
          * Logical key of one skill document: `skills/{name}.md`.
          *
-         * Shared by the indexing layer and its readers so the two can never drift; GLOBAL and
-         * PROJECT skills with the same name produce the same key on purpose, they live in
-         * different `biz_id` slices.
+         * Shared by the indexing layer and its readers so the two can never drift; owner
+         * isolation lives in the `biz_id` slice, not in the key.
          */
         @JvmStatic
         fun keyFor(name: String): String = "$KEY_DIR/${sanitizeSegment(name)}.md"

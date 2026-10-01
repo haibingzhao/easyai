@@ -3,15 +3,16 @@ import { i18n } from '../../utils/i18n';
 import { TokenInput } from '../TokenInput';
 import { modelConfigService } from '@/services/model-config-service';
 import { ChevronRight, ChevronDown, Trash2 } from 'lucide-react';
-import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, Protocol, SaveModelProviderConfigRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
+import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, ModelConfigGroup, Protocol, SaveModelProviderConfigRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
 
 interface InlineAddModelFormProps {
   availableProviders: ModelProviderInfo[];
+  groups: ModelConfigGroup[];
   onSave: (request: SaveModelProviderConfigRequest) => Promise<ModelProviderConfig>;
   onDone: () => void;
 }
 
-export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availableProviders, onSave, onDone }) => {
+export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availableProviders, groups, onSave, onDone }) => {
   // ─── Connection Settings (shared/group fields) ─────────────────────────────
   const [groupName, setGroupName] = useState('');
   const [selectedProtocol, setSelectedProtocol] = useState<Protocol | ''>('');
@@ -125,6 +126,11 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
       // Ensure group exists
       let currentGroupId = groupId;
       if (!currentGroupId) {
+        const clash = groups.find(g => g.name.trim().toLowerCase() === groupName.trim().toLowerCase());
+        if (clash) {
+          alert(i18n('Group "{name}" already exists — add this model from that group instead').replace('{name}', clash.name));
+          return;
+        }
         const group = await modelConfigService.saveGroup({
           name: groupName.trim(),
           protocol: selectedProtocol,

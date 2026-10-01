@@ -20,14 +20,14 @@ internal class SkillSearchToolBuilder(
     private val catalogProvider: ObjectProvider<AsyncSkillCatalogStore>,
     @param:Value("\${easyai.skills.rag.search-top-k:5}") private val searchTopK: Int = SkillSearchTool.DEFAULT_SEARCH_TOP_K,
     private val registry: SkillRegistry?,
-    private val skillConfigProvider: ObjectProvider<SkillConfig>,
-    @param:Value("\${easyai.skills.rag.enabled:false}") private val ragEnabled: Boolean = false
+    @param:Value("\${easyai.skills.rag.enabled:false}") private val ragEnabled: Boolean = false,
+    private val refresherProvider: ObjectProvider<SkillRefreshService>
 ) : ToolBuilder {
     override val metadata = ToolMetadata(
         name = "skill_search",
-        description = "Discover authorized skills for this task in the current project and GLOBAL scope. " +
-            "Uses semantic search when indexed, otherwise bounded name/description matching. " +
-            "Load the selected skill with `load_skill` by name.",
+        description = "Discover authorized skills for this task across your own skills and the shared " +
+            "`system` layer. Uses semantic search when indexed, otherwise bounded name/description " +
+            "matching. Load the selected skill with `load_skill` by name.",
         permissionCategory = "skill",
         isDefaultTool = false,
         alwaysInclude = true
@@ -42,7 +42,7 @@ internal class SkillSearchToolBuilder(
         if (!ragEnabled || context.allowedSkillNames.isEmpty()) return null
         return SkillSearchTool(
             metadata, skillStoreProvider.getIfAvailable(), catalogProvider.getIfAvailable(), searchTopK,
-            reg, skillConfigProvider.getIfAvailable() ?: SkillConfig(), context.allowedSkillNames
+            reg, context.allowedSkillNames, refresherProvider.getIfAvailable()
         )
     }
 }

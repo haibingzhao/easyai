@@ -21,7 +21,7 @@ easyai-web/src/main/kotlin/com/easy/easyai/web/
 │   ├── CommandController.kt       # Built-in command execution
 │   ├── UserCommandController.kt   # User custom command CRUD
 │   ├── ModelConfigController.kt   # Model provider config
-│   ├── SkillController.kt         # Skill listing
+│   ├── SkillController.kt         # Skill list / add from directory / upload / enable / delete (owner-granular)
 │   ├── FileController.kt          # File upload/storage
 │   └── AiConfigController.kt      # AI config generation, template validation
 ├── handler/

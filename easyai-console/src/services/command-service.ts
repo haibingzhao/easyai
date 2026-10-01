@@ -1,13 +1,19 @@
-import type { SlashCommand, UserCommand, UserCommandCreateRequest } from '@/types/command';
+import type { CommandCategory, SlashCommand, UserCommand, UserCommandCreateRequest } from '@/types/command';
 import { authFetch, fetchJson, fetchVoid, JSON_HEADERS } from '@/services/api-client';
-import { useProjectStore } from '@/services/stores/project-store';
+
+/** Wire shape: skill commands arrive with their skill name in `source`. */
+interface CommandDto extends Omit<SlashCommand, 'skillName'> {
+  source?: string;
+  category: CommandCategory;
+}
 
 export class CommandService {
-  static async fetchCommands(agentId?: string | null, projectId: string | null | undefined = useProjectStore.getState().currentProject?.id, signal?: AbortSignal): Promise<SlashCommand[]> {
+  static async fetchCommands(agentId?: string | null, signal?: AbortSignal): Promise<SlashCommand[]> {
     const params = new URLSearchParams();
-    if (projectId) params.set('projectId', projectId);
     if (agentId) params.set('agentId', agentId);
-    return fetchJson<SlashCommand[]>(`/api/commands?${params}`, { signal });
+    const rows = await fetchJson<CommandDto[]>(`/api/commands?${params}`, { signal });
+    return rows.map(({ source, ...command }) =>
+      command.category === 'SKILL' ? { ...command, skillName: source ?? command.name } : command);
   }
 
   // ─── User Command CRUD ─────────────────────────────────────────────

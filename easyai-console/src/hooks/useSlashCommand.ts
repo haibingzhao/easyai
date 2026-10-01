@@ -4,7 +4,6 @@ import type { CommandIdentity } from '@/utils/command-utils';
 import { flattenCommands } from '@/utils/command-utils';
 import { CommandService } from '@/services/command-service';
 import { useAuthStore } from '@/services/stores/auth-store';
-import { useProjectStore } from '@/services/stores/project-store';
 import { i18n } from '@/utils/i18n';
 
 interface CommandSnapshot {
@@ -13,10 +12,10 @@ interface CommandSnapshot {
   commands: SlashCommand[];
 }
 
-/** Project/user-scoped candidates, refreshed on every opening. No process-wide cache. */
-export function useSlashCommand(agentId: string | null, projectId?: string) {
+/** The caller's own commands plus the shared layer, refreshed on every opening. No process-wide cache. */
+export function useSlashCommand(agentId: string | null) {
   const userId = useAuthStore((state) => state.user?.id);
-  const scopeKey = JSON.stringify([userId, projectId]);
+  const scopeKey = userId ?? '';
   const [snapshot, setSnapshot] = useState<CommandSnapshot | null>(null);
   const [query, setQuery] = useState<string | null>(null);
   const queryRef = useRef<string | null>(null);
@@ -24,16 +23,13 @@ export function useSlashCommand(agentId: string | null, projectId?: string) {
   const requestRef = useRef<AbortController | null>(null);
   const validationsRef = useRef(new Set<AbortController>());
 
-  const isCurrentContext = useCallback(() => (
-    useAuthStore.getState().user?.id === userId
-    && useProjectStore.getState().currentProject?.id === projectId
-  ), [userId, projectId]);
+  const isCurrentContext = useCallback(() => useAuthStore.getState().user?.id === userId, [userId]);
 
   const refresh = useCallback(() => {
     requestRef.current?.abort();
     const controller = new AbortController();
     requestRef.current = controller;
-    CommandService.fetchCommands(agentId, projectId, controller.signal).then((commands) => {
+    CommandService.fetchCommands(agentId, controller.signal).then((commands) => {
       if (!controller.signal.aborted && isCurrentContext()) {
         setSnapshot({ scopeKey, agentId, commands });
         setSelectedIndex(0);
@@ -43,7 +39,7 @@ export function useSlashCommand(agentId: string | null, projectId?: string) {
         setSnapshot({ scopeKey, agentId, commands: [] });
       }
     });
-  }, [agentId, projectId, scopeKey, isCurrentContext]);
+  }, [agentId, scopeKey, isCurrentContext]);
 
   const close = useCallback(() => {
     queryRef.current = null;
@@ -62,7 +58,7 @@ export function useSlashCommand(agentId: string | null, projectId?: string) {
     };
   }, [refresh, close]);
 
-  // Gate synchronously on scope, so a render after switching user/project never shows old rows.
+  // Gate synchronously on the owner, so a render after switching user never shows old rows.
   const commands = snapshot?.scopeKey === scopeKey && snapshot.agentId === agentId ? snapshot.commands : [];
   const filtered = useMemo(() => flattenCommands(commands.filter((command) => query !== null && (
     command.name.toLowerCase().startsWith(query)
@@ -82,30 +78,30 @@ export function useSlashCommand(agentId: string | null, projectId?: string) {
   }, [close, refresh]);
 
   const selectionError = useCallback((command: CommandIdentity | null | undefined): string | null => {
-    if (!command?.source && command?.category !== 'SKILL') return null;
-    if (snapshot?.scopeKey !== scopeKey) return i18n('Checking skill source...');
-    return snapshot.commands.some((candidate) => candidate.category === 'SKILL' && candidate.source === command.source && candidate.name === command.name)
-      ? null : i18n('This skill source is unavailable in the current project. Remove it or select another skill.');
+    if (!command?.skillName) return null;
+    if (snapshot?.scopeKey !== scopeKey) return i18n('Checking skill availability...');
+    return snapshot.commands.some((candidate) => candidate.skillName === command.skillName)
+      ? null : i18n('This skill is not installed for you any more. Remove it or select another skill.');
   }, [snapshot, scopeKey]);
 
-  /** Validate exact source, never substitute a same-named candidate. Also used before queue promotion. */
+  /** Validate the named skill against the caller's visible set. Also used before queue promotion. */
   const validateCommand = useCallback(async (command: CommandIdentity | null | undefined): Promise<string | null> => {
-    if (!isCurrentContext()) return i18n('Project or user changed. Please try again.');
-    if (!command?.source && command?.category !== 'SKILL') return null;
+    if (!isCurrentContext()) return i18n('The user changed. Please try again.');
+    if (!command?.skillName) return null;
     const controller = new AbortController();
     validationsRef.current.add(controller);
     try {
       // SKILL visibility does not depend on the selected agent.
-      const available = await CommandService.fetchCommands(null, projectId, controller.signal);
-      if (!isCurrentContext() || controller.signal.aborted) return i18n('Project or user changed. Please try again.');
-      return available.some((candidate) => candidate.category === 'SKILL' && candidate.source === command.source && candidate.name === command.name)
-        ? null : i18n('This skill source is unavailable in the current project. Remove it or select another skill.');
+      const available = await CommandService.fetchCommands(null, controller.signal);
+      if (!isCurrentContext() || controller.signal.aborted) return i18n('The user changed. Please try again.');
+      return available.some((candidate) => candidate.skillName === command.skillName)
+        ? null : i18n('This skill is not installed for you any more. Remove it or select another skill.');
     } catch {
-      return i18n('Unable to verify the skill source. Please try again.');
+      return i18n('Unable to verify the skill. Please try again.');
     } finally {
       validationsRef.current.delete(controller);
     }
-  }, [projectId, isCurrentContext]);
+  }, [isCurrentContext]);
 
   const onKeyDown = useCallback((e: React.KeyboardEvent): boolean => {
     if (!isOpen) return false;
