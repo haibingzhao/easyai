@@ -17,6 +17,10 @@
     <dependencies>
         <dependency>
             <groupId>com.easy</groupId>
+            <artifactId>easyai-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
             <artifactId>easyai-storage</artifactId>
         </dependency>
         <dependency>

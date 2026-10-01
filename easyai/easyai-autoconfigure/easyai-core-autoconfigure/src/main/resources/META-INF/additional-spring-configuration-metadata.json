@@ -50,18 +50,10 @@
       "defaultValue": true
     },
     {
-      "name": "easyai.skills.paths",
-      "type": "java.util.List<java.lang.String>",
-      "description": "Explicit skill file paths to load.",
-      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
-      "defaultValue": []
-    },
-    {
-      "name": "easyai.skills.home-skill-dirs",
-      "type": "java.util.List<java.lang.String>",
-      "description": "Directories under workDir to scan for skills.",
-      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
-      "defaultValue": [".agents/skills", ".easyai/skills"]
+      "name": "easyai.skills.root-dir",
+      "type": "java.lang.String",
+      "description": "Parent directory of the owner skill roots; every user and the shared system layer owns {root-dir}/{userId}.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties"
     },
     {
       "name": "easyai.skills.inject-into-system-prompt",
@@ -69,6 +61,13 @@
       "description": "Whether to inject skill descriptions into the system prompt.",
       "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
       "defaultValue": true
+    },
+    {
+      "name": "easyai.skills.package-max-bytes",
+      "type": "java.lang.Long",
+      "description": "Hard cap on one packed skill package in bytes; larger skill directories are refused before upload.",
+      "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
+      "defaultValue": 20971520
     },
     {
       "name": "easyai.skills.rag.enabled",

@@ -5,6 +5,11 @@ import com.fasterxml.jackson.annotation.JsonInclude
 
 /**
  * User's model provider configuration.
+ *
+ * [modelType] splits the table in two populations: `CHAT` rows feed the ReAct ChatModel and every
+ * model picker; generation rows (`IMAGE`/`VIDEO`/`SPEECH`/`MUSIC`/`ASR`) are reached through tools
+ * and never listed in chat selectors. [isDefault] marks the fallback entry within one user's
+ * (modelType) population for generation tools that accept no explicit model.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class ModelProviderConfig(
@@ -24,8 +29,25 @@ data class ModelProviderConfig(
     /** Model capabilities (e.g. vision support). */
     val capabilities: ModelCapabilities? = null,
     /** Group ID this config belongs to. Null for ungrouped configs. */
-    val groupId: String? = null
+    val groupId: String? = null,
+    /** What this row can do. See [ModelType]. */
+    val modelType: ModelType = ModelType.CHAT,
+    /** Provider-specific generation parameters as a raw JSON object string (size / voice / etc.). */
+    val mediaOptions: String? = null,
+    /** Within one user's (modelType) population, at most one row carries true. */
+    val isDefault: Boolean = false,
+    /** Row owner (`system` rows are shared fallbacks); server-side metadata, never edited. */
+    val userId: String = "system"
 )
+
+/**
+ * Purpose of a model configuration row.
+ *
+ * CHAT rows feed the ChatModel loop; the rest are media-generation / understanding backends
+ * consumed by tools (generate_image, generate_video, generate_speech, generate_music,
+ * transcribe_audio).
+ */
+enum class ModelType { CHAT, IMAGE, VIDEO, SPEECH, MUSIC, ASR }
 
 /**
  * Request to save a model provider configuration.
@@ -48,7 +70,13 @@ data class SaveModelProviderConfigRequest(
     /** Model capabilities (e.g. vision support). */
     val capabilities: ModelCapabilities? = null,
     /** Group ID to associate this config with. */
-    val groupId: String? = null
+    val groupId: String? = null,
+    /** Defaults to CHAT; generation rows are managed from the Models page and consumed by tools. */
+    val modelType: ModelType = ModelType.CHAT,
+    /** Raw JSON object string of provider-specific generation parameters (generation rows only). */
+    val mediaOptions: String? = null,
+    /** Mark this row as the fallback entry for its modelType; the store clears sibling flags. */
+    val isDefault: Boolean = false
 )
 
 /**

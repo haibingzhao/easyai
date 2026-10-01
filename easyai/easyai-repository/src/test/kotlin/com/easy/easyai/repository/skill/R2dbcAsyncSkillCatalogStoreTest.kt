@@ -15,21 +15,20 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
-import java.security.MessageDigest
-import java.util.HexFormat
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * Tests for [R2dbcAsyncSkillCatalogStore] against an in-memory H2 (MODE=MYSQL) database.
  *
- * The interesting cases here are all about identity: rows are addressed by the `(user_id, name,
- * project_hash)` triple, so a same-named skill of two projects must survive as two rows, and every
- * mutation must land on exactly one primary key — a cross-granularity write is a tenant-isolation
- * bug, not a display glitch.
+ * The interesting cases here are all about identity: rows are addressed by the `(user_id, name)`
+ * pair, so the same skill name of two owners — or of an owner and the `system` shared layer — must
+ * survive as two rows, and every mutation must land on exactly one primary key. A write that lands
+ * on another owner's row is a tenant-isolation bug, not a display glitch.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class R2dbcAsyncSkillCatalogStoreTest {
@@ -53,20 +52,16 @@ class R2dbcAsyncSkillCatalogStoreTest {
         checksum: String = "a".repeat(64),
         enabled: Boolean = true,
         source: String = SkillCatalogEntry.SOURCE_LOCAL,
-        projectPath: String? = null
     ) = SkillCatalogEntry(
         name = name,
         source = source,
         version = "1.2.3",
         checksum = checksum,
         enabled = enabled,
-        installPath = "${projectPath ?: "/home/$userId"}/.easyai/skills/$name",
-        origin = null,
+        rootPath = "/home/$userId/.easyai/skills/$userId",
+        installPath = "/home/$userId/.easyai/skills/$userId/$name",
+        objectKey = "skills/$userId/$name.zip",
         userId = userId,
-        projectHash = projectPath?.let {
-            HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(it.toByteArray(Charsets.UTF_8))).take(16)
-        } ?: SkillCatalogEntry.GLOBAL_HASH,
-        indexProjectPath = projectPath
     )
 
     private fun uniqueUser(prefix: String) = "$prefix-${UUID.randomUUID().toString().take(8)}"
@@ -75,22 +70,22 @@ class R2dbcAsyncSkillCatalogStoreTest {
     inner class `claim and content update semantics` {
 
         @Test
-        fun `a second claim of the same triple leaves the existing row untouched`() = runTest {
+        fun `a second claim of the same name leaves the existing row untouched`() = runTest {
             val store = createStore()
             val user = uniqueUser("claim")
-            val original = entry("pdf-report", user, enabled = false, projectPath = "/projects/report")
-                .copy(origin = "https://example.org/original")
+            val original = entry("pdf-report", user, enabled = false)
             val first = store.claim(original)
             val second = store.claim(original.copy(
-                checksum = "c".repeat(64), version = "2.0.0", source = "EXTERNAL", enabled = true,
-                installPath = "/projects/report/.agents/skills/pdf-report", origin = "https://example.org/other"
+                checksum = "c".repeat(64), version = "2.0.0", enabled = true,
+                installPath = "/somewhere/else/.easyai/skills/$user/pdf-report",
+                objectKey = "skills/other/pdf-report.zip"
             ))
 
             assertEquals(first, second, "claim must not overwrite content, ownership, path or enablement")
             assertEquals(first, store.listByUser(user).single())
             assertEquals(original.userId, second.userId)
             assertEquals(original.installPath, second.installPath)
-            assertEquals(original.indexProjectPath, second.indexProjectPath)
+            assertEquals(original.objectKey, second.objectKey)
             assertFalse(second.enabled)
         }
 
@@ -118,33 +113,33 @@ class R2dbcAsyncSkillCatalogStoreTest {
             store.claim(entry("foo", alice, checksum = "e".repeat(64)))
             store.claim(entry("foo", bob, checksum = "f".repeat(64)))
 
-            assertEquals("e".repeat(64), store.listByName("foo", alice).single().checksum)
-            assertEquals("f".repeat(64), store.listByName("foo", bob).single().checksum)
+            assertEquals("e".repeat(64), store.findByName(alice, "foo")?.checksum)
+            assertEquals("f".repeat(64), store.findByName(bob, "foo")?.checksum)
             assertEquals(1, store.listByUser(alice).size)
             assertEquals(1, store.listByUser(bob).size)
         }
 
         @Test
-        fun `the same name and owner under two projects are two rows that never overwrite each other`() = runTest {
+        fun `an owner row and a shared row of one name are two rows that never overwrite each other`() = runTest {
             val store = createStore()
-            val user = uniqueUser("tri")
+            val user = uniqueUser("shadow")
 
-            val first = store.claim(entry("pdf", user, checksum = "a".repeat(64), projectPath = "/projects/a"))
-            val second = store.claim(entry("pdf", user, checksum = "b".repeat(64), projectPath = "/projects/b"))
+            val first = store.claim(entry("pdf", user, checksum = "a".repeat(64)))
+            val second = store.claim(entry("pdf", SkillCatalogEntry.DEFAULT_USER_ID, checksum = "b".repeat(64)))
             assertTrue(store.updateContent(first.id, first.revision, "c".repeat(64), "2.0.0"))
 
-            val rows = store.listByName("pdf", user)
-            assertEquals(2, rows.size, "the unique index is (user, name, project_hash) — two granularities, two rows")
+            val rows = store.listByOwners(listOf(user, SkillCatalogEntry.DEFAULT_USER_ID))
+                .filter { it.name == "pdf" }
+            assertEquals(2, rows.size, "the unique index is (user_id, name) — the shared layer is a distinct row")
             val updated = rows.first { it.id == first.id }
             assertEquals("c".repeat(64), updated.checksum)
-            assertEquals(first.projectHash, updated.projectHash)
-            assertEquals(first.indexProjectPath, updated.indexProjectPath)
+            assertEquals(first.rootPath, updated.rootPath)
             assertEquals(second, rows.first { it.id == second.id })
         }
 
         // A unique violation must retry in a fresh transaction without changing the winning claim.
         @Test
-        fun `concurrent claims of the same triple converge without overwriting the winner`() = runTest {
+        fun `concurrent claims of one name converge without overwriting the winner`() = runTest {
             val store = createStore()
             val user = uniqueUser("race")
             val results = coroutineScope {
@@ -155,7 +150,7 @@ class R2dbcAsyncSkillCatalogStoreTest {
                 }.map { it.await() }
             }
 
-            val rows = store.listByName("race", user)
+            val rows = store.listByUser(user)
             assertEquals(1, rows.size, "a unique-index collision must return the existing row")
             assertTrue(results.all { it.name == "race" && it.userId == user })
             assertTrue(results.all { it == rows.single() }, "every racer must observe the unchanged winning claim")
@@ -170,7 +165,7 @@ class R2dbcAsyncSkillCatalogStoreTest {
             val user = uniqueUser("claim")
             val row = store.claim(entry("pdf", user, enabled = false))
             assertEquals(SkillSyncState.PENDING_DELETE, row.syncState)
-            assertEquals(null, row.indexedChecksum)
+            assertNull(row.indexedChecksum)
             val claimed = store.claim(entry("pdf", user, enabled = true, checksum = "b".repeat(64)))
             assertEquals(row, claimed)
             val pending = store.claim(entry("other", user))
@@ -212,14 +207,14 @@ class R2dbcAsyncSkillCatalogStoreTest {
         }
 
         @Test
-        fun `content and sync updates preserve disabled ownership and project addressing`() = runTest {
+        fun `content and sync updates preserve disabled ownership`() = runTest {
             val store = createStore()
-            val row = store.claim(entry("pdf", uniqueUser("disabled"), enabled = false, projectPath = "/projects/disabled"))
+            val row = store.claim(entry("pdf", uniqueUser("disabled"), enabled = false))
             assertTrue(store.updateContent(row.id, row.revision, "b".repeat(64), "2.0.0"))
             val updated = assertNotNull(store.findById(row.id))
             assertEquals(row.copy(
                 checksum = "b".repeat(64), version = "2.0.0", revision = row.revision + 1, updatedAt = updated.updatedAt
-            ), updated, "content updates must preserve owner, install path, enablement and slice address")
+            ), updated, "content updates must preserve owner, root path, install path, package key and enablement")
             assertFalse(store.updateSync(updated.id, updated.revision,
                 SkillSyncUpdate(SkillSyncState.SYNCED, updated.checksum)))
             assertFalse(store.updateSync(updated.id, updated.revision,
@@ -271,6 +266,23 @@ class R2dbcAsyncSkillCatalogStoreTest {
             assertEquals(owners.distinct().size, owners.size, "owners must be deduplicated")
             assertTrue(user in owners)
         }
+
+        @Test
+        fun `listByOwners returns every row of the requested owners`() = runTest {
+            val store = createStore()
+            val user = uniqueUser("owners")
+            val stranger = uniqueUser("owners-stranger")
+
+            store.claim(entry("own", user))
+            val shared = store.claim(entry("shared", SkillCatalogEntry.DEFAULT_USER_ID))
+            store.claim(entry("stranger", stranger))
+
+            val rows = store.listByOwners(listOf(user, SkillCatalogEntry.DEFAULT_USER_ID))
+            assertTrue(rows.any { it.userId == user && it.name == "own" })
+            assertTrue(shared in rows)
+            assertTrue(rows.none { it.userId == stranger }, "unrequested owners stay out of the result")
+            assertTrue(store.listByOwners(emptyList()).isEmpty())
+        }
     }
 
     @Nested
@@ -283,7 +295,8 @@ class R2dbcAsyncSkillCatalogStoreTest {
             store.claim(entry("locked", owner))
 
             assertFalse(store.setEnabled("no-such-row-${UUID.randomUUID()}", false))
-            assertTrue(store.listByName("locked", owner).single().enabled, "an unknown id must leave every row untouched")
+            assertTrue(store.findByName(owner, "locked")?.enabled == true,
+                "an unknown id must leave every row untouched")
         }
 
         @Test
@@ -291,14 +304,15 @@ class R2dbcAsyncSkillCatalogStoreTest {
             val store = createStore()
             val user = uniqueUser("toggle")
             val row = store.claim(entry("switch", user))
-            val sibling = store.claim(entry("switch", user, projectPath = "/projects/other"))
+            val shared = store.claim(entry("switch", SkillCatalogEntry.DEFAULT_USER_ID))
 
             assertTrue(store.setEnabled(row.id, false))
-            assertFalse(store.listByName("switch", user).first { it.id == row.id }.enabled)
+            assertFalse(store.findByName(user, "switch")!!.enabled)
             assertTrue(
-                store.listByName("switch", user).first { it.id == sibling.id }.enabled,
-                "the same-named row of another project must not flip with it"
+                store.findByName(SkillCatalogEntry.DEFAULT_USER_ID, "switch")!!.enabled,
+                "the shared layer keeps its own enablement when a user disables their shadowing row"
             )
+            assertEquals(shared.revision, store.findByName(SkillCatalogEntry.DEFAULT_USER_ID, "switch")!!.revision)
         }
 
         @Test
@@ -310,8 +324,8 @@ class R2dbcAsyncSkillCatalogStoreTest {
             store.claim(entry("shared", bob))
 
             assertTrue(store.delete(aliceRow.id))
-            assertTrue(store.listByName("shared", alice).isEmpty())
-            assertNotNull(store.listByName("shared", bob).singleOrNull(), "the other owner keeps their skill")
+            assertNull(store.findByName(alice, "shared"))
+            assertNotNull(store.findByName(bob, "shared"), "the other owner keeps their skill")
             assertFalse(store.delete(aliceRow.id), "deleting an absent row says so")
         }
 
@@ -323,7 +337,8 @@ class R2dbcAsyncSkillCatalogStoreTest {
             val otherOwner = store.claim(entry("drifty", uniqueUser("other-owner")))
 
             assertTrue(store.updateContent(row.id, row.revision, "9".repeat(64), "2.0.0"))
-            val reloaded = store.listByName("drifty", user).single()
+            val reloaded = store.findByName(user, "drifty")
+            assertNotNull(reloaded)
             assertEquals("9".repeat(64), reloaded.checksum)
             assertEquals("2.0.0", reloaded.version)
             assertEquals(row.revision + 1, reloaded.revision)

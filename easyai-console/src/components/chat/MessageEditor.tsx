@@ -84,7 +84,7 @@ export const MessageEditor: React.FC = () => {
   const currentProjectId = useProjectStore((state) => state.currentProject?.id);
 
   // Slash command autocomplete (must be after selectedAgentId is defined)
-  const slashCommand = useSlashCommand(selectedAgentId, currentProjectId);
+  const slashCommand = useSlashCommand(selectedAgentId);
   const { validateCommand, isCurrentContext } = slashCommand;
   const commandError = slashCommand.selectionError(selectedCommand);
 
@@ -597,7 +597,7 @@ export const MessageEditor: React.FC = () => {
     const chip = editor.querySelector<HTMLElement>('.command-chip');
     let command = chip ? (serializeCommand(selectedCommand, '') === chip.dataset.commandToken
       ? selectedCommand : parseCommand(chip.dataset.commandToken ?? '')?.command ?? null) : null;
-    if (!chip && parseCommand(getEditorText())?.command.source) {
+    if (!chip && parseCommand(getEditorText())?.command.skillName) {
       command = populateMessageEditor(editor, getEditorText());
       const range = document.createRange();
       range.selectNodeContents(editor);

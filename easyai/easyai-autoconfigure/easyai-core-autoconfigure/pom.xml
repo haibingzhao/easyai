@@ -30,6 +30,10 @@
         </dependency>
         <dependency>
             <groupId>com.easy</groupId>
+            <artifactId>easyai-storage</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
             <artifactId>easyai-agent-core</artifactId>
             <version>${revision}</version>
         </dependency>

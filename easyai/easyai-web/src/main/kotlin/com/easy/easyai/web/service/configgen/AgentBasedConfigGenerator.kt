@@ -10,7 +10,7 @@ import com.easy.easyai.core.model.SystemMessage
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.model.UserMessage
 import com.easy.easyai.core.tool.ToolDefinition
-import com.easy.easyai.skills.SkillRegistry
+import com.easy.easyai.skills.SkillAccessResolver
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.web.model.AiConfigGenerateRequest
 import com.easy.easyai.web.model.ConfigValidationResult
@@ -49,7 +49,7 @@ class AgentBasedConfigGenerator(
     private val configValidator: ConfigValidator,
     private val toolRegistry: ToolRegistry,
     private val agentStore: AsyncAgentStore,
-    private val skillRegistry: SkillRegistry?,
+    private val skillAccessResolver: SkillAccessResolver?,
     private val mcpClientManager: McpClientManager?,
     private val modelConfigStore: ModelProviderConfigStore,
 ) {
@@ -336,7 +336,7 @@ class AgentBasedConfigGenerator(
 
     private fun buildTools(configType: String, userId: String, finalizeAction: suspend (String?) -> String): List<ToolDefinition> {
         val listResources = ListResourcesTool(
-            toolRegistry, agentStore, skillRegistry, mcpClientManager, modelConfigStore, userId, configType,
+            toolRegistry, agentStore, skillAccessResolver, mcpClientManager, modelConfigStore, userId, configType,
             swarmContext = configType == "swarm"
         )
         // Both agent and swarm use chunked block mode to prevent stream stalls with large configs

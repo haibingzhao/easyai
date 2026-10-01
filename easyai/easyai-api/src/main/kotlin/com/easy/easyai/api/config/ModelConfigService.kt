@@ -4,6 +4,7 @@ import com.easy.easyai.api.model.ModelConfigGroup
 import com.easy.easyai.api.model.ModelInfo
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo
+import com.easy.easyai.api.model.ModelType
 import com.easy.easyai.api.model.SaveModelConfigGroupRequest
 import com.easy.easyai.api.model.SaveModelProviderConfigRequest
 
@@ -30,8 +31,11 @@ interface ModelConfigService {
 
     /**
      * Get user's saved provider configurations.
+     *
+     * [modelType] partitions the population: chat selectors pass nothing (CHAT), the Models page
+     * generation sections and media tools pass their own type.
      */
-    suspend fun getUserConfigurations(userId: String = "system"): List<ModelProviderConfig>
+    suspend fun getUserConfigurations(modelType: ModelType = ModelType.CHAT, userId: String = "system"): List<ModelProviderConfig>
 
     /**
      * Get a user's specific provider configuration by ID.
@@ -42,6 +46,13 @@ interface ModelConfigService {
      * Save a user's provider configuration.
      */
     suspend fun saveUserConfiguration(request: SaveModelProviderConfigRequest, userId: String = "system"): ModelProviderConfig
+
+    /**
+     * Structural probe of a generation-type draft without persisting it.
+     *
+     * @return null when the draft is usable, otherwise the failure reason; [request] must not be CHAT.
+     */
+    suspend fun testGenerationConfiguration(request: SaveModelProviderConfigRequest, userId: String = "system"): String?
 
     /**
      * Delete a user's provider configuration by ID.

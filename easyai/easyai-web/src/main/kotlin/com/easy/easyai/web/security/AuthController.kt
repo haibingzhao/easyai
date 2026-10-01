@@ -2,8 +2,17 @@ package com.easy.easyai.web.security
 
 import com.easy.easyai.auth.AuthConstants
 import com.easy.easyai.auth.model.UserProfile
+import com.easy.easyai.skills.SkillRefreshService
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.reactor.mono
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.DisposableBean
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.ResponseCookie
 import org.springframework.web.bind.annotation.*
 import org.springframework.web.server.ServerWebExchange
@@ -23,9 +32,17 @@ import reactor.core.publisher.Mono
 @RequestMapping("/api/auth")
 class AuthController(
     private val authService: AuthService,
-    private val authProperties: AuthProperties
-) {
+    private val authProperties: AuthProperties,
+    @param:Autowired(required = false) private val skillRefreshService: SkillRefreshService? = null
+) : DisposableBean {
     private val logger = LoggerFactory.getLogger(javaClass)
+
+    /** Background scope for the post-login skill sync: a slow object store must not delay a login. */
+    private val skillSyncScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    override fun destroy() {
+        skillSyncScope.cancel()
+    }
 
     @PostMapping("/register")
     fun register(
@@ -44,6 +61,7 @@ class AuthController(
     ): Mono<AuthResponseDto> = mono {
         val response = authService.login(request.username, request.password)
         setRefreshTokenCookie(exchange, response.refreshToken)
+        syncSkillsQuietly(response.user.id)
         response.toDto()
     }
 
@@ -69,7 +87,9 @@ class AuthController(
     @GetMapping("/me")
     fun me(exchange: ServerWebExchange): Mono<UserProfileDto> = mono {
         if (!authProperties.enabled) {
-            // Auth disabled: return a default system user profile
+            // Auth disabled: the caller is the system identity, whose skills the desktop relies on
+            // immediately — this is the fallback trigger for a process that never saw a login.
+            syncSkillsQuietly(AuthConstants.SYSTEM_USER_ID)
             UserProfileDto(
                 id = AuthConstants.SYSTEM_USER_ID,
                 username = "system",
@@ -83,12 +103,31 @@ class AuthController(
                 // No valid authentication found — reject
                 throw AuthException("Authentication required", 401)
             }
+            syncSkillsQuietly(userId)
             val profile = authService.getProfile(userId)
             profile.toDto()
         }
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
+
+    /**
+     * Reconcile one owner's skills against the catalog and object storage, off the response path.
+     * [SkillRefreshService.ensureSynced] runs at most once per owner per process and logs its own
+     * failures, so an unreachable package store can never turn into a failed login or profile read.
+     */
+    private fun syncSkillsQuietly(userId: String) {
+        val service = skillRefreshService ?: return
+        skillSyncScope.launch {
+            try {
+                service.ensureSynced(userId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger.warn("Background skill sync for '{}' did not complete: {}", userId, e.message)
+            }
+        }
+    }
 
     private fun setRefreshTokenCookie(exchange: ServerWebExchange, refreshToken: String) {
         val isSecure = exchange.request.uri.scheme == "https"

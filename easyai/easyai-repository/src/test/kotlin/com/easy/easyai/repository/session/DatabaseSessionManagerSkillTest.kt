@@ -88,9 +88,8 @@ internal class DatabaseSessionManagerSkillTest {
                 toolResolver = toolResolver,
                 agentLookup = { _, _ -> agentDef },
                 agentStore = agentStore,
-                skillsSupplier = { userId, path, names ->
+                skillsSupplier = { userId, names ->
                     assertEquals("alice", userId)
-                    assertEquals(projectPath, path)
                     assertEquals(listOf("pdf"), names)
                     view
                 }

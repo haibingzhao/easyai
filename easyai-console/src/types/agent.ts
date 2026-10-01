@@ -144,16 +144,22 @@ export interface AgentConfigsRequest {
 }
 
 /**
- * Skill information from the API.
+ * One skill visible to the current user: their own install plus the read-only shared layer,
+ * where an own skill shadows a same-named shared one.
  */
 export interface SkillInfo {
   name: string;
   description: string | null;
   tags: string[];
-  /** Granularity the skill was discovered at: "global" or "project". */
-  scope?: string;
-  /** Set when scope is "project" — disambiguates same-named skills across projects. */
-  projectPath?: string | null;
+  version: string;
+  enabled: boolean;
+  /** True when the skill comes from the shared `system` layer, which regular users cannot modify. */
+  shared: boolean;
+  installPath: string;
+  /** False while the catalog row exists but the local directory still awaits restore. */
+  installedOnDisk: boolean;
+  /** False until the retrieval index has caught up with the current content. */
+  indexed: boolean;
 }
 
 /**

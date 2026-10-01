@@ -25,7 +25,6 @@ import { isSideEffectCommand, parseCommand, serializeCommand } from '@/utils/com
 import type { CommandIdentity } from '@/utils/command-utils';
 import { useSlashCommand } from '@/hooks/useSlashCommand';
 import { useAgentStore } from '@/services/stores/agent-store';
-import { useProjectStore } from '@/services/stores/project-store';
 import { i18n } from '@/utils/i18n';
 import { UserMessageContent } from './UserMessage';
 import { AttachmentImage } from './AttachmentImage';
@@ -179,7 +178,7 @@ const InlineEdit: React.FC<InlineEditProps> = ({ msg, onSave, onCancel }) => {
     if (!editor) return;
     const chip = editor.querySelector<HTMLElement>('.command-chip');
     commandRef.current = chip ? parseCommand(chip.dataset.commandToken ?? '')?.command ?? null : null;
-    if (!chip && parseCommand(readMessageEditorText(editor))?.command.source) {
+    if (!chip && parseCommand(readMessageEditorText(editor))?.command.skillName) {
       commandRef.current = populateMessageEditor(editor, readMessageEditorText(editor));
     }
   };
@@ -251,8 +250,7 @@ export const QueuedMessagesPanel: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const agentId = useAgentStore((state) => state.selectedAgentId);
-  const projectId = useProjectStore((state) => state.currentProject?.id);
-  const { validateCommand, isCurrentContext } = useSlashCommand(agentId, projectId);
+  const { validateCommand, isCurrentContext } = useSlashCommand(agentId);
   const busyIds = useRef(new Set<string>());
 
   const {
@@ -325,7 +323,7 @@ export const QueuedMessagesPanel: React.FC = () => {
     const msg = queuedMessages.find((item) => item.id === id);
     if (!msg || busyIds.current.has(id)) return;
     const parsed = parseCommand(content);
-    const category = parsed?.command.source ? 'SKILL'
+    const category = parsed?.command.skillName ? 'SKILL'
       : parseCommand(msg.content)?.command.name === parsed?.command.name ? msg.commandCategory : undefined;
     if (isSideEffectCommand(msg.content, msg.commandCategory) || isSideEffectCommand(content, category)) {
       setError(i18n(QUEUE_COMMAND_WARNING));

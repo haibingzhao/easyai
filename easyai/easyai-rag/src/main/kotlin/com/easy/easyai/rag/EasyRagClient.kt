@@ -146,7 +146,7 @@ internal class EasyRagClient(
         }
         if (!awaitIndexing) {
             // Fire-and-forget: submission was accepted, indexing continues server-side.
-            logger.debug("RAG indexing submitted (not awaiting): externalId={}, docId={}", doc.externalId, docId)
+            logger.trace("RAG indexing submitted (not awaiting): externalId={}, docId={}", doc.externalId, docId)
             return RagUpsertResult(docId = docId, indexed = false)
         }
         val pollResult = pollUntilTerminal(config, docId, bizId)
@@ -159,7 +159,7 @@ internal class EasyRagClient(
     override suspend fun delete(externalId: String, bizId: String?): Boolean {
         val config = loadEnabledConfig("delete")
         val detail = readByExternalId(config, externalId, bizId) ?: run {
-            logger.debug("RAG delete: no document for externalId={}, nothing to do", externalId)
+            logger.trace("RAG delete: no document for externalId={}, nothing to do", externalId)
             return false
         }
         withConflictRetry("delete $externalId") {

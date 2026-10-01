@@ -44,6 +44,7 @@ class FlywayMigrationRunner(private val properties: R2dbcProperties) {
             .baselineVersion("0")
             .load()
 
+        flyway.repair()
         val result = flyway.migrate()
         logger.info(
             "Flyway migration completed: {} migration(s) applied, schema at version {}",

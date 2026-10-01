@@ -7,7 +7,6 @@ import type { DatabaseInfo, DatabaseSetupRequest } from '@/services/setup-servic
 import { IntegrationsTab } from '@/components/settings/IntegrationsTab';
 import { RagTab } from '@/components/settings/RagTab';
 import { StorageTab } from '@/components/settings/StorageTab';
-import { MediaTab } from '@/components/settings/MediaTab';
 import { AuxModelsTab } from '@/components/settings/AuxModelsTab';
 import { i18n } from '@/utils/i18n';
 import {
@@ -40,7 +39,6 @@ const menuItems: MenuItem[] = [
   { id: 'rag', label: 'RAG', icon: <Layers className="w-4 h-4" /> },
   { id: 'database', label: 'Database', icon: <Database className="w-4 h-4" /> },
   { id: 'storage', label: 'Storage', icon: <HardDrive className="w-4 h-4" /> },
-  { id: 'media', label: 'Media', icon: <Sparkles className="w-4 h-4" /> },
   { id: 'aux-models', label: 'Task Models', icon: <Cpu className="w-4 h-4" /> },
   { id: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
 ];
@@ -94,7 +92,6 @@ export const SettingsPage: React.FC = () => {
         {activeTab === 'rag' && <RagTab />}
         {activeTab === 'database' && <DatabaseTab />}
         {activeTab === 'storage' && <StorageTab />}
-        {activeTab === 'media' && <MediaTab />}
         {activeTab === 'aux-models' && <AuxModelsTab />}
         {activeTab === 'about' && <AboutTab />}
       </main>

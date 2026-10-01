@@ -10,7 +10,7 @@ import com.easy.easyai.core.tool.BaseToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.tool.ToolUpdate
-import com.easy.easyai.skills.SkillRegistry
+import com.easy.easyai.skills.SkillAccessResolver
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.web.model.ConfigValidationError
 import com.easy.easyai.web.service.ConfigValidator
@@ -133,7 +133,7 @@ data class ValidateConfigParameter(
 class ListResourcesTool(
     private val toolRegistry: ToolRegistry,
     private val agentStore: AsyncAgentStore,
-    private val skillRegistry: SkillRegistry?,
+    private val skillAccessResolver: SkillAccessResolver?,
     private val mcpClientManager: McpClientManager?,
     private val modelConfigStore: ModelProviderConfigStore,
     private val userId: String,
@@ -223,9 +223,11 @@ class ListResourcesTool(
         }
     }
 
-    private fun listSkills(): String {
+    private suspend fun listSkills(): String {
         if (swarmContext) return "Skills are NOT available in swarm runtime. Do not use skillNames or load_skill."
-        val skills = skillRegistry?.all() ?: emptyList()
+        val skills = skillAccessResolver?.listScopedSkills(userId).orEmpty()
+            .filter { it.catalogEntry?.enabled != false }
+            .map { it.skill }
         if (skills.isEmpty()) return "No skills available."
         return buildString {
             appendLine("Available Skills (use via skillNames field, NOT toolNames):")

@@ -2,50 +2,50 @@ package com.easy.easyai.skills
 
 import com.easy.easyai.core.skill.AsyncSkillCatalogStore
 import com.easy.easyai.core.skill.SkillCatalogEntry
-import com.easy.easyai.core.skill.SkillScope
-import java.nio.file.Path
 
 /** A registry candidate and the exact catalog row authorizing its install location, if configured. */
-data class ScopedSkill(val skill: SkillInfo, val catalogEntry: SkillCatalogEntry?)
+data class ScopedSkill(val skill: SkillInfo, val catalogEntry: SkillCatalogEntry?) {
+    /** True when the authorizing row belongs to the shared `system` layer. */
+    val shared: Boolean
+        get() = catalogEntry?.userId == SkillCatalogEntry.DEFAULT_USER_ID
+}
 
-/** Shared user/project candidate resolution for command and management entry points. */
+/**
+ * Owner-granular resolution shared by command, prompt, load and management entry points.
+ *
+ * The name binding happens once, here: catalog rows decide who owns a name (the viewer's own row
+ * shadows the shared one), and only the install path that winning row pins is exposed.
+ */
 class SkillAccessResolver(
     private val registry: SkillRegistry,
-    private val catalog: AsyncSkillCatalogStore?,
-    private val config: SkillConfig
+    private val catalog: AsyncSkillCatalogStore?
 ) {
 
     /**
-     * Returns exact-project and GLOBAL candidates without enabled or agent-whitelist filtering.
-     * Same-named PROJECT and GLOBAL entries remain distinct. The user's row shadows system for
-     * each (name, project), before install-path matching, so a stale or disabled user row cannot
-     * grant access through a different system install. Catalog failures propagate.
+     * The effective skill set visible to [userId] — their own plus shared `system` skills — with
+     * no enabled or agent-whitelist filtering. Catalog failures propagate.
      *
-     * Without a catalog only explicitly shared GLOBAL sources are exposed, never project trees
-     * whose ownership cannot be established. The registry's same-identity root winner is unchanged.
+     * Without a catalog the registry snapshot is exposed unbound (single-machine/dev mode);
+     * with one, a candidate whose row is missing or whose install path drifted stays hidden —
+     * a stale user row cannot grant access through a different system install.
      */
-    suspend fun listScopedSkills(userId: String?, projectPath: Path?): List<ScopedSkill> {
-        val roots = SkillScopeResolver.candidateRoots(projectPath)
-        val candidates = registry.all().mapNotNull { skill ->
-            val (scope, project) = SkillScopeResolver.classify(skill, config) ?: return@mapNotNull null
-            if (project !in roots || (catalog == null && scope != SkillScope.GLOBAL)) return@mapNotNull null
-            SkillKey(skill.name, project) to skill
-        }.sortedWith(compareBy({ roots.indexOf(it.first.projectPath) }, { it.first.name }))
-        val store = catalog ?: return candidates.map { ScopedSkill(it.second, null) }
-        val user = userId?.takeIf { it.isNotBlank() } ?: SkillCatalogEntry.DEFAULT_USER_ID
-        val ownRows = SkillOwnership.rowsByIdentity(store.listByUser(user), user, config)
-        val systemRows = if (user == SkillCatalogEntry.DEFAULT_USER_ID) emptyMap() else {
-            SkillOwnership.rowsByIdentity(
-                store.listByUser(SkillCatalogEntry.DEFAULT_USER_ID), SkillCatalogEntry.DEFAULT_USER_ID, config
-            )
+    suspend fun listScopedSkills(userId: String?): List<ScopedSkill> {
+        val owner = userId?.takeIf { it.isNotBlank() } ?: SkillCatalogEntry.DEFAULT_USER_ID
+        val store = catalog
+            ?: return registry.visibleFor(owner).map { ScopedSkill(it, null) }
+        // A store that misreports ownership can never authorize: rows are kept only under their own userId.
+        val ownRows = store.listByUser(owner).filter { it.userId == owner }.associateBy { it.name }
+        val systemRows = if (owner == SkillCatalogEntry.DEFAULT_USER_ID) emptyMap()
+        else store.listByUser(SkillCatalogEntry.DEFAULT_USER_ID).filter { it.userId == SkillCatalogEntry.DEFAULT_USER_ID }.associateBy { it.name }
+        val result = mutableListOf<ScopedSkill>()
+        for (skill in registry.visibleFor(owner)) {
+            // Rows, not the in-memory snapshot, decide the winner: a delete, a disable and a
+            // restore all act on a row, and the snapshot can lag it by one sync pass.
+            val row = ownRows[skill.name] ?: systemRows[skill.name] ?: continue
+            val dir = skill.location.parent ?: continue
+            if (SkillPaths.canonicalizeOrNull(row.installPath) != SkillPaths.canonicalize(dir)) continue
+            result.add(ScopedSkill(skill, row))
         }
-        return candidates.mapNotNull { (key, skill) ->
-            val row = ownRows[key] ?: systemRows[key] ?: return@mapNotNull null
-            val installPath = skill.location.parent ?: return@mapNotNull null
-            if (SkillPaths.canonicalizeOrNull(row.installPath) != SkillPaths.canonicalize(installPath)) {
-                return@mapNotNull null
-            }
-            ScopedSkill(skill, row)
-        }
+        return result.sortedBy { it.skill.name }
     }
 }

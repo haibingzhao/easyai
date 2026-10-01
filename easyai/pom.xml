@@ -48,6 +48,7 @@
 
         <exposed.version>1.2.0</exposed.version>
         <jtokkit.version>1.1.0</jtokkit.version>
+        <dashscope-sdk.version>2.23.1</dashscope-sdk.version>
         <!-- Build Plugins -->
         <maven.compiler-plugin.version>3.14.0</maven.compiler-plugin.version>
         <maven-install-plugin.version>3.1.4</maven-install-plugin.version>
@@ -251,6 +252,25 @@
                 <groupId>com.easy</groupId>
                 <artifactId>easyai-anthropic-autoconfigure</artifactId>
                 <version>${revision}</version>
+            </dependency>
+            <!-- easyai-dashscope-autoconfigure -->
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-dashscope-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <!-- DashScope (Aliyun Bailian) native protocol SDK -->
+            <dependency>
+                <groupId>com.alibaba</groupId>
+                <artifactId>dashscope-sdk-java</artifactId>
+                <version>${dashscope-sdk.version}</version>
+                <exclusions>
+                    <!-- Declared compile-scope upstream; a Surefire provider must not reach the runtime classpath. -->
+                    <exclusion>
+                        <groupId>org.apache.maven.surefire</groupId>
+                        <artifactId>junit-platform-surefire-provider</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
             <!-- easyai-auth -->
             <dependency>

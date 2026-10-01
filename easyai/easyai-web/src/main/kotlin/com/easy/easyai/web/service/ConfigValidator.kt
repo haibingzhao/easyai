@@ -4,7 +4,7 @@ import com.easy.easyai.agent.api.model.AgentCreateRequest
 import com.easy.easyai.common.textio.template.InvalidTemplateException
 import com.easy.easyai.common.textio.template.TemplateRenderer
 import com.easy.easyai.core.agent.AsyncAgentStore
-import com.easy.easyai.skills.SkillRegistry
+import com.easy.easyai.skills.SkillAccessResolver
 import com.easy.easyai.swarm.dag.DagAlgorithms
 import com.easy.easyai.swarm.model.DeliberationSpec
 import com.easy.easyai.swarm.model.SwarmAgentSpec
@@ -255,7 +255,7 @@ class ConfigValidator(
             toolRegistry: com.easy.easyai.agent.registry.ToolRegistry,
             agentStore: AsyncAgentStore,
             objectMapper: ObjectMapper,
-            skillRegistry: SkillRegistry? = null,
+            skillAccessResolver: SkillAccessResolver? = null,
             mcpClientManager: McpClientManager? = null,
             templateRenderer: TemplateRenderer? = null,
         ): ConfigValidator {
@@ -268,7 +268,7 @@ class ConfigValidator(
                     ResourceExistenceValidator(
                         toolRegistry = toolRegistry,
                         agentStore = agentStore,
-                        skillRegistry = skillRegistry,
+                        skillAccessResolver = skillAccessResolver,
                         mcpClientManager = mcpClientManager,
                     ),
                     TemplateSyntaxValidator(templateRenderer),

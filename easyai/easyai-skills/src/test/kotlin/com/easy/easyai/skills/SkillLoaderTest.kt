@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
+import kotlin.io.path.readText
 import kotlin.io.path.writeText
 
 class SkillLoaderTest {
@@ -104,6 +105,29 @@ class SkillLoaderTest {
             val (frontmatter, body) = SkillLoader.extractFrontmatter(content)
             assertTrue(frontmatter.isEmpty())
             assertEquals(content, body)
+        }
+    }
+
+    /**
+     * Rename is how the add flow registers a copied package under the name the user chose, so the
+     * rewritten file has to parse back the same way it was written — including keeping every other
+     * key. A YAML document-start marker leaking into the block would terminate it immediately.
+     */
+    @Nested
+    inner class Rename {
+        @Test
+        fun `rewriteName keeps other keys and round trips through parse`(@TempDir tempDir: Path) {
+            val skillFile = tempDir.resolve("SKILL.md")
+            skillFile.writeText("---\nname: other\ndescription: d\nversion: 1.4.2\n---\n\nbody text\n")
+
+            SkillLoader.rewriteName(skillFile, "draft")
+
+            val renamed = SkillLoader.parse(skillFile)
+            assertEquals("draft", renamed.name)
+            assertEquals("d", renamed.description)
+            assertEquals("body text", renamed.content)
+            assertEquals("1.4.2", SkillLoader.parseWithFrontmatter(skillFile).second["version"])
+            assertTrue(!skillFile.readText().contains("---\n---"))
         }
     }
 

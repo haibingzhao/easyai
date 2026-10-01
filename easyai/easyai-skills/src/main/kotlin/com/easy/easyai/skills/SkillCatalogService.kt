@@ -3,27 +3,24 @@ package com.easy.easyai.skills
 import com.easy.easyai.core.skill.AsyncSkillCatalogStore
 import com.easy.easyai.core.skill.SkillCatalogEntry
 import com.easy.easyai.core.skill.SkillOwnerContext
-import com.easy.easyai.core.skill.SkillScope
-import com.easy.easyai.core.skill.SkillStore
 import com.easy.easyai.core.skill.SkillSyncState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
-import java.io.File
+import java.nio.file.Files
 import java.nio.file.Path
 
 /**
  * One catalog row as the management surface needs to see it.
  *
- * @property scope granularity derived from the install path, never stored redundantly
- * @property installedOnDisk whether the SKILL.md is still there; false means reconciliation will
- *   delist the row on the next pass, so the UI can warn before that happens
+ * @param shared true when the row belongs to the read-only `system` layer
+ * @param installedOnDisk whether the skill directory still carries a SKILL.md; false means the
+ *   next sync restores it from the object-storage package, so the UI can say so before that happens
  */
 data class SkillCatalogView(
     val entry: SkillCatalogEntry,
-    val scope: SkillScope,
-    val projectPath: Path?,
+    val shared: Boolean,
     val installedOnDisk: Boolean
 )
 
@@ -45,32 +42,42 @@ sealed interface SkillToggleResult {
  * Exists so no caller can update the table and the index separately: [setEnabled] flips the row
  * and adds or removes the index document in one call, which is what keeps "disabled" from becoming
  * a lie the system prompt or `skill_search` still tells.
+ *
+ * The row is flipped **first**, then the index is asked to catch up: [SkillIndexer.synchronize] can
+ * legitimately fail (missing SKILL.md, backend outage) and the row must not stay behind that
+ * failure — otherwise the API says "applied" while `load_skill` still refuses the skill.
+ * `indexSynced` reports only the index side; the row is the source of truth.
  */
 class SkillCatalogService(
     private val catalog: AsyncSkillCatalogStore?,
-    private val indexer: SkillIndexer,
-    private val skillStore: SkillStore?,
-    private val config: SkillConfig
+    private val indexer: SkillIndexer
 ) {
 
     private val logger = LoggerFactory.getLogger(javaClass)
 
-    /** Every row owned by [SkillOwnerContext.userId], enriched with its granularity and freshness. */
+    /** The requester's own rows plus the shared `system` rows; same names appear once, own first. */
     suspend fun list(owner: SkillOwnerContext): List<SkillCatalogView> {
         val store = catalog ?: return emptyList()
-        val userId = owner.userId ?: SkillCatalogEntry.DEFAULT_USER_ID
-        val rows = store.listByUser(userId)
+        val userId = owner.userId?.takeIf { it.isNotBlank() } ?: SkillCatalogEntry.DEFAULT_USER_ID
+        val owners = if (userId == SkillCatalogEntry.DEFAULT_USER_ID) listOf(userId)
+        else listOf(userId, SkillCatalogEntry.DEFAULT_USER_ID)
+        val rows = store.listByOwners(owners)
         if (rows.isEmpty()) return emptyList()
-        // One IO-dispatcher hop for the whole page instead of one per row: `installedOnDisk` is a stat call
-        // and this method is called from Netty event-loop threads via the REST controller.
-        return withContext(Dispatchers.IO) { rows.map { viewOf(it) } }
+        val ownNames = rows.filter { it.userId == userId }.map { it.name }.toSet()
+        val visible = rows.filter { it.userId == userId || it.name !in ownNames }
+        // One IO-dispatcher hop for the whole page instead of one per row: `installedOnDisk` is a
+        // stat call and this method is called from event-loop threads via the REST controller.
+        return withContext(Dispatchers.IO) { visible.map { viewOf(it) } }
     }
 
-    /** One row from this owner's point of view; null when the user does not own it. */
+    /** One row from this owner's point of view: their own first, then the shared layer. */
     suspend fun find(name: String, owner: SkillOwnerContext): SkillCatalogView? {
         val store = catalog ?: return null
-        val userId = owner.userId ?: SkillCatalogEntry.DEFAULT_USER_ID
-        val row = SkillOwnership.resolveRow(store, name, userId, owner.projectPath, config) ?: return null
+        val userId = owner.userId?.takeIf { it.isNotBlank() } ?: SkillCatalogEntry.DEFAULT_USER_ID
+        val own = store.findByName(userId, name)
+        val system = if (userId == SkillCatalogEntry.DEFAULT_USER_ID) null
+        else store.findByName(SkillCatalogEntry.DEFAULT_USER_ID, name)
+        val row = own ?: system ?: return null
         return withContext(Dispatchers.IO) { viewOf(row) }
     }
 
@@ -80,24 +87,19 @@ class SkillCatalogService(
      * Enabling re-indexes from disk (so a skill edited while disabled publishes its new text);
      * disabling removes the document but keeps the row, which is where provenance lives.
      *
-     * The row is flipped **first**, then the index is asked to catch up: [SkillIndexer.synchronize] can
-     * legitimately fail (missing SKILL.md, backend outage) and the row must not stay behind that
-     * failure — otherwise the API says "applied" while `load_skill` still refuses the skill.
-     * `indexSynced` reports only the index side; the row is the source of truth.
-     *
-     * The target row is [SkillOwnership.resolveRow]'s pick for [owner]'s granularity — the same
-     * winner `load_skill` would serve — and every write addresses it by primary key, so a toggle
-     * can never hit a same-named skill of another project.
+     * Only the requester's **own** rows are toggleable: a name matched solely in the shared layer
+     * is read-only for every regular user (admins toggle it by acting as the `system` owner).
      */
     suspend fun setEnabled(name: String, owner: SkillOwnerContext, enabled: Boolean): SkillToggleResult {
         val store = catalog
             ?: return SkillToggleResult.Rejected("Skill catalog is not available: enable easyai.r2dbc.enabled")
-        val userId = owner.userId ?: SkillCatalogEntry.DEFAULT_USER_ID
-        val row = SkillOwnership.resolveRow(store, name, userId, owner.projectPath, config)
-            ?: return SkillToggleResult.Rejected("Skill '$name' is not installed for user '$userId'")
-        if (owner.userId.isNullOrBlank() || row.userId != userId || row.userId == SkillCatalogEntry.DEFAULT_USER_ID) {
-            return SkillToggleResult.Rejected("Shared skills are read-only")
-        }
+        val userId = owner.userId?.takeIf { it.isNotBlank() } ?: SkillCatalogEntry.DEFAULT_USER_ID
+        val row = store.findByName(userId, name)
+            ?: return SkillToggleResult.Rejected(
+                if (userId == SkillCatalogEntry.DEFAULT_USER_ID || store.findByName(SkillCatalogEntry.DEFAULT_USER_ID, name) == null)
+                    "Skill '$name' is not installed for user '$userId'"
+                else "Shared skills are read-only"
+            )
         val flipped = try {
             if (enabled) indexer.prepareEnable(row) else store.setEnabled(row.id, false)
         } catch (e: CancellationException) {
@@ -118,12 +120,13 @@ class SkillCatalogService(
     }
 
     private fun viewOf(entry: SkillCatalogEntry): SkillCatalogView {
-        val (scope, projectPath) = SkillScopeResolver.resolve(entry, config)
+        val installed = runCatching {
+            Files.isRegularFile(Path.of(entry.installPath).resolve(SkillPaths.SKILL_FILE_NAME))
+        }.getOrDefault(false)
         return SkillCatalogView(
             entry = entry,
-            scope = scope,
-            projectPath = projectPath,
-            installedOnDisk = File(entry.installPath, SkillCatalogSyncService.SKILL_FILE_NAME).isFile
+            shared = entry.userId == SkillCatalogEntry.DEFAULT_USER_ID,
+            installedOnDisk = installed
         )
     }
 }

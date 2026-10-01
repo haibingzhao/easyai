@@ -113,6 +113,7 @@ export { McpPage } from './pages/McpPage';
 export { MemoriesPage } from './pages/MemoriesPage';
 export { KnowledgePage } from './pages/KnowledgePage';
 export { CommandsPage } from './pages/CommandsPage';
+export { SkillsPage } from './pages/SkillsPage';
 export { SettingsPage } from './pages/SettingsPage';
 export { SwarmPresetEditorPage } from './pages/SwarmPresetEditorPage';
 export { WorkflowRunPage } from './pages/WorkflowRunPage';

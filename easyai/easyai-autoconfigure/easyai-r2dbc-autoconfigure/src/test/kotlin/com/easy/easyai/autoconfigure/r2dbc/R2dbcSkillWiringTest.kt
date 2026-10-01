@@ -85,16 +85,16 @@ internal class R2dbcSkillWiringTest {
             properties.skills.rag.enabled = true
             val source = mockk<SkillPromptSource>()
             val skills = listOf(mapOf<String, Any?>("name" to "pdf", "description" to "Read PDF"))
-            coEvery { source.skillsForPrompt("alice", projectPath, listOf("pdf"), true) } returns skills
-            coEvery { source.skillsForPrompt("alice", projectPath, listOf("pdf"), false) } returns skills
+            coEvery { source.skillsForPrompt("alice", listOf("pdf"), true) } returns skills
+            coEvery { source.skillsForPrompt("alice", listOf("pdf"), false) } returns skills
             val parent = context.copy(allowedSkillNames = listOf("pdf"))
             val withRegistry = configuration.subAgentContextResolver(toolResolver, agentStore, registry, source)
             val withoutRegistry = configuration.subAgentContextResolver(toolResolver, agentStore, skillPromptSource = source)
 
             assertEquals(skills, withRegistry.resolve(inlineAgent, parent).first.skills)
             assertEquals(skills, withoutRegistry.resolve(inlineAgent, parent).first.skills)
-            coVerify(exactly = 1) { source.skillsForPrompt("alice", projectPath, listOf("pdf"), true) }
-            coVerify(exactly = 1) { source.skillsForPrompt("alice", projectPath, listOf("pdf"), false) }
+            coVerify(exactly = 1) { source.skillsForPrompt("alice", listOf("pdf"), true) }
+            coVerify(exactly = 1) { source.skillsForPrompt("alice", listOf("pdf"), false) }
             verify { registry wasNot Called }
         }
     }

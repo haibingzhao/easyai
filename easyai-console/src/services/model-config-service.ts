@@ -1,4 +1,4 @@
-import type { ModelProviderInfo, ModelProviderConfig, ModelConfigGroup, SaveModelProviderConfigRequest, SaveModelConfigGroupRequest } from '@/types/settings';
+import type { ModelProviderInfo, ModelProviderConfig, ModelConfigGroup, SaveModelProviderConfigRequest, SaveModelConfigGroupRequest, ModelType, ModelConfigTestResult } from '@/types/settings';
 import { fetchJson, fetchVoid, JSON_HEADERS } from '@/services/api-client';
 
 const API_BASE = '/api/chat';
@@ -19,10 +19,11 @@ export const modelConfigService = {
   },
 
   /**
-   * Get user's saved provider configurations.
+   * Get user's saved provider configurations of one type (CHAT when omitted).
    */
-  async getUserConfigurations(): Promise<ModelProviderConfig[]> {
-    return fetchJson<ModelProviderConfig[]>(`${API_BASE}/model-configs`);
+  async getUserConfigurations(modelType?: ModelType): Promise<ModelProviderConfig[]> {
+    const query = modelType ? `?modelType=${modelType}` : '';
+    return fetchJson<ModelProviderConfig[]>(`${API_BASE}/model-configs${query}`);
   },
 
   /**
@@ -30,6 +31,17 @@ export const modelConfigService = {
    */
   async saveConfiguration(request: SaveModelProviderConfigRequest): Promise<ModelProviderConfig> {
     return fetchJson<ModelProviderConfig>(`${API_BASE}/model-configs`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(request),
+    });
+  },
+
+  /**
+   * Structural probe of a generation draft; never persists.
+   */
+  async testGenerationConfig(request: SaveModelProviderConfigRequest): Promise<ModelConfigTestResult> {
+    return fetchJson<ModelConfigTestResult>(`${API_BASE}/model-configs/test`, {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(request),
@@ -46,10 +58,11 @@ export const modelConfigService = {
   // ─── Model Config Groups ─────────────────────────────────────────────────────
 
   /**
-   * Get all model config groups with their member models.
+   * Get groups with members of one type (CHAT when omitted).
    */
-  async getGroups(): Promise<ModelConfigGroup[]> {
-    return fetchJson<ModelConfigGroup[]>(`${API_BASE}/model-groups`);
+  async getGroups(modelType?: ModelType): Promise<ModelConfigGroup[]> {
+    const query = modelType ? `?modelType=${modelType}` : '';
+    return fetchJson<ModelConfigGroup[]>(`${API_BASE}/model-groups${query}`);
   },
 
   /**

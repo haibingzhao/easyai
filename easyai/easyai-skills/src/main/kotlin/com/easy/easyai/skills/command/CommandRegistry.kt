@@ -10,8 +10,8 @@ interface CommandRegistry {
  * Queries McpPromptProvider on every call — no caching, so it always reflects the current
  * MCP connections.
  *
- * SKILL commands are user/project-scoped and served by CommandService.listSkillCommands, never
- * from this registry: a registry-wide snapshot would advertise other owners' and projects' skills.
+ * SKILL commands are owner-scoped and served by CommandService.listSkillCommands, never from
+ * this registry: a registry-wide snapshot would advertise other owners' skills.
  * USER commands are served from DB via AsyncUserCommandStore and are NOT part of this registry.
  * BUILTIN commands are exposed via [builtinHandlers] and included in [all] for autocomplete.
  */
@@ -21,7 +21,7 @@ class DefaultCommandRegistry(
 ) : CommandRegistry {
 
     override fun resolve(name: String): CommandInfo? {
-        // Skills require user/project resolution in CommandService, never a global fallback.
+        // Skills require owner resolution in CommandService, never a registry-wide fallback.
         // 1. Try MCP "server:prompt" exact match
         if (name.contains(":")) {
             val (server, prompt) = name.split(":", limit = 2)

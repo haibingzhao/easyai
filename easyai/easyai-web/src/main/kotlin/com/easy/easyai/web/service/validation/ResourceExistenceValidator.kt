@@ -4,7 +4,7 @@ import com.easy.easyai.agent.api.model.AgentCreateRequest
 import com.easy.easyai.agent.registry.ToolRegistry
 import com.easy.easyai.core.agent.AgentType
 import com.easy.easyai.core.agent.AsyncAgentStore
-import com.easy.easyai.skills.SkillRegistry
+import com.easy.easyai.skills.SkillAccessResolver
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.web.model.ConfigValidationError
 
@@ -14,7 +14,7 @@ import com.easy.easyai.web.model.ConfigValidationError
 class ResourceExistenceValidator(
     private val toolRegistry: ToolRegistry,
     private val agentStore: AsyncAgentStore,
-    private val skillRegistry: SkillRegistry? = null,
+    private val skillAccessResolver: SkillAccessResolver? = null,
     private val mcpClientManager: McpClientManager? = null,
 ) : AgentConfigValidator {
 
@@ -31,16 +31,24 @@ class ResourceExistenceValidator(
             }
         }
 
-        // Validate skills
+        // Validate skills against the owner's visible set (own rows plus the shared layer), never
+        // the global registry: another owner's skill name must not validate this request.
         if (request.skillNames.isNotEmpty()) {
-            val availableNames = skillRegistry?.all()?.map { it.name }?.toSet() ?: emptySet()
+            val visible = skillAccessResolver?.listScopedSkills(userId)?.associateBy { it.skill.name }
             for (name in request.skillNames) {
-                if (name !in availableNames) {
-                    if (skillRegistry != null) {
+                val candidate = visible?.get(name)
+                if (candidate == null) {
+                    if (visible != null) {
                         errors.add(ConfigValidationError("skillNames", "Skill '$name' does not exist"))
                     } else {
                         errors.add(ConfigValidationError("skillNames", "Skill '$name' cannot be verified (skill system unavailable)", "warning"))
                     }
+                } else if (candidate.catalogEntry?.enabled == false) {
+                    errors.add(ConfigValidationError(
+                        "skillNames",
+                        "Skill '$name' is disabled; load_skill will refuse it until it is enabled",
+                        "warning"
+                    ))
                 }
             }
         }

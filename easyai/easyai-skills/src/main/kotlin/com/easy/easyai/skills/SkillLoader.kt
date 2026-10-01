@@ -5,6 +5,7 @@ import tools.jackson.dataformat.yaml.YAMLMapper
 import tools.jackson.module.kotlin.readValue
 import java.nio.file.Path
 import kotlin.io.path.readText
+import kotlin.io.path.writeText
 
 /**
  * Parses SKILL.md files: extracts YAML front matter and markdown body.
@@ -18,11 +19,10 @@ internal object SkillLoader {
     private const val FRONTMATTER_DELIMITER = "---"
 
     /**
-     * Parse a SKILL.md file at the given path.
-     * @return SkillInfo with extracted metadata and content.
-     * @throws IllegalArgumentException if the required 'name' field is missing.
+     * Parse a SKILL.md file at the given path together with its raw frontmatter map, so callers
+     * that need fields beyond [SkillInfo] (catalog `version`) do not re-read or re-parse the file.
      */
-    fun parse(path: Path): SkillInfo {
+    fun parseWithFrontmatter(path: Path): Pair<SkillInfo, Map<String, Any?>> {
         val content = path.readText()
         val (frontmatter, body) = extractFrontmatter(content)
         val name = frontmatter["name"] as? String
@@ -40,7 +40,7 @@ internal object SkillLoader {
             is String -> setOf(raw)
             else -> emptySet()
         }
-        return SkillInfo(
+        val info = SkillInfo(
             name = name,
             description = description,
             location = path.toAbsolutePath(),
@@ -48,7 +48,40 @@ internal object SkillLoader {
             tags = tags,
             examples = examples,
         )
+        return info to frontmatter
     }
+
+    /**
+     * Rewrite the frontmatter `name` of the SKILL.md at [path] to [newName], preserving every
+     * other key. Used when a copied skill is registered under a user-chosen name that differs
+     * from what its source file declared.
+     */
+    fun rewriteName(path: Path, newName: String) {
+        val content = path.readText()
+        val (frontmatter, body) = extractFrontmatter(content)
+        val merged = LinkedHashMap(frontmatter)
+        merged["name"] = newName
+        path.writeText("$FRONTMATTER_DELIMITER\n${yamlFields(merged)}\n$FRONTMATTER_DELIMITER\n\n$body\n")
+    }
+
+    /**
+     * The frontmatter block as plain `key: value` lines.
+     *
+     * Jackson's YAML writer emits an explicit `---` document-start marker, and a second one from the
+     * frontmatter wrapper above would terminate the block immediately and read back as an empty map.
+     */
+    private fun yamlFields(frontmatter: Map<String, Any?>): String {
+        val yaml = yamlMapper.writeValueAsString(frontmatter).trim().lineSequence()
+        return yaml.dropWhile { it.trim().isEmpty() || it.trim() == FRONTMATTER_DELIMITER || it.startsWith("%") }
+            .joinToString("\n").trim()
+    }
+
+    /**
+     * Parse a SKILL.md file at the given path.
+     * @return SkillInfo with extracted metadata and content.
+     * @throws IllegalArgumentException if the required 'name' field is missing.
+     */
+    fun parse(path: Path): SkillInfo = parseWithFrontmatter(path).first
 
     /**
      * Split content at a `---` line boundary, parse the YAML frontmatter.

@@ -3,8 +3,10 @@ package com.easy.easyai.tools.media
 import com.easy.easyai.core.media.MediaProviderSettings
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.withTimeout
+import org.springframework.core.io.ByteArrayResource
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
+import org.springframework.http.client.MultipartBodyBuilder
 import org.springframework.http.client.reactive.ReactorClientHttpConnector
 import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.bodyToMono
@@ -98,6 +100,28 @@ class OpenAiCompatibleClient(private val settings: MediaProviderSettings) {
         return bytes to mime
     }
 
+    /** Transcribe audio (OpenAI Whisper-compatible `POST {base}/audio/transcriptions`); returns the text. */
+    suspend fun transcribe(audio: ByteArray, filename: String, language: String?): String {
+        val body = MultipartBodyBuilder().apply {
+            part("file", NamedBytesResource(audio, filename))
+            part("model", settings.defaultModel.ifBlank { "whisper-1" })
+            language?.takeIf { it.isNotBlank() }?.let { part("language", it) }
+        }.build()
+        val json = withTimeout(timeout) {
+            client.post()
+                .uri("$base/audio/transcriptions")
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .headers { applyAuth(it) }
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono<String>()
+                .awaitSingle()
+        }
+        val node = MediaArtifacts.readJson(json)
+        return node.path("text").asString(null)
+            ?: throw IllegalStateException("transcription response carried no text")
+    }
+
     /** Download a provider-returned artifact URL, refusing internal hosts and oversized bodies. */
     private suspend fun download(url: String): ByteArray {
         MediaFetch.validateNotInternal(url)
@@ -112,12 +136,15 @@ class OpenAiCompatibleClient(private val settings: MediaProviderSettings) {
 
     private fun applyAuth(headers: HttpHeaders) {
         if (settings.apiKey.isNotBlank()) headers.setBearerAuth(settings.apiKey)
-        settings.accessKeyId.takeIf { it.isNotBlank() }?.let { headers.set("X-Access-Key-Id", it) }
-        settings.accessKeySecret.takeIf { it.isNotBlank() }?.let { headers.set("X-Access-Key-Secret", it) }
     }
 
     companion object {
         private const val DEFAULT_BASE = "https://api.openai.com/v1"
         private const val MAX_IN_MEMORY = 32 * 1024 * 1024 // 32MB: large image/video responses fail fast, not OOM
     }
+}
+
+/** ByteArrayResource carrying an upload filename, as multipart `file` parts require. */
+private class NamedBytesResource(bytes: ByteArray, private val filename: String) : ByteArrayResource(bytes) {
+    override fun getFilename(): String = filename
 }

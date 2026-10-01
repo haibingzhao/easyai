@@ -5,10 +5,13 @@ import com.easy.easyai.api.model.ModelConfigGroup
 import com.easy.easyai.api.model.ModelInfo
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo
+import com.easy.easyai.api.model.ModelType
 import com.easy.easyai.api.model.SaveModelConfigGroupRequest
 import com.easy.easyai.api.model.SaveModelProviderConfigRequest
+import com.easy.easyai.core.media.MediaProviderResolver
 import com.easy.easyai.web.security.getCurrentUserId
 import kotlinx.coroutines.reactor.mono
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.*
 import org.springframework.web.server.ResponseStatusException
@@ -17,7 +20,9 @@ import reactor.core.publisher.Mono
 @RestController
 @RequestMapping("/api/chat")
 class ModelConfigController(
-    private val modelConfigService: ModelConfigService
+    private val modelConfigService: ModelConfigService,
+    @param:Autowired(required = false)
+    private val mediaProviderResolver: MediaProviderResolver? = null
 ) {
 
     companion object {
@@ -62,10 +67,12 @@ class ModelConfigController(
         }
 
     @GetMapping("/model-configs")
-    fun getUserConfigurations(): Mono<List<ModelProviderConfig>> =
+    fun getUserConfigurations(@RequestParam(required = false) modelType: ModelType?): Mono<List<ModelProviderConfig>> =
         mono {
             val userId = getCurrentUserId()
-            modelConfigService.getUserConfigurations(userId).map { it.masked() }
+            modelConfigService
+                .getUserConfigurations(modelType ?: ModelType.CHAT, userId)
+                .map { it.masked() }
         }
 
     @GetMapping("/model-configs/{id}")
@@ -81,7 +88,21 @@ class ModelConfigController(
     fun saveUserConfiguration(@RequestBody request: SaveModelProviderConfigRequest): Mono<ModelProviderConfig> =
         mono {
             val userId = getCurrentUserId()
-            modelConfigService.saveUserConfiguration(request, userId).masked()
+            try {
+                modelConfigService.saveUserConfiguration(request, userId).masked()
+            } catch (e: IllegalArgumentException) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message ?: "Invalid model configuration")
+            }.also { refreshMediaCache(userId, request.modelType) }
+        }
+
+    /** Structural probe of a generation-type draft; never persists. Blank keys fall back to stored ones. */
+    @PostMapping("/model-configs/test")
+    fun testGenerationConfiguration(@RequestBody request: SaveModelProviderConfigRequest): Mono<ModelConfigTestDto> =
+        mono {
+            val userId = getCurrentUserId()
+            val failure = modelConfigService.testGenerationConfiguration(request, userId)
+            if (failure == null) ModelConfigTestDto(true, "Configuration OK")
+            else ModelConfigTestDto(false, failure)
         }
 
     @DeleteMapping("/model-configs/{id}")
@@ -89,19 +110,25 @@ class ModelConfigController(
     fun deleteUserConfiguration(@PathVariable id: String): Mono<Void> =
         mono {
             val userId = getCurrentUserId()
+            val existing = modelConfigService.getUserConfiguration(id, userId)
             val deleted = modelConfigService.deleteUserConfiguration(id, userId)
             if (!deleted) {
                 throw ResponseStatusException(HttpStatus.NOT_FOUND, "Configuration not found: $id")
             }
+            existing?.let { refreshMediaCache(userId, it.modelType) }
         }.then()
 
     // ─── Model Config Groups ─────────────────────────────────────────────────────
 
     @GetMapping("/model-groups")
-    fun getGroups(): Mono<List<ModelConfigGroup>> =
+    fun getGroups(@RequestParam(required = false) modelType: ModelType?): Mono<List<ModelConfigGroup>> =
         mono {
             val userId = getCurrentUserId()
-            modelConfigService.getGroups(userId).map { it.masked() }
+            modelConfigService.getGroups(userId)
+                .map { group -> group.copy(models = group.models.filter { it.modelType == (modelType ?: ModelType.CHAT) }) }
+                // An explicitly requested type only shows groups that carry members of it
+                .filter { modelType == null || it.models.isNotEmpty() }
+                .map { it.masked() }
         }
 
     @PostMapping("/model-groups")
@@ -129,4 +156,16 @@ class ModelConfigController(
                 throw ResponseStatusException(HttpStatus.NOT_FOUND, "Group not found: $id")
             }
         }.then()
+
+    /** Generation rows are cached per (user, kind) by the media resolver; hot-apply on any change. */
+    private fun refreshMediaCache(userId: String, modelType: ModelType) {
+        if (modelType == ModelType.CHAT) return
+        mediaProviderResolver?.refresh(userId)
+    }
 }
+
+/** Outcome of a generation-config structural probe. */
+data class ModelConfigTestDto(
+    val success: Boolean,
+    val message: String
+)

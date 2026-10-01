@@ -1,18 +1,22 @@
 package com.easy.easyai.skills
 
 import com.easy.easyai.core.skill.AsyncSkillCatalogStore
-import java.nio.file.Path
 
-/** Fresh, fail-closed model visibility. Catalog failures propagate to the request boundary. */
+/**
+ * Fresh, fail-closed model visibility. Catalog failures propagate to the request boundary.
+ *
+ * @param firstAccessSync lazy-sync gate invoked before the first read of a process for one user
+ *   ([SkillRefreshService.ensureSynced]); null when no sync layer is wired.
+ */
 class SkillPromptSource(
     registry: SkillRegistry?,
     catalog: AsyncSkillCatalogStore?,
     private val injectIntoSystemPrompt: Boolean,
     private val ragEnabled: Boolean,
     private val ragDiscoveryReady: Boolean = ragEnabled,
-    config: SkillConfig = SkillConfig()
+    private val firstAccessSync: (suspend (userId: String?) -> Unit)? = null
 ) {
-    private val modelView = registry?.let { SkillModelView(it, catalog, config) }
+    private val modelView = registry?.let { SkillModelView(it, catalog) }
 
     /** Only the injection switch, not a process-wide assertion that every tenant's index is ready. */
     val fullInjectionActive: Boolean
@@ -20,17 +24,17 @@ class SkillPromptSource(
 
     /**
      * Suppression requires both a usable search tool in this agent and a synchronized effective
-     * catalog. A SkillStore bean alone says nothing about readiness for this user/project.
+     * catalog. A SkillStore bean alone says nothing about readiness for this user.
      */
     suspend fun skillsForPrompt(
         userId: String? = null,
-        projectPath: Path? = null,
         allowedSkillNames: List<String> = emptyList(),
         skillSearchAvailable: Boolean = false
     ): List<Map<String, Any?>> {
         val view = modelView ?: return emptyList()
+        firstAccessSync?.invoke(userId)
         if (!fullInjectionActive) return emptyList()
-        val skills = view.list(userId, projectPath, allowedSkillNames)
+        val skills = view.list(userId, allowedSkillNames)
         if (ragEnabled && ragDiscoveryReady && skillSearchAvailable && skills.all { view.indexReady(it) }) {
             return emptyList()
         }
@@ -40,10 +44,12 @@ class SkillPromptSource(
     }
 
     /**
-     * Names of the effective model view for this user/project, independent of the prompt-injection
-     * switch and of RAG suppression: the default agent's `load_skill` whitelist derives from here,
-     * never from the (possibly suppressed) skillsData rendered into the prompt.
+     * Names of the effective model view for this user, independent of the prompt-injection switch
+     * and of RAG suppression: the default agent's `load_skill` whitelist derives from here, never
+     * from the (possibly suppressed) skillsData rendered into the prompt.
      */
-    suspend fun effectiveNames(userId: String?, projectPath: Path?): List<String> =
-        modelView?.listEffective(userId, projectPath)?.map { it.skill.name } ?: emptyList()
+    suspend fun effectiveNames(userId: String?): List<String> {
+        firstAccessSync?.invoke(userId)
+        return modelView?.listEffective(userId)?.map { it.skill.name } ?: emptyList()
+    }
 }

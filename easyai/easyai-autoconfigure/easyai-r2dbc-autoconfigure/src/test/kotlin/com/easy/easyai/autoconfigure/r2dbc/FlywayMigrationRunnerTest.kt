@@ -102,7 +102,12 @@ class FlywayMigrationRunnerTest {
                         assertTrue(result.next())
                         assertEquals("alice", result.getString(Tables.SkillTable.userId.name))
                         assertEquals("report", result.getString(Tables.SkillTable.name.name))
-                        assertEquals("", result.getString(Tables.SkillTable.projectHash.name))
+                        assertEquals(
+                            "/home/alice/.easyai/skills/alice",
+                            result.getString(Tables.SkillTable.rootPath.name)
+                        )
+                        assertEquals("LOCAL", result.getString(Tables.SkillTable.skillSource.name))
+                        assertEquals("", result.getString(Tables.SkillTable.objectKey.name))
                         assertEquals("PENDING_INDEX", result.getString(Tables.SkillTable.syncState.name))
                         assertEquals(0L, result.getLong(Tables.SkillTable.revision.name))
                     }
@@ -136,7 +141,7 @@ class FlywayMigrationRunnerTest {
                 conn.createStatement().executeQuery("SELECT member_session_id FROM swarm_team_member_execution").close()
                 // Skill catalog table (V3): the columns the retrieval slices are derived from
                 conn.createStatement().executeQuery(
-                    "SELECT id, name, source, version, checksum, enabled, install_path, origin, user_id " +
+                    "SELECT id, name, source, version, checksum, enabled, root_path, install_path, object_key, user_id " +
                         "FROM skill"
                 ).close()
                 // Storage settings table (V4): per-user object-storage configuration rows
@@ -145,7 +150,7 @@ class FlywayMigrationRunnerTest {
                         "FROM storage_settings"
                 ).close()
                 conn.createStatement().executeQuery(
-                    "SELECT id, name, install_path, user_id, project_hash, index_project_path, " +
+                    "SELECT id, name, root_path, install_path, object_key, user_id, " +
                         "indexed_checksum, sync_state, revision, next_attempt_at, last_error FROM skill"
                 ).close()
                 conn.createStatement().use { statement ->
@@ -155,29 +160,28 @@ class FlywayMigrationRunnerTest {
                             "WHERE UPPER(TABLE_NAME) = 'SKILL'"
                     ).use { rs -> while (rs.next()) indexes += rs.getString(1).uppercase() }
                     assertTrue(
-                        "UQ_SKILL_USER_NAME_HASH" in indexes,
-                        "V6 must leave the triple unique index in place, got: $indexes"
+                        "UQ_SKILL_USER_NAME" in indexes,
+                        "the whole sync pipeline addresses rows by (user_id, name), got: $indexes"
                     )
                     assertTrue(
-                        "UQ_SKILL_USER_NAME" !in indexes,
-                        "the old (user_id, name) unique index would collapse two projects' same-named skills again, got: $indexes"
+                        "UQ_SKILL_USER_NAME_HASH" !in indexes,
+                        "the project-scoped unique index would let one owner hold a name several times, got: $indexes"
                     )
                 }
             }
         }
 
         @Test
-        fun `skills can share a name across owners and projects but not within one triple`() {
+        fun `a skill name is unique inside one owner and free across owners`() {
             val jdbcUrl = "jdbc:h2:mem:flyway_skill_names;MODE=MYSQL;DB_CLOSE_DELAY=-1"
             DriverManager.getConnection(jdbcUrl, "sa", "").use { conn ->
                 conn.applySkillSchema()
-                conn.applyProjectScopedIdentity()
                 conn.executeSkillInsert("alice", "pdf-report")
                 conn.executeSkillInsert("bob", "pdf-report")
-                // Same owner, same name, another project: the row V3 could not express.
-                conn.executeSkillInsert("alice", "pdf-report", id = "row-3", projectHash = "1234abcd5678ef90")
+                // The shared layer carries the same name for everybody else.
+                conn.executeSkillInsert(SHARED_OWNER, "pdf-report", id = "row-3")
 
-                // A different id, so the only constraint this can trip is the (user_id, name, project_hash) one.
+                // A different id, so the only constraint this can trip is the (user_id, name) one.
                 val error = assertThrows(SQLException::class.java) {
                     conn.executeSkillInsert("alice", "pdf-report", id = "row-4")
                 }
@@ -194,10 +198,7 @@ class FlywayMigrationRunnerTest {
 
             DriverManager.getConnection("jdbc:h2:mem:flyway_skill_replay;MODE=MYSQL;DB_CLOSE_DELAY=-1", "sa", "")
                 .use { conn ->
-                    repeat(2) {
-                        conn.applySkillSchema()
-                        conn.applyProjectScopedIdentity()
-                    }
+                    repeat(2) { conn.applySkillSchema() }
                 }
         }
 
@@ -218,25 +219,24 @@ class FlywayMigrationRunnerTest {
 
         private fun Connection.applySkillSchema() = skillStatements().forEach { createStatement().execute(it) }
 
-        private fun Connection.applyProjectScopedIdentity() =
-            statementsOf(PROJECT_SCOPED_IDENTITY).forEach { createStatement().execute(it) }
-
         private fun Connection.executeSkillInsert(
             userId: String,
             name: String,
-            id: String = "$userId-$name",
-            projectHash: String = ""
+            id: String = "$userId-$name"
         ) {
+            val ownerRoot = "/home/$userId/.easyai/skills/$userId"
             createStatement().execute(
-                "INSERT INTO skill (id, name, checksum, install_path, created_at, updated_at, user_id, project_hash) " +
-                    "VALUES ('$id', '$name', 'a', '/home/$userId/.easyai/skills/$name', 1, 1, '$userId', '$projectHash')"
+                "INSERT INTO skill (id, name, checksum, root_path, install_path, created_at, updated_at, user_id) " +
+                    "VALUES ('$id', '$name', 'a', '$ownerRoot', '$ownerRoot/$name', 1, 1, '$userId')"
             )
         }
     }
 
     companion object {
         private const val SKILL_MIGRATION = "/db/migration/V3__create_skill_table.sql"
-        private const val PROJECT_SCOPED_IDENTITY = "/db/migration/V6__skill_project_scoped_identity.sql"
+
+        /** Owner id of the shared read-only layer (`SkillCatalogEntry.DEFAULT_USER_ID`). */
+        private const val SHARED_OWNER = "system"
 
         /** The newest versioned script Flyway sees, so this file never lags behind a new migration. */
         private fun maxVersionOnClasspath(flyway: Flyway): String =

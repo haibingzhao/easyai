@@ -5,6 +5,8 @@ import com.easy.easyai.api.model.ModelInfo
 import com.easy.easyai.api.model.ModelOptions
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo
+import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.api.model.ModelType
 import com.easy.easyai.api.model.SaveModelConfigGroupRequest
 import com.easy.easyai.api.model.SaveModelProviderConfigRequest
 import java.util.UUID
@@ -39,8 +41,8 @@ class DefaultModelConfigService(
             ?: emptyList()
     }
 
-    override suspend fun getUserConfigurations(userId: String): List<ModelProviderConfig> {
-        return configStore.getAllConfigs(userId)
+    override suspend fun getUserConfigurations(modelType: ModelType, userId: String): List<ModelProviderConfig> {
+        return configStore.getModelConfigs(modelType, userId)
             .filter { it.isCustom }
     }
 
@@ -51,12 +53,18 @@ class DefaultModelConfigService(
 
     override suspend fun saveUserConfiguration(request: SaveModelProviderConfigRequest, userId: String): ModelProviderConfig {
         request.options?.let { validateOptions(it) }
+        validateGenerationRow(request)
         val id = request.id ?: UUID.randomUUID().toString()
         // When apiKey is null, preserve existing key or resolve from group
         // (frontend sends null for masked/unchanged keys to avoid overwriting with masked values)
         val effectiveApiKey = request.apiKey
             ?: configStore.getConfig(id, userId)?.apiKey
             ?: request.groupId?.let { groupStore?.getGroup(it, userId)?.apiKey }
+        if (request.modelType != ModelType.CHAT && effectiveApiKey.isNullOrBlank()) {
+            throw IllegalArgumentException(
+                "a ${request.modelType.name.lowercase()} model needs an api key on itself or its group"
+            )
+        }
         val config = ModelProviderConfig(
             id = id,
             name = request.name,
@@ -71,7 +79,10 @@ class DefaultModelConfigService(
             options = request.options,
             timeoutSeconds = request.timeoutSeconds,
             capabilities = request.capabilities,
-            groupId = request.groupId
+            groupId = request.groupId,
+            modelType = request.modelType,
+            mediaOptions = request.mediaOptions?.trim()?.takeIf { it.isNotEmpty() },
+            isDefault = request.isDefault
         )
         configStore.saveConfig(config, userId)
         return config
@@ -84,6 +95,23 @@ class DefaultModelConfigService(
             ?: false
     }
 
+    override suspend fun testGenerationConfiguration(request: SaveModelProviderConfigRequest, userId: String): String? {
+        if (request.modelType == ModelType.CHAT) return "the test endpoint only covers generation models"
+        return try {
+            validateGenerationRow(request)
+            val effectiveApiKey = request.apiKey
+                ?: request.id?.let { configStore.getConfig(it, userId)?.apiKey }
+                ?: request.groupId?.let { groupStore?.getGroup(it, userId)?.apiKey }
+            if (effectiveApiKey.isNullOrBlank()) {
+                "a ${request.modelType.name.lowercase()} model needs an api key on itself or its group"
+            } else {
+                null
+            }
+        } catch (e: IllegalArgumentException) {
+            e.message
+        }
+    }
+
     // ─── Group operations ────────────────────────────────────────────────────────
 
     override suspend fun getGroups(userId: String): List<ModelConfigGroup> {
@@ -92,12 +120,28 @@ class DefaultModelConfigService(
 
     override suspend fun saveGroup(request: SaveModelConfigGroupRequest, userId: String): ModelConfigGroup {
         val store = groupStore ?: throw UnsupportedOperationException("ModelConfigGroupStore not available")
+        requireGroupNameAvailable(request, userId, excludeGroupId = request.id)
         return store.saveGroup(request, userId)
     }
 
     override suspend fun updateGroup(id: String, request: SaveModelConfigGroupRequest, userId: String): ModelConfigGroup {
         val store = groupStore ?: throw UnsupportedOperationException("ModelConfigGroupStore not available")
+        requireGroupNameAvailable(request, userId, excludeGroupId = id)
         return store.updateGroupConnection(id, request, userId)
+    }
+
+    /**
+     * Group names address the shared-connection entry point for a vendor, so a duplicate is always a
+     * mistake: the caller meant to reuse the existing group. Rejecting it here covers both the Text and
+     * the generation write paths, which create groups from their own inline forms.
+     */
+    private suspend fun requireGroupNameAvailable(request: SaveModelConfigGroupRequest, userId: String, excludeGroupId: String?) {
+        val groups = groupStore?.getAllGroups(userId) ?: return
+        val name = request.name.trim()
+        val clash = groups.firstOrNull { it.id != excludeGroupId && it.name.trim().equals(name, ignoreCase = true) }
+        require(clash == null) {
+            "group \"$name\" already exists — add this model from that group's entry instead"
+        }
     }
 
     override suspend fun deleteGroup(id: String, userId: String): Boolean {
@@ -113,6 +157,22 @@ class DefaultModelConfigService(
             isCustom = config.isCustom,
             models = listOf(ModelInfo(id = config.modelId, name = config.modelName ?: config.modelId))
         )
+    }
+
+    private fun validateGenerationRow(request: SaveModelProviderConfigRequest) {
+        if (request.modelType == ModelType.CHAT) {
+            require(request.protocol != Protocol.KLING) {
+                "KLING is a generation-only protocol and cannot back a chat model"
+            }
+            return
+        }
+        require(request.protocol in GENERATION_PROTOCOLS) {
+            "protocol ${request.protocol} cannot back a ${request.modelType.name.lowercase()} model " +
+                "(supported: ${GENERATION_PROTOCOLS.joinToString { it.name.lowercase() }})"
+        }
+        require(request.modelId.isNotBlank()) {
+            "${request.modelType.name.lowercase()} models need a model id"
+        }
     }
 
     private fun validateOptions(options: ModelOptions) {
@@ -131,5 +191,10 @@ class DefaultModelConfigService(
         require(options.contextToken <= options.maxContextTokens) {
             "contextToken (${options.contextToken}) must not exceed maxContextTokens (${options.maxContextTokens})"
         }
+    }
+
+    companion object {
+        /** Protocols the media tools can drive: OpenAI-compatible gateways (incl. DashScope compat), DashScope, Kling. */
+        private val GENERATION_PROTOCOLS: Set<Protocol> = setOf(Protocol.OPENAI, Protocol.DASHSCOPE, Protocol.KLING)
     }
 }

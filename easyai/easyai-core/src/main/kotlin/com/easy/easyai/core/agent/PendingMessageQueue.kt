@@ -113,7 +113,7 @@ class PendingMessageQueue {
                         metadata = msg.metadata - setOf(
                             UserMessage.COMMAND_EXPANSION, UserMessage.COMMAND_NAME,
                             UserMessage.COMMAND_SOURCE, UserMessage.COMMAND_CATEGORY,
-                            UserMessage.COMMAND_USER_ID, UserMessage.COMMAND_PROJECT_PATH
+                            UserMessage.COMMAND_USER_ID
                         )
                     )
                 }

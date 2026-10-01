@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { CommandService } from '@/services/command-service';
-import { useProjectStore } from '@/services/stores/project-store';
 import { useAuthStore } from '@/services/stores/auth-store';
 import type { SlashCommand } from '@/types/command';
 import { Zap, Loader2 } from 'lucide-react';
@@ -12,22 +11,21 @@ interface CommandSelectorProps {
 }
 
 export const CommandSelector: React.FC<CommandSelectorProps> = ({ selectedCommands, onChange, disabled }) => {
-  const projectId = useProjectStore((state) => state.currentProject?.id);
   const userId = useAuthStore((state) => state.user?.id);
-  const scopeKey = JSON.stringify([userId, projectId]);
-  const [snapshot, setSnapshot] = useState<{ scopeKey: string; commands: SlashCommand[] } | null>(null);
-  const commands = snapshot?.scopeKey === scopeKey ? snapshot.commands : [];
+  const [snapshot, setSnapshot] = useState<{ userId: string | undefined; commands: SlashCommand[] } | null>(null);
+  // Only the caller's own commands and the builtins are selectable; skills bind separately.
+  const commands = snapshot !== null && snapshot.userId === userId ? snapshot.commands : [];
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
-    CommandService.fetchCommands(null, projectId, controller.signal)
-      .then((cmds) => { if (!controller.signal.aborted) setSnapshot({ scopeKey, commands: cmds.filter(c => c.category === 'BUILTIN' || c.category === 'USER') }); })
-      .catch(() => { if (!controller.signal.aborted) setSnapshot({ scopeKey, commands: [] }); })
+    CommandService.fetchCommands(null, controller.signal)
+      .then((cmds) => { if (!controller.signal.aborted) setSnapshot({ userId, commands: cmds.filter(c => c.category === 'BUILTIN' || c.category === 'USER') }); })
+      .catch(() => { if (!controller.signal.aborted) setSnapshot({ userId, commands: [] }); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [projectId, scopeKey]);
+  }, [userId]);
 
   const toggleCommand = (cmdName: string) => {
     if (selectedCommands.includes(cmdName)) {

@@ -17,6 +17,7 @@ easyai-console/src/
 │   ├── SwarmPresetEditorPage.tsx # DAG workflow editor
 │   ├── McpPage.tsx              # MCP server management
 │   ├── MemoriesPage.tsx         # Memory CRUD + search
+│   ├── SkillsPage.tsx           # Skill management (my skills + shared read-only layer) + AddSkillDialog
 │   ├── CommandsPage.tsx         # User command management
 │   ├── ModelsPage.tsx           # Model provider config
 │   ├── SettingsPage.tsx         # App settings (project, permissions, auth)
@@ -80,4 +81,5 @@ tsc -b          # Type check
 | McpService | `/api/mcp` | GET/POST/PUT/DELETE |
 | PermissionService | `/api/permission` | GET/POST/PUT/DELETE |
 | MemoryService | `/api/memory` | GET/POST/PUT/DELETE |
+| SkillService | `/api/skills` | GET/POST/PATCH/DELETE (`POST /api/skills/upload` multipart) |
 | AuthService | `/api/auth` | POST (login/register/refresh) |

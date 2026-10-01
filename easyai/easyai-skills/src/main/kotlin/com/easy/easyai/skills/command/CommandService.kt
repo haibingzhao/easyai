@@ -3,17 +3,14 @@ package com.easy.easyai.skills.command
 import com.easy.easyai.core.command.AsyncUserCommandStore
 import com.easy.easyai.core.model.EasyAiMessage
 import com.easy.easyai.core.model.UserMessage
+import com.easy.easyai.skills.ScopedSkill
 import com.easy.easyai.skills.SkillAccessResolver
-import com.easy.easyai.skills.SkillConfig
 import com.easy.easyai.skills.SkillInfo
 import com.easy.easyai.skills.SkillLoader
-import com.easy.easyai.skills.SkillPaths
-import com.easy.easyai.skills.SkillScopeResolver
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
-import java.nio.file.Path
 
 class CommandService(
     private val registry: CommandRegistry,
@@ -21,7 +18,6 @@ class CommandService(
     private val userCommandStore: AsyncUserCommandStore? = null,
     private val builtinHandlers: List<BuiltinCommandHandler> = emptyList(),
     private val skillAccessResolver: SkillAccessResolver? = null,
-    private val skillConfig: SkillConfig = SkillConfig(),
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
 
@@ -29,14 +25,13 @@ class CommandService(
         private val NUMBERED_PLACEHOLDER = Regex("\\$(\\d+)")
     }
 
-    suspend fun listSkillCommands(userId: String, projectPath: Path?): List<CommandInfo> =
-        skillAccessResolver?.listScopedSkills(userId, projectPath).orEmpty().map { candidate ->
+    /** Skill-derived slash commands, addressed by name; the access resolver already shadowed owners. */
+    suspend fun listSkillCommands(userId: String): List<CommandInfo> =
+        enabledSkills(userId).map { candidate ->
             val skill = candidate.skill
-            val (scope, project) = SkillScopeResolver.resolve(skill, skillConfig)
             CommandInfo(
                 name = skill.name, description = skill.description, category = CommandCategory.SKILL,
-                source = SkillPaths.canonicalize(skill.location), hints = extractHints(skill.content),
-                scope = scope.name, projectPath = project?.toString()
+                source = skill.name, hints = extractHints(skill.content), shared = candidate.shared
             )
         }
 
@@ -44,12 +39,11 @@ class CommandService(
         message: String?,
         userId: String = "system",
         sessionId: String = "",
-        projectPath: Path? = null,
         allowSideEffects: Boolean = true
     ): CommandExpansion? {
         val parsed = message?.let(CommandUtils::parse) ?: return null
         if (parsed.source != null) {
-            val skill = resolveSource(parsed.source, userId, projectPath)
+            val skill = resolveByName(parsed.source, userId)
             return expandSkill(skill, parsed.arguments)
         }
         builtinHandlers.find { it.name == parsed.name }?.let { handler ->
@@ -62,20 +56,23 @@ class CommandService(
         if (userCmd != null) {
             return CommandExpansion(userCmd.name, renderTemplate(userCmd.template, parsed.arguments), CommandCategory.USER, "db:${userCmd.id}")
         }
-        val candidates = skillAccessResolver?.listScopedSkills(userId, projectPath).orEmpty()
-            .filter { it.skill.name == parsed.name }
-        if (candidates.size > 1) throw CommandReferenceException("Ambiguous Skill name; select its source from the command menu")
-        candidates.singleOrNull()?.let { return expandSkill(it.skill, parsed.arguments) }
+        enabledSkills(userId)
+            .firstOrNull { it.skill.name == parsed.name }?.let { return expandSkill(it.skill, parsed.arguments) }
         val cmd = registry.resolve(parsed.name)?.takeIf { it.category == CommandCategory.MCP } ?: return null
         return CommandExpansion(cmd.name, fetchMcpTemplate(cmd, parsed.arguments), cmd.category, cmd.source)
     }
 
-    private suspend fun resolveSource(source: String, userId: String, projectPath: Path?): SkillInfo {
-        val canonical = SkillPaths.canonicalize(Path.of(source))
-        return skillAccessResolver?.listScopedSkills(userId, projectPath).orEmpty()
-            .firstOrNull { SkillPaths.canonicalize(it.skill.location) == canonical }?.skill
-            ?: throw CommandReferenceException("Skill source is not available in the current user/project scope")
-    }
+    private suspend fun resolveByName(name: String, userId: String): SkillInfo =
+        enabledSkills(userId).firstOrNull { it.skill.name == name }?.skill
+            ?: throw CommandReferenceException("Skill '$name' is not available for the current user")
+
+    /**
+     * Skills the menu may offer and an expansion may run: shadowing is the resolver's job, but a
+     * disabled row is off for every entry point, not just the model's. Replay validation stays on
+     * the unfiltered list — a saved message must not fail to load because its skill was disabled.
+     */
+    private suspend fun enabledSkills(userId: String): List<ScopedSkill> =
+        skillAccessResolver?.listScopedSkills(userId).orEmpty().filter { it.catalogEntry?.enabled != false }
 
     private suspend fun expandSkill(skill: SkillInfo, arguments: String): CommandExpansion {
         val current = try {
@@ -86,37 +83,38 @@ class CommandService(
             throw CommandReferenceException("Skill source is missing, unreadable or invalid; refresh and select it again")
         }
         if (current.name != skill.name) throw CommandReferenceException("Skill identity changed; refresh and select it again")
-        return CommandExpansion(current.name, renderTemplate(current.content, arguments), CommandCategory.SKILL, SkillPaths.canonicalize(skill.location))
+        return CommandExpansion(current.name, renderTemplate(current.content, arguments), CommandCategory.SKILL, skill.name)
     }
 
-    fun metadata(expansion: CommandExpansion?, userId: String, projectPath: Path?): Map<String, String> {
+    fun metadata(expansion: CommandExpansion?, userId: String): Map<String, String> {
         if (expansion == null) return emptyMap()
         return mapOf(
             UserMessage.COMMAND_NAME to expansion.commandName,
             UserMessage.COMMAND_EXPANSION to expansion.expandedPrompt,
             UserMessage.COMMAND_CATEGORY to expansion.commandCategory.name,
             UserMessage.COMMAND_SOURCE to expansion.commandSource,
-            UserMessage.COMMAND_USER_ID to userId,
-            UserMessage.COMMAND_PROJECT_PATH to (projectPath?.let(SkillPaths::canonicalize) ?: "")
+            UserMessage.COMMAND_USER_ID to userId
         )
     }
 
-    suspend fun validateReplay(messages: List<EasyAiMessage>, userId: String, projectPath: Path?) {
+    /**
+     * Replays must still resolve the referenced skill for the same user. Skill commands pin only
+     * the user and the skill name — content is re-read from the owner's installed directory.
+     */
+    suspend fun validateReplay(messages: List<EasyAiMessage>, userId: String) {
         val snapshots = messages.filterIsInstance<UserMessage>().filter {
             it.metadata[UserMessage.COMMAND_CATEGORY] == CommandCategory.SKILL.name &&
                 !it.metadata[UserMessage.COMMAND_EXPANSION].isNullOrBlank() &&
                 it.metadata["isCompactionSummary"] != "true"
         }
         if (snapshots.isEmpty()) return
-        val sources = skillAccessResolver?.listScopedSkills(userId, projectPath).orEmpty()
-            .associateBy { SkillPaths.canonicalize(it.skill.location) }
+        val available = skillAccessResolver?.listScopedSkills(userId).orEmpty()
+            .associateBy { it.skill.name }
         for (message in snapshots) {
             val metadata = message.metadata
-            val source = metadata[UserMessage.COMMAND_SOURCE]
-            if (metadata[UserMessage.COMMAND_USER_ID] != userId ||
-                metadata[UserMessage.COMMAND_PROJECT_PATH] != (projectPath?.let(SkillPaths::canonicalize) ?: "") ||
-                sources[source]?.skill?.name != metadata[UserMessage.COMMAND_NAME]) {
-                throw CommandReferenceException("Saved Skill source is no longer available in the current user/project scope")
+            val name = metadata[UserMessage.COMMAND_NAME]
+            if (metadata[UserMessage.COMMAND_USER_ID] != userId || !available.containsKey(name)) {
+                throw CommandReferenceException("Saved Skill '$name' is no longer available for the current user")
             }
         }
     }

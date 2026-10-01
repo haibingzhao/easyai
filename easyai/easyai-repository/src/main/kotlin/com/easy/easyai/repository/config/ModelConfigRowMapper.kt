@@ -4,6 +4,7 @@ import com.easy.easyai.api.model.ModelCapabilities
 import com.easy.easyai.api.model.ModelOptions
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.api.model.ModelType
 import com.easy.easyai.repository.database.Tables
 import org.jetbrains.exposed.v1.core.ResultRow
 import tools.jackson.databind.ObjectMapper
@@ -52,6 +53,14 @@ internal fun mapToModelProviderConfig(row: ResultRow, objectMapper: ObjectMapper
         options = options,
         timeoutSeconds = row[Tables.ModelProviderConfigTable.timeoutSeconds],
         capabilities = capabilities,
-        groupId = row[Tables.ModelProviderConfigTable.groupId]
+        groupId = row[Tables.ModelProviderConfigTable.groupId],
+        modelType = parseModelType(row[Tables.ModelProviderConfigTable.modelType]),
+        mediaOptions = row[Tables.ModelProviderConfigTable.mediaOptions]?.takeIf { it.isNotBlank() },
+        isDefault = row[Tables.ModelProviderConfigTable.isDefault],
+        userId = row[Tables.ModelProviderConfigTable.userId]
     )
 }
+
+// Pre-V11 rows or writes from an older build may carry an unknown type string; CHAT is the safe default.
+private fun parseModelType(raw: String): ModelType =
+    ModelType.entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: ModelType.CHAT

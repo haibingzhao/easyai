@@ -12,8 +12,8 @@ data class CommandInfo(
     val mcpServer: String? = null,
     val mcpPromptName: String? = null,
     val mcpArguments: List<McpPromptArgument> = emptyList(),
-    val scope: String? = null,
-    val projectPath: String? = null,
+    /** SKILL category only: the command comes from the read-only shared `system` layer. */
+    val shared: Boolean = false,
 )
 
 enum class CommandCategory { USER, SKILL, MCP, BUILTIN }

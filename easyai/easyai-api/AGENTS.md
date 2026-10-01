@@ -23,7 +23,7 @@ easyai-api/src/main/kotlin/com/easy/easyai/api/
 ## WHERE TO LOOK
 | Task | Location | Notes |
 |------|----------|-------|
-| Create ChatModel | `config/ChatModelFactory` | Implemented per provider (OpenAI, Anthropic) |
+| Create ChatModel | `config/ChatModelFactory` | Implemented per protocol (OpenAI, Anthropic, DashScope) — picked by `supports(protocol)` |
 | Config resolution | `config/DefaultModelConfigService` | Resolves active model config |
 | Provider config | `model/ModelProviderConfig` | Data class: protocol, apiKey, baseUrl, params |
 

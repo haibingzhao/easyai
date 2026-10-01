@@ -131,6 +131,21 @@ export async function fetchVoid(url: string, options?: AuthFetchOptions): Promis
 }
 
 /**
+ * Human-readable text from an Error thrown by fetchJson/fetchVoid: validation
+ * failures arrive as a `{"error": "..."}` body rather than plain text.
+ */
+export function readErrorMessage(e: unknown, fallback = 'Request failed'): string {
+  if (!(e instanceof Error)) return fallback;
+  try {
+    const body = JSON.parse(e.message) as { error?: unknown };
+    if (typeof body.error === 'string' && body.error) return body.error;
+  } catch {
+    // Body wasn't a JSON error object — the message is already readable.
+  }
+  return e.message || fallback;
+}
+
+/**
  * Trigger a browser file-download from a Blob.
  */
 export function downloadBlob(blob: Blob, filename: string): void {

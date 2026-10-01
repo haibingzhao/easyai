@@ -378,7 +378,7 @@ class ChatStreamService(
             // Load fresh messages from DB (single source of truth)
             val messages = sessionManager.loadMessages(sessionId)
 
-            commandService?.validateReplay(messages, userId, session.agentContext.projectPath)
+            commandService?.validateReplay(messages, userId)
             val stream = if (message.isNullOrBlank()) {
                 session.resume(messages = messages)
             } else {
@@ -461,7 +461,7 @@ class ChatStreamService(
         }
 
         val history = sessionManager.loadMessages(session.id)
-        commandService?.validateReplay(history, agentContext.userId ?: "system", session.agentContext.projectPath)
+        commandService?.validateReplay(history, agentContext.userId ?: "system")
 
         // Resume goal timer if paused (defensive: user may send a new message instead of using dedicated resume endpoints)
         resumeGoalTimer(session.id, agentContext.userId ?: "system")
@@ -506,12 +506,12 @@ class ChatStreamService(
     ): UserMessage {
         val context = session.agentContext
         val userId = context.userId ?: "system"
-        val expansion = commandService?.resolveAndExpand(rawText, userId, session.id, context.projectPath, allowSideEffects)
+        val expansion = commandService?.resolveAndExpand(rawText, userId, session.id, allowSideEffects)
         val commandKeys = setOf(
             UserMessage.COMMAND_NAME, UserMessage.COMMAND_EXPANSION, UserMessage.COMMAND_SOURCE,
-            UserMessage.COMMAND_CATEGORY, UserMessage.COMMAND_USER_ID, UserMessage.COMMAND_PROJECT_PATH
+            UserMessage.COMMAND_CATEGORY, UserMessage.COMMAND_USER_ID
         )
-        val metadata = message.metadata - commandKeys + commandService?.metadata(expansion, userId, context.projectPath).orEmpty()
+        val metadata = message.metadata - commandKeys + commandService?.metadata(expansion, userId).orEmpty()
         return message.copy(metadata = metadata)
     }
 
@@ -708,7 +708,7 @@ class ChatStreamService(
 
             // Load fresh messages from DB
             val messages = sessionManager.loadMessages(session.id)
-            commandService?.validateReplay(messages, userId, session.agentContext.projectPath)
+            commandService?.validateReplay(messages, userId)
 
             val chatContext = session.agentContext
             val messagesWithResult: List<EasyAiMessage>

@@ -1,7 +1,7 @@
 import type { Attachment } from '../types/message';
 import type { ChatAttachment } from '../types/socket-request';
 import type { CommandIdentity } from './command-utils';
-import { commandLabel, parseCommand, serializeCommand } from './command-utils';
+import { commandLabel, commandTooltip, parseCommand, serializeCommand } from './command-utils';
 
 /** Invisible character used to wrap file references in message text. */
 export const FILE_REF_CHAR = '\u201b';
@@ -242,7 +242,7 @@ export function createCommandChip(command: CommandIdentity): HTMLSpanElement {
   chip.className = 'command-chip';
   chip.contentEditable = 'false';
   chip.textContent = commandLabel(command);
-  chip.title = command.source ?? `/${command.name}`;
+  chip.title = commandTooltip(command);
   chip.dataset.commandToken = serializeCommand(command, '');
   return chip;
 }

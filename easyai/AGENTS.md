@@ -16,7 +16,7 @@ easyai/
 │   ├── easyai-agent-core/ #   AgentDto, ToolInfo, ToolRegistry
 │   └── easyai-agent-coding/ # Coding-specific agent configuration
 ├── easyai-swarm/          # Multi-agent orchestration: DAG scheduling, SINGLE/TEAM/DELIBERATION tasks
-├── easyai-skills/         # Skill plugin: discovery→load→register, commands, subagent execution
+├── easyai-skills/         # Skill plugin: owner-granular sync (DB+OSS+local dir)→load→register, commands, subagent execution
 ├── easyai-snapshot/       # Git checkpoint/revert: SnapshotService, RevertService, event listener
 ├── easyai-compaction/     # Context compaction: token-triggered, summary/LLM strategies
 ├── easyai-auth/           # JWT token provider, user store, refresh token rotation
@@ -25,7 +25,7 @@ easyai/
 ├── easyai-observability/  # @Tracked AOP, MDC propagation, OTel+Micrometer handlers
 ├── easyai-web/            # REST controllers (14), SSE streaming, security (JWT filter), services
 ├── easyai-common/         # 4 sub-modules: bom, core (marker interfaces, thinking), textio (Jinja), util
-├── easyai-autoconfigure/  # 8 auto-config sub-modules (core, web, observability, openai, anthropic, r2dbc, compaction, swarm)
+├── easyai-autoconfigure/  # 11 auto-config sub-modules (core, web, observability, openai, anthropic, dashscope, r2dbc, compaction, rag, storage, swarm)
 └── easyai-starters/       # Starter POM aggregation
 ```
 
@@ -45,7 +45,7 @@ easyai/
 
 **Repository** (`easyai-repository/`): Exposed R2DBC, never JDBC. All ops in `asyncTransaction { }`. 18 tables. `DatabaseMigration` handles schema evolution. `UserScope` provides multi-user data isolation.
 
-**Skills & Commands** (`easyai-skills/`): Skill discovery via filesystem → YAML/markdown → `SkillRegistry`. `CommandRegistry` + `CommandService` for slash commands. `SubAgentTool` for spawning child agents.
+**Skills & Commands** (`easyai-skills/`): Skills are owner-granular — each user (plus the read-only `system` shared layer) owns `~/.easyai/skills/{owner}/{name}/SKILL.md`. The DB `skill` row is authoritative for identity/enablement, the zip in object storage for content, and the local directory is the working copy; `SkillSyncService` reconciles the three on login, first access, and startup. `CommandRegistry` + `CommandService` for slash commands. `SubAgentTool` for spawning child agents.
 
 ## CRITICAL PATTERNS
 
