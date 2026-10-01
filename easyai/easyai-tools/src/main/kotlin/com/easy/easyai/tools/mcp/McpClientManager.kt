@@ -7,7 +7,6 @@ import io.modelcontextprotocol.client.McpAsyncClient
 import io.modelcontextprotocol.client.McpClient
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport
 import io.modelcontextprotocol.client.transport.ServerParameters
-import io.modelcontextprotocol.client.transport.StdioClientTransport
 import io.modelcontextprotocol.json.McpJsonDefaults
 import io.modelcontextprotocol.spec.McpSchema
 import kotlinx.coroutines.*
@@ -43,6 +42,9 @@ class McpClientManager(
     private val toolCache = ConcurrentHashMap<String, List<McpSchema.Tool>>()
     private val promptCache = ConcurrentHashMap<String, List<McpSchema.Prompt>>()
     private val connectLocks = ConcurrentHashMap<String, Mutex>()
+
+    /** Last config used per connection, so a terminated transport can be reconnected without a caller-supplied config. */
+    private val configsByServer = ConcurrentHashMap<String, McpServerConfig>()
 
     /** Tracks users whose MCP servers have been lazily initialized. */
     private val initializedUsers = ConcurrentHashMap.newKeySet<String>()
@@ -134,6 +136,7 @@ class McpClientManager(
 
             val tools = client.listTools().awaitSingle().tools() ?: emptyList()
             clients[k] = client
+            configsByServer[k] = config
             toolCache[k] = tools
             statuses[k] = McpServerStatus.Connected
 
@@ -174,6 +177,7 @@ class McpClientManager(
      */
     fun disconnect(name: String, userId: String = "system") {
         val k = key(userId, name)
+        configsByServer.remove(k)
         clients.remove(k)?.let { client ->
             try { client.close() } catch (e: Exception) {
                 logger.warn("Error closing MCP client '{}' (user={}): {}", name, userId, e.message)
@@ -223,6 +227,7 @@ class McpClientManager(
      * Executes an MCP tool call on the named server for the given user.
      * Returns result as a string (joined text content).
      * Throws exception on failure (caller should handle and return ToolResult.isError=true).
+     * A terminated stdio transport is reconnected and the call retried once.
      */
     @Suppress("UNCHECKED_CAST")
     suspend fun callTool(serverName: String, toolName: String, args: Map<String, Any?>, userId: String = "system"): String {
@@ -232,7 +237,7 @@ class McpClientManager(
 
         val javaArgs: Map<String, Any> = args.filterValues { it != null } as Map<String, Any>
         val request = McpSchema.CallToolRequest.builder(toolName).arguments(javaArgs).build()
-        val result = client.callTool(request).awaitSingle()
+        val result = executeWithReconnect(serverName, userId, client) { it.callTool(request).awaitSingle() }
 
         if (result.isError == true) {
             val errorText = result.content()
@@ -326,7 +331,7 @@ class McpClientManager(
             builder.arguments(args)
         }
         val request = builder.build()
-        val result = client.getPrompt(request).awaitSingle()
+        val result = executeWithReconnect(serverName, userId, client) { it.getPrompt(request).awaitSingle() }
         return result.messages()?.joinToString("\n") { msg ->
             (msg.content() as? McpSchema.TextContent)?.text() ?: ""
         } ?: ""
@@ -341,6 +346,69 @@ class McpClientManager(
 
     // ─── Private helpers ───────────────────────────────────────────────────────
 
+    /**
+     * Runs one client request, reconnecting and retrying once when the transport behind it
+     * has already terminated. Retrying the same client cannot help: a completed sink rejects
+     * every later message.
+     */
+    private suspend fun <T> executeWithReconnect(
+        serverName: String,
+        userId: String,
+        client: McpAsyncClient,
+        request: suspend (McpAsyncClient) -> T,
+    ): T = try {
+        request(client)
+    } catch (e: Exception) {
+        val replacement = findTerminatedTransport(e)
+            ?.let { reconnectTerminatedTransport(serverName, userId, client) }
+            ?: throw e
+        request(replacement)
+    }
+
+    /** The SDK can wrap transport errors, so walk the cause chain rather than the top-level type. */
+    private fun findTerminatedTransport(e: Throwable): McpTransportTerminatedException? =
+        generateSequence(e) { it.cause }.filterIsInstance<McpTransportTerminatedException>().firstOrNull()
+
+    /**
+     * Evicts and re-establishes a connection whose stdio transport stopped accepting
+     * messages, so a dead server cannot stay advertised as [McpServerStatus.Connected].
+     *
+     * Returns the client to retry with, or null when recovery is impossible (no cached
+     * config, or the reconnect failed). Concurrent failures for the same key serialize on
+     * the connect mutex and then observe the already reconnected client.
+     */
+    private suspend fun reconnectTerminatedTransport(
+        serverName: String,
+        userId: String,
+        failedClient: McpAsyncClient,
+    ): McpAsyncClient? {
+        val k = key(userId, serverName)
+        clients[k]?.takeIf { it !== failedClient }?.let { return it }
+
+        val config = configsByServer[k]
+            ?: run {
+                logger.warn(
+                    "MCP server '{}' (user={}) transport terminated and no config is cached; dropping connection state",
+                    serverName, userId,
+                )
+                clients.remove(k)
+                toolCache.remove(k)
+                promptCache.remove(k)
+                statuses[k] = McpServerStatus.Failed("MCP server '$serverName' transport terminated")
+                return null
+            }
+
+        val mutex = connectLocks.computeIfAbsent(k) { Mutex() }
+        return mutex.withLock {
+            val current = clients[k]
+            if (current != null && current !== failedClient) {
+                return@withLock current
+            }
+            logger.info("Reconnecting MCP server '{}' (user={}) after transport termination", serverName, userId)
+            if (connectInternal(config, userId) is McpServerStatus.Connected) clients[k] else null
+        }
+    }
+
     private fun createTransport(config: McpServerConfig): io.modelcontextprotocol.spec.McpClientTransport {
         return when (config.type) {
             "local" -> {
@@ -353,12 +421,12 @@ class McpClientManager(
                     .build()
                 val mapper = McpJsonDefaults.getMapper()
                 if (config.cwd != null) {
-                    object : StdioClientTransport(params, mapper) {
+                    object : SerializedStdioTransport(params, mapper, config.name) {
                         override fun getProcessBuilder(): ProcessBuilder =
                             super.getProcessBuilder().directory(java.io.File(config.cwd))
                     }
                 } else {
-                    StdioClientTransport(params, mapper)
+                    SerializedStdioTransport(params, mapper, config.name)
                 }
             }
             "remote" -> {
@@ -389,11 +457,24 @@ class McpClientManager(
         clients.clear()
         toolCache.clear()
         promptCache.clear()
+        configsByServer.clear()
     }
 }
 
 /** Thrown when an MCP tool returns an error result. */
 class McpToolCallException(message: String) : RuntimeException(message)
+
+/**
+ * Thrown when a stdio transport can no longer accept outbound messages because its
+ * connection already terminated — the child process died, its pipe broke, or a close raced
+ * an in-flight call. Signals that the connection must be re-established, never that the
+ * request itself is invalid.
+ */
+class McpTransportTerminatedException(
+    val serverName: String,
+    /** True when this process initiated the close, false when the transport died on its own. */
+    val closedByUs: Boolean,
+) : RuntimeException("MCP stdio transport '$serverName' is no longer accepting messages (closedByUs=$closedByUs)")
 
 /** Connected server info with owner userId for tool resolution. */
 data class McpServerTools(
