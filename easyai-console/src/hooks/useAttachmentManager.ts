@@ -19,7 +19,7 @@ interface UseAttachmentManagerReturn {
   isProcessingFiles: () => boolean;
   uploadPendingAttachments: (sessionId: string) => Promise<Attachment[]>;
   fileInputRef: React.RefObject<HTMLInputElement>;
-  handleFiles: (files: File[]) => Promise<void>;
+  handleFiles: (files: File[]) => Promise<Attachment[]>;
   removeAttachment: (id: string) => void;
   /** Extract image files from a paste event. Returns image files array, or empty if none. */
   getImageFilesFromPaste: (e: React.ClipboardEvent) => File[];
@@ -40,7 +40,7 @@ export function useAttachmentManager({
     setAttachments((current) => current.map((attachment) => attachment.id === uploaded.id ? uploaded : attachment));
   }), [attachments]);
 
-  const handleFiles = useCallback(async (files: File[]) => {
+  const handleFiles = useCallback(async (files: File[]): Promise<Attachment[]> => {
     processingCount.current += 1;
     setProcessingFiles(true);
     const newAttachments: Attachment[] = [];
@@ -75,6 +75,7 @@ export function useAttachmentManager({
         } else {
           // Fallback: read as base64 (will be uploaded at send time)
           const attachment = await loadAttachment(file);
+          attachment.id = id;
           newAttachments.push(attachment);
         }
       } catch (err) {
@@ -102,6 +103,7 @@ export function useAttachmentManager({
     });
     processingCount.current -= 1;
     setProcessingFiles(processingCount.current > 0);
+    return newAttachments;
   }, [visionSupported, onError, sessionId]);
 
   const removeAttachment = useCallback((id: string) => {

@@ -17,6 +17,7 @@ import { SlashCommandPopover } from './SlashCommandPopover';
 import { useSlashCommand } from '@/hooks/useSlashCommand';
 import { useAttachmentManager } from '@/hooks/useAttachmentManager';
 import { AttachmentPreviewBar } from './AttachmentPreviewBar';
+import { AttachmentImage } from './AttachmentImage';
 import type { SlashCommand } from '@/types/command';
 import type { CommandIdentity } from '@/utils/command-utils';
 import { parseCommand, serializeCommand } from '@/utils/command-utils';
@@ -29,6 +30,7 @@ import { QueuedMessagesPanel } from './QueuedMessagesPanel';
 import { getCheckpoints } from '@/services/checkpoint-service';
 import type { CheckpointInfo } from '@/types/checkpoint';
 import type { ErrorEvent } from '@/types/socket-event';
+import { createRoot, type Root } from 'react-dom/client';
 
 export const MessageEditor: React.FC = () => {
   const [editorValue, setEditorValue] = useState('');
@@ -44,6 +46,8 @@ export const MessageEditor: React.FC = () => {
   const [toolbarHeight, setToolbarHeight] = useState(0);
   // Tracks whether the user has dismissed the green clock to reveal the Stop button
   const [clockDismissed, setClockDismissed] = useState(false);
+  // React roots for inline image chips, keyed by container element for cleanup
+  const imageRootsRef = useRef<Map<HTMLElement, Root>>(new Map());
 
   useEffect(() => {
     if (toolbarRowRef.current) {
@@ -133,6 +137,37 @@ export const MessageEditor: React.FC = () => {
     }
   }, []);
 
+  /** Create an inline image chip DOM element with a React-rendered AttachmentImage. */
+  const createImageChip = useCallback((attachment: Attachment): HTMLElement => {
+    const container = document.createElement('span');
+    container.className = 'image-chip';
+    container.contentEditable = 'false';
+    container.dataset.attachmentId = attachment.id;
+    container.style.cssText = 'display:inline-flex;align-items:center;vertical-align:middle;margin:0 2px;';
+
+    const root = createRoot(container);
+    root.render(
+      <AttachmentImage attachment={attachment} className="w-5 h-5 object-cover rounded" inline />,
+    );
+    imageRootsRef.current.set(container, root);
+    return container;
+  }, []);
+
+  /** Unmount React root for a given image chip container. */
+  const unmountImageChip = useCallback((container: HTMLElement) => {
+    const root = imageRootsRef.current.get(container);
+    if (root) {
+      root.unmount();
+      imageRootsRef.current.delete(container);
+    }
+  }, []);
+
+  /** Unmount all inline image chip React roots. */
+  const unmountAllImageChips = useCallback(() => {
+    imageRootsRef.current.forEach((root) => root.unmount());
+    imageRootsRef.current.clear();
+  }, []);
+
   // --- Command select handler ---
 
   const handleCommandSelect = useCallback((cmd: SlashCommand) => {
@@ -195,6 +230,7 @@ export const MessageEditor: React.FC = () => {
       if (node.nodeType === Node.ELEMENT_NODE) {
         const el = node as HTMLElement;
         if (el.classList.contains('command-chip')) return; // skip command chip
+        if (el.classList.contains('image-chip')) return; // skip image chip (not part of text)
         if (el.classList.contains('mention-chip')) {
           const path = el.dataset.path || '';
           const type = el.dataset.type || 'file';
@@ -407,6 +443,7 @@ export const MessageEditor: React.FC = () => {
         });
 
         // Only clear the draft once every attachment is ready.
+        unmountAllImageChips();
         if (editorRef.current) editorRef.current.innerHTML = '';
         setSelectedCommand(null);
         setEditorValue('');
@@ -471,6 +508,21 @@ export const MessageEditor: React.FC = () => {
     const editor = editorRef.current;
     return editor ? readMessageEditorText(editor) : '';
   }, []);
+
+  /** Wrap handleFiles to insert inline image chips into the editor after processing. */
+  const handleFilesWithChips = useCallback(async (files: File[]) => {
+    const editor = editorRef.current;
+    const newAttachments = await handleFiles(files);
+    if (!editor || newAttachments.length === 0) return;
+    for (const att of newAttachments) {
+      if (isImageAttachment(att)) {
+        const chip = createImageChip(att);
+        insertNodeAtCursor(editor, chip);
+        insertTextAfterNode(chip, '\u00A0');
+      }
+    }
+    setEditorValue(getEditorText());
+  }, [handleFiles, createImageChip, insertNodeAtCursor, insertTextAfterNode, getEditorText]);
 
   /** Insert a mention chip at the cursor position, removing the @ trigger text */
   const insertMentionChip = useCallback((item: MentionItem) => {
@@ -560,6 +612,7 @@ export const MessageEditor: React.FC = () => {
       addQueuedMessage(localMsg);
 
       // Clear editor and attachments
+      unmountAllImageChips();
       if (editorRef.current) editorRef.current.innerHTML = '';
       setSelectedCommand(null);
       setEditorValue('');
@@ -671,6 +724,35 @@ export const MessageEditor: React.FC = () => {
       }
     }
 
+    // Handle backspace to delete image chip as a whole unit
+    if (e.key === 'Backspace') {
+      const editor = editorRef.current;
+      if (editor) {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0) {
+          const range = sel.getRangeAt(0);
+          if (range.collapsed) {
+            const prevSibling = range.startContainer === editor
+              ? editor.childNodes[range.startOffset - 1]
+              : range.startContainer.previousSibling;
+            if (prevSibling && (prevSibling as HTMLElement).classList?.contains('image-chip')) {
+              e.preventDefault();
+              const imgChip = prevSibling as HTMLElement;
+              const attId = imgChip.dataset.attachmentId;
+              unmountImageChip(imgChip);
+              imgChip.remove();
+              if (attId) removeAttachment(attId);
+              if (editor.childNodes.length === 0) {
+                editor.appendChild(document.createTextNode(''));
+              }
+              setEditorValue(getEditorText());
+              return;
+            }
+          }
+        }
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       const text = editorRef.current?.textContent?.trim() || '';
@@ -701,7 +783,7 @@ export const MessageEditor: React.FC = () => {
         });
         return;
       }
-      handleFiles(imageFiles);
+      handleFilesWithChips(imageFiles);
       return;
     }
 
@@ -815,7 +897,7 @@ export const MessageEditor: React.FC = () => {
       <QueuedMessagesPanel />
 
       {attachments.length > 0 && (
-        <AttachmentPreviewBar attachments={attachments} onRemove={removeAttachment} disabled={isSubmitting} showImageThumbnails />
+        <AttachmentPreviewBar attachments={attachments.filter((a) => !isImageAttachment(a))} onRemove={removeAttachment} disabled={isSubmitting} showImageThumbnails />
       )}
 
       {/* Slash command popover */}
@@ -858,7 +940,7 @@ export const MessageEditor: React.FC = () => {
           accept="image/*,.txt,.md,.json,.xml,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.kt,.go,.rs,.rb,.sh,.sql,.toml,.ini,.cfg,.yml,.yaml,.csv"
           onChange={(e) => {
             if (e.target.files && !submittingRef.current) {
-              handleFiles(Array.from(e.target.files));
+              handleFilesWithChips(Array.from(e.target.files));
               e.target.value = '';
             }
           }}

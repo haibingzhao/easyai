@@ -141,11 +141,13 @@ class AttachmentProcessorTest {
         @Test
         fun `keeps stable stored image references without uploading again`() = runTest {
             val reference = StoredFileReference.create("alice", "session-1", "png")
+            val presigned = "https://oss.example/signed-url.png"
+            coEvery { fileStorageService.resolveImageUrl(reference, "alice") } returns presigned
             val result = AttachmentProcessor.processAttachments(
                 listOf(ChatAttachment("shot.png", "image/png", filePath = reference)),
                 fileStorageService, "session-1", 12, null, "alice"
             )
-            assertEquals(FileRefContent(reference, "shot.png", "image/png", displayOffset = 12), result.single())
+            assertEquals(FileRefContent(reference, "shot.png", "image/png", displayOffset = 12, accessibleUrl = presigned), result.single())
             coVerify(exactly = 0) { fileStorageService.saveImage(any(), any(), any(), any(), any()) }
         }
 

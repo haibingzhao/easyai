@@ -129,6 +129,7 @@ function RunBackgroundRenderer({ toolCall, result, status, compact }: ToolMessag
   const markTouched = useStreamingRowExpand(status, setIsExpanded);
   const parsed = parseRunBackgroundArgs(toolCall.args);
   const backgroundTasks = useChatStore((s) => s.backgroundTasks);
+  const isStreaming = useChatStore((s) => s.isStreaming);
 
   if (!parsed) {
     return (
@@ -146,15 +147,20 @@ function RunBackgroundRenderer({ toolCall, result, status, compact }: ToolMessag
   const taskIdMatch = result?.result?.match(/Task ID:\s*([a-f0-9-]+)/i);
   const taskId = taskIdMatch?.[1];
   const taskEvent = taskId ? backgroundTasks[taskId] : null;
+  // For historical sessions (not streaming), infer completed status since session has ended
   const taskStatus = taskEvent?.event === 'completed' ? 'COMPLETED'
     : taskEvent?.event === 'failed' ? 'FAILED'
     : taskEvent?.event === 'cancelled' ? 'CANCELLED'
+    : !isStreaming ? 'COMPLETED'
     : 'RUNNING';
+  // Override tool call status for historical sessions: run_background returns immediately
+  // so stored status may be 'RUNNING', but the task has already completed/failed
+  const effectiveStatus = !isStreaming && (status === 'RUNNING' || status === 'PENDING') ? 'COMPLETED' : status;
 
   const rowHeader = (
     <ToolRowHeader
       toolName={toolCall.toolName}
-      status={status ?? 'PENDING'}
+      status={effectiveStatus ?? 'PENDING'}
       summary={getToolRowSummary(toolCall.toolName, toolCall.args)}
       expanded={isExpanded}
       onToggle={() => { markTouched(); setIsExpanded(prev => !prev); }}
@@ -184,8 +190,8 @@ function RunBackgroundRenderer({ toolCall, result, status, compact }: ToolMessag
               )}
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <ExecStatusDot status={status} />
-              {taskId && status !== 'RUNNING' && status !== 'PENDING' && (
+              <ExecStatusDot status={effectiveStatus} />
+              {taskId && effectiveStatus !== 'RUNNING' && effectiveStatus !== 'PENDING' && (
                 <StatusBadge status={taskStatus} />
               )}
               <ChevronDown
@@ -258,6 +264,7 @@ function TaskStatusRenderer({ toolCall, result, status, compact }: ToolMessagePr
   const markTouched = useStreamingRowExpand(status, setIsExpanded);
   const parsed = parseTaskStatusArgs(toolCall.args);
   const backgroundTasks = useChatStore((s) => s.backgroundTasks);
+  const isStreaming = useChatStore((s) => s.isStreaming);
 
   if (!parsed) {
     return (
@@ -271,6 +278,8 @@ function TaskStatusRenderer({ toolCall, result, status, compact }: ToolMessagePr
   }
 
   const taskEvent = backgroundTasks[parsed.taskId];
+  // For historical sessions (not streaming), infer completed status since session has ended
+  const inferredStatus = !taskEvent && !isStreaming ? 'completed' : taskEvent?.event;
 
   const rowHeader = (
     <ToolRowHeader
@@ -299,11 +308,11 @@ function TaskStatusRenderer({ toolCall, result, status, compact }: ToolMessagePr
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <ExecStatusDot status={status} />
-              {taskEvent && (
+              {(taskEvent || inferredStatus) && (
                 <StatusBadge status={
-                  taskEvent.event === 'completed' ? 'COMPLETED'
-                  : taskEvent.event === 'failed' ? 'FAILED'
-                  : taskEvent.event === 'cancelled' ? 'CANCELLED'
+                  inferredStatus === 'completed' ? 'COMPLETED'
+                  : inferredStatus === 'failed' ? 'FAILED'
+                  : inferredStatus === 'cancelled' ? 'CANCELLED'
                   : 'RUNNING'
                 } />
               )}

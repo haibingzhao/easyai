@@ -948,7 +948,15 @@ class ChatStreamService(
             replay = 0, extraBufferCapacity = 256, onBufferOverflow = BufferOverflow.DROP_OLDEST
         )
         sessionTaps[session.id] = tap
-        // Create or retrieve BackgroundTaskManager for this session (lazy initialization)
+        // Create or retrieve BackgroundTaskManager for this session (lazy initialization).
+        // eventPublisher is set after bridge channel exists so background task events reach
+        // the primary SSE client (not only tap/watch subscribers).
+        // (bridge channel created below; getOrCreate deferred to after bridge init)
+
+        // Bridge channel: background pump -> this HTTP consumer. UNLIMITED so the pump never
+        // blocks while the client is disconnected (events are bounded by the execution itself).
+        val bridge = Channel<ServerSentEvent<ChatStreamEvent>>(Channel.UNLIMITED)
+
         backgroundTaskManagerRegistry?.getOrCreate(
             sessionId = session.id,
             sessionLookup = { executionService?.getActiveSession(session.id) },
@@ -956,17 +964,15 @@ class ChatStreamService(
             eventPublisher = { event ->
                 val chatEvents = ChatEventConverter.convert(event, customEventConverters)
                 chatEvents.forEach { chatEvent ->
-                    tap.tryEmit(chatEvent.toSse())
+                    val sse = chatEvent.toSse()
+                    bridge.trySend(sse)
+                    tap.tryEmit(sse)
                 }
             },
             autoResumeTrigger = { sessionId, uid ->
                 autoResumeForBackgroundTask(sessionId, uid)
             }
         )
-
-        // Bridge channel: background pump -> this HTTP consumer. UNLIMITED so the pump never
-        // blocks while the client is disconnected (events are bounded by the execution itself).
-        val bridge = Channel<ServerSentEvent<ChatStreamEvent>>(Channel.UNLIMITED)
 
         // SSE handshake: push the session context (active model's context window) before
         // any agent event, so the frontend token bar uses the real window size from the

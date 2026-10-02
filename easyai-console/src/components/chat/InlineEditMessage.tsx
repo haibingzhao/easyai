@@ -13,11 +13,12 @@ import { SlashCommandPopover } from './SlashCommandPopover';
 import { useSlashCommand } from '@/hooks/useSlashCommand';
 import { useAttachmentManager } from '@/hooks/useAttachmentManager';
 import { AttachmentPreviewBar } from './AttachmentPreviewBar';
+import { AttachmentImage } from './AttachmentImage';
 import type { SlashCommand } from '@/types/command';
 import type { CommandIdentity } from '@/utils/command-utils';
 import { parseCommand, serializeCommand } from '@/utils/command-utils';
 import { createCommandChip, populateMessageEditor, readMessageEditorText, copyMessageSelection } from '@/utils/attachment-utils';
-import type { Message } from '../../types/message';
+import type { Message, Attachment } from '../../types/message';
 import type { ModelCapabilities } from '@/types/settings';
 import { isImageAttachment, isTextAttachment, toChatAttachment, buildMessageWithTextAttachments, buildFileRef, buildFolderRef } from '../../utils/attachment-utils';
 import { useMention } from '@/hooks/useMention';
@@ -25,6 +26,7 @@ import type { MentionItem } from '@/hooks/useMention';
 import { ResourceMentionPopover } from '@/components/chat/ResourceMentionPopover';
 import { i18n } from '../../utils/i18n';
 import type { ErrorEvent } from '@/types/socket-event';
+import { createRoot, type Root } from 'react-dom/client';
 
 interface InlineEditMessageProps {
   message: Message & { role: 'user' | 'user-with-attachments' };
@@ -46,6 +48,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
   const [pendingRevertFiles, setPendingRevertFiles] = useState<{ path: string; additions: number }[]>([]);
   const editorRef = useRef<HTMLDivElement>(null);
   const commandsLoadedRef = useRef(false);
+  const imageRootsRef = useRef<Map<HTMLElement, Root>>(new Map());
 
   const {
     sessionId,
@@ -174,6 +177,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
       if (node.nodeType === Node.ELEMENT_NODE) {
         const el = node as HTMLElement;
         if (el.classList.contains('command-chip')) return;
+        if (el.classList.contains('image-chip')) return;
         if (el.classList.contains('mention-chip')) {
           const path = el.dataset.path || '';
           const type = el.dataset.type || 'file';
@@ -220,6 +224,37 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
       sel.removeAllRanges();
       sel.addRange(range);
     }
+  }, []);
+
+  /** Create an inline image chip DOM element with a React-rendered AttachmentImage. */
+  const createImageChip = useCallback((attachment: Attachment): HTMLElement => {
+    const container = document.createElement('span');
+    container.className = 'image-chip';
+    container.contentEditable = 'false';
+    container.dataset.attachmentId = attachment.id;
+    container.style.cssText = 'display:inline-flex;align-items:center;vertical-align:middle;margin:0 2px;';
+
+    const root = createRoot(container);
+    root.render(
+      <AttachmentImage attachment={attachment} className="w-5 h-5 object-cover rounded" inline />,
+    );
+    imageRootsRef.current.set(container, root);
+    return container;
+  }, []);
+
+  /** Unmount React root for a given image chip container. */
+  const unmountImageChip = useCallback((container: HTMLElement) => {
+    const root = imageRootsRef.current.get(container);
+    if (root) {
+      root.unmount();
+      imageRootsRef.current.delete(container);
+    }
+  }, []);
+
+  /** Unmount all inline image chip React roots. */
+  const unmountAllImageChips = useCallback(() => {
+    imageRootsRef.current.forEach((root) => root.unmount());
+    imageRootsRef.current.clear();
   }, []);
 
   /** Remove the @ trigger text from DOM (finds @ directly in text nodes) */
@@ -330,6 +365,21 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     getImageFilesFromPaste,
   } = useAttachmentManager({ visionSupported, sessionId, initialAttachments: message.attachments ?? [], onError: (msg) => setError(msg) });
 
+  /** Wrap handleFiles to insert inline image chips into the editor after processing. */
+  const handleFilesWithChips = useCallback(async (files: File[]) => {
+    const editor = editorRef.current;
+    const newAttachments = await handleFiles(files);
+    if (!editor || newAttachments.length === 0) return;
+    for (const att of newAttachments) {
+      if (isImageAttachment(att)) {
+        const chip = createImageChip(att);
+        insertNodeAtCursor(editor, chip);
+        insertTextAfterNode(chip, '\u00A0');
+      }
+    }
+    setEditorValue(getEditorText());
+  }, [handleFiles, createImageChip, insertNodeAtCursor, insertTextAfterNode, getEditorText]);
+
   const handleAgentSelect = useCallback((_agentId: string) => {
     // Agent selection is managed in useAgentStore
   }, []);
@@ -433,6 +483,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     setStreaming(true);
 
     // Notify parent to clear editing state — the new user message will render as UserMessage
+    unmountAllImageChips();
     onSubmit?.();
 
     const sid = sessionId!;
@@ -634,6 +685,35 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
       }
     }
 
+    // Handle backspace to delete image chip as a whole unit
+    if (e.key === 'Backspace') {
+      const editor = editorRef.current;
+      if (editor) {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0) {
+          const range = sel.getRangeAt(0);
+          if (range.collapsed) {
+            const prevSibling = range.startContainer === editor
+              ? editor.childNodes[range.startOffset - 1]
+              : range.startContainer.previousSibling;
+            if (prevSibling && (prevSibling as HTMLElement).classList?.contains('image-chip')) {
+              e.preventDefault();
+              const imgChip = prevSibling as HTMLElement;
+              const attId = imgChip.dataset.attachmentId;
+              unmountImageChip(imgChip);
+              imgChip.remove();
+              if (attId) removeAttachment(attId);
+              if (editor.childNodes.length === 0) {
+                editor.appendChild(document.createTextNode(''));
+              }
+              setEditorValue(getEditorText());
+              return;
+            }
+          }
+        }
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       if (!isSubmitting && (selectedCommand || editorValue.trim())) {
@@ -655,7 +735,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
         setError(i18n('Current model does not support image input'));
         return;
       }
-      handleFiles(imageFiles);
+      handleFilesWithChips(imageFiles);
       return;
     }
 
@@ -736,7 +816,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
         )}
 
         {/* Attachment previews */}
-        <AttachmentPreviewBar attachments={attachments} onRemove={removeAttachment} disabled={isSubmitting || showConfirmDialog} showImageThumbnails />
+        <AttachmentPreviewBar attachments={attachments.filter((a) => !isImageAttachment(a))} onRemove={removeAttachment} disabled={isSubmitting || showConfirmDialog} showImageThumbnails />
 
         <div
           ref={editorRef}
@@ -759,7 +839,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
           accept="image/*,.txt,.md,.json,.xml,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.kt,.go,.rs,.rb,.sh,.sql,.toml,.ini,.cfg,.yml,.yaml,.csv"
           onChange={(e) => {
             if (e.target.files && !submittingRef.current && !showConfirmDialog) {
-              handleFiles(Array.from(e.target.files));
+              handleFilesWithChips(Array.from(e.target.files));
               e.target.value = '';
             }
           }}

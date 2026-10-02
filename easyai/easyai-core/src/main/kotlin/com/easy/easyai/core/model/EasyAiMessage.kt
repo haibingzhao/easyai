@@ -82,7 +82,14 @@ data class FileRefContent(
      * converter re-inserts file content at this offset so the LLM sees which
      * sentence each file belongs to.
      */
-    val displayOffset: Int
+    val displayOffset: Int,
+    /**
+     * URL or path the LLM can use to access this file via tools.
+     * - OSS-stored images: presigned URL from object storage.
+     * - Local images: absolute filesystem path (accessible via `read` / BashTool).
+     * - Text files: same as [filePath].
+     */
+    val accessibleUrl: String? = null
 ) : ContentBlock {
     @get:JsonIgnore
     override val type: String get() = "fileRef"
