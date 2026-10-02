@@ -211,10 +211,20 @@ class ChatSession(
                 workingMessages.add(UserMessage("The previous response was interrupted. Please continue from where you left off or re-evaluate your approach."))
             } else if (lastEndReason == "max_iterations") {
                 lastEndReason = "normal" // consume the reason to avoid re-triggering on subsequent resumes
-                workingMessages.add(UserMessage("[System: The previous execution reached the maximum iteration limit. Please continue the task efficiently and aim to complete it within this new execution cycle.]"))
+                workingMessages.add(
+                    UserMessage(
+                        content = listOf(TextContent("[System: The previous execution reached the maximum iteration limit. Please continue the task efficiently and aim to complete it within this new execution cycle.]")),
+                        metadata = mapOf(UserMessage.SYSTEM_ORIGIN_KEY to UserMessage.ORIGIN_RESUME_GUIDANCE)
+                    )
+                )
             } else if (lastEndReason == AgentCompletionCheck.END_REASON_STALLED) {
                 lastEndReason = "normal" // consume the reason to avoid re-triggering on subsequent resumes
-                workingMessages.add(UserMessage("[System: The previous execution stopped with todo items still open because repeating the reminder produced no progress. Ask the user whether those items should be worked on now, or close them out.]"))
+                workingMessages.add(
+                    UserMessage(
+                        content = listOf(TextContent("[System: The previous execution stopped with todo items still open because repeating the reminder produced no progress. Ask the user whether those items should be worked on now, or close them out.]")),
+                        metadata = mapOf(UserMessage.SYSTEM_ORIGIN_KEY to UserMessage.ORIGIN_RESUME_GUIDANCE)
+                    )
+                )
             }
         }
 

@@ -33,18 +33,25 @@ interface NavState {
   openSessionsTab: () => void;
   /** Open the Team tab (Team Member Panel) */
   openTeamTab: () => void;
+  /** Project file/folder queued for inserting into the chat input (transient signal, not persisted) */
+  pendingChatFile: { path: string; type: 'file' | 'directory' } | null;
+  /** Request adding a project file or folder to the chat input */
+  requestAddFileToChat: (path: string, type: 'file' | 'directory') => void;
+  /** Consume the queued chat-file request (returns the payload, or null if none) */
+  consumePendingChatFile: () => { path: string; type: 'file' | 'directory' } | null;
 }
 
 const DEFAULT_SIDEBAR_WIDTH = 220;
 const DEFAULT_RIGHT_PANEL_WIDTH = 400;
 
 export const useNavStore = create<NavState>()(persist(
-    (set) => ({
+    (set, get) => ({
       sidebarCollapsed: false,
       mobileSidebarOpen: false,
       rightPanelOpen: false,
       reviewFilePath: null,
       selectedFile: null,
+      pendingChatFile: null,
       sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
       rightPanelWidth: DEFAULT_RIGHT_PANEL_WIDTH,
       rightPanelTab: 'files' as RightPanelTab,
@@ -70,6 +77,12 @@ export const useNavStore = create<NavState>()(persist(
         rightPanelOpen: true,
         rightPanelTab: 'team' as RightPanelTab,
       }),
+      requestAddFileToChat: (path, type) => set({ pendingChatFile: { path, type } }),
+      consumePendingChatFile: () => {
+        const path = get().pendingChatFile;
+        if (path !== null) set({ pendingChatFile: null });
+        return path;
+      },
     }),
     {
       name: 'easyai-nav',

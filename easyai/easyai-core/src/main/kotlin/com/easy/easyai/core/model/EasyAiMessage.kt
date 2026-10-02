@@ -269,6 +269,10 @@ data class UserMessage(
         const val SOURCE_STEERING = "steering"
         const val SOURCE_FOLLOW_UP = "follow_up"
         const val SOURCE_COMPLETION_CHECK = "completion_check"
+        /** Marks a user message as system-injected (not typed by the user). Value identifies the injector. */
+        const val SYSTEM_ORIGIN_KEY = "systemOrigin"
+        const val ORIGIN_BACKGROUND_TASK = "background_task"
+        const val ORIGIN_RESUME_GUIDANCE = "resume_guidance"
         const val COMMAND_EXPANSION = "commandExpansion"
         const val COMMAND_NAME = "commandName"
         const val COMMAND_SOURCE = "commandSource"

@@ -523,6 +523,7 @@ const translations: Record<string, Record<string, string>> = {
     'Command name can only contain letters, numbers, hyphens and underscores': 'Command name can only contain letters, numbers, hyphens and underscores',
     'Copy Relative Path': 'Copy Relative Path',
     'Copy Absolute Path': 'Copy Absolute Path',
+    'Add to Chat': 'Add to Chat',
     'Refresh': 'Refresh',
     // Goal
     'Goal': 'Goal',
@@ -1081,6 +1082,7 @@ const translations: Record<string, Record<string, string>> = {
     'Command name can only contain letters, numbers, hyphens and underscores': '命令名称只能包含字母、数字、连字符和下划线',
     'Copy Relative Path': '复制相对路径',
     'Copy Absolute Path': '复制绝对路径',
+    'Add to Chat': '添加到对话框',
     'Refresh': '刷新',
     'mention.files': '文件',
     'mention.folders': '文件夹',

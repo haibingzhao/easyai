@@ -482,8 +482,10 @@ export function handleChatEvent(
 
       // For steer/followUp messages, find the matching queued message to inherit attachments.
       // UserMessageAddedEvent.content only contains text — image data must be inherited from the local queue.
+      // System-injected steers (background tasks) are never in the local queue — skip matching to avoid
+      // consuming a real queued user message via the type-based fallback.
       let matchedQueuedMsg: QueuedMessage | undefined;
-      if (source === 'steering' || source === 'follow_up') {
+      if ((source === 'steering' || source === 'follow_up') && !umEvent.metadata?.systemOrigin) {
         const queue = currentState.queuedMessages;
         const typeMatch = source === 'steering' ? 'steer' : 'followUp';
         matchedQueuedMsg = queue.find(m => m.content === umEvent.content && m.status === 'synced')

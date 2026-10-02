@@ -35,11 +35,14 @@ class AttachmentProcessorTest {
     /** ‛[name](path)‛ encoding matching the frontend buildFileRef. */
     private fun fileRef(name: String, path: Path): String = "‛[$name]($path)‛"
 
+    /** ‛[name](path)‛ encoding for string paths (e.g. storage:// references). */
+    private fun fileRef(name: String, path: String): String = "‛[$name]($path)‛"
+
     @Nested
     inner class `extractInlineFileRefs` {
 
         @Test
-        fun `converts folder refs to FolderRefContent blocks`(@TempDir projectDir: Path) {
+        fun `converts folder refs to FolderRefContent blocks`(@TempDir projectDir: Path) = runTest {
             val dir = Files.createDirectories(projectDir.resolve("summary"))
             val text = "Save results to ${folderRef("summary", dir)} folder"
 
@@ -56,7 +59,7 @@ class AttachmentProcessorTest {
         fun `strips folder refs outside project directory without blocks`(
             @TempDir projectDir: Path,
             @TempDir otherDir: Path
-        ) {
+        ) = runTest {
             val dir = Files.createDirectories(otherDir.resolve("secret"))
             val text = "ref ${folderRef("secret", dir)} end"
 
@@ -67,7 +70,7 @@ class AttachmentProcessorTest {
         }
 
         @Test
-        fun `strips folder refs when no project directory is configured`(@TempDir tempDir: Path) {
+        fun `strips folder refs when no project directory is configured`(@TempDir tempDir: Path) = runTest {
             val dir = Files.createDirectories(tempDir.resolve("summary"))
             val text = "ref ${folderRef("summary", dir)} end"
 
@@ -78,7 +81,7 @@ class AttachmentProcessorTest {
         }
 
         @Test
-        fun `records displayOffset of folder ref in cleaned text`(@TempDir projectDir: Path) {
+        fun `records displayOffset of folder ref in cleaned text`(@TempDir projectDir: Path) = runTest {
             val dir = Files.createDirectories(projectDir.resolve("summary"))
             val text = "save to ${folderRef("summary", dir)} folder please"
 
@@ -90,7 +93,7 @@ class AttachmentProcessorTest {
         }
 
         @Test
-        fun `displayOffset accounts for earlier stripped file refs`(@TempDir projectDir: Path) {
+        fun `displayOffset accounts for earlier stripped file refs`(@TempDir projectDir: Path) = runTest {
             val file = projectDir.resolve("a.txt")
             Files.writeString(file, "x")
             val dir = Files.createDirectories(projectDir.resolve("d"))
@@ -104,7 +107,7 @@ class AttachmentProcessorTest {
         }
 
         @Test
-        fun `still converts file refs to FileRefContent blocks`(@TempDir projectDir: Path) {
+        fun `still converts file refs to FileRefContent blocks`(@TempDir projectDir: Path) = runTest {
             val file = projectDir.resolve("note.txt")
             Files.writeString(file, "hello")
             val text = "read ${fileRef("note.txt", file)} please"
@@ -118,13 +121,42 @@ class AttachmentProcessorTest {
             assertEquals(5, ref.displayOffset) // "read " is 5 chars in cleaned "read  please"
             assertEquals("read  please", result.cleanedText)
         }
+
+        @Test
+        fun `converts stored chat image refs to FileRefContent blocks with signed url`() = runTest {
+            val reference = StoredFileReference.create("alice", "session-1", "png")
+            coEvery { fileStorageService.resolveImageUrl(reference, "alice") } returns "https://oss.example/signed.png"
+            val text = "look at ${fileRef("shot.png", reference)} here"
+
+            val result = AttachmentProcessor.extractInlineFileRefs(text, null, "alice", fileStorageService)
+
+            val ref = result.fileRefBlocks.single()
+            assertEquals(reference, ref.filePath)
+            assertEquals("shot.png", ref.name)
+            assertEquals("image/png", ref.mimeType)
+            assertEquals("inline", ref.source)
+            assertEquals("https://oss.example/signed.png", ref.accessibleUrl)
+            assertEquals("look at  here", result.cleanedText)
+            assertEquals(8, ref.displayOffset)
+        }
+
+        @Test
+        fun `strips stored chat image refs owned by another user`() = runTest {
+            val reference = StoredFileReference.create("bob", "session-1", "png")
+            val text = "look at ${fileRef("shot.png", reference)} here"
+
+            val result = AttachmentProcessor.extractInlineFileRefs(text, null, "alice", fileStorageService)
+
+            assertTrue(result.fileRefBlocks.isEmpty())
+            assertEquals("look at  here", result.cleanedText)
+        }
     }
 
     @Nested
     inner class `buildContentBlocks` {
 
         @Test
-        fun `includes folder ref blocks alongside text`(@TempDir projectDir: Path) {
+        fun `includes folder ref blocks alongside text`(@TempDir projectDir: Path) = runTest {
             val dir = Files.createDirectories(projectDir.resolve("out"))
 
             val blocks = AttachmentProcessor.buildContentBlocks("put it in ${folderRef("out", dir)}", projectDir)

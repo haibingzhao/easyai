@@ -2,7 +2,8 @@ import React from 'react';
 import type { Message, Attachment } from '../../types/message';
 import { getAttachmentIcon, isImageAttachment, parseFileRefs, splitByFileRefs, copyMessageSelection } from '../../utils/attachment-utils';
 import { commandLabel, commandTooltip, parseCommand, serializeCommand } from '@/utils/command-utils';
-import { RotateCw } from 'lucide-react';
+import { Bell, Pencil, RotateCw } from 'lucide-react';
+import { i18n } from '@/utils/i18n';
 import { AttachmentImage } from './AttachmentImage';
 
 /** Parse message content and render command prefix (e.g. /goal) as a styled chip, plus file/folder references */
@@ -56,7 +57,7 @@ interface UserMessageProps {
   message: Message & { role: 'user' | 'user-with-attachments' };
   /** Whether this message can be edited (has messageId, not streaming, not system) */
   isEditable?: boolean;
-  /** Called when user clicks the message to edit */
+  /** Called when user clicks the edit icon in the hover time bar */
   onEditClick?: () => void;
   /** Called when user double-clicks the message container */
   onDoubleClick?: (e: React.MouseEvent) => void;
@@ -102,7 +103,9 @@ function AttachmentPreview({ attachments }: { attachments: Attachment[] }) {
 export const UserMessage: React.FC<UserMessageProps> = ({ message, isEditable, onEditClick, onDoubleClick }) => {
   // Check if this is a system-injected completion check message
   const isCompletionCheck = message.metadata?.source === 'completion_check';
-  const isSystemMessage = isCompletionCheck;
+  // System-steered messages (background task results, resume guidance) — never user-typed
+  const systemOrigin = message.metadata?.systemOrigin;
+  const isSystemSteer = !!systemOrigin;
   const attachments = message.role === 'user-with-attachments' ? message.attachments ?? [] : [];
   const inlineRefPaths = new Set(parseFileRefs(message.content).map((ref) => ref.path));
   const previewAttachments = attachments.filter((attachment) =>
@@ -119,10 +122,10 @@ export const UserMessage: React.FC<UserMessageProps> = ({ message, isEditable, o
         className={`user-message-container py-2 px-4 rounded-xl max-w-[80%] ${
           isCompletionCheck 
             ? 'bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800' 
+            : isSystemSteer
+            ? 'bg-gray-100 dark:bg-gray-800/70 border border-dashed border-gray-300 dark:border-gray-600'
             : 'bg-blue-50 dark:bg-blue-950/25'
-        } ${isEditable && !isSystemMessage ? 'cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors' : ''}`}
-        onClick={isEditable && !isSystemMessage ? onEditClick : undefined}
-        title={isEditable && !isSystemMessage ? 'Click to edit' : undefined}
+        }`}
       >
         {isCompletionCheck && (
           <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 mb-1">
@@ -130,8 +133,14 @@ export const UserMessage: React.FC<UserMessageProps> = ({ message, isEditable, o
             <span>Auto-continue</span>
           </div>
         )}
+        {isSystemSteer && (
+          <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 mb-1">
+            <Bell className="w-3 h-3" />
+            <span>{systemOrigin === 'background_task' ? 'Background task' : 'System'}</span>
+          </div>
+        )}
         <div
-          className="whitespace-pre-wrap text-sm text-gray-800 dark:text-blue-100"
+          className={`whitespace-pre-wrap text-sm ${isSystemSteer ? 'text-gray-600 dark:text-gray-300' : 'text-gray-800 dark:text-blue-100'}`}
           data-message-content={message.content}
           onCopy={(e) => { if (copyMessageSelection(e.currentTarget, e.clipboardData)) e.preventDefault(); }}
         >
@@ -142,10 +151,19 @@ export const UserMessage: React.FC<UserMessageProps> = ({ message, isEditable, o
           <AttachmentPreview attachments={previewAttachments} />
         )}
 
-        {/* Inline time bar: shown on hover */}
+        {/* Inline time bar: shown on hover, with the edit entry */}
         <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-150 pt-1">
-          <div className="text-right text-[11px] text-muted-foreground/60 tabular-nums">
-            {new Date(message.timestamp).toLocaleTimeString()}
+          <div className="flex items-center justify-end gap-1 text-[11px] text-muted-foreground/60 tabular-nums">
+            <span>{new Date(message.timestamp).toLocaleTimeString()}</span>
+            {isEditable && (
+              <button
+                onClick={onEditClick}
+                className="p-1 -my-1 rounded hover:bg-muted hover:text-foreground transition-colors"
+                title={i18n('Edit')}
+              >
+                <Pencil className="w-3 h-3" />
+              </button>
+            )}
           </div>
         </div>
       </div>
