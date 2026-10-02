@@ -331,13 +331,16 @@ class ChatStreamService(
         // fails fast without leaving partial state.
         // Attachments have no inline position — anchor them at the end of the cleaned text.
         val projectDir = session.agentContext.projectPath?.toAbsolutePath()?.normalize()
-        val contentBlocks = AttachmentProcessor.buildContentBlocks(content, projectDir).toMutableList()
+        val contentBlocks = AttachmentProcessor.buildContentBlocks(content, projectDir, userId, fileStorageService).toMutableList()
         if (fileStorageService != null) {
-            // New path: process all attachments via FileRefContent (no base64 in DB)
+            // New path: process all attachments via FileRefContent (no base64 in DB).
+            // Skip attachments already covered by an inline ref so the same image is not sent twice.
+            val inlinePaths = contentBlocks.filterIsInstance<FileRefContent>().mapTo(mutableSetOf()) { it.filePath }
+            val pendingAttachments = attachments?.filterNot { it.filePath != null && it.filePath in inlinePaths }
             val textEnd = contentBlocks.filterIsInstance<TextContent>().firstOrNull()?.text?.length ?: 0
             contentBlocks.addAll(
                 AttachmentProcessor.processAttachments(
-                    attachments, fileStorageService, sessionId,
+                    pendingAttachments, fileStorageService, sessionId,
                     anchorOffset = textEnd, projectDir = projectDir, userId = userId
                 )
             )
@@ -393,7 +396,10 @@ class ChatStreamService(
         if (previous.metadata[UserMessage.COMMAND_CATEGORY] == CommandCategory.BUILTIN.name) {
             throw CommandReferenceException("Queued built-in commands cannot be edited; use Goal management instead")
         }
-        val blocks = AttachmentProcessor.buildContentBlocks(newContent, session.agentContext.projectPath).toMutableList()
+        val blocks = AttachmentProcessor.buildContentBlocks(
+            newContent, session.agentContext.projectPath,
+            session.agentContext.userId ?: "system", fileStorageService
+        ).toMutableList()
         blocks.addAll(previous.content.filter { it !is TextContent })
         val replacement = prepareCommandMessage(
             newContent, previous.copy(content = blocks), session, allowSideEffects = false
@@ -454,7 +460,9 @@ class ChatStreamService(
             val stream = if (message.isNullOrBlank()) {
                 session.resume(messages = messages)
             } else {
-                val content = AttachmentProcessor.buildContentBlocks(message, session.agentContext.projectPath)
+                val content = AttachmentProcessor.buildContentBlocks(
+                    message, session.agentContext.projectPath, userId, fileStorageService
+                )
                 val prepared = prepareCommandMessage(message, UserMessage(content = content), session)
                 sessionManager.saveSessionMessages(session.agentContext, listOf(prepared))
                 skillTurnRouter?.route(userId, session.agentContext.allowedSkillNames, message)
@@ -497,15 +505,19 @@ class ChatStreamService(
         // Inline @ references (‛[name](path)‛) become FileRefContent/FolderRefContent blocks
         // anchored at their sentence position; attachments have no inline position and are
         // anchored at the end of the cleaned text.
-        val contentBlocks = AttachmentProcessor.buildContentBlocks(messageText, projectDir).toMutableList()
+        val chatUserId = agentContext.userId ?: "system"
+        val contentBlocks = AttachmentProcessor.buildContentBlocks(messageText, projectDir, chatUserId, fileStorageService).toMutableList()
         if (fileStorageService != null) {
-            // New path: attachments → FileRefContent/FolderRefContent (no base64 in DB)
+            // New path: attachments → FileRefContent/FolderRefContent (no base64 in DB).
+            // Skip attachments already covered by an inline ref so the same image is not sent twice.
             try {
+                val inlinePaths = contentBlocks.filterIsInstance<FileRefContent>().mapTo(mutableSetOf()) { it.filePath }
+                val pendingAttachments = attachments?.filterNot { it.filePath != null && it.filePath in inlinePaths }
                 val textEnd = contentBlocks.filterIsInstance<TextContent>().firstOrNull()?.text?.length ?: 0
                 contentBlocks.addAll(
                     AttachmentProcessor.processAttachments(
-                        attachments, fileStorageService, session.id,
-                        anchorOffset = textEnd, projectDir = projectDir, userId = agentContext.userId ?: "system"
+                        pendingAttachments, fileStorageService, session.id,
+                        anchorOffset = textEnd, projectDir = projectDir, userId = chatUserId
                     )
                 )
             } catch (e: AttachmentValidationException) {

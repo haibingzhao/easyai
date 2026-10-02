@@ -3,6 +3,8 @@ package com.easy.easyai.tools.background
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.ChatSession
 import com.easy.easyai.core.event.CustomEvent
+import com.easy.easyai.core.model.TextContent
+import com.easy.easyai.core.model.UserMessage
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolUpdate
 import kotlinx.coroutines.*
@@ -207,7 +209,15 @@ class BackgroundTaskManager(
             append("]")
         }
 
-        session.steer(message)
+        session.steer(
+            UserMessage(
+                content = listOf(TextContent(message)),
+                metadata = mapOf(
+                    UserMessage.SOURCE_KEY to UserMessage.SOURCE_STEERING,
+                    UserMessage.SYSTEM_ORIGIN_KEY to UserMessage.ORIGIN_BACKGROUND_TASK
+                )
+            )
+        )
 
         // Check if we need to auto-resume (loop is idle)
         if (!isExecutingCheck()) {

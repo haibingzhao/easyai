@@ -4,6 +4,8 @@ import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { useSideAskStore } from '@/services/stores/side-ask-store';
 import { useProjectStore } from '@/services/stores/project-store';
+import { useNavStore } from '@/services/stores/nav-store';
+import { pathToFile, IMAGE_EXTS } from '@/services/file-browser-service';
 import { ChatService, sendMessageToBackend, abortAllActiveStreams, cancelChat } from '../../services/chat-service';
 import { SessionService, sessionService } from '../../services/session-service';
 import { isImageAttachment, isTextAttachment, toChatAttachment, buildMessageWithTextAttachments, buildFileRef, buildFolderRef } from '../../utils/attachment-utils';
@@ -249,10 +251,12 @@ export const MessageEditor: React.FC = () => {
     return offset;
   }, []);
 
-  /** Insert a DOM node at the current cursor position */
+  /** Insert a DOM node at the current cursor position.
+   *  The selection may live outside the editor (e.g. a right-click in the file tree
+   *  selects the word under the pointer), so only trust ranges inside the editor. */
   const insertNodeAtCursor = useCallback((editor: HTMLElement, node: HTMLElement) => {
     const sel = window.getSelection();
-    if (sel && sel.rangeCount > 0) {
+    if (sel && sel.rangeCount > 0 && editor.contains(sel.getRangeAt(0).commonAncestorContainer)) {
       const range = sel.getRangeAt(0);
       range.deleteContents();
       range.insertNode(node);
@@ -354,6 +358,46 @@ export const MessageEditor: React.FC = () => {
     removeAttachment,
     getImageFilesFromPaste,
   } = useAttachmentManager({ visionSupported, sessionId, onError: (msg) => addMessage({ role: 'error', content: msg, timestamp: Date.now() }) });
+
+  // --- Pending "添加到对话框" requests from the file tree context menu ---
+
+  /** Last cursor range inside the editor — right-clicking the tree moves the DOM selection */
+  const lastEditorRangeRef = useRef<Range | null>(null);
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const sel = window.getSelection();
+      const editor = editorRef.current;
+      if (!sel || !editor || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      if (editor.contains(range.commonAncestorContainer)) {
+        lastEditorRangeRef.current = range.cloneRange();
+      }
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => document.removeEventListener('selectionchange', onSelectionChange);
+  }, []);
+
+  const restoreEditorCursor = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const range = lastEditorRangeRef.current;
+    const sel = window.getSelection();
+    if (range && editor.contains(range.commonAncestorContainer)) {
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      return;
+    }
+    // No cursor history (e.g. fresh page load): place the cursor at the editor end
+    editor.focus();
+    const endRange = document.createRange();
+    endRange.selectNodeContents(editor);
+    endRange.collapse(false);
+    sel?.removeAllRanges();
+    sel?.addRange(endRange);
+  }, []);
+
+  const pendingChatFile = useNavStore((s) => s.pendingChatFile);
+  const handleFilesWithChipsRef = useRef<(files: File[]) => Promise<void>>(null!);
 
   const handleAgentSelect = useCallback((_agentId: string) => {
     // Agent selection is managed in useAgentStore, this callback is for UI feedback
@@ -523,6 +567,52 @@ export const MessageEditor: React.FC = () => {
     }
     setEditorValue(getEditorText());
   }, [handleFiles, createImageChip, insertNodeAtCursor, insertTextAfterNode, getEditorText]);
+  handleFilesWithChipsRef.current = handleFilesWithChips;
+
+  /** Insert a file/folder mention chip at the editor cursor */
+  const insertMentionChipAtCursor = useCallback((name: string, path: string, type: 'file' | 'directory') => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const chip = document.createElement('span');
+    chip.className = `mention-chip mention-${type === 'directory' ? 'folder' : 'file'}`;
+    chip.contentEditable = 'false';
+    chip.dataset.path = path;
+    chip.dataset.type = type;
+    chip.textContent = type === 'directory' ? `📁 ${name}` : `📄 ${name}`;
+    insertNodeAtCursor(editor, chip);
+    insertTextAfterNode(chip, '\u00A0');
+    setEditorValue(getEditorText());
+  }, [insertNodeAtCursor, insertTextAfterNode, getEditorText]);
+
+  // Consume "添加到对话框" requests from the file tree context menu:
+  // images go through the upload pipeline (inline chip at cursor); other files
+  // become an inline file-reference chip, equivalent to an @mention.
+  useEffect(() => {
+    if (!pendingChatFile) return;
+    const pending = useNavStore.getState().consumePendingChatFile();
+    if (!pending) return;
+    const { path, type } = pending;
+    const name = path.split('/').pop() || path;
+    if (type === 'directory') {
+      restoreEditorCursor();
+      insertMentionChipAtCursor(name, path, 'directory');
+      return;
+    }
+    const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
+    if (IMAGE_EXTS.has(ext) && visionSupported) {
+      const projectId = useProjectStore.getState().currentProject?.id || '';
+      restoreEditorCursor();
+      pathToFile(path, projectId)
+        .then((file) => handleFilesWithChipsRef.current([file]))
+        .catch((err) => {
+          console.error('[MessageEditor] Failed to add file to chat:', err);
+          addMessage({ role: 'error', content: `Failed to attach ${name}`, timestamp: Date.now() });
+        });
+    } else {
+      restoreEditorCursor();
+      insertMentionChipAtCursor(name, path, 'file');
+    }
+  }, [pendingChatFile, visionSupported, addMessage, restoreEditorCursor, insertMentionChipAtCursor]);
 
   /** Insert a mention chip at the cursor position, removing the @ trigger text */
   const insertMentionChip = useCallback((item: MentionItem) => {

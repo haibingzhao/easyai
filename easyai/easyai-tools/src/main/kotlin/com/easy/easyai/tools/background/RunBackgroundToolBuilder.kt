@@ -8,6 +8,7 @@ import com.easy.easyai.core.permission.PermissionService
 import com.easy.easyai.core.tool.ToolBuilder
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
 
 private const val RUN_BACKGROUND_TOOL_DESCRIPTION = """Launch any tool in the background without waiting for its result.
@@ -27,11 +28,15 @@ Note: Tools that require user permission (ASK) cannot be run in background. Call
 
 /**
  * Builder for [RunBackgroundTool].
+ *
+ * [PermissionService] is only provided by the persistence stack, so a deployment without it cannot
+ * pre-check the target tool — the tool hides itself rather than letting the container fail to boot.
  */
 @Component
 class RunBackgroundToolBuilder(
-    private val permissionService: PermissionService,
-    private val taskManagerRegistry: BackgroundTaskManagerRegistry
+    private val taskManagerRegistry: BackgroundTaskManagerRegistry,
+    @param:Autowired(required = false)
+    private val permissionService: PermissionService? = null
 ) : ToolBuilder {
     override val metadata = ToolMetadata(
         name = "run_background",
@@ -46,10 +51,11 @@ class RunBackgroundToolBuilder(
         PermissionRule("tool.execute.background_task", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
+    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+        val permissions = permissionService ?: return null
         return RunBackgroundTool(
             metadata = metadata,
-            permissionService = permissionService,
+            permissionService = permissions,
             taskManagerRegistry = taskManagerRegistry
         )
     }

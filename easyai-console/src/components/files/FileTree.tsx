@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { ChevronRight, ChevronDown, Folder, FolderOpen, File, Loader2, AlertCircle } from 'lucide-react';
 import { browseDirectory } from '@/services/permission-service';
 import type { FileNodeDto } from '@/types/permission';
+import { useNavStore } from '@/services/stores/nav-store';
 import { i18n } from '@/utils/i18n';
 
 interface FileTreeProps {
@@ -38,6 +39,7 @@ interface ContextMenuState {
   y: number;
   absolutePath: string;
   relativePath: string;
+  nodeType: 'file' | 'directory';
 }
 
 export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileSelect, selectedFile, revealPath, refreshToken }) => {
@@ -49,13 +51,13 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileS
   /** In-flight browseDirectory promises, keyed by directory path */
   const inFlightRef = useRef<Map<string, Promise<FileNodeDto[]>>>(new Map());
 
-  const handleContextMenu = useCallback((e: React.MouseEvent, absolutePath: string) => {
+  const handleContextMenu = useCallback((e: React.MouseEvent, absolutePath: string, nodeType: 'file' | 'directory') => {
     e.preventDefault();
     e.stopPropagation();
     const relativePath = absolutePath.startsWith(rootPath)
       ? absolutePath.slice(rootPath.length + 1) || rootPath.split('/').pop() || ''
       : absolutePath;
-    setContextMenu({ x: e.clientX, y: e.clientY, absolutePath, relativePath });
+    setContextMenu({ x: e.clientX, y: e.clientY, absolutePath, relativePath, nodeType });
   }, [rootPath]);
 
   // Close context menu on click outside or scroll
@@ -92,6 +94,12 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileS
     }
     setContextMenu(null);
   }, []);
+
+  const handleAddToChat = useCallback(() => {
+    if (!contextMenu) return;
+    useNavStore.getState().requestAddFileToChat(contextMenu.absolutePath, contextMenu.nodeType);
+    setContextMenu(null);
+  }, [contextMenu]);
 
   // Keep ref in sync with state (also sync synchronously in setDirStates calls below)
   useEffect(() => {
@@ -385,7 +393,7 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileS
       <div
         className="flex items-center gap-1 px-2 py-1.5 cursor-pointer hover:bg-muted transition-colors font-medium"
         onClick={() => toggleDirectory(rootPath)}
-        onContextMenu={(e) => handleContextMenu(e, rootPath)}
+        onContextMenu={(e) => handleContextMenu(e, rootPath, 'directory')}
       >
         {dirStates[rootPath]?.expanded
           ? <ChevronDown className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
@@ -447,6 +455,12 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileS
           >
             <span className="text-xs text-muted-foreground">{i18n('Copy Absolute Path')}</span>
           </button>
+          <button
+            className="w-full text-left px-3 py-1.5 hover:bg-accent transition-colors flex items-center gap-2"
+            onClick={handleAddToChat}
+          >
+            <span className="text-xs text-muted-foreground">{i18n('Add to Chat')}</span>
+          </button>
         </div>,
         document.body,
       )}
@@ -461,7 +475,7 @@ interface TreeNodeProps {
   dirStates: Record<string, DirState>;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
-  onContextMenu: (e: React.MouseEvent, absolutePath: string) => void;
+  onContextMenu: (e: React.MouseEvent, absolutePath: string, nodeType: 'file' | 'directory') => void;
 }
 
 const TreeNode: React.FC<TreeNodeProps> = ({
@@ -493,7 +507,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
         }`}
         style={{ paddingLeft: `${depth * 12 + 8}px` }}
         onClick={handleClick}
-        onContextMenu={(e) => onContextMenu(e, node.path)}
+        onContextMenu={(e) => onContextMenu(e, node.path, node.type)}
         title={node.path}
         data-selected={isSelected ? 'true' : undefined}
       >

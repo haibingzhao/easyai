@@ -229,15 +229,40 @@ object AttachmentProcessor {
      * Folder references (prefixed with 📁) are stripped from text and converted to
      * [FolderRefContent] blocks (path-only; directories never map to a single file).
      *
+     * Stored chat image references (`storage://chat-images/...`) are validated via
+     * [StoredFileReference.parse] (owner-scoped, fail closed) and converted to
+     * [FileRefContent] blocks with a signed [FileRefContent.accessibleUrl] when a
+     * [fileStorageService] is available.
+     *
      * @param text the raw message text from the frontend
-     * @param projectDir optional project directory for path validation; if null, no validation
+     * @param projectDir optional project directory for local path validation; if null, local refs are dropped
+     * @param userId owner used to validate stored chat image references
+     * @param fileStorageService optional service used to sign stored image URLs
      * @return [InlineRefResult] with cleaned text, file ref blocks and folder ref blocks
      */
-    fun extractInlineFileRefs(text: String, projectDir: Path? = null): InlineRefResult {
+    suspend fun extractInlineFileRefs(
+        text: String,
+        projectDir: Path? = null,
+        userId: String = "system",
+        fileStorageService: FileStorageService? = null
+    ): InlineRefResult {
         if (!text.contains(FILE_REF_CHAR)) return InlineRefResult(text, emptyList())
 
         val blocks = mutableListOf<FileRefContent>()
         val folderBlocks = mutableListOf<FolderRefContent>()
+        // Pre-resolve signed URLs for stored chat images: Regex.replace's transform
+        // lambda is not inline, so suspend calls must happen before it.
+        val storedImageUrls = mutableMapOf<String, String?>()
+        for (match in INLINE_REF_REGEX.findAll(text)) {
+            val path = match.groupValues[2]
+            if (!StoredFileReference.isStored(path) || path in storedImageUrls) continue
+            storedImageUrls[path] = try {
+                StoredFileReference.parse(path, userId)
+                fileStorageService?.resolveImageUrl(path, userId)
+            } catch (_: Exception) {
+                null
+            }
+        }
         // Chars stripped so far: refs are removed from text, so the cleaned-text offset
         // of the current match is its original index minus everything removed before it.
         var removedChars = 0
@@ -276,6 +301,25 @@ object AttachmentProcessor {
                     filePath = resolvedDir.toString(),
                     name = rawName.removePrefix(FOLDER_PREFIX),
                     displayOffset = cleanedOffset
+                ))
+                return@replace ""
+            }
+
+            // Stored chat image refs (storage://chat-images/...): owner-scoped, no project-dir rule
+            if (StoredFileReference.isStored(filePath)) {
+                try {
+                    StoredFileReference.parse(filePath, userId)
+                } catch (_: IllegalArgumentException) {
+                    logger.warn("Inline file ref: invalid stored image reference, skipping: {}", filePath)
+                    return@replace ""
+                }
+                blocks.add(FileRefContent(
+                    filePath = filePath,
+                    name = rawName,
+                    mimeType = storedImageMimeType(filePath),
+                    source = "inline",
+                    displayOffset = cleanedOffset,
+                    accessibleUrl = storedImageUrls[filePath]
                 ))
                 return@replace ""
             }
@@ -334,11 +378,18 @@ object AttachmentProcessor {
      * Convenience method that combines text cleaning and block creation.
      *
      * @param messageText the raw message text from the frontend
-     * @param projectDir optional project directory for path validation
+     * @param projectDir optional project directory for local path validation
+     * @param userId owner used to validate stored chat image references
+     * @param fileStorageService optional service used to sign stored image URLs
      * @return list of [ContentBlock]s: one [TextContent] (if non-blank) + [FileRefContent]s + [FolderRefContent]s
      */
-    fun buildContentBlocks(messageText: String, projectDir: Path? = null): List<ContentBlock> {
-        val result = extractInlineFileRefs(messageText, projectDir)
+    suspend fun buildContentBlocks(
+        messageText: String,
+        projectDir: Path? = null,
+        userId: String = "system",
+        fileStorageService: FileStorageService? = null
+    ): List<ContentBlock> {
+        val result = extractInlineFileRefs(messageText, projectDir, userId, fileStorageService)
         val blocks = mutableListOf<ContentBlock>()
         if (result.cleanedText.isNotBlank()) {
             blocks.add(TextContent(result.cleanedText))
@@ -347,6 +398,19 @@ object AttachmentProcessor {
         blocks.addAll(result.folderRefBlocks)
         return blocks
     }
+
+    /**
+     * MIME type for a stored chat image reference. [StoredFileReference.parse] has already
+     * restricted the extension to png/jpg/jpeg/gif/webp at this point.
+     */
+    private fun storedImageMimeType(filePath: String): String =
+        when (filePath.substringAfterLast('.', "").lowercase()) {
+            "png" -> "image/png"
+            "jpg", "jpeg" -> "image/jpeg"
+            "gif" -> "image/gif"
+            "webp" -> "image/webp"
+            else -> "application/octet-stream"
+        }
 
     /**
      * Resolve MIME type for a file, using [Files.probeContentType] with fallback
