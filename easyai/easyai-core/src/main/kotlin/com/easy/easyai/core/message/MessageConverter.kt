@@ -68,7 +68,10 @@ class DefaultMessageConverter(
                     msg.content.forEachIndexed { index, block -> blockSeq.putIfAbsent(block, index) }
                     val anchoredInsertions = mutableListOf<AnchoredInsertion>()
                     var hasImageMarkers = false
-                    fun imageMarker(ref: FileRefContent): String = "[image ${mediaList.size}: ${ref.name}]"
+                    fun imageMarker(ref: FileRefContent): String {
+                        val base = "[image ${mediaList.size}: ${ref.name}"
+                        return if (ref.accessibleUrl != null) "$base (${ref.accessibleUrl})]" else "$base]"
+                    }
                     for (img in images) {
                         mediaList.add(
                             Media.builder()

@@ -60,7 +60,7 @@ internal class ChatStreamServiceImageTest {
     private val attachment = ChatAttachment("shot.png", "image/png", data = Base64.getEncoder().encodeToString(bytes))
     private val reference = StoredFileReference.create("alice", "session-1", "png")
     private val expectedContent = listOf(
-        TextContent(text), FileRefContent(reference, attachment.name, attachment.mimeType, displayOffset = text.length)
+        TextContent(text), FileRefContent(reference, attachment.name, attachment.mimeType, displayOffset = text.length, accessibleUrl = reference)
     )
     private val request = ChatRequest(
         sessionId = "session-1", message = text, modelProviderConfigId = config.id, attachments = listOf(attachment)

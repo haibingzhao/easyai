@@ -121,7 +121,8 @@ object AttachmentProcessor {
                     if (att.mimeType !in SUPPORTED_IMAGE_MIMES) {
                         throw AttachmentValidationException("Unsupported stored image type '${att.mimeType}'")
                     }
-                    blocks.add(FileRefContent(att.filePath, att.name, att.mimeType, displayOffset = anchorOffset))
+                    val accessibleUrl = fileStorageService.resolveImageUrl(att.filePath, userId)
+                    blocks.add(FileRefContent(att.filePath, att.name, att.mimeType, displayOffset = anchorOffset, accessibleUrl = accessibleUrl))
                     continue
                 }
                 if (att.filePath.contains("://")) {
@@ -156,7 +157,8 @@ object AttachmentProcessor {
                     filePath = att.filePath,
                     name = att.name,
                     mimeType = att.mimeType,
-                    displayOffset = anchorOffset
+                    displayOffset = anchorOffset,
+                    accessibleUrl = att.filePath
                 ))
             } else if (att.data != null) {
                 if (att.mimeType !in SUPPORTED_IMAGE_MIMES) {
@@ -181,7 +183,8 @@ object AttachmentProcessor {
                     filePath = filePath,
                     name = att.name,
                     mimeType = att.mimeType,
-                    displayOffset = anchorOffset
+                    displayOffset = anchorOffset,
+                    accessibleUrl = filePath
                 ))
             }
         }
@@ -316,7 +319,8 @@ object AttachmentProcessor {
                 name = rawName,
                 mimeType = mimeType,
                 source = "inline",
-                displayOffset = cleanedOffset
+                displayOffset = cleanedOffset,
+                accessibleUrl = resolvedPath.toString()
             ))
 
             "" // Remove the ref from text
