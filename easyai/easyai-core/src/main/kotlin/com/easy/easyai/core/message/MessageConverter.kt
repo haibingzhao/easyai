@@ -42,6 +42,7 @@ class DefaultMessageConverter(
     companion object {
         const val DEFAULT_MAX_TOTAL_INLINE_FILE_BYTES: Long = 10L * 1024 * 1024 // 10 MB
         private val STORED_IMAGE_MIME_TYPES = setOf("image/png", "image/jpeg", "image/gif", "image/webp")
+        private const val PRESIGNED_URL_REFRESH_MARGIN_SECONDS = 300L
     }
 
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -82,9 +83,14 @@ class DefaultMessageConverter(
                     }
                     for (ref in fileRefs) {
                         if (StoredFileReference.isStored(ref.filePath)) {
+                            // Marker carries no URL: the persisted accessibleUrl expires within the
+                            // signing TTL and would leak into every later turn's context.
                             mediaList.add(resolveStoredImage(ref, userId))
                             anchoredInsertions.add(
-                                AnchoredInsertion(ref.displayOffset, blockSeq[ref] ?: 0, imageMarker(ref))
+                                AnchoredInsertion(
+                                    ref.displayOffset, blockSeq[ref] ?: 0,
+                                    "[image ${mediaList.size}: ${ref.name}]"
+                                )
                             )
                             hasImageMarkers = true
                             continue
@@ -220,7 +226,7 @@ class DefaultMessageConverter(
                         )
                     }
 
-                    val text = textParts.joinToString("\n\n")
+                    val text = sanitizePresignedUrls(textParts.joinToString("\n\n"), userId)
                     if (text.isEmpty() && mediaList.isEmpty()) emptyList()
                     else {
                         if (mediaList.isEmpty()) {
@@ -237,14 +243,19 @@ class DefaultMessageConverter(
                 }
                 is AssistantMessage -> {
                     val text = msg.content.filterIsInstance<TextContent>().joinToString("") { it.text }
+                    val sanitizedText = sanitizePresignedUrls(text, userId)
                     val toolCalls = msg.content.filterIsInstance<ToolCallContent>()
                     val springAiToolCalls = toolCalls.map { tc ->
-                        SpringAiAssistantMessage.ToolCall(tc.id, "function", tc.name, tc.arguments)
+                        // Replayed arguments are a context source too: the model copies image URLs
+                        // straight out of its own earlier tool calls.
+                        SpringAiAssistantMessage.ToolCall(
+                            tc.id, "function", tc.name, sanitizePresignedUrls(tc.arguments, userId)
+                        )
                     }
                     if (springAiToolCalls.isEmpty()) {
-                        listOf(SpringAiAssistantMessage(text))
+                        listOf(SpringAiAssistantMessage(sanitizedText))
                     } else {
-                        listOf(SpringAiAssistantMessage.builder().content(text).toolCalls(springAiToolCalls).build())
+                        listOf(SpringAiAssistantMessage.builder().content(sanitizedText).toolCalls(springAiToolCalls).build())
                     }
                     // Tool results are handled separately via ToolResultMessage
                 }
@@ -253,7 +264,7 @@ class DefaultMessageConverter(
                     // oversized results are spilled to the temp dir and replaced with a pointer notice,
                     // so no send-time re-processing is needed here.
                     val responses = msg.toolResults.map { entry ->
-                        ToolResponseMessage.ToolResponse(entry.toolCallId, entry.toolName, entry.result)
+                        ToolResponseMessage.ToolResponse(entry.toolCallId, entry.toolName, sanitizePresignedUrls(entry.result, userId))
                     }
                     listOf(ToolResponseMessage.builder().responses(responses).build())
                 }
@@ -271,6 +282,71 @@ class DefaultMessageConverter(
                 else -> emptyList()
             }
         }
+
+    /**
+     * Regex to match presigned URLs from object storage providers.
+     * Matches URLs with common signature parameters: Signature, X-Amz-Signature, OSSAccessKeyId, etc.
+     * Parameter values and the tail use a URL-charset whitelist: a permissive class would bridge
+     * across JSON-escaped separators (`\" \"]`) and glue several URLs into one unparseable match.
+     */
+    private val PRESIGNED_URL_REGEX = Regex(
+        """https?://[^\s"'<>\\]+\?(?:[^&\s"'<>\\]*(?:Signature|X-Amz-Signature|OSSAccessKeyId|Expires|x-id|X-Amz-Expires|X-Amz-Algorithm|X-Amz-Credential|X-Amz-Date|X-Amz-SignedHeaders)=[A-Za-z0-9%+/_.=-]*&?)+[A-Za-z0-9%+/_.=&-]*"""
+    )
+
+    /** Characters that can never terminate a presigned URL; strips prose/punctuation the greedy match ate. */
+    private val TRAILING_NON_URL_CHARS = Regex("[^A-Za-z0-9%+/_.=&-]+$")
+
+    private val EXPIRES_PARAM_REGEX = Regex("""[?&]Expires=(\d+)""")
+
+    /**
+     * Sanitize text by replacing expired presigned URLs with fresh ones.
+     * This prevents the LLM from using expired URLs in tool calls.
+     */
+    private suspend fun sanitizePresignedUrls(text: String, userId: String): String {
+        if (objectStorageResolver == null || !text.contains("Signature") && !text.contains("OSSAccessKeyId")) {
+            return text
+        }
+        val storage = objectStorageResolver.resolve(userId) ?: return text
+
+        // Collect expired presigned URLs first. Matches stop at the first character outside the
+        // URL charset so glued punctuation (markdown parens, CJK prose) survives replacement.
+        val nowSeconds = System.currentTimeMillis() / 1000
+        val urlsToRefresh = PRESIGNED_URL_REGEX.findAll(text)
+            .map { match -> match.value.replace(TRAILING_NON_URL_CHARS, "") }
+            .distinct()
+            .filter { url -> isExpiredOrExpiring(url, nowSeconds) }
+            .toList()
+        if (urlsToRefresh.isEmpty()) return text
+
+        // Generate fresh URLs for each expired one
+        val urlMapping = mutableMapOf<String, String>()
+        for (oldUrl in urlsToRefresh) {
+            try {
+                val uri = URI(oldUrl)
+                val path = uri.path?.trimStart('/') ?: continue
+                val freshUrl = storage.presignedGetUrl(path, StoredFileReference.URL_TTL_SECONDS)
+                if (freshUrl != null) {
+                    logger.debug("Refreshed expired presigned URL: {} -> {}", oldUrl.take(50), freshUrl.take(50))
+                    urlMapping[oldUrl] = freshUrl
+                }
+            } catch (e: Exception) {
+                logger.warn("Failed to refresh presigned URL: {}", oldUrl.take(100), e)
+            }
+        }
+
+        // Replace all expired URLs with fresh ones
+        var result = text
+        for ((oldUrl, freshUrl) in urlMapping) {
+            result = result.replace(oldUrl, freshUrl)
+        }
+        return result
+    }
+
+    /** URLs without an Expires parameter are re-signed unconditionally; others once inside the margin. */
+    private fun isExpiredOrExpiring(url: String, nowSeconds: Long): Boolean {
+        val expires = EXPIRES_PARAM_REGEX.find(url)?.groupValues?.get(1)?.toLongOrNull() ?: return true
+        return expires - nowSeconds <= PRESIGNED_URL_REFRESH_MARGIN_SECONDS
+    }
 
     private suspend fun resolveStoredImage(ref: FileRefContent, userId: String): Media {
         val stored = StoredFileReference.parse(ref.filePath, userId)

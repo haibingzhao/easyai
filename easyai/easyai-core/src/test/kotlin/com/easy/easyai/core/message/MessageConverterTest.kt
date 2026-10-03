@@ -398,6 +398,88 @@ class MessageConverterTest {
     }
 
     @Nested
+    inner class `presigned url sanitization` {
+        private val userId = "user-1"
+        private val key = "chat-images/user-1/session-1/img.png"
+        private val expiredUrl =
+            "https://oss.example/$key?Expires=1000000000&OSSAccessKeyId=ak&Signature=old%2Bsig%3D"
+        private val freshUrl =
+            "https://oss.example/$key?Expires=4000000000&OSSAccessKeyId=ak&Signature=fresh%2Bsig%3D"
+        private val reSignedUrl =
+            "https://oss.example/$key?Expires=9999999999&OSSAccessKeyId=ak&Signature=new%2Bsig%3D"
+        private val storage = mockk<ObjectStorage>()
+        private val resolver = mockk<ObjectStorageResolver>()
+        private val sanitizer = DefaultMessageConverter(objectStorageResolver = resolver)
+
+        init {
+            coEvery { resolver.resolve(userId) } returns storage
+            coEvery { storage.presignedGetUrl(key, StoredFileReference.URL_TTL_SECONDS) } returns reSignedUrl
+        }
+
+        @Test
+        fun `re-signs expired presigned urls inside replayed tool call arguments`() = runTest {
+            val messages = listOf(
+                AssistantMessage(
+                    id = "a1",
+                    content = listOf(ToolCallContent("call1", "image_edit", """{"image_url": "$expiredUrl"}"""))
+                )
+            )
+
+            val result = sanitizer.toSpringAiMessages(messages, userId)
+
+            val toolCall = (result.single() as SpringAiAssistantMsg).toolCalls.single()
+            assertEquals("""{"image_url": "$reSignedUrl"}""", toolCall.arguments)
+            coVerify(exactly = 1) { storage.presignedGetUrl(key, StoredFileReference.URL_TTL_SECONDS) }
+        }
+
+        @Test
+        fun `keeps presigned urls that expire outside the refresh margin`() = runTest {
+            val messages = listOf(
+                ToolResultMessage(toolResults = listOf(ToolResultEntry("call1", "image_edit", "saved $freshUrl")))
+            )
+
+            val result = sanitizer.toSpringAiMessages(messages, userId)
+
+            val response = (result.single() as org.springframework.ai.chat.messages.ToolResponseMessage).responses.single()
+            assertEquals("saved $freshUrl", response.responseData)
+            coVerify(exactly = 0) { storage.presignedGetUrl(any(), any()) }
+        }
+
+        @Test
+        fun `preserves punctuation and prose glued after a presigned url`() = runTest {
+            val messages = listOf(
+                ToolResultMessage(toolResults = listOf(ToolResultEntry("call1", "image_edit", "see ($expiredUrl) 请查看")))
+            )
+
+            val result = sanitizer.toSpringAiMessages(messages, userId)
+
+            val response = (result.single() as org.springframework.ai.chat.messages.ToolResponseMessage).responses.single()
+            assertEquals("see ($reSignedUrl) 请查看", response.responseData)
+        }
+
+        @Test
+        fun `re-signs each url of a json-escaped run separately`() = runTest {
+            val secondKey = "chat-images/user-1/session-1/img2.png"
+            val expiredSecond =
+                "https://oss.example/$secondKey?Expires=1000000000&OSSAccessKeyId=ak&Signature=two%2Bsig%3D"
+            val reSignedSecond =
+                "https://oss.example/$secondKey?Expires=9999999999&OSSAccessKeyId=ak&Signature=two2%2Bsig%3D"
+            coEvery { storage.presignedGetUrl(secondKey, StoredFileReference.URL_TTL_SECONDS) } returns reSignedSecond
+            val escaped = "\\\"$expiredUrl\\\" \\\"$expiredSecond\\\""
+            val messages = listOf(
+                ToolResultMessage(toolResults = listOf(ToolResultEntry("call1", "image_edit", escaped)))
+            )
+
+            val result = sanitizer.toSpringAiMessages(messages, userId)
+
+            val response = (result.single() as org.springframework.ai.chat.messages.ToolResponseMessage).responses.single()
+            assertEquals("\\\"$reSignedUrl\\\" \\\"$reSignedSecond\\\"", response.responseData)
+            coVerify(exactly = 1) { storage.presignedGetUrl(key, StoredFileReference.URL_TTL_SECONDS) }
+            coVerify(exactly = 1) { storage.presignedGetUrl(secondKey, StoredFileReference.URL_TTL_SECONDS) }
+        }
+    }
+
+    @Nested
     inner class `stored chat images` {
         private val userId = "user-1"
         private val path = StoredFileReference.create(userId, "session-1", "png")

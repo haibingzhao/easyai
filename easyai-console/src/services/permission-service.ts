@@ -112,3 +112,36 @@ export async function browseDirectory(absolutePath: string, projectId?: string):
   }
   return fetchJson<FileNodeDto[]>(`${API_BASE}/browse-directory?${params}`);
 }
+
+/**
+ * Create a new directory inside the project tree.
+ * Returns the absolute path of the created directory.
+ */
+export async function createDirectory(
+  parentPath: string,
+  name: string,
+  projectId: string
+): Promise<{ status: string; path: string }> {
+  return fetchJson<{ status: string; path: string }>(`${API_BASE}/create-directory`, {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ path: parentPath, name, projectId }),
+  });
+}
+
+/**
+ * Platform of the backend host: "macos" | "windows" | "linux" | "unknown".
+ * Used to gate OS-specific file-tree actions like "Reveal in Finder".
+ */
+export async function fetchServerPlatform(): Promise<string> {
+  const res = await fetchJson<{ platform: string }>(`${API_BASE}/server-platform`);
+  return res.platform;
+}
+
+/**
+ * Reveal a project path in the macOS Finder (server-side `open -R`).
+ */
+export async function revealInFinder(path: string, projectId: string): Promise<void> {
+  const params = new URLSearchParams({ path, projectId });
+  return fetchVoid(`${API_BASE}/reveal-path?${params}`, { method: 'POST' });
+}

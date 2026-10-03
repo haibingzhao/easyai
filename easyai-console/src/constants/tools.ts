@@ -46,6 +46,16 @@ export const SUBAGENT_BLOCKED_TOOLS: string[] = ['task', 'run_swarm'];
 export const TEAM_EXCLUDED_TOOLS: string[] = ['task'];
 
 /**
+ * Companion tools that must be enabled together with a primary tool.
+ * `run_background` only returns a task ID; without `task_list` / `task_status`
+ * the agent has no way to inspect or retrieve the background task's result, so
+ * checking `run_background` auto-checks both companions.
+ */
+export const TOOL_COMPANIONS: Record<string, string[]> = {
+  run_background: ['task_list', 'task_status'],
+};
+
+/**
  * Filter out auto-injected tools (ToolInfo.alwaysInclude) from a selectable list.
  *
  * Auto-injected tools (e.g. team coordination tools delegate_to_member /

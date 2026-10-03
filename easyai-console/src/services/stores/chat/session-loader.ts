@@ -250,7 +250,8 @@ export function loadSessionMessagesImpl(
   set: LoadSetFn,
   endReason?: string | null,
   variables?: Record<string, string>,
-  modelContextLength?: number | null
+  modelContextLength?: number | null,
+  localMessages?: Message[]
 ): void {
   // Separate sub-agent messages (parentToolCallId != null) from parent-level messages
   const subAgentSnapshots = messages.filter((msg) => msg.parentToolCallId != null);
@@ -295,8 +296,22 @@ export function loadSessionMessagesImpl(
   // Build checkpoint map
   const checkpointsByMessageId = buildCheckpointMap(checkpoints, mergedMessages);
 
+  // A snapshot load must not drop the optimistic user message of an in-flight send:
+  // the snapshot may have been fetched before the backend persisted it (stale-stream
+  // reconciliation, session-switch race). Re-append such local-only messages.
+  const orphanUserMessages = (localMessages ?? []).filter((local) => {
+    if (local.role !== 'user' && local.role !== 'user-with-attachments') return false;
+    if (local.messageId) return false;
+    const content = local.content.trim();
+    return !mergedMessages.some((loaded) =>
+      (loaded.role === 'user' || loaded.role === 'user-with-attachments') &&
+      loaded.content.trim() === content &&
+      Math.abs(loaded.timestamp - local.timestamp) <= 10_000);
+  });
+  const finalMessages = orphanUserMessages.length > 0 ? [...mergedMessages, ...orphanUserMessages] : mergedMessages;
+
   set(() => ({
-    messages: mergedMessages,
+    messages: finalMessages,
     cancelReason,
     cumulativeUsage,
     contextTokens,

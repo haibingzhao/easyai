@@ -1,7 +1,7 @@
 import React from 'react';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { Bot, Terminal, FileText, Search, FolderSearch, List, MessageSquare, CheckSquare, AlertTriangle } from 'lucide-react';
-import { selectableTools } from '@/constants/tools';
+import { selectableTools, TOOL_COMPANIONS } from '@/constants/tools';
 import { useWebSearchStatus } from '@/hooks/useWebSearchStatus';
 import { i18n } from '@/utils/i18n';
 
@@ -57,9 +57,22 @@ export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onCha
 
   const toggleTool = (toolName: string) => {
     if (selectedTools.includes(toolName)) {
+      // Keep companion tools locked while their primary tool is still selected
+      // (e.g. task_list/task_status stay on as long as run_background is on).
+      const lockedByCompanion = Object.entries(TOOL_COMPANIONS).some(
+        ([primary, companions]) =>
+          companions.includes(toolName) &&
+          primary !== toolName &&
+          selectedTools.includes(primary)
+      );
+      if (lockedByCompanion) return;
       onChange(selectedTools.filter(t => t !== toolName));
     } else {
-      onChange([...selectedTools, toolName]);
+      const next = [...selectedTools, toolName];
+      (TOOL_COMPANIONS[toolName] ?? []).forEach((companion) => {
+        if (!next.includes(companion)) next.push(companion);
+      });
+      onChange(next);
     }
   };
 

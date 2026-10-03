@@ -1,9 +1,11 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Send, X, Bot, Paperclip } from 'lucide-react';
 import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { useProjectStore } from '@/services/stores/project-store';
-import { sendMessageToBackend } from '../../services/chat-service';
+import { useNavStore } from '@/services/stores/nav-store';
+import { pathToFile, IMAGE_EXTS } from '@/services/file-browser-service';
+import { sendMessageToBackend, getCurrentSendService, type ChatService } from '../../services/chat-service';
 import { sessionService } from '../../services/session-service';
 import { editMessage, getCheckpoints } from '@/services/checkpoint-service';
 import type { CheckpointInfo } from '@/types/checkpoint';
@@ -20,12 +22,11 @@ import { parseCommand, serializeCommand } from '@/utils/command-utils';
 import { createCommandChip, populateMessageEditor, readMessageEditorText, copyMessageSelection } from '@/utils/attachment-utils';
 import type { Message, Attachment } from '../../types/message';
 import type { ModelCapabilities } from '@/types/settings';
-import { isImageAttachment, isTextAttachment, toChatAttachment, buildMessageWithTextAttachments, buildFileRef, buildFolderRef } from '../../utils/attachment-utils';
+import { isImageAttachment, isTextAttachment, toChatAttachment, buildMessageWithTextAttachments, buildFileRef, buildFolderRef, parseFileRefs } from '../../utils/attachment-utils';
 import { useMention } from '@/hooks/useMention';
 import type { MentionItem } from '@/hooks/useMention';
 import { ResourceMentionPopover } from '@/components/chat/ResourceMentionPopover';
 import { i18n } from '../../utils/i18n';
-import type { ErrorEvent } from '@/types/socket-event';
 import { createRoot, type Root } from 'react-dom/client';
 
 interface InlineEditMessageProps {
@@ -353,6 +354,15 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
 
   const visionSupported = currentCapabilities?.vision === true;
 
+  // Attachments whose inline ref is restored as an editor chip must not also sit in the
+  // attachment bar, or the same file shows twice in the edit UI. Images stay in the bar:
+  // the text protocol restores them as plain chips, so the bar remains their only
+  // thumbnail preview (and keeps the vision capability check honest).
+  const initialAttachments = useMemo(() => {
+    const inlinePaths = new Set(parseFileRefs(message.content).map((ref) => ref.path));
+    return (message.attachments ?? []).filter((a) => !a.filePath || !inlinePaths.has(a.filePath) || isImageAttachment(a));
+  }, [message.content, message.attachments]);
+
   const {
     attachments,
     setAttachments,
@@ -363,7 +373,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     handleFiles,
     removeAttachment,
     getImageFilesFromPaste,
-  } = useAttachmentManager({ visionSupported, sessionId, initialAttachments: message.attachments ?? [], onError: (msg) => setError(msg) });
+  } = useAttachmentManager({ visionSupported, sessionId, initialAttachments, onError: (msg) => setError(msg) });
 
   /** Wrap handleFiles to insert inline image chips into the editor after processing. */
   const handleFilesWithChips = useCallback(async (files: File[]) => {
@@ -379,6 +389,111 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     }
     setEditorValue(getEditorText());
   }, [handleFiles, createImageChip, insertNodeAtCursor, insertTextAfterNode, getEditorText]);
+  const handleFilesWithChipsRef = useRef<(files: File[]) => Promise<void>>(null!);
+  handleFilesWithChipsRef.current = handleFilesWithChips;
+
+  // --- Pending "Add to Chat" requests from the file tree context menu ---
+
+  /** Last cursor range inside the editor — right-clicking the tree moves the DOM selection */
+  const lastEditorRangeRef = useRef<Range | null>(null);
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const sel = window.getSelection();
+      const editor = editorRef.current;
+      if (!sel || !editor || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      if (editor.contains(range.commonAncestorContainer)) {
+        lastEditorRangeRef.current = range.cloneRange();
+      }
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => document.removeEventListener('selectionchange', onSelectionChange);
+  }, []);
+
+  const restoreEditorCursor = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const range = lastEditorRangeRef.current;
+    const sel = window.getSelection();
+    if (range && editor.contains(range.commonAncestorContainer)) {
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      return;
+    }
+    // No cursor history (e.g. editor just mounted): place the cursor at the editor end
+    editor.focus();
+    const endRange = document.createRange();
+    endRange.selectNodeContents(editor);
+    endRange.collapse(false);
+    sel?.removeAllRanges();
+    sel?.addRange(endRange);
+  }, []);
+
+  const handleEditorFocus = useCallback(() => {
+    useNavStore.getState().setActiveChatEditor('inline');
+  }, []);
+
+  // While mounted and focused this editor owns "Add to Chat"; hand ownership back
+  // to the main composer once the inline edit closes.
+  useEffect(() => () => {
+    if (useNavStore.getState().activeChatEditor === 'inline') {
+      useNavStore.getState().setActiveChatEditor('main');
+    }
+  }, []);
+
+  // Claim ownership on mount rather than relying on the mount focus() to fire onFocus:
+  // the editor may already hold focus (no focus event), and under StrictMode the remount
+  // pass skips focus() entirely because the history-restore effect early-returns.
+  useEffect(() => {
+    useNavStore.getState().setActiveChatEditor('inline');
+  }, []);
+
+  /** Insert a file/folder mention chip at the editor cursor */
+  const insertMentionChipAtCursor = useCallback((name: string, path: string, type: 'file' | 'directory') => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const chip = document.createElement('span');
+    chip.className = `mention-chip mention-${type === 'directory' ? 'folder' : 'file'}`;
+    chip.contentEditable = 'false';
+    chip.dataset.path = path;
+    chip.dataset.type = type;
+    chip.textContent = type === 'directory' ? `📁 ${name}` : `📄 ${name}`;
+    insertNodeAtCursor(editor, chip);
+    insertTextAfterNode(chip, '\u00A0');
+    setEditorValue(getEditorText());
+  }, [insertNodeAtCursor, insertTextAfterNode, getEditorText]);
+
+  const pendingChatFile = useNavStore((s) => s.pendingChatFile);
+
+  // Consume "Add to Chat" requests while this editor owns them: images go through the
+  // upload pipeline (inline chip at cursor); other files become a file-reference chip.
+  useEffect(() => {
+    if (!pendingChatFile) return;
+    if (useNavStore.getState().activeChatEditor !== 'inline') return;
+    const pending = useNavStore.getState().consumePendingChatFile();
+    if (!pending) return;
+    const { path, type } = pending;
+    const name = path.split('/').pop() || path;
+    if (type === 'directory') {
+      restoreEditorCursor();
+      insertMentionChipAtCursor(name, path, 'directory');
+      return;
+    }
+    const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
+    if (IMAGE_EXTS.has(ext) && visionSupported) {
+      const projectId = useProjectStore.getState().currentProject?.id || '';
+      restoreEditorCursor();
+      pathToFile(path, projectId)
+        .then((file) => handleFilesWithChipsRef.current([file]))
+        .catch((err) => {
+          console.error('[InlineEditMessage] Failed to add file to chat:', err);
+          setError(`Failed to attach ${name}`);
+        });
+    } else {
+      restoreEditorCursor();
+      insertMentionChipAtCursor(name, path, 'file');
+    }
+  }, [pendingChatFile, visionSupported, restoreEditorCursor, insertMentionChipAtCursor]);
 
   const handleAgentSelect = useCallback((_agentId: string) => {
     // Agent selection is managed in useAgentStore
@@ -487,15 +602,20 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     onSubmit?.();
 
     const sid = sessionId!;
-    await sendMessageToBackend({
+    let ownService: ChatService | null = null;
+    // Drop events from a replaced stream: a stale 'done' would clear isStreaming and
+    // reconcile a stale snapshot over this turn's optimistic user message.
+    const isStaleStream = () => ownService !== null && getCurrentSendService() !== ownService;
+    ownService = sendMessageToBackend({
       message: finalMessage,
       sessionId: sid,
       agentId: selectedAgentId,
       modelId: currentModelId,
       projectId: currentProjectId,
       attachments: chatAttachments.length > 0 ? chatAttachments : undefined,
-      onEvent: handleEvent,
+      onEvent: (event) => { if (!isStaleStream()) handleEvent(event); },
       onDone: (event) => {
+        if (isStaleStream()) return;
         handleEvent(event);
         // Full reconciliation after stream ends: recover any SSE events that may
         // have been lost (e.g., compaction indicators).
@@ -504,11 +624,11 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
           getCheckpoints(sid).catch(() => [] as CheckpointInfo[]),
         ]).then(([detail, checkpoints]) => {
           useChatStore.getState().loadSessionMessages(
-            detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength
+            detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, sid
           );
         }).catch(() => { /* best-effort */ });
       },
-      onError: handleEvent as unknown as (event: ErrorEvent) => void,
+      onError: (event) => { if (!isStaleStream()) handleEvent(event); },
     });
     setAttachments([]);
   }, [sessionId, messageIndex, truncateMessagesFrom, setRevertState, addMessage, setStreaming, handleEvent, selectedAgentId, currentModelId, currentProjectId, onSubmit, attachments, setAttachments, uploadPendingAttachments, visionSupported, validateCommand, isCurrentContext]);
@@ -826,6 +946,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
           onCopy={(e) => handleClipboard(e)}
           onCut={(e) => handleClipboard(e, true)}
           onClick={handleEditorClick}
+          onFocus={handleEditorFocus}
           data-placeholder={i18n('Plan, @ for context, / for commands')}
           className="message-editor w-full px-3 py-2 rounded-xl border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring overflow-y-auto whitespace-pre-wrap break-words"
           style={{ minHeight: '3em', maxHeight: '12em' }}

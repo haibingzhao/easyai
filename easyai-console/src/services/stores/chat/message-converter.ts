@@ -121,7 +121,7 @@ export function convertSnapshot(msg: MessageSnapshot): Message {
     // Stable sorting preserves block order for image/folder refs sharing an offset, matching the LLM view.
     msg.content
       .filter((block): block is FileRefContentBlock | FolderRefContentBlock =>
-        isFolderRefBlock(block) || (isFileRefBlock(block) && block.mimeType.startsWith('image/')
+        isFolderRefBlock(block) || (isFileRefBlock(block)
           && !allRefs.some((ref) => ref.type === 'file' && ref.path === block.filePath)),
       )
       .sort((a, b) => a.displayOffset - b.displayOffset)

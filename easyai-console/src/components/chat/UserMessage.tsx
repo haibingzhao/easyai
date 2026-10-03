@@ -108,8 +108,10 @@ export const UserMessage: React.FC<UserMessageProps> = ({ message, isEditable, o
   const isSystemSteer = !!systemOrigin;
   const attachments = message.role === 'user-with-attachments' ? message.attachments ?? [] : [];
   const inlineRefPaths = new Set(parseFileRefs(message.content).map((ref) => ref.path));
+  // Inline chips (file mentions or image thumbnails) already show these at their sentence
+  // position; repeating them in the bottom bar would double every reference.
   const previewAttachments = attachments.filter((attachment) =>
-    !attachment.mimeType.startsWith('image/') || !attachment.filePath || !inlineRefPaths.has(attachment.filePath),
+    !attachment.filePath || !inlineRefPaths.has(attachment.filePath),
   );
 
   return (
