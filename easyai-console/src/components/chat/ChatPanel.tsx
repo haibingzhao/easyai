@@ -304,11 +304,11 @@ export const ChatPanel: React.FC = () => {
           if (cancelled) return false;
           hasPendingPermission = !!detail?.pendingPermission;
           if (detail) {
-            loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength);
+            loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, runningSessionId);
           }
         } else {
           // Safe to use incremental merge — pass pendingPermission from backend
-          loadSessionMessagesIncremental(afterResponse.messages, afterResponse.pendingPermission ?? null, checkpoints, afterResponse.endReason);
+          loadSessionMessagesIncremental(afterResponse.messages, afterResponse.pendingPermission ?? null, checkpoints, afterResponse.endReason, undefined, undefined, runningSessionId);
         }
       } catch {
         // Incremental fetch failed — fall back to full reload
@@ -316,7 +316,7 @@ export const ChatPanel: React.FC = () => {
         if (cancelled) return false;
         hasPendingPermission = !!detail?.pendingPermission;
         if (detail) {
-          loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength);
+          loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, runningSessionId);
         }
       }
 
@@ -381,7 +381,7 @@ export const ChatPanel: React.FC = () => {
         ]);
         if (cancelled) return;
         if (detail) {
-          loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength);
+          loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, runningSessionId);
         }
         setTodos(groupedTodos.main);
         setAllSubAgentTodos(

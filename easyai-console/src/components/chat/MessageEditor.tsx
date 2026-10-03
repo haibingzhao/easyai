@@ -6,7 +6,7 @@ import { useSideAskStore } from '@/services/stores/side-ask-store';
 import { useProjectStore } from '@/services/stores/project-store';
 import { useNavStore } from '@/services/stores/nav-store';
 import { pathToFile, IMAGE_EXTS } from '@/services/file-browser-service';
-import { ChatService, sendMessageToBackend, abortAllActiveStreams, cancelChat } from '../../services/chat-service';
+import { sendMessageToBackend, abortAllActiveStreams, cancelChat, getCurrentSendService, type ChatService } from '../../services/chat-service';
 import { SessionService, sessionService } from '../../services/session-service';
 import { isImageAttachment, isTextAttachment, toChatAttachment, buildMessageWithTextAttachments, buildFileRef, buildFolderRef } from '../../utils/attachment-utils';
 import { useMention } from '@/hooks/useMention';
@@ -31,7 +31,6 @@ import { addQueueMessage, removeQueueMessage } from '../../services/chat-service
 import { QueuedMessagesPanel } from './QueuedMessagesPanel';
 import { getCheckpoints } from '@/services/checkpoint-service';
 import type { CheckpointInfo } from '@/types/checkpoint';
-import type { ErrorEvent } from '@/types/socket-event';
 import { createRoot, type Root } from 'react-dom/client';
 
 export const MessageEditor: React.FC = () => {
@@ -96,8 +95,6 @@ export const MessageEditor: React.FC = () => {
 
   // @ mention autocomplete
   const mention = useMention();
-
-  const chatServiceRef = useRef<ChatService | null>(null);
 
   // --- Chip DOM management ---
 
@@ -399,6 +396,10 @@ export const MessageEditor: React.FC = () => {
   const pendingChatFile = useNavStore((s) => s.pendingChatFile);
   const handleFilesWithChipsRef = useRef<(files: File[]) => Promise<void>>(null!);
 
+  const handleEditorFocus = useCallback(() => {
+    useNavStore.getState().setActiveChatEditor('main');
+  }, []);
+
   const handleAgentSelect = useCallback((_agentId: string) => {
     // Agent selection is managed in useAgentStore, this callback is for UI feedback
   }, []);
@@ -498,15 +499,22 @@ export const MessageEditor: React.FC = () => {
         submittingRef.current = false;
         setIsSubmitting(false);
 
-        chatServiceRef.current = await sendMessageToBackend({
+        let ownService: ChatService | null = null;
+        // Events from a replaced stream (e.g. a delayed 'done' from the previous run)
+        // would clear isStreaming and reconcile a stale snapshot over this turn's
+        // optimistic user message — drop them once a newer send owns the channel.
+        const isStaleStream = () => ownService !== null && getCurrentSendService() !== ownService;
+
+        ownService = sendMessageToBackend({
           message: finalMessage,
           sessionId: sid,
           agentId: selectedAgentId,
           modelId: currentModelId,
           projectId: currentProjectId,
           attachments: chatAttachments.length > 0 ? chatAttachments : undefined,
-          onEvent: handleEvent,
+          onEvent: (event) => { if (!isStaleStream()) handleEvent(event); },
           onDone: (event) => {
+            if (isStaleStream()) return;
             handleEvent(event);
             // Full reconciliation after stream ends: recover any SSE events that may
             // have been lost (e.g., compaction indicators). Mirrors the watch path's
@@ -517,12 +525,12 @@ export const MessageEditor: React.FC = () => {
                 getCheckpoints(sid).catch(() => [] as CheckpointInfo[]),
               ]).then(([detail, checkpoints]) => {
                 useChatStore.getState().loadSessionMessages(
-                  detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength
+                  detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, sid
                 );
               }).catch(() => { /* best-effort */ });
             }
           },
-          onError: handleEvent as unknown as (event: ErrorEvent) => void,
+          onError: (event) => { if (!isStaleStream()) handleEvent(event); },
         });
       } catch (error) {
         console.error('Failed to send message:', error);
@@ -589,6 +597,8 @@ export const MessageEditor: React.FC = () => {
   // become an inline file-reference chip, equivalent to an @mention.
   useEffect(() => {
     if (!pendingChatFile) return;
+    // The inline history-message editor owns the request while it holds focus
+    if (useNavStore.getState().activeChatEditor !== 'main') return;
     const pending = useNavStore.getState().consumePendingChatFile();
     if (!pending) return;
     const { path, type } = pending;
@@ -1044,6 +1054,7 @@ export const MessageEditor: React.FC = () => {
           onCopy={(e) => handleClipboard(e)}
           onCut={(e) => handleClipboard(e, true)}
           onClick={handleEditorClick}
+          onFocus={handleEditorFocus}
           data-placeholder={i18n('Plan, @ for context, / for commands')}
           className="message-editor flex-1 w-full px-3 pt-0 pb-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring overflow-y-auto whitespace-pre-wrap break-words"
           style={{
@@ -1086,9 +1097,7 @@ export const MessageEditor: React.FC = () => {
                   title={i18n('Stop')}
                   onClick={() => {
                     commitStreamingMessage();
-                    if (chatServiceRef.current) {
-                      chatServiceRef.current.abort();
-                    }
+                    getCurrentSendService()?.abort();
                     abortAllActiveStreams();
                     if (sessionId) {
                       cancelChat(sessionId);

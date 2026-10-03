@@ -131,13 +131,15 @@ describe('attachment snapshot conversion', () => {
     expect(convertSnapshot(input)).toMatchObject({ content: before + buildFileRef('image.png', ref) + after });
   });
 
-  it('leaves non-image file blocks unchanged', () => {
+  it('restores non-image file positions from display offsets', () => {
     const input = snapshot();
     input.content = [
       { type: 'text', text: 'Read this file' },
       { type: 'fileRef', filePath: '/project/readme.txt', name: 'readme.txt', mimeType: 'text/plain', displayOffset: 5 },
     ];
-    expect(convertSnapshot(input)).toMatchObject({ content: 'Read this file' });
+    expect(convertSnapshot(input)).toMatchObject({
+      content: `Read ${buildFileRef('readme.txt', '/project/readme.txt')}this file`,
+    });
   });
 });
 
@@ -168,6 +170,20 @@ describe('inline image chip rendering', () => {
     expect(html).toContain('mention-chip mention-file');
     expect(html).toContain('mention-chip mention-folder');
     expect(html).not.toContain('Preview image');
+  });
+
+  it('renders restored file chips inline without a duplicate bottom attachment chip', () => {
+    const input = snapshot();
+    input.content = [
+      { type: 'text', text: '风格参考： 播报' },
+      { type: 'fileRef', filePath: '/project/00.md', name: '00.md', mimeType: 'text/markdown', displayOffset: 5 },
+    ];
+    const message = convertSnapshot(input);
+    if (message.role !== 'user-with-attachments') throw new Error('Expected attachments');
+    expect(message.content).toBe(`风格参考：${buildFileRef('00.md', '/project/00.md')} 播报`);
+    const html = renderToStaticMarkup(createElement(UserMessage, { message }));
+    expect(html).toContain('mention-chip mention-file');
+    expect(html).not.toContain('bg-background rounded-md text-sm border border-border');
   });
 });
 

@@ -39,6 +39,9 @@ interface NavState {
   requestAddFileToChat: (path: string, type: 'file' | 'directory') => void;
   /** Consume the queued chat-file request (returns the payload, or null if none) */
   consumePendingChatFile: () => { path: string; type: 'file' | 'directory' } | null;
+  /** Chat editor that last held focus; routes pendingChatFile to the matching input (not persisted) */
+  activeChatEditor: 'main' | 'inline';
+  setActiveChatEditor: (target: 'main' | 'inline') => void;
 }
 
 const DEFAULT_SIDEBAR_WIDTH = 220;
@@ -83,6 +86,8 @@ export const useNavStore = create<NavState>()(persist(
         if (path !== null) set({ pendingChatFile: null });
         return path;
       },
+      activeChatEditor: 'main' as 'main' | 'inline',
+      setActiveChatEditor: (target) => set({ activeChatEditor: target }),
     }),
     {
       name: 'easyai-nav',

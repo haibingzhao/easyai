@@ -27,7 +27,7 @@ export async function switchToSession(sessionId: string): Promise<void> {
     sessionService.getSessionDetail(sessionId),
     getCheckpoints(sessionId).catch(() => [] as CheckpointInfo[]),
   ]);
-  loadSessionMessages(detail!.messages, detail!.pendingPermission, checkpoints, detail!.endReason, detail!.variables, detail!.modelContextLength);
+  loadSessionMessages(detail!.messages, detail!.pendingPermission, checkpoints, detail!.endReason, detail!.variables, detail!.modelContextLength, sessionId);
   setForkRootId(detail!.forkRootSessionId ?? sessionId);
   useNavStore.getState().setSelectedFile(null);
 

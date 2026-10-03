@@ -18,6 +18,16 @@ const activePermissionControllers = new Set<AbortController>();
 // Store active watch (session observer) abort controllers for cleanup
 const activeWatchControllers = new Set<AbortController>();
 
+// The ChatService of the most recent main send (MessageEditor / InlineEditMessage).
+// Late events from a replaced stream (e.g. a delayed 'done' from the previous run)
+// must be dropped, otherwise they clear isStreaming and reconcile a stale snapshot
+// over the new turn's optimistic user message.
+let currentSendService: ChatService | null = null;
+
+export function getCurrentSendService(): ChatService | null {
+  return currentSendService;
+}
+
 interface SSECallbacks {
   onEvent: (event: ChatStreamEvent) => void;
   onDone: (event: DoneEvent) => void;
@@ -150,9 +160,11 @@ export interface SendMessageParams {
 /**
  * Shared function to send a message to the backend and handle SSE stream.
  * Used by both MessageEditor and InlineEditMessage.
- * Returns the ChatService instance for abort control.
+ * Returns the ChatService instance synchronously so callers own it while the
+ * stream is active (abort control + stale-event detection). Stream errors are
+ * routed to onError by ChatService.sendMessage; the send itself never rejects.
  */
-export async function sendMessageToBackend(params: SendMessageParams): Promise<ChatService> {
+export function sendMessageToBackend(params: SendMessageParams): ChatService {
   const { message, sessionId, agentId, modelId, projectId, attachments, onEvent, onDone, onError } = params;
 
   const chatService = new ChatService({
@@ -160,8 +172,9 @@ export async function sendMessageToBackend(params: SendMessageParams): Promise<C
     onDone: onDone as (event: DoneEvent) => void,
     onError: onError as (event: ErrorEvent) => void,
   });
+  currentSendService = chatService;
 
-  await chatService.sendMessage({
+  void chatService.sendMessage({
     sessionId: sessionId!,
     projectId: projectId ?? undefined,
     message: message,

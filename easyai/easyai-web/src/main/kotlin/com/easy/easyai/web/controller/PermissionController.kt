@@ -1,6 +1,7 @@
 package com.easy.easyai.web.controller
 
 import com.easy.easyai.agent.registry.ToolRegistry
+import com.easy.easyai.common.util.ProcessExecutor
 import com.easy.easyai.core.permission.PermissionAction
 import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.permission.PermissionRuleStore
@@ -34,6 +35,9 @@ import java.nio.file.Path
  * - GET /api/permission/settings/{projectId} - Get effective permission settings
  * - PATCH /api/permission/settings/{projectId} - Update a single setting
  * - GET /api/permission/project-structure/{projectId} - Get project directory tree
+ * - POST /api/permission/create-directory - Create a directory inside the project tree
+ * - GET /api/permission/server-platform - Get the backend host platform
+ * - POST /api/permission/reveal-path - Reveal a project path in the macOS Finder
  */
 @RestController
 @RequestMapping("/api/permission")
@@ -53,6 +57,20 @@ class PermissionController(
         private const val MAX_SEARCH_RESULTS = 50
         private const val SEARCH_TIMEOUT_MS = 5000L
         private const val MAX_MEDIA_BYTES = 500L * 1024 * 1024
+
+        private fun detectPlatform(): String {
+            val os = System.getProperty("os.name").lowercase()
+            return when {
+                os.contains("mac") -> "macos"
+                os.contains("win") -> "windows"
+                os.contains("linux") -> "linux"
+                else -> "unknown"
+            }
+        }
+
+        private fun isValidDirectoryName(name: String): Boolean =
+            name.isNotEmpty() && name != "." && name != ".." &&
+                name.none { it == '/' || it == '\\' || it == '\u0000' }
         // Extension → MIME whitelist. Files.probeContentType is unreliable across platforms
         // (returns null for mp4/mkv on many Linux hosts), so the served type is derived here.
         private val MEDIA_MIME_BY_EXT: Map<String, String> = mapOf(
@@ -243,6 +261,79 @@ class PermissionController(
             }
             require(Files.isDirectory(dirPath)) { "Not a directory: $path" }
             listDirectory(dirPath)
+        }
+    }
+
+    /**
+     * Create a new directory inside the project directory.
+     * The parent path must be within the project directory and the name must be
+     * a single path segment that does not exist yet.
+     */
+    @PostMapping("/create-directory")
+    fun createDirectory(@RequestBody request: CreateDirectoryRequest): Mono<Map<String, String>> {
+        return mono {
+            val projectPath = resolveProjectPath(request.projectId)
+                ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found: ${request.projectId}")
+            val projectDir = Path.of(projectPath).toAbsolutePath().normalize()
+            val parentDir = Path.of(request.path).toAbsolutePath().normalize()
+            if (!parentDir.startsWith(projectDir)) {
+                throw ResponseStatusException(HttpStatus.FORBIDDEN, "Access denied: path is outside project directory")
+            }
+            if (!Files.isDirectory(parentDir)) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Not a directory: ${request.path}")
+            }
+            val name = request.name.trim()
+            if (!isValidDirectoryName(name)) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid directory name: ${request.name}")
+            }
+            val target = parentDir.resolve(name)
+            if (Files.exists(target)) {
+                throw ResponseStatusException(HttpStatus.CONFLICT, "Already exists: $name")
+            }
+            Files.createDirectory(target)
+            logger.info("Created directory: {}", target)
+            mapOf("status" to "created", "path" to target.toString())
+        }
+    }
+
+    /**
+     * Report the backend host platform so the frontend can gate OS-specific
+     * file-tree actions (e.g. "Reveal in Finder" only works on a macOS host).
+     */
+    @GetMapping("/server-platform")
+    fun serverPlatform(): Mono<Map<String, String>> {
+        return mono { mapOf("platform" to detectPlatform()) }
+    }
+
+    /**
+     * Reveal a path in the macOS Finder via `open -R`.
+     * macOS-only: other platforms answer 501 so the frontend hides the action.
+     */
+    @PostMapping("/reveal-path")
+    fun revealPath(
+        @RequestParam path: String,
+        @RequestParam projectId: String
+    ): Mono<Map<String, String>> {
+        return mono {
+            if (detectPlatform() != "macos") {
+                throw ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Reveal in Finder is only supported on macOS")
+            }
+            val projectPath = resolveProjectPath(projectId)
+                ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found: $projectId")
+            val projectDir = Path.of(projectPath).toAbsolutePath().normalize()
+            val target = Path.of(path).toAbsolutePath().normalize()
+            if (!target.startsWith(projectDir)) {
+                throw ResponseStatusException(HttpStatus.FORBIDDEN, "Access denied: path is outside project directory")
+            }
+            if (!Files.exists(target)) {
+                throw ResponseStatusException(HttpStatus.NOT_FOUND, "Path not found: $path")
+            }
+            val result = ProcessExecutor.execute(listOf("open", "-R", target.toString()), timeoutSeconds = 5)
+            if (result == null || result.exitCode != 0) {
+                logger.warn("open -R failed for {}: {}", target, result?.stderr)
+                throw ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to reveal path in Finder")
+            }
+            mapOf("status" to "revealed")
         }
     }
 

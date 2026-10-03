@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronRight, ChevronDown, Folder, FolderOpen, File, Loader2, AlertCircle } from 'lucide-react';
-import { browseDirectory } from '@/services/permission-service';
+import { browseDirectory, createDirectory, fetchServerPlatform, revealInFinder } from '@/services/permission-service';
 import type { FileNodeDto } from '@/types/permission';
 import { useNavStore } from '@/services/stores/nav-store';
 import { i18n } from '@/utils/i18n';
@@ -48,6 +48,13 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileS
   const treeContainerRef = useRef<HTMLDivElement>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  /** Backend host platform; gates OS-specific actions like "Reveal in Finder" */
+  const [serverPlatform, setServerPlatform] = useState<string | null>(null);
+  /** Directory path where the inline new-folder input is currently shown */
+  const [creatingIn, setCreatingIn] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
+  /** Transient bottom toast for action failures */
+  const [notice, setNotice] = useState<string | null>(null);
   /** In-flight browseDirectory promises, keyed by directory path */
   const inFlightRef = useRef<Map<string, Promise<FileNodeDto[]>>>(new Map());
 
@@ -100,6 +107,21 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileS
     useNavStore.getState().requestAddFileToChat(contextMenu.absolutePath, contextMenu.nodeType);
     setContextMenu(null);
   }, [contextMenu]);
+
+  // Probe the backend host platform once; hide OS-specific actions when unknown
+  useEffect(() => {
+    let cancelled = false;
+    fetchServerPlatform()
+      .then((platform) => { if (!cancelled) setServerPlatform(platform); })
+      .catch(() => { /* older backend without the endpoint: keep actions hidden */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), 2500);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   // Keep ref in sync with state (also sync synchronously in setDirStates calls below)
   useEffect(() => {
@@ -294,6 +316,69 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileS
     }
   }, [projectId]);
 
+  const refreshDirectory = useCallback(async (path: string) => {
+    try {
+      const children = await browseDirectory(path, projectId);
+      setDirStates((prev) => {
+        const next = {
+          ...prev,
+          [path]: { expanded: true, loaded: true, loading: false, error: false, children },
+        };
+        dirStatesRef.current = next;
+        return next;
+      });
+    } catch (err) {
+      console.error(`[FileTree] Failed to refresh directory: ${path}`, err);
+    }
+  }, [projectId]);
+
+  const startCreating = useCallback((dirPath: string) => {
+    setCreateError(null);
+    setCreatingIn(dirPath);
+    if (!dirStatesRef.current[dirPath]?.expanded) {
+      void toggleDirectory(dirPath);
+    }
+  }, [toggleDirectory]);
+
+  const handleCreateSubmit = useCallback(async (name: string) => {
+    const parent = creatingIn;
+    if (!parent) return;
+    if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
+      setCreateError(i18n('Invalid folder name'));
+      return;
+    }
+    if (dirStatesRef.current[parent]?.children.some((child) => child.name === name)) {
+      setCreateError(i18n('Folder already exists'));
+      return;
+    }
+    try {
+      await createDirectory(parent, name, projectId);
+      setCreatingIn(null);
+      setCreateError(null);
+      await refreshDirectory(parent);
+    } catch (err) {
+      console.error('[FileTree] Failed to create folder', err);
+      setCreateError(i18n('Failed to create folder'));
+    }
+  }, [creatingIn, projectId, refreshDirectory]);
+
+  const handleCreateCancel = useCallback(() => {
+    setCreatingIn(null);
+    setCreateError(null);
+  }, []);
+
+  const handleReveal = useCallback(async () => {
+    if (!contextMenu) return;
+    const { absolutePath } = contextMenu;
+    setContextMenu(null);
+    try {
+      await revealInFinder(absolutePath, projectId);
+    } catch (err) {
+      console.error('[FileTree] Failed to reveal in Finder', err);
+      setNotice(i18n('Failed to reveal in Finder'));
+    }
+  }, [contextMenu, projectId]);
+
   /** Root folder name from path */
   const rootName = rootPath.split('/').pop() || rootPath;
 
@@ -409,6 +494,14 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileS
       {/* Root children */}
       {dirStates[rootPath]?.expanded && (
         <div className="ml-2">
+          {creatingIn === rootPath && (
+            <NewFolderRow
+              depth={1}
+              error={createError}
+              onSubmit={handleCreateSubmit}
+              onCancel={handleCreateCancel}
+            />
+          )}
           {dirStates[rootPath]?.loading && (
             <div className="flex items-center gap-2 px-2 py-1 text-muted-foreground">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -428,9 +521,13 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileS
               depth={1}
               selectedFile={selectedFile}
               dirStates={dirStates}
+              creatingIn={creatingIn}
+              createError={createError}
               onToggle={toggleDirectory}
               onSelect={onFileSelect}
               onContextMenu={handleContextMenu}
+              onCreateSubmit={handleCreateSubmit}
+              onCreateCancel={handleCreateCancel}
             />
           ))}
         </div>
@@ -443,6 +540,26 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileS
           className="fixed z-[9999] min-w-[180px] py-1 bg-popover border border-border rounded-md shadow-lg text-sm"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
+          {contextMenu.nodeType === 'directory' && (
+            <button
+              className="w-full text-left px-3 py-1.5 hover:bg-accent transition-colors flex items-center gap-2"
+              onClick={() => {
+                const dirPath = contextMenu.absolutePath;
+                setContextMenu(null);
+                startCreating(dirPath);
+              }}
+            >
+              <span className="text-xs text-muted-foreground">{i18n('New Folder')}</span>
+            </button>
+          )}
+          {contextMenu.nodeType === 'directory' && serverPlatform === 'macos' && (
+            <button
+              className="w-full text-left px-3 py-1.5 hover:bg-accent transition-colors flex items-center gap-2"
+              onClick={handleReveal}
+            >
+              <span className="text-xs text-muted-foreground">{i18n('Reveal in Finder')}</span>
+            </button>
+          )}
           <button
             className="w-full text-left px-3 py-1.5 hover:bg-accent transition-colors flex items-center gap-2"
             onClick={() => copyToClipboard(contextMenu.relativePath)}
@@ -464,6 +581,15 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileS
         </div>,
         document.body,
       )}
+
+      {/* Transient failure toast */}
+      {notice && createPortal(
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-1.5 px-3 py-1.5 bg-foreground text-background text-xs rounded-md shadow-lg">
+          <AlertCircle className="w-3.5 h-3.5" />
+          {notice}
+        </div>,
+        document.body,
+      )}
     </div>
   );
 };
@@ -473,9 +599,13 @@ interface TreeNodeProps {
   depth: number;
   selectedFile: string | null;
   dirStates: Record<string, DirState>;
+  creatingIn: string | null;
+  createError: string | null;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
   onContextMenu: (e: React.MouseEvent, absolutePath: string, nodeType: 'file' | 'directory') => void;
+  onCreateSubmit: (name: string) => void;
+  onCreateCancel: () => void;
 }
 
 const TreeNode: React.FC<TreeNodeProps> = ({
@@ -483,9 +613,13 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   depth,
   selectedFile,
   dirStates,
+  creatingIn,
+  createError,
   onToggle,
   onSelect,
   onContextMenu,
+  onCreateSubmit,
+  onCreateCancel,
 }) => {
   const isDir = node.type === 'directory';
   const state = isDir ? dirStates[node.path] : undefined;
@@ -546,6 +680,16 @@ const TreeNode: React.FC<TreeNodeProps> = ({
         </div>
       )}
 
+      {/* Inline input for creating a subfolder inside this directory */}
+      {isDir && creatingIn === node.path && (
+        <NewFolderRow
+          depth={depth + 1}
+          error={createError}
+          onSubmit={onCreateSubmit}
+          onCancel={onCreateCancel}
+        />
+      )}
+
       {/* Children (for expanded directories) */}
       {isDir && state?.expanded && state.loaded && (
         <div>
@@ -556,12 +700,72 @@ const TreeNode: React.FC<TreeNodeProps> = ({
               depth={depth + 1}
               selectedFile={selectedFile}
               dirStates={dirStates}
+              creatingIn={creatingIn}
+              createError={createError}
               onToggle={onToggle}
               onSelect={onSelect}
               onContextMenu={onContextMenu}
+              onCreateSubmit={onCreateSubmit}
+              onCreateCancel={onCreateCancel}
             />
           ))}
         </div>
+      )}
+    </div>
+  );
+};
+
+/** Inline input row for naming a new folder: Enter creates, Escape cancels, blur creates. */
+const NewFolderRow: React.FC<{
+  depth: number;
+  error: string | null;
+  onSubmit: (name: string) => void;
+  onCancel: () => void;
+}> = ({ depth, error, onSubmit, onCancel }) => {
+  const [value, setValue] = useState('');
+  /** Guards against double submission (Enter then blur) */
+  const settledRef = useRef(false);
+
+  const submit = () => {
+    if (settledRef.current) return;
+    settledRef.current = true;
+    const name = value.trim();
+    if (name) {
+      onSubmit(name);
+    } else {
+      onCancel();
+    }
+  };
+
+  return (
+    <div className="py-1 pr-2" style={{ paddingLeft: `${depth * 12 + 8}px` }}>
+      <div className="flex items-center gap-1">
+        <span className="w-3 shrink-0" />
+        <Folder className="w-3.5 h-3.5 shrink-0 text-blue-500" />
+        <input
+          autoFocus
+          value={value}
+          placeholder={i18n('Folder name')}
+          onChange={(e) => setValue(e.target.value)}
+          onFocus={() => { settledRef.current = false; }}
+          onBlur={submit}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              submit();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              settledRef.current = true;
+              onCancel();
+            }
+          }}
+          className="flex-1 min-w-0 bg-transparent border border-blue-500 rounded px-1 text-xs outline-none"
+        />
+      </div>
+      {error && (
+        <div className="ml-8 mt-0.5 text-xs text-destructive">{error}</div>
       )}
     </div>
   );

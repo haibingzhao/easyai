@@ -82,3 +82,14 @@ data class FileNodeDto(
     val type: String,
     val children: List<FileNodeDto>? = null
 )
+
+/**
+ * Request body for creating a new directory inside the project tree.
+ */
+data class CreateDirectoryRequest(
+    /** Absolute path of the parent directory */
+    val path: String,
+    /** Single-segment name of the new directory (no path separators) */
+    val name: String,
+    val projectId: String
+)

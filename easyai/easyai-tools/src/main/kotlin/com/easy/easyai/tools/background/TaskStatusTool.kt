@@ -2,16 +2,28 @@ package com.easy.easyai.tools.background
 
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.model.TextContent
-import com.easy.easyai.core.tool.*
+import com.easy.easyai.core.tool.BaseToolDefinition
+import com.easy.easyai.core.tool.ToolMetadata
+import com.easy.easyai.core.tool.ToolResult
+import com.easy.easyai.core.tool.ToolUpdate
 import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Parameters for task_status tool.
  */
 data class TaskStatusParameters(
     @param:JsonPropertyDescription("The task ID to query")
-    val taskId: String
+    val taskId: String,
+    @param:JsonPropertyDescription(
+        "Optional number of SECONDS to wait before reading the status. Use this to poll a " +
+        "RUNNING task after a pause instead of calling task_status repeatedly in a tight loop — " +
+        "e.g. sleep=30 blocks for 30s and then returns the task's status at that moment. " +
+        "Omit or pass 0 to return immediately."
+    )
+    val sleep: Int? = null
 )
 
 /**
@@ -40,6 +52,11 @@ class TaskStatusTool(
 
         val manager = taskManagerRegistry.get(sessionId)
             ?: return ToolResult(content = listOf(TextContent("No background tasks found for this session.")))
+
+        val sleepSeconds = (args["sleep"] as? Number)?.toInt() ?: 0
+        if (sleepSeconds > 0) {
+            delay((sleepSeconds * 1000L).milliseconds)
+        }
 
         val task = manager.getStatus(taskId)
             ?: return ToolResult(content = listOf(TextContent("Task not found: $taskId")))
