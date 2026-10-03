@@ -5,7 +5,7 @@ import { ArtifactPanel } from '../artifacts/ArtifactPanel';
 import { WelcomeScreen } from './WelcomeScreen';
 import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
-import { getStreamingStatus, watchSession } from '@/services/chat-service';
+import { getStreamingStatus } from '@/services/chat-service';
 import { sessionService } from '@/services/session-service';
 import { getCheckpoints, getFileReviewState } from '@/services/checkpoint-service';
 import { Badge } from '../ui/Badge';
@@ -268,7 +268,6 @@ export const ChatPanel: React.FC = () => {
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let watchHandle: { abort: () => void } | null = null;
 
     /**
      * Fetch incremental messages from the server.
@@ -368,65 +367,19 @@ export const ChatPanel: React.FC = () => {
       }
     };
 
-    /**
-     * Full reconciliation: load authoritative messages from DB.
-     * Called once when the SSE watch stream ends normally (done event).
-     */
-    const finalReconciliation = async () => {
-      try {
-        const [detail, checkpoints, groupedTodos] = await Promise.all([
-          sessionService.getSessionDetail(runningSessionId),
-          getCheckpoints(runningSessionId).catch(() => [] as CheckpointInfo[]),
-          sessionService.getGroupedTodos(runningSessionId).catch(() => ({ main: [], subAgents: [] })),
-        ]);
-        if (cancelled) return;
-        if (detail) {
-          loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, runningSessionId);
-        }
-        setTodos(groupedTodos.main);
-        setAllSubAgentTodos(
-          Object.fromEntries(groupedTodos.subAgents.map((g) => [g.agentName, { todos: g.todos, toolCallId: g.agentName }]))
-        );
-      } catch { /* best-effort */ }
-      if (!cancelled) {
-        setRunningSessionId(null);
-        setStreaming(false);
-      }
-    };
-
     // Ownership guard: once the user switches sessions, the store's runningSessionId no
-    // longer matches the session watched by this effect. In-flight events from the old
-    // session must be dropped, otherwise they would mutate the new session's state
-    // (streaming blocks, or even committed messages) before the effect cleanup aborts.
-    const isStaleWatch = () => cancelled || useChatStore.getState().runningSessionId !== runningSessionId;
+    // longer matches the session polled by this effect.
+    const isStalePoll = () => cancelled || useChatStore.getState().runningSessionId !== runningSessionId;
 
-    // SSE-first: attach to the running session's event broadcast
-    watchHandle = watchSession(runningSessionId, {
-      onEvent: (event) => {
-        if (isStaleWatch()) return;
-        useChatStore.getState().handleEvent(event);
-      },
-      onDone: (event) => {
-        if (isStaleWatch()) return;
-        if (event.reason === 'not_streaming') {
-          // Session not active on this server — fall back to polling
-          poll();
-        } else {
-          // Normal completion — full reconciliation
-          finalReconciliation();
-        }
-      },
-      onError: () => {
-        if (isStaleWatch()) return;
-        // SSE connection failed — fall back to polling
-        poll();
-      },
-    });
+    // Polling-only recovery: the DB snapshot + incremental merges are the single
+    // source of truth while a session runs in the background. A watch SSE attach
+    // here would double-render committed turns (messages copy + streaming copy).
+    void poll();
 
-    // Periodic checkpoint refresh during SSE — surfaces team member file changes
-    // that don't flow through the parent's SSE stream (members use isolated session IDs).
+    // Periodic checkpoint refresh — surfaces team member file changes
+    // that don't flow through the parent's stream (members use isolated session IDs).
     const checkpointTimer = setInterval(async () => {
-      if (isStaleWatch()) return;
+      if (isStalePoll()) return;
       try {
         const checkpoints = await getCheckpoints(runningSessionId);
         if (cancelled) return;
@@ -435,7 +388,7 @@ export const ChatPanel: React.FC = () => {
           const key = cp.assistantMessageId || cp.messageId;
           if (!key) continue;
           // Upsert synthetic member checkpoints (their content grows as members write more files);
-          // only add genuinely new keys for real checkpoints (already pushed via SSE).
+          // only add genuinely new keys for real checkpoints.
           if (!state.checkpointsByMessageId[key] || key.startsWith('member:')) {
             state.addCheckpoint(key, cp);
           }
@@ -445,7 +398,6 @@ export const ChatPanel: React.FC = () => {
 
     return () => {
       cancelled = true;
-      watchHandle?.abort();
       if (timer) clearTimeout(timer);
       clearInterval(checkpointTimer);
     };

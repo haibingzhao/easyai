@@ -18,10 +18,10 @@ data class TaskStatusParameters(
     @param:JsonPropertyDescription("The task ID to query")
     val taskId: String,
     @param:JsonPropertyDescription(
-        "Optional number of SECONDS to wait before reading the status. Use this to poll a " +
-        "RUNNING task after a pause instead of calling task_status repeatedly in a tight loop — " +
-        "e.g. sleep=30 blocks for 30s and then returns the task's status at that moment. " +
-        "Omit or pass 0 to return immediately."
+        "Optional number of SECONDS to block before reading the status. Only use this when you must " +
+        "see intermediate progress before the automatic completion notification arrives — completion is " +
+        "pushed to you on its own, so ending the turn and letting the notification wake you is preferred " +
+        "over sleeping here. Omit or pass 0 to return immediately."
     )
     val sleep: Int? = null
 )
@@ -93,6 +93,9 @@ class TaskStatusTool(
             }
         }
 
-        return ToolResult(content = listOf(TextContent(result.trim())))
+        return ToolResult(
+            content = listOf(TextContent(result.trim())),
+            repetitionExpected = task.status == BackgroundTaskStatus.RUNNING
+        )
     }
 }

@@ -6,10 +6,14 @@ import com.easy.easyai.core.permission.PermissionAction
 import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.permission.PermissionRuleStore
 import com.easy.easyai.core.permission.PermissionService
+import com.easy.easyai.core.skill.SkillCatalogEntry
 import com.easy.easyai.repository.project.AsyncProjectStore
+import com.easy.easyai.skills.SkillConfig
+import com.easy.easyai.skills.SkillPaths
 import com.easy.easyai.web.model.*
 import com.easy.easyai.web.security.getCurrentUserId
 import kotlinx.coroutines.reactor.mono
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.core.io.FileSystemResource
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
@@ -45,7 +49,8 @@ class PermissionController(
     private val permissionService: PermissionService,
     private val ruleStore: PermissionRuleStore,
     private val toolRegistry: ToolRegistry,
-    private val projectStore: AsyncProjectStore? = null
+    private val projectStore: AsyncProjectStore? = null,
+    @param:Autowired(required = false) private val skillConfig: SkillConfig? = null
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
 
@@ -340,13 +345,13 @@ class PermissionController(
     /**
      * Read the content of a file on the server filesystem.
      * Returns file content as text along with MIME type and size.
-     * Path must be within the specified project directory.
-     * Limited to files ≤ 1MB for safety.
+     * Path must be within the caller's skill owner roots, the specified project directory, or
+     * allowed by permission rules. Limited to files ≤ 1MB for safety.
      */
     @GetMapping("/read-file-content")
     fun readFileContent(
         @RequestParam path: String,
-        @RequestParam projectId: String
+        @RequestParam(required = false) projectId: String?
     ): Mono<Map<String, Any>> {
         return mono {
             val filePath = validateReadablePath(path, projectId)
@@ -373,7 +378,7 @@ class PermissionController(
     @GetMapping("/serve-media")
     fun serveMedia(
         @RequestParam path: String,
-        @RequestParam projectId: String
+        @RequestParam(required = false) projectId: String?
     ): Mono<ResponseEntity<FileSystemResource>> {
         return mono {
             val filePath = validateReadablePath(path, projectId)
@@ -393,15 +398,29 @@ class PermissionController(
     }
 
     /**
-     * Resolve and validate a file path for reading: must exist as a regular file and be
+     * Resolve and validate a file path for reading: must exist as a regular file and be either
+     * within a skill owner root the caller may read (their own or the shared `system` layer), or
      * within the authenticated user's project directory, or allowed by permission rules.
      */
-    private suspend fun validateReadablePath(path: String, projectId: String): Path {
+    private suspend fun validateReadablePath(path: String, projectId: String?): Path {
+        val rawPath = Path.of(path)
+        // Skill packages live outside any project directory; serve them straight from the owner root.
+        val skillFile = resolveWithinSkillRoots(rawPath)
+        if (skillFile != null) {
+            if (!Files.isRegularFile(skillFile)) {
+                logger.warn("File not found: {}", skillFile)
+                throw ResponseStatusException(HttpStatus.NOT_FOUND, "File not found: $path")
+            }
+            return skillFile
+        }
+        if (projectId.isNullOrBlank()) {
+            logger.warn("Access denied: path outside project directory and no project given: {}", rawPath)
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "Access denied: path is outside project directory")
+        }
         val projectPath = resolveProjectPath(projectId)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found: $projectId")
         val projectDir = Path.of(projectPath).toAbsolutePath().normalize()
         // Resolve relative paths against the project directory; absolute paths used as-is
-        val rawPath = Path.of(path)
         val filePath = (if (rawPath.isAbsolute) rawPath else projectDir.resolve(rawPath)).normalize()
         if (!filePath.startsWith(projectDir) && !isPathAllowedByRules(projectId, filePath, projectDir)) {
             logger.warn("Access denied: path outside project directory: {} (project: {})", filePath, projectDir)
@@ -412,6 +431,22 @@ class PermissionController(
             throw ResponseStatusException(HttpStatus.NOT_FOUND, "File not found: $path")
         }
         return filePath
+    }
+
+    /**
+     * Resolve [path] to a canonical path inside a skill owner root the caller may read: their own
+     * root or the shared `system` root — never another user's private skills. Returns null when the
+     * skill system is disabled or the path is under neither root, so the caller falls back to
+     * project-directory validation. Owner roots and containment come from [SkillPaths], the single
+     * source of truth for skill directory layout.
+     */
+    private suspend fun resolveWithinSkillRoots(path: Path): Path? {
+        val config = skillConfig ?: return null
+        val userId = getCurrentUserId()
+        val normalized = path.toAbsolutePath().normalize()
+        val readable = SkillPaths.isWithin(SkillPaths.ownerRoot(config, userId), normalized) ||
+            SkillPaths.isWithin(SkillPaths.ownerRoot(config, SkillCatalogEntry.DEFAULT_USER_ID), normalized)
+        return if (readable) normalized else null
     }
 
     private suspend fun resolveProjectPath(projectId: String): String? {

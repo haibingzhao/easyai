@@ -160,6 +160,11 @@ internal class ReInvocationDetectorTest {
         }
 
         @Test
+        fun `expected results clear batch streaks without reviving the previous turn`() {
+            assertBoundaryBreaksStreak { result(it, repetitionExpected = true) }
+        }
+
+        @Test
         fun `absent keys reset while present keys keep their streaks`() {
             val a = call("a", name = "A")
             val b = call("b", name = "B")
@@ -189,6 +194,46 @@ internal class ReInvocationDetectorTest {
             val fresh = ReInvocationDetector()
             assertTrue(fresh.observeTurn(listOf(call()), listOf(result(call()))).isEmpty())
             assertEquals(listOf(notice()), fresh.observeTurn(listOf(call()), listOf(result(call()))))
+        }
+    }
+
+    @Nested
+    inner class ExpectedRepetition {
+
+        @Test
+        fun `tool declared expected repetition never warns however long it continues`() {
+            repeat(12) {
+                assertTrue(observe(expected = true).isEmpty())
+            }
+        }
+
+        @Test
+        fun `strict counting restarts after the expected window ends`() {
+            repeat(3) {
+                assertTrue(observe(expected = true).isEmpty())
+            }
+            assertTrue(observe().isEmpty())
+            assertEquals(listOf(notice()), observe())
+        }
+
+        @Test
+        fun `expected key stays silent while a strict key warns in the same batch`() {
+            val pollName = "task_status"
+            val strictName = "read"
+            val first = listOf(call("p1", name = pollName), call("s1", name = strictName))
+            assertTrue(detector.observeTurn(
+                first,
+                listOf(result(first[0], repetitionExpected = true), result(first[1]))
+            ).isEmpty())
+
+            val second = listOf(call("p2", name = pollName), call("s2", name = strictName))
+            assertEquals(
+                listOf(notice(second[1])),
+                detector.observeTurn(
+                    second,
+                    listOf(result(second[0], repetitionExpected = true), result(second[1]))
+                )
+            )
         }
     }
 
@@ -225,20 +270,26 @@ internal class ReInvocationDetectorTest {
         text: String = "pending",
         isError: Boolean = false,
         needPause: Boolean = false,
-        isSkipped: Boolean = false
+        isSkipped: Boolean = false,
+        repetitionExpected: Boolean = false
     ) = ToolCallResult(
         toolCallId = call.id,
         resultText = text,
         isError = isError,
         needPause = needPause,
-        isSkipped = isSkipped
+        isSkipped = isSkipped,
+        repetitionExpected = repetitionExpected
     )
 
     private fun observe(
         text: String = "pending",
         isError: Boolean = false,
-        call: ToolCallContent = call()
-    ): List<Notice> = detector.observeTurn(listOf(call), listOf(result(call, text, isError)))
+        call: ToolCallContent = call(),
+        expected: Boolean = false
+    ): List<Notice> = detector.observeTurn(
+        listOf(call),
+        listOf(result(call, text, isError, repetitionExpected = expected))
+    )
 
     private fun notice(call: ToolCallContent = call(), count: Int = 2, level: Level = Level.WARN) =
         Notice(toolName = call.name, toolCallId = call.id, count = count, level = level)

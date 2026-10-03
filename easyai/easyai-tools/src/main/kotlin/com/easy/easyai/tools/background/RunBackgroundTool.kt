@@ -105,7 +105,9 @@ class RunBackgroundTool(
                 "Background task launched.\n" +
                 "Task ID: $taskId\n" +
                 "Tool: $toolName\n" +
-                "Use task_status(task_id=\"$taskId\") to check progress."
+                "You will be automatically notified with the result when it finishes, even if this turn ends. " +
+                "Do not poll to wait for it: keep working on something else, or tell the user the task is running and finish the turn. " +
+                "Call task_status(taskId=\"$taskId\") only if you need intermediate progress."
             ))
         )
     }

@@ -11,6 +11,8 @@ export const TOOL_NAMES = {
   UPDATE_VARIABLE: 'update_variable',
   /** Tool that manages goal state (update_status, update_objective, add_evidence) */
   GOAL: 'goal',
+  /** Tool whose payload is an HTML/SVG fragment rendered inline by the client */
+  RENDER_VISUAL: 'render_visual',
   /** Team coordination tools (TEAM agent only) */
   DELEGATE_TO_MEMBER: 'delegate_to_member',
   WAIT_FOR_MEMBER_EVENTS: 'wait_for_member_events',
@@ -46,14 +48,24 @@ export const SUBAGENT_BLOCKED_TOOLS: string[] = ['task', 'run_swarm'];
 export const TEAM_EXCLUDED_TOOLS: string[] = ['task'];
 
 /**
- * Companion tools that must be enabled together with a primary tool.
- * `run_background` only returns a task ID; without `task_list` / `task_status`
- * the agent has no way to inspect or retrieve the background task's result, so
- * checking `run_background` auto-checks both companions.
+ * Tool groups that must be selected or deselected atomically.
+ * Individual tools within these sets are useless (or nearly so) alone:
+ * - run_background only returns a task ID — without task_list / task_status the
+ *   agent can never inspect or retrieve the background task's result.
+ * - knowledge_search finds entries; knowledge_read loads their full content.
+ * - the memory tools form one search → read → write lifecycle, and the backend
+ *   prompt guidance is only injected when memory_search is registered.
  */
-export const TOOL_COMPANIONS: Record<string, string[]> = {
-  run_background: ['task_list', 'task_status'],
-};
+export const TOOL_GROUPS: string[][] = [
+  ['run_background', 'task_list', 'task_status'],
+  ['knowledge_search', 'knowledge_read'],
+  ['memory_search', 'memory_read', 'memory_write', 'memory_list'],
+];
+
+/** All members of the group containing `toolName`, or null if it is not grouped. */
+export function toolGroupOf(toolName: string): string[] | null {
+  return TOOL_GROUPS.find((group) => group.includes(toolName)) ?? null;
+}
 
 /**
  * Filter out auto-injected tools (ToolInfo.alwaysInclude) from a selectable list.

@@ -15,7 +15,7 @@ import java.nio.file.Path
  * `{ownerRoot}/{sanitizedName}`. Owner and name segments are sanitized with
  * [SkillEntry.sanitizeSegment] so a hostile or path-bearing user id can never escape the tree.
  */
-internal object SkillPaths {
+object SkillPaths {
 
     const val SKILL_FILE_NAME = "SKILL.md"
 

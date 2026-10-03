@@ -29,7 +29,10 @@ data class ToolCallResult(
     val pauseReason: String? = null,
     val isSkipped: Boolean = false,
     /** Token usage from this tool execution (e.g., sub-agent LLM calls). Null if not applicable. */
-    val usage: Usage? = null
+    val usage: Usage? = null,
+    /** True when the tool declared an identical repeat call as expected work, not a stuck loop. */
+    @get:JsonIgnore
+    val repetitionExpected: Boolean = false
 )
 
 interface ToolExecutionEngine {
@@ -187,7 +190,8 @@ class DefaultToolExecutionEngine: ToolExecutionEngine {
             exitCode = guardedResult.content.filterIsInstance<ToolResultContent>().firstOrNull()?.exitCode,
             mimeType = guardedResult.content.filterIsInstance<ToolResultContent>().firstOrNull()?.mimeType ?: "text/plain",
             isError = guardedResult.isError,
-            usage = toolUsage
+            usage = toolUsage,
+            repetitionExpected = guardedResult.repetitionExpected
         )
     }
 

@@ -15,12 +15,12 @@ private const val RUN_BACKGROUND_TOOL_DESCRIPTION = """Launch any tool in the ba
 
 Use this tool for long-running operations (video generation, TTS, large builds, etc.) where you want to continue reasoning while the task executes.
 
-The tool returns immediately with a task ID. Use task_status(task_id) to check progress, or task_list() to see all tasks.
+The tool returns immediately with a task ID. You will be automatically notified with the result when the task finishes, and the conversation resumes on its own even if this turn has already ended. So do not poll in order to wait: keep working on something else, or finish the turn and tell the user the task is running.
 
-When the background task completes, you will be automatically notified with the result.
+Call task_status(taskId=...) only when you need intermediate status before that notification arrives, or task_list() to see all tasks.
 
 Parameters:
-- tool_name: Name of the tool to run (any available tool including MCP tools)
+- toolName: Name of the tool to run (any available tool including MCP tools)
 - arguments: Arguments to pass to the target tool as a JSON object
 - description: Optional short description of what this background task does
 

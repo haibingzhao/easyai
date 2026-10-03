@@ -1,7 +1,7 @@
 import React from 'react';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { Bot, Terminal, FileText, Search, FolderSearch, List, MessageSquare, CheckSquare, AlertTriangle } from 'lucide-react';
-import { selectableTools, TOOL_COMPANIONS } from '@/constants/tools';
+import { selectableTools, toolGroupOf } from '@/constants/tools';
 import { useWebSearchStatus } from '@/hooks/useWebSearchStatus';
 import { i18n } from '@/utils/i18n';
 
@@ -56,21 +56,15 @@ export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onCha
   const showWebSearchWarning = selectedTools.includes('websearch') && webSearchConfigured === false;
 
   const toggleTool = (toolName: string) => {
+    // Grouped tools toggle atomically: checking any member selects the whole
+    // group, unchecking any member deselects all of them.
+    const group = toolGroupOf(toolName) ?? [toolName];
     if (selectedTools.includes(toolName)) {
-      // Keep companion tools locked while their primary tool is still selected
-      // (e.g. task_list/task_status stay on as long as run_background is on).
-      const lockedByCompanion = Object.entries(TOOL_COMPANIONS).some(
-        ([primary, companions]) =>
-          companions.includes(toolName) &&
-          primary !== toolName &&
-          selectedTools.includes(primary)
-      );
-      if (lockedByCompanion) return;
-      onChange(selectedTools.filter(t => t !== toolName));
+      onChange(selectedTools.filter(t => !group.includes(t)));
     } else {
-      const next = [...selectedTools, toolName];
-      (TOOL_COMPANIONS[toolName] ?? []).forEach((companion) => {
-        if (!next.includes(companion)) next.push(companion);
+      const next = [...selectedTools];
+      group.forEach((member) => {
+        if (!next.includes(member)) next.push(member);
       });
       onChange(next);
     }
@@ -96,6 +90,7 @@ export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onCha
         {visibleTools.map((tool) => {
           const isSelected = selectedTools.includes(tool.name);
           const isUnavailable = unavailableSet.has(tool.name);
+          const group = toolGroupOf(tool.name);
           const row = (
             <label
               key={tool.name}
@@ -121,6 +116,14 @@ export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onCha
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">{tool.name}</span>
+                  {group && (
+                    <span
+                      title={`${i18n('Selected together with')}: ${group.filter(t => t !== tool.name).join(', ')}`}
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground border border-border shrink-0"
+                    >
+                      {i18n('Grouped')}
+                    </span>
+                  )}
                   {isUnavailable && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground border border-border shrink-0">
                       {i18n('Runtime unavailable')}

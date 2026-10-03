@@ -23,6 +23,7 @@ import { LoadSkillToolMessage } from './LoadSkillToolMessage';
 import { TeamToolMessage } from './TeamToolMessage';
 import { SwarmToolMessage } from './SwarmToolMessage';
 import { BackgroundTaskToolMessage } from './BackgroundTaskToolMessage';
+import { RenderVisualToolMessage } from './RenderVisualToolMessage';
 import { MediaResultCard } from './MediaResultCard';
 import { GenericToolMessage } from './GenericToolMessage';
 import { McpToolCard } from './McpToolCard';
@@ -61,6 +62,7 @@ const TOOL_RENDERERS: Record<string, React.ComponentType<ToolMessageProps>> = {
   generate_video: MediaResultCard,
   generate_music: MediaResultCard,
   fetch_media: MediaResultCard,
+  render_visual: RenderVisualToolMessage,
 };
 
 export function ToolMessageRouter(props: ToolMessageProps) {

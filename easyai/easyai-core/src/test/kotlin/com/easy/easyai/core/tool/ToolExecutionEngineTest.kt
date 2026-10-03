@@ -73,6 +73,33 @@ class ToolExecutionEngineTest {
             assertEquals(1, results.size)
             assertEquals("call1", results[0].toolCallId)
             assertEquals("result", results[0].resultText)
+            assertFalse(results[0].repetitionExpected)
+        }
+    }
+
+    @Nested
+    inner class `Repetition expectation` {
+
+        @Test
+        fun `propagates repetitionExpected declared by the tool`() = runBlocking {
+            val engine = DefaultToolExecutionEngine()
+            val mockScope = createMockScope()
+            val pollTool = createTestTool(
+                "poll",
+                result = ToolResult(content = listOf(TextContent("Status: RUNNING")), repetitionExpected = true)
+            )
+
+            val results = engine.executeToolCalls(
+                agentContext = createMockContext(),
+                toolCalls = listOf(ToolCallContent("call1", "poll", "{}")),
+                tools = listOf(pollTool),
+                eventStream = mockScope,
+                scope = this,
+                turnId = 0
+            )
+
+            assertEquals("Status: RUNNING", results.single().resultText)
+            assertTrue(results.single().repetitionExpected)
         }
     }
 
@@ -127,6 +154,7 @@ class ToolExecutionEngineTest {
 
             assertEquals(1, results.size)
             assertEquals(true, results[0].isError)
+            assertFalse(results[0].repetitionExpected)
         }
     }
 

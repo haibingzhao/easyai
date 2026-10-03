@@ -7,6 +7,7 @@ import { TOOL_NAMES } from '@/constants/tools';
  */
 const UNGROUPED_TOOLS: ReadonlySet<string> = new Set([
   TOOL_NAMES.ASK_QUESTION,
+  TOOL_NAMES.RENDER_VISUAL,
   'task',
   'run_swarm',
   'generate_image',

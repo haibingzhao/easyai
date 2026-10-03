@@ -19,6 +19,8 @@ interface FileTreeProps {
   revealPath?: string | null;
   /** Increment to force a full tree refresh (re-fetches root and preserves expanded dirs) */
   refreshToken?: number;
+  /** Hide mutating/project-scoped context-menu actions (New Folder, Reveal, Add to Chat). */
+  readOnly?: boolean;
 }
 
 /** Track state for each directory node */
@@ -42,7 +44,7 @@ interface ContextMenuState {
   nodeType: 'file' | 'directory';
 }
 
-export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileSelect, selectedFile, revealPath, refreshToken }) => {
+export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileSelect, selectedFile, revealPath, refreshToken, readOnly = false }) => {
   const [dirStates, setDirStates] = useState<Record<string, DirState>>({});
   const dirStatesRef = useRef<Record<string, DirState>>({});
   const treeContainerRef = useRef<HTMLDivElement>(null);
@@ -110,12 +112,13 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileS
 
   // Probe the backend host platform once; hide OS-specific actions when unknown
   useEffect(() => {
+    if (readOnly) return;
     let cancelled = false;
     fetchServerPlatform()
       .then((platform) => { if (!cancelled) setServerPlatform(platform); })
       .catch(() => { /* older backend without the endpoint: keep actions hidden */ });
     return () => { cancelled = true; };
-  }, []);
+  }, [readOnly]);
 
   useEffect(() => {
     if (!notice) return;
@@ -540,7 +543,7 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileS
           className="fixed z-[9999] min-w-[180px] py-1 bg-popover border border-border rounded-md shadow-lg text-sm"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          {contextMenu.nodeType === 'directory' && (
+          {!readOnly && contextMenu.nodeType === 'directory' && (
             <button
               className="w-full text-left px-3 py-1.5 hover:bg-accent transition-colors flex items-center gap-2"
               onClick={() => {
@@ -552,7 +555,7 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileS
               <span className="text-xs text-muted-foreground">{i18n('New Folder')}</span>
             </button>
           )}
-          {contextMenu.nodeType === 'directory' && serverPlatform === 'macos' && (
+          {!readOnly && contextMenu.nodeType === 'directory' && serverPlatform === 'macos' && (
             <button
               className="w-full text-left px-3 py-1.5 hover:bg-accent transition-colors flex items-center gap-2"
               onClick={handleReveal}
@@ -572,12 +575,14 @@ export const FileTree: React.FC<FileTreeProps> = ({ rootPath, projectId, onFileS
           >
             <span className="text-xs text-muted-foreground">{i18n('Copy Absolute Path')}</span>
           </button>
-          <button
-            className="w-full text-left px-3 py-1.5 hover:bg-accent transition-colors flex items-center gap-2"
-            onClick={handleAddToChat}
-          >
-            <span className="text-xs text-muted-foreground">{i18n('Add to Chat')}</span>
-          </button>
+          {!readOnly && (
+            <button
+              className="w-full text-left px-3 py-1.5 hover:bg-accent transition-colors flex items-center gap-2"
+              onClick={handleAddToChat}
+            >
+              <span className="text-xs text-muted-foreground">{i18n('Add to Chat')}</span>
+            </button>
+          )}
         </div>,
         document.body,
       )}
