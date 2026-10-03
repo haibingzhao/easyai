@@ -552,6 +552,14 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   setQueuedMessages: (messages) => set({ queuedMessages: messages }),
 
   handleEvent: (event) => {
+    // Recovery mode (re-entering a running session via switch/NewSessionDialog or
+    // post-refresh takeover): the DB snapshot + polling is the single source of
+    // truth. Live SSE events (orphaned send stream, watch tap) must not write the
+    // store, or committed turns render twice (messages copy + streaming copy).
+    const state = get();
+    if (state.runningSessionId !== null && state.runningSessionId === state.sessionId) {
+      return;
+    }
     handleChatEvent(event, get, set);
     // Team coordination tools: refresh member executions immediately on SSE events
     const teamToolNames: string[] = [TOOL_NAMES.DELEGATE_TO_MEMBER, TOOL_NAMES.WAIT_FOR_MEMBER_EVENTS, TOOL_NAMES.RESUME_MEMBER];

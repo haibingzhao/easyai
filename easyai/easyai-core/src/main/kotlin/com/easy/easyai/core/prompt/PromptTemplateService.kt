@@ -171,7 +171,10 @@ class PromptTemplateService(
         val knowledgeGuidanceSegment = if (context.tools.any { it["name"] == "knowledge_search" }) KNOWLEDGE_GUIDANCE_SEGMENT else null
         // Append background-task guidance when the agent has run_background tool registered. Static text for cache stability.
         val backgroundTaskSegment = if (context.tools.any { it["name"] == "run_background" }) BACKGROUND_TASK_SEGMENT else null
-        return listOfNotNull(base.takeIf { it.isNotBlank() }, varsSegment, timeAccessSegment, memoryGuidanceSegment, knowledgeGuidanceSegment, backgroundTaskSegment)
+        // Append inline-visual guidance when the agent has render_visual registered. Without it models
+        // tend to emit one text block and call the tool once at the end; the segment teaches mid-narrative placement.
+        val renderVisualSegment = if (context.tools.any { it["name"] == "render_visual" }) RENDER_VISUAL_SEGMENT else null
+        return listOfNotNull(base.takeIf { it.isNotBlank() }, varsSegment, timeAccessSegment, memoryGuidanceSegment, knowledgeGuidanceSegment, backgroundTaskSegment, renderVisualSegment)
             .joinToString("\n\n")
     }
 
@@ -283,6 +286,23 @@ background and keep reasoning or doing other work while it runs.
 
 Prefer `run_background` whenever a step is slow and you have other useful work to do meanwhile.
 Tools that require user approval (ASK) cannot be backgrounded — call those directly first.
+        """.trimIndent()
+
+        /** Static guidance for mid-narrative inline visuals via render_visual (cache-stable). */
+        private val RENDER_VISUAL_SEGMENT = """
+## Inline Visuals
+
+You can show HTML/SVG fragments inline in the conversation with the `render_visual` tool: the
+client renders the fragment as a visual card at the exact position where you call it.
+
+Call it in the MIDDLE of your narrative, not once at the end:
+1. Write the text that leads into the visual.
+2. Call `render_visual` with the fragment for that point in the story.
+3. Continue with the text that follows it, and repeat steps 1-3 for each further visual.
+
+The tool returns only an acknowledgement — the fragment itself reaches the user through the
+rendered card, so never repeat or summarize the fragment code in your text reply. Follow the
+input and style contract in the tool description (bare fragment, contract variables for colors).
         """.trimIndent()
     }
 }

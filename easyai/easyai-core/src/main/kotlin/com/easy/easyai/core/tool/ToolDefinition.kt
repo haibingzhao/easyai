@@ -51,7 +51,10 @@ data class ToolResult(
     /** Reason for pause when [needPause] is true (e.g., "ask_question"). Null when not paused. */
     val pauseReason: String? = null,
     /** Token usage incurred by this tool execution (e.g., sub-agent LLM calls). Null if not applicable. */
-    val usage: Usage? = null
+    val usage: Usage? = null,
+    /** True when an identical repeat call is expected work, not a stuck loop (e.g. polling a RUNNING task). */
+    @get:JsonIgnore
+    val repetitionExpected: Boolean = false
 )
 
 /**

@@ -234,6 +234,9 @@ interface LoadSessionStateShape {
   queuedMessages: QueuedMessage[];
   isStreaming: boolean;
   sessionVariables: Record<string, string>;
+  streamingBlocks: StreamingBlock[];
+  streamingToolOutputs: Record<string, string>;
+  pendingMessageData: Record<string, unknown>;
 }
 
 type LoadSetFn = (partial: Partial<LoadSessionStateShape> | ((state: LoadSessionStateShape) => Partial<LoadSessionStateShape>)) => void;
@@ -318,6 +321,12 @@ export function loadSessionMessagesImpl(
     checkpointsByMessageId,
     revertState: null,
     fileReviewOverrides: {},
+    // A snapshot load replaces the whole transcript with the DB truth; any live
+    // streaming state from a previous view of this (or another) session would
+    // otherwise render as a second copy on top of the loaded messages.
+    streamingBlocks: [],
+    streamingToolOutputs: {},
+    pendingMessageData: {},
     // Adopt the backend-reported context window when provided (model-specific,
     // e.g. 256K/1M); keeps the token bar percentage real instead of the 200K default.
     ...(modelContextLength != null && modelContextLength > 0 ? { contextWindow: modelContextLength } : {}),

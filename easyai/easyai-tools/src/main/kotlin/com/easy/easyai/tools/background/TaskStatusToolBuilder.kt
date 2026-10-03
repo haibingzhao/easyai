@@ -17,7 +17,7 @@ Returns detailed information about a background task including:
 - Duration and timestamps
 - Result or error message
 
-Use this after launching a task with run_background to check its progress or get its result."""
+Use this when you need status before the automatic completion notification arrives — not to wait for a task to finish. Completion is pushed to you on its own, even if the turn has ended."""
 
 /**
  * Builder for [TaskStatusTool].

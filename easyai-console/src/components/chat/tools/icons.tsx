@@ -40,7 +40,8 @@ import {
   MessageSquare,
   Play,
   CircleDot,
-  ListChecks
+  ListChecks,
+  Shapes
 } from 'lucide-react';
 
 export const TOOL_ICONS: Record<string, LucideIcon> = {
@@ -77,6 +78,7 @@ export const TOOL_ICONS: Record<string, LucideIcon> = {
   generate_music: Music,
   transcribe_audio: AudioLines,
   fetch_media: Download,
+  render_visual: Shapes,
 };
 
 /** MCP 工具（serverName__toolName）按工具名片段匹配图标，未命中回退 Plug */

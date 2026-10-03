@@ -15,7 +15,7 @@ internal class ReInvocationDetector {
             val key = Key(call.name, call.arguments)
             seen.add(key)
             val result = resultsById[call.id]
-            if (result == null || result.needPause || result.isSkipped) {
+            if (result == null || result.needPause || result.isSkipped || result.repetitionExpected) {
                 current.remove(key)
                 continue
             }

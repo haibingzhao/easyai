@@ -141,6 +141,45 @@ class PromptTemplateServiceTest {
     }
 
     @Nested
+    inner class `render visual guidance` {
+
+        @Test
+        fun `appends static guidance when render_visual tool registered on default prompt`() {
+            val rendered = service.build(null, contextWithTools("render_visual"))
+            assertTrue(rendered.contains("## Inline Visuals"))
+            assertTrue(rendered.contains("render_visual"))
+        }
+
+        @Test
+        fun `omits guidance when render_visual tool not registered`() {
+            val rendered = service.build(null, contextWithTools("read", "bash"))
+            assertFalse(rendered.contains("## Inline Visuals"))
+        }
+
+        @Test
+        fun `appends guidance on custom template when render_visual tool registered`() {
+            val rendered = service.build("You are a coding agent.", contextWithTools("render_visual"))
+            assertTrue(rendered.contains("You are a coding agent."))
+            assertTrue(rendered.contains("## Inline Visuals"))
+        }
+
+        @Test
+        fun `guidance teaches mid-narrative placement instead of a trailing call`() {
+            val guidance = service.build(null, contextWithTools("render_visual")).substringAfter("## Inline Visuals")
+            assertTrue(guidance.contains("MIDDLE of your narrative"), guidance)
+            assertTrue(guidance.contains("never repeat or summarize the fragment code"), guidance)
+        }
+
+        @Test
+        fun `guidance output is stable across builds for cache friendliness`() {
+            val context = contextWithTools("render_visual")
+            val first = service.build(null, context)
+            val second = service.build(null, context)
+            assertTrue(first == second)
+        }
+    }
+
+    @Nested
     inner class `sub-agent guidance` {
 
         private fun contextWith(

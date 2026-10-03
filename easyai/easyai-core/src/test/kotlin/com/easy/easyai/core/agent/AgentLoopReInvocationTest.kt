@@ -221,6 +221,41 @@ internal class AgentLoopReInvocationTest {
         }
 
         @Test
+        fun `tool declared expected repetition polls without advice and without skipping execution`() = runTest {
+            val fixture = Fixture(
+                (1..5).map { response(call("c$it")) } + response(),
+                tools = listOf(testTool {
+                    ToolResult(content = listOf(TextContent("Status: RUNNING")), repetitionExpected = true)
+                })
+            )
+            fixture.run()
+            assertEquals(listOf("c1", "c2", "c3", "c4", "c5"), fixture.beforeIds.toList())
+            assertEquals(listOf("c1", "c2", "c3", "c4", "c5"), fixture.results().map { it.toolCallId })
+            assertTrue(fixture.notices().isEmpty())
+            assertTrue(fixture.pauses.isEmpty())
+            assertEquals("normal", fixture.events.filterIsInstance<AgentEndEvent>().single().endReason)
+        }
+
+        @Test
+        fun `advice resumes once the tool stops declaring the wait expected`() = runTest {
+            val fixture = Fixture(
+                (1..5).map { response(call("c$it")) } + response(),
+                tools = listOf(testTool { id ->
+                    val running = id in setOf("c1", "c2", "c3")
+                    ToolResult(
+                        content = listOf(TextContent(if (running) "Status: RUNNING" else "Status: COMPLETED")),
+                        repetitionExpected = running
+                    )
+                })
+            )
+            fixture.run()
+            assertEquals(listOf("c1", "c2", "c3", "c4", "c5"), fixture.results().map { it.toolCallId })
+            val text = messageText(fixture.notices().single())
+            assertTrue(text.contains("call c5"))
+            assertTrue(text.contains("[WARN]"))
+        }
+
+        @Test
         fun `batch notices aggregate without hiding same-name different-argument calls`() = runTest {
             val fixture = Fixture(listOf(
                 response(call("a1", args = """{"job":"a"}"""), call("b1", args = """{"job":"b"}""")),
