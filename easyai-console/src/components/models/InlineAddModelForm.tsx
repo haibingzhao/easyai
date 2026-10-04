@@ -4,6 +4,7 @@ import { TokenInput } from '../TokenInput';
 import { modelConfigService } from '@/services/model-config-service';
 import { ChevronRight, ChevronDown, Trash2 } from 'lucide-react';
 import { ToolCallingToggle } from '@/components/ui/ToolCallingToggle';
+import { MODEL_FIELD_HINTS, validateContextTokenBounds } from '@/constants/model-options';
 import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, ModelConfigGroup, Protocol, SaveModelProviderConfigRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
 
 interface InlineAddModelFormProps {
@@ -111,9 +112,9 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
       alert(i18n('Please enter Model Name'));
       return;
     }
-    if (options.contextToken != null && options.maxContextTokens != null
-      && options.contextToken > options.maxContextTokens) {
-      alert(i18n('Context Token must not exceed Max Context Tokens'));
+    const boundError = validateContextTokenBounds(options);
+    if (boundError) {
+      alert(i18n(boundError));
       return;
     }
 
@@ -443,6 +444,7 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
                     placeholder="16"
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                   />
+                  <p className="mt-1 text-[11px] leading-tight text-muted-foreground">{i18n(MODEL_FIELD_HINTS.maxTokens)}</p>
                 </div>
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-medium">{i18n('Thinking')}</label>
@@ -485,6 +487,7 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
                     placeholder="200"
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                   />
+                  <p className="mt-1 text-[11px] leading-tight text-muted-foreground">{i18n(MODEL_FIELD_HINTS.maxContextTokens)}</p>
                 </div>
                 <div>
                   <label className="text-xs font-medium mb-1 block">{i18n('Context Token')}</label>
@@ -494,6 +497,7 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
                     placeholder="200"
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                   />
+                  <p className="mt-1 text-[11px] leading-tight text-muted-foreground">{i18n(MODEL_FIELD_HINTS.contextToken)}</p>
                 </div>
               </div>
             )}
