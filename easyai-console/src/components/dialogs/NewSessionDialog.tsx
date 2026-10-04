@@ -18,7 +18,7 @@ interface NewSessionDialogProps {
 
 export const NewSessionDialog: React.FC<NewSessionDialogProps> = ({ open, onClose }) => {
   const { remoteSessions, remoteSessionHasMore, remoteSessionLoading, setCurrentSessionId, loadRemoteSessions, loadMoreRemoteSessions } = useSessionStore();
-  const { setSessionId, loadSessionMessages, sessionId: chatSessionId, setFileReviewOverrides, setRunningSessionId, setStreaming } = useChatStore();
+  const { setSessionId, loadSessionMessages, sessionId: chatSessionId, setFileReviewOverrides, setRunningSessionId, setStreaming, setSnapshotEnabled } = useChatStore();
 
   useEffect(() => {
     if (open) {
@@ -40,12 +40,14 @@ export const NewSessionDialog: React.FC<NewSessionDialogProps> = ({ open, onClos
         }),
       ]);
       loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, sessionId);
+      // Applied after setSessionId below — the identity-change reset restores the optimistic default.
+      const snapshotEnabled = detail.snapshotEnabled !== false;
       useNavStore.getState().setSelectedFile(null);
-      // Load file review state
-      const reviewState = await getFileReviewState(sessionId).catch((e) => {
+      // Load file review state (skipped when the backend snapshot system is disabled)
+      const reviewState = snapshotEnabled ? await getFileReviewState(sessionId).catch((e) => {
         console.warn('Failed to load file review state:', e);
         return null;
-      });
+      }) : null;
       if (reviewState?.reviews) {
         setFileReviewOverrides(reviewState.reviews);
       }
@@ -53,6 +55,7 @@ export const NewSessionDialog: React.FC<NewSessionDialogProps> = ({ open, onClos
       if (streamingStatus.local || streamingStatus.streaming) {
         // Session is still running — enter polling mode to get new messages
         setSessionId(sessionId);
+        setSnapshotEnabled(snapshotEnabled);
         setRunningSessionId(sessionId);
         // When there's a pending permission request, loadSessionMessages already
         // set isStreaming=false so the PermissionBar is interactive. Don't override it.
@@ -68,6 +71,7 @@ export const NewSessionDialog: React.FC<NewSessionDialogProps> = ({ open, onClos
       setRunningSessionId(null);
       setCurrentSessionId(sessionId);
       setSessionId(sessionId);
+      setSnapshotEnabled(snapshotEnabled);
       onClose();
     } catch (e) {
       console.error('Failed to load session:', e);

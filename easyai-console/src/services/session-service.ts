@@ -160,6 +160,8 @@ export interface SessionDetail {
   forkedFromSessionId?: string | null;
   /** Root main session this fork descends from (null/absent = main session) */
   forkRootSessionId?: string | null;
+  /** Whether the backend snapshot/checkpoint system is active for this session's project. Absent (older backend) = enabled. */
+  snapshotEnabled?: boolean;
 }
 
 /** One fork branch entry for the Summary panel branch list. */
