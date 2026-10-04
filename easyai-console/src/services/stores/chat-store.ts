@@ -82,8 +82,11 @@ interface ChatState {
   _lastSnapshots: MessageSnapshot[];
   /** Root main session the currently viewed session belongs to (own id for a main session; null before a session exists) */
   forkRootId: string | null;
+  /** Whether the backend snapshot/checkpoint system is active for the current session (gates the Review panel). Defaults to true for older backends. */
+  snapshotEnabled: boolean;
   setRunningSessionId: (id: string | null) => void;
   setForkRootId: (id: string | null) => void;
+  setSnapshotEnabled: (enabled: boolean) => void;
 
   setSessionId: (id: string | null) => void;
   setAgentId: (id: string) => void;
@@ -173,11 +176,14 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   runningSessionId: null,
   _lastSnapshots: [],
   forkRootId: null,
+  snapshotEnabled: true,
 
   // When the session identity changes, clear streaming render state left over from the
   // old session (streamingBlocks / isStreaming / ...), otherwise the previous session's
   // in-flight tool cards would be rendered at the end of the new session's message list.
   // Same-id calls (e.g. re-selecting the current session) keep live streaming untouched.
+  // snapshotEnabled resets to the optimistic default here; detail-loading paths
+  // (switchToSession, NewSessionDialog) must apply the backend value AFTER setSessionId.
   setSessionId: (id) => set((state) => (id === state.sessionId ? { sessionId: id } : {
     sessionId: id,
     streamingBlocks: [],
@@ -188,9 +194,11 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     retryInfo: null,
     pendingMessageData: {},
     backgroundTasks: {},
+    snapshotEnabled: true,
   })),
   setRunningSessionId: (id) => set({ runningSessionId: id, ...(id !== null ? { _lastSnapshots: [] } : {}) }),
   setForkRootId: (id) => set({ forkRootId: id }),
+  setSnapshotEnabled: (enabled) => set({ snapshotEnabled: enabled }),
 
   setAgentId: (id) => set({ agentId: id }),
 
@@ -486,6 +494,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     runningSessionId: null,
     _lastSnapshots: [],
     forkRootId: null,
+    snapshotEnabled: true,
   }),
 
   commitStreamingMessage: () => set((state) => commitStreamingMessageImpl(state)),

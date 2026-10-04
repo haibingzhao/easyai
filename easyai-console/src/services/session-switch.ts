@@ -19,6 +19,7 @@ export async function switchToSession(sessionId: string): Promise<void> {
   const {
     loadSessionMessages, setSessionId, setTodos, setAllSubAgentTodos,
     setFileReviewOverrides, setRunningSessionId, setStreaming, setForkRootId,
+    setSnapshotEnabled,
   } = chat;
 
   const streamingStatus = await getStreamingStatus(sessionId);
@@ -29,6 +30,8 @@ export async function switchToSession(sessionId: string): Promise<void> {
   ]);
   loadSessionMessages(detail!.messages, detail!.pendingPermission, checkpoints, detail!.endReason, detail!.variables, detail!.modelContextLength, sessionId);
   setForkRootId(detail!.forkRootSessionId ?? sessionId);
+  // Applied after setSessionId below — the identity-change reset restores the optimistic default.
+  const snapshotEnabled = detail!.snapshotEnabled !== false;
   useNavStore.getState().setSelectedFile(null);
 
   // Restore Agent and Model selectors from the last message's config
@@ -41,7 +44,7 @@ export async function switchToSession(sessionId: string): Promise<void> {
 
   const [groupedTodos, reviewState] = await Promise.all([
     sessionService.getGroupedTodos(sessionId),
-    getFileReviewState(sessionId).catch(() => null),
+    snapshotEnabled ? getFileReviewState(sessionId).catch(() => null) : Promise.resolve(null),
   ]);
   setTodos(groupedTodos.main);
   setAllSubAgentTodos(
@@ -53,6 +56,7 @@ export async function switchToSession(sessionId: string): Promise<void> {
 
   if (streamingStatus.local || streamingStatus.streaming) {
     setSessionId(sessionId);
+    setSnapshotEnabled(snapshotEnabled);
     setRunningSessionId(sessionId);
     if (!detail!.pendingPermission) {
       setStreaming(true);
@@ -65,4 +69,5 @@ export async function switchToSession(sessionId: string): Promise<void> {
   setRunningSessionId(null);
   setCurrentSessionId(sessionId);
   setSessionId(sessionId);
+  setSnapshotEnabled(snapshotEnabled);
 }

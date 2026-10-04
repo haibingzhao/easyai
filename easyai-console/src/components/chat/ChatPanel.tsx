@@ -304,6 +304,7 @@ export const ChatPanel: React.FC = () => {
           hasPendingPermission = !!detail?.pendingPermission;
           if (detail) {
             loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, runningSessionId);
+            useChatStore.getState().setSnapshotEnabled(detail.snapshotEnabled !== false);
           }
         } else {
           // Safe to use incremental merge — pass pendingPermission from backend
@@ -316,6 +317,7 @@ export const ChatPanel: React.FC = () => {
         hasPendingPermission = !!detail?.pendingPermission;
         if (detail) {
           loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, runningSessionId);
+          useChatStore.getState().setSnapshotEnabled(detail.snapshotEnabled !== false);
         }
       }
 

@@ -24,7 +24,14 @@ data class SessionDetail(
     /** Direct source session when this session was created by forking (null = main session). */
     val forkedFromSessionId: String? = null,
     /** Root main session this fork descends from (null = main session). */
-    val forkRootSessionId: String? = null
+    val forkRootSessionId: String? = null,
+    /**
+     * Whether the snapshot/checkpoint system is active for this session's project.
+     * False when no SnapshotService bean is present, the session has no project path,
+     * or the service reports the project disabled (e.g. a no-op override).
+     * The frontend hides the file-review UI when this is false.
+     */
+    val snapshotEnabled: Boolean = false
 )
 
 /**

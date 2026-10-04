@@ -101,8 +101,28 @@ class SessionService(
             modelContextLength = modelContextLength,
             variables = variables,
             forkedFromSessionId = forkInfo?.forkedFromSessionId,
-            forkRootSessionId = forkInfo?.forkRootSessionId
+            forkRootSessionId = forkInfo?.forkRootSessionId,
+            snapshotEnabled = resolveSnapshotEnabled(id, userId)
         )
+    }
+
+    /**
+     * Resolve whether the snapshot/checkpoint system is active for this session's project.
+     * Mirrors the runtime gating in [getCheckpoints] and SnapshotEventListener, so a
+     * no-op SnapshotService override (or a session without a project) reports false and
+     * the frontend can hide the file-review UI. Best-effort: never fails the detail load.
+     */
+    private suspend fun resolveSnapshotEnabled(sessionId: String, userId: String): Boolean {
+        val service = snapshotService ?: return false
+        return try {
+            val projectPath = sessionManager.getSessionContext(sessionId, userId)?.projectPath
+            projectPath != null && service.isEnabled(projectPath)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("Failed to resolve snapshot capability for session {}: {}", sessionId, e.message)
+            false
+        }
     }
 
     /**

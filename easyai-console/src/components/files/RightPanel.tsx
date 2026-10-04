@@ -9,6 +9,7 @@ import { SwarmRunCard } from '../chat/SwarmRunCard';
 import { ForkBranchesSection } from '../chat/ForkBranchesSection';
 import { TeamMemberPanel } from '../chat/team/TeamMemberPanel';
 import { useProjectStore } from '@/services/stores/project-store';
+import { useChatStore } from '@/services/stores/chat-store';
 import { useNavStore, type RightPanelTab } from '@/services/stores/nav-store';
 import { i18n } from '@/utils/i18n';
 import { X } from 'lucide-react';
@@ -49,13 +50,21 @@ export const RightPanel: React.FC<RightPanelProps> = ({ onClose, references, ses
   const selectedFile = useNavStore((s) => s.selectedFile);
   const setSelectedFile = useNavStore((s) => s.setSelectedFile);
   const currentProject = useProjectStore((s) => s.currentProject);
+  const snapshotEnabled = useChatStore((s) => s.snapshotEnabled);
 
   const rootPath = currentProject?.path || '';
   const projectId = currentProject?.id || '';
 
-  // Team tab only visible for TEAM agents; fall back to summary if stale
-  const tabs = isTeamAgent ? [TEAM_TAB, ...BASE_TABS] : BASE_TABS;
-  const effectiveTab = activeTab === 'team' && !isTeamAgent ? 'summary' : activeTab;
+  // Team tab only visible for TEAM agents; Review tab only when the backend snapshot system is active.
+  // Fall back to summary if a hidden tab is stale-active.
+  const tabs = [
+    ...(isTeamAgent ? [TEAM_TAB] : []),
+    ...(snapshotEnabled ? BASE_TABS : BASE_TABS.filter((tab) => tab.id !== 'review')),
+  ];
+  const effectiveTab =
+    (activeTab === 'team' && !isTeamAgent) || (activeTab === 'review' && !snapshotEnabled)
+      ? 'summary'
+      : activeTab;
 
   return (
     <div className="h-full flex flex-col bg-background border-l border-border">
