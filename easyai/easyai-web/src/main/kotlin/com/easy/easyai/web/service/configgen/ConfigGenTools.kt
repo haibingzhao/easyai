@@ -7,6 +7,7 @@ import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.AsyncAgentStore
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.tool.BaseToolDefinition
+import com.easy.easyai.core.tool.ToolFactory
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.tool.ToolUpdate
@@ -14,6 +15,7 @@ import com.easy.easyai.skills.SkillAccessResolver
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.web.model.ConfigValidationError
 import com.easy.easyai.web.service.ConfigValidator
+import com.easy.easyai.web.service.validation.ToolAvailability
 import kotlinx.coroutines.CoroutineScope
 import tools.jackson.databind.JsonNode
 
@@ -32,14 +34,6 @@ internal fun formatValidationErrors(errors: List<ConfigValidationError>): String
         }
     }
 }
-
-/**
- * Tools that the swarm runtime does not support for worker agents:
- * - load_skill: skills are cleared in swarm context
- * - task: SubAgentTool is not created (parentAgentId recursion guard)
- * - run_swarm: mainAgentOnly tool, blocked for non-main agents
- */
-internal val SWARM_UNSUPPORTED_TOOLS = setOf("load_skill", "task", "run_swarm")
 
 // ============================================================================
 // Tool 1: validate_config
@@ -126,9 +120,9 @@ data class ValidateConfigParameter(
  * Lists available resources by type (agents, tools, skills, MCP servers, models, spec).
  * Enables on-demand resource discovery instead of injecting everything into the prompt.
  *
- * @param swarmContext When true, tools unsupported by the swarm runtime
- *   (load_skill, task, run_swarm) are excluded from the tools listing,
- *   and skills are reported as unavailable.
+ * @param swarmContext When true, tools unsupported by the swarm runtime (derived from
+ *   tool capability metadata via [ToolAvailability.swarmUnsupported]) are excluded from
+ *   the tools listing, and skills are reported as unavailable.
  */
 class ListResourcesTool(
     private val toolRegistry: ToolRegistry,
@@ -138,6 +132,7 @@ class ListResourcesTool(
     private val modelConfigStore: ModelProviderConfigStore,
     private val userId: String,
     private val configType: String,
+    private val toolFactory: ToolFactory,
     private val swarmContext: Boolean = false
 ) : BaseToolDefinition(
     ToolMetadata(
@@ -200,12 +195,13 @@ class ListResourcesTool(
     }
 
     private fun listTools(): String {
+        val swarmUnsupported = ToolAvailability.swarmUnsupported(toolFactory)
         val tools = toolRegistry.getAllTools()
             // Auto-injected tools (alwaysInclude, e.g. team coordination tools) are
             // runtime-managed and bypass toolNames filtering — never list them as
             // valid toolNames values, or the AI would add them redundantly.
             .filter { !it.alwaysInclude }
-            .let { all -> if (swarmContext) all.filter { it.name !in SWARM_UNSUPPORTED_TOOLS } else all }
+            .let { all -> if (swarmContext) all.filter { it.name !in swarmUnsupported } else all }
         if (tools.isEmpty()) return "No built-in tools available."
         return buildString {
             appendLine("Built-in Tools (valid values for toolNames field):")
@@ -214,11 +210,17 @@ class ListResourcesTool(
             }
             appendLine()
             appendLine("NOTE: Team coordination tools (delegate_to_member, wait_for_member_events, resume_member) are auto-injected for TEAM agents — do NOT add them to toolNames.")
-            appendLine("NOTE: 'task' and 'run_swarm' are blocked at runtime for SUBAGENT agents — do NOT add them to a SUBAGENT's toolNames.")
-            appendLine("NOTE: 'task' is NOT usable for TEAM agents (no sub-agent whitelist) — do NOT add it to a TEAM agent's toolNames.")
-            if (swarmContext) {
+            val subAgentBlocked = ToolAvailability.subAgentBlocked(toolFactory)
+            if (subAgentBlocked.isNotEmpty()) {
+                appendLine("NOTE: ${subAgentBlocked.sorted().joinToString(", ")} are blocked at runtime for SUBAGENT agents — do NOT add them to a SUBAGENT's toolNames.")
+            }
+            val teamUnusable = ToolAvailability.teamUnusable(toolFactory)
+            if (teamUnusable.isNotEmpty()) {
+                appendLine("NOTE: ${teamUnusable.sorted().joinToString(", ")} is NOT usable for TEAM agents (no sub-agent whitelist) — do NOT add it to a TEAM agent's toolNames.")
+            }
+            if (swarmContext && swarmUnsupported.isNotEmpty()) {
                 appendLine()
-                appendLine("NOTE: load_skill, task, and run_swarm are NOT available in swarm runtime and must NOT be used in toolNames.")
+                appendLine("NOTE: ${swarmUnsupported.sorted().joinToString(", ")} are NOT available in swarm runtime and must NOT be used in toolNames.")
             }
         }
     }

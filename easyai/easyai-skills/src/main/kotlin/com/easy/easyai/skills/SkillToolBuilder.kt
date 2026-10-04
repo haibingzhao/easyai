@@ -6,6 +6,7 @@ import com.easy.easyai.core.permission.PermissionAction
 import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.skill.AsyncSkillCatalogStore
 import com.easy.easyai.core.tool.ToolBuilder
+import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import org.springframework.beans.factory.ObjectProvider
@@ -26,7 +27,8 @@ class SkillToolBuilder(
         name = "load_skill",
         description = baseDescription,
         permissionCategory = "skill",
-        isDefaultTool = false
+        isDefaultTool = false,
+        capabilities = setOf(ToolCapability.SKILL_LOADING)
     )
 
     override val defaultPermissionRules = listOf(

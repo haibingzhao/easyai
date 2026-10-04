@@ -1,6 +1,7 @@
 package com.easy.easyai.agent.registry
 
 import com.easy.easyai.agent.api.model.ToolInfo
+import com.easy.easyai.core.tool.ToolAvailabilityRules
 import com.easy.easyai.core.tool.ToolFactory
 import org.springframework.stereotype.Service
 
@@ -34,7 +35,10 @@ class DefaultToolRegistry(private val toolFactory: ToolFactory) : ToolRegistry {
                 permissionCategory = builder.permissionCategory,
                 uiRenderer = builder.uiRenderer,
                 isDefaultTool = builder.isDefaultTool,
-                alwaysInclude = builder.alwaysInclude
+                alwaysInclude = builder.alwaysInclude,
+                blockedForSubAgent = ToolAvailabilityRules.blockedForSubAgent(builder),
+                unusableForTeam = ToolAvailabilityRules.unusableForTeam(builder),
+                unsupportedInSwarm = ToolAvailabilityRules.unsupportedInSwarm(builder)
             )
         }
     }

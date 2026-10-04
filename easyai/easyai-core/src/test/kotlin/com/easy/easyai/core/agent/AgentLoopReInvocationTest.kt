@@ -19,6 +19,7 @@ import com.easy.easyai.core.model.UserMessage
 import com.easy.easyai.core.prompt.PromptTemplateService
 import com.easy.easyai.core.tool.BaseToolDefinition
 import com.easy.easyai.core.tool.DefaultToolExecutionEngine
+import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.core.tool.ToolResult
@@ -66,7 +67,12 @@ internal class AgentLoopReInvocationTest {
     ): ToolDefinition = object : BaseToolDefinition(ToolMetadata(
         name = name,
         description = "Test tool",
-        skipOnResume = name == "ask_question"
+        skipOnResume = name == "ask_question",
+        capabilities = when (name) {
+            "bash" -> setOf(ToolCapability.SHELL_EXECUTION)
+            "ask_question" -> setOf(ToolCapability.USER_INTERACTIVE)
+            else -> emptySet()
+        }
     )) {
         override fun parameterType(): Class<*> = Map::class.java
         override suspend fun doExecute(

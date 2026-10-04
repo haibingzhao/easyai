@@ -1,5 +1,6 @@
 package com.easy.easyai.core.message
 
+import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.storage.ObjectContent
 import com.easy.easyai.core.storage.ObjectMeta
@@ -7,6 +8,7 @@ import com.easy.easyai.core.storage.ObjectStorage
 import com.easy.easyai.core.storage.ObjectStorageException
 import com.easy.easyai.core.storage.ObjectStorageResolver
 import com.easy.easyai.core.storage.StoredFileReference
+import com.easy.easyai.core.tool.ToolContextProjector
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.coVerifyOrder
@@ -18,6 +20,7 @@ import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.NullSource
 import org.junit.jupiter.params.provider.ValueSource
+import tools.jackson.databind.node.ObjectNode
 import org.springframework.ai.chat.messages.AssistantMessage as SpringAiAssistantMsg
 import org.springframework.ai.chat.model.ChatResponse
 import org.springframework.ai.chat.metadata.ChatResponseMetadata
@@ -38,7 +41,25 @@ import org.springframework.ai.chat.messages.UserMessage as SpringAiUserMsg
 
 class MessageConverterTest {
 
-    private val converter = DefaultMessageConverter()
+    /**
+     * Inline stand-in for the render_visual context projector (whose production copy lives in
+     * easyai-tools and cannot be referenced from easyai-core tests). Replaces the bulky `code`
+     * argument with a size-bearing placeholder so the elision wiring is exercised end to end.
+     */
+    private val renderVisualProjector = ToolContextProjector { args ->
+        val mapper = SharedObjectMapper.instance
+        val node = mapper.readTree(args)
+        val code = node.get("code")
+        if (node is ObjectNode && code != null && code.isString) {
+            val bytes = code.stringValue().toByteArray(Charsets.UTF_8).size
+            node.put("code", "[fragment elided from context: $bytes bytes, rendered inline in the UI]")
+            mapper.writeValueAsString(node)
+        } else args
+    }
+
+    private val converter = DefaultMessageConverter(
+        contextProjectors = mapOf("render_visual" to renderVisualProjector)
+    )
 
     private fun writePng(path: Path): Path {
         val image = java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB)
@@ -700,6 +721,68 @@ class MessageConverterTest {
             ).single() as SpringAiUserMsg
             assertEquals("https://objects.example/system.png", result.media.single().data)
             coVerify(exactly = 1) { resolver.resolve("system") }
+        }
+    }
+
+    @Nested
+    inner class `render_visual fragment elision` {
+
+        @Test
+        fun `elides the code fragment but keeps title in replayed render_visual calls`() = runTest {
+            val messages = listOf(
+                AssistantMessage(
+                    id = "a1",
+                    content = listOf(
+                        ToolCallContent("call1", "render_visual", """{"title":"My Chart","code":"<svg></svg>"}""")
+                    )
+                )
+            )
+
+            val toolCall = (converter.toSpringAiMessages(messages).single() as SpringAiAssistantMsg).toolCalls.single()
+
+            assertTrue(toolCall.arguments.contains("\"title\":\"My Chart\""), "title must survive, got: ${toolCall.arguments}")
+            assertTrue(
+                toolCall.arguments.contains("[fragment elided from context: 11 bytes, rendered inline in the UI]"),
+                "code must be replaced by a size-bearing placeholder, got: ${toolCall.arguments}"
+            )
+            assertFalse(toolCall.arguments.contains("<svg>"), "original fragment must not be replayed, got: ${toolCall.arguments}")
+        }
+
+        @Test
+        fun `leaves other tools arguments untouched`() = runTest {
+            val args = """{"path":"test.txt"}"""
+            val messages = listOf(
+                AssistantMessage(id = "a1", content = listOf(ToolCallContent("call1", "read", args)))
+            )
+
+            val toolCall = (converter.toSpringAiMessages(messages).single() as SpringAiAssistantMsg).toolCalls.single()
+
+            assertEquals(args, toolCall.arguments)
+        }
+
+        @Test
+        fun `does not modify the persisted message`() = runTest {
+            val toolCallContent = ToolCallContent("call1", "render_visual", """{"title":"T","code":"<svg></svg>"}""")
+            val message = AssistantMessage(id = "a1", content = listOf(toolCallContent))
+
+            converter.toSpringAiMessages(listOf(message))
+
+            assertTrue(
+                toolCallContent.arguments.contains("<svg></svg>"),
+                "persisted arguments must keep the full fragment for UI rendering, got: ${toolCallContent.arguments}"
+            )
+        }
+
+        @Test
+        fun `passes malformed render_visual arguments through unchanged`() = runTest {
+            val broken = "{not json"
+            val messages = listOf(
+                AssistantMessage(id = "a1", content = listOf(ToolCallContent("call1", "render_visual", broken)))
+            )
+
+            val toolCall = (converter.toSpringAiMessages(messages).single() as SpringAiAssistantMsg).toolCalls.single()
+
+            assertEquals(broken, toolCall.arguments)
         }
     }
 

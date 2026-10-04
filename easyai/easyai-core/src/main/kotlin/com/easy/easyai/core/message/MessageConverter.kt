@@ -4,6 +4,7 @@ import com.easy.easyai.core.model.*
 import com.easy.easyai.core.storage.ObjectStorageException
 import com.easy.easyai.core.storage.ObjectStorageResolver
 import com.easy.easyai.core.storage.StoredFileReference
+import com.easy.easyai.core.tool.ToolContextProjector
 import kotlinx.coroutines.CancellationException
 import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.messages.Message
@@ -37,7 +38,13 @@ class DefaultMessageConverter(
      * (the LLM can then read them on demand via tools). Images are still inlined as Media.
      */
     var maxTotalInlineFileBytes: Long = DEFAULT_MAX_TOTAL_INLINE_FILE_BYTES,
-    private val objectStorageResolver: ObjectStorageResolver? = null
+    private val objectStorageResolver: ObjectStorageResolver? = null,
+    /**
+     * Per-tool argument projectors (ToolDefinition.contextProjector), keyed by tool name.
+     * Applied to replayed tool-call arguments before they are sent to the LLM — e.g. to elide
+     * bulky display-only payloads. Wired from the registered ToolBuilders by the autoconfiguration.
+     */
+    private val contextProjectors: Map<String, ToolContextProjector> = emptyMap()
 ) : MessageConverter {
     companion object {
         const val DEFAULT_MAX_TOTAL_INLINE_FILE_BYTES: Long = 10L * 1024 * 1024 // 10 MB
@@ -247,9 +254,11 @@ class DefaultMessageConverter(
                     val toolCalls = msg.content.filterIsInstance<ToolCallContent>()
                     val springAiToolCalls = toolCalls.map { tc ->
                         // Replayed arguments are a context source too: the model copies image URLs
-                        // straight out of its own earlier tool calls.
+                        // straight out of its own earlier tool calls. Per-tool projectors may rewrite
+                        // arguments first (e.g. eliding display-only payloads).
+                        val args = ToolContextProjector.projectSafely(contextProjectors, tc.name, tc.arguments)
                         SpringAiAssistantMessage.ToolCall(
-                            tc.id, "function", tc.name, sanitizePresignedUrls(tc.arguments, userId)
+                            tc.id, "function", tc.name, sanitizePresignedUrls(args, userId)
                         )
                     }
                     if (springAiToolCalls.isEmpty()) {

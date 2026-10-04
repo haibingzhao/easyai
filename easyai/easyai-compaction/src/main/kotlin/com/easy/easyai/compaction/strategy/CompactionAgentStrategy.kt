@@ -32,10 +32,14 @@ import java.util.concurrent.atomic.AtomicReference
  *
  * @param agentServiceProvider Lazy provider for AgentService (avoids circular dependency)
  * @param fallbackChatModel ChatModel to use as fallback when no session-specific model is provided
+ * @param contextProjectors Per-tool argument projectors (ToolDefinition.contextProjector) keyed by
+ *   tool name. Applied to tool-call arguments before file-path scanning so display-only payloads
+ *   (e.g. HTML/SVG fragments) do not surface bogus file references in fallback summaries.
  */
 class CompactionAgentStrategy(
     private val agentServiceProvider: () -> AgentService,
-    private val fallbackChatModel: ChatModel? = null
+    private val fallbackChatModel: ChatModel? = null,
+    private val contextProjectors: Map<String, ToolContextProjector> = emptyMap()
 ) : CompactionStrategy {
 
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -319,8 +323,14 @@ Rules:
                 when (block) {
                     is TextContent -> filePattern.findAll(block.text)
                         .forEach { match -> match.groupValues[1].takeIf { isValidFilePath(it) }?.let(files::add) }
-                    is ToolCallContent -> filePattern.findAll(block.arguments)
-                        .forEach { match -> match.groupValues[1].takeIf { isValidFilePath(it) }?.let(files::add) }
+                    // Apply the tool's own context projector first: display-only payloads (e.g. an
+                    // HTML/SVG fragment) are rewritten to a placeholder, so scanning the projected
+                    // arguments cannot surface markup tokens as bogus file paths.
+                    is ToolCallContent -> {
+                        val projected = ToolContextProjector.projectSafely(contextProjectors, block.name, block.arguments)
+                        filePattern.findAll(projected)
+                            .forEach { match -> match.groupValues[1].takeIf { isValidFilePath(it) }?.let(files::add) }
+                    }
                     is ToolResultContent -> filePattern.findAll(block.output)
                         .forEach { match -> match.groupValues[1].takeIf { isValidFilePath(it) }?.let(files::add) }
                     else -> {}

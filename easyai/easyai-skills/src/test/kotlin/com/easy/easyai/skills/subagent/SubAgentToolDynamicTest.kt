@@ -6,6 +6,7 @@ import com.easy.easyai.core.agent.AgentType
 import com.easy.easyai.core.agent.AsyncAgentStore
 import com.easy.easyai.core.event.MessageListener
 import com.easy.easyai.core.model.TextContent
+import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.core.tool.ToolResult
@@ -24,7 +25,8 @@ import kotlin.test.assertTrue
 
 private class StubTool(
     override val name: String,
-    override val permissionCategory: String = name
+    override val permissionCategory: String = name,
+    override val capabilities: Set<ToolCapability> = emptySet()
 ) : ToolDefinition {
     override val description: String = "stub tool"
     override val inputSchema: String = "{}"
@@ -55,8 +57,8 @@ class SubAgentToolDynamicTest {
     private val parentTools = listOf(
         StubTool("read"),
         StubTool("bash"),
-        StubTool("task"),
-        StubTool("ask_question"),
+        StubTool("task", capabilities = setOf(ToolCapability.SPAWNS_SUBAGENTS)),
+        StubTool("ask_question", capabilities = setOf(ToolCapability.USER_INTERACTIVE)),
         StubTool("github__create_issue", permissionCategory = "mcp"),
         StubTool("github__list_prs", permissionCategory = "mcp"),
         StubTool("slack__post_message", permissionCategory = "mcp"),

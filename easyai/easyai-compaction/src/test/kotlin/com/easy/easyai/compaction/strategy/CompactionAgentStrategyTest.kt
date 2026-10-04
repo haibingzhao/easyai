@@ -2,6 +2,7 @@ package com.easy.easyai.compaction.strategy
 
 import com.easy.easyai.compaction.model.CompactedRange
 import com.easy.easyai.compaction.model.CompactionContext
+import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.DefaultAgentService
 import com.easy.easyai.core.event.MessageListener
@@ -15,6 +16,7 @@ import com.easy.easyai.core.model.UserMessage
 import com.easy.easyai.core.model.EasyAiMessage
 import com.easy.easyai.core.prompt.PromptTemplateService
 import com.easy.easyai.core.tool.DefaultToolExecutionEngine
+import com.easy.easyai.core.tool.ToolContextProjector
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
@@ -28,6 +30,7 @@ import org.springframework.ai.chat.model.ChatResponse
 import org.springframework.ai.chat.model.Generation
 import org.springframework.ai.chat.prompt.Prompt
 import reactor.core.publisher.Flux
+import tools.jackson.databind.node.ObjectNode
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -188,8 +191,22 @@ class CompactionAgentStrategyTest {
             currentTurnId = 3
         )
 
+        // Inline stand-in for the render_visual context projector (production copy lives in
+        // easyai-tools, not reachable from easyai-compaction tests). Mirrors the elision so the
+        // fallback file-reference scan cannot surface markup tokens as bogus paths.
+        private val renderVisualProjector = ToolContextProjector { args ->
+            val mapper = SharedObjectMapper.instance
+            val node = mapper.readTree(args)
+            val code = node.get("code")
+            if (node is ObjectNode && code != null && code.isString) {
+                node.put("code", "[fragment elided]")
+                mapper.writeValueAsString(node)
+            } else args
+        }
+
         private val strategy = CompactionAgentStrategy(
-            agentServiceProvider = { throw IllegalStateException("agent unavailable") }
+            agentServiceProvider = { throw IllegalStateException("agent unavailable") },
+            contextProjectors = mapOf("render_visual" to renderVisualProjector)
         )
 
         private val messages = listOf<EasyAiMessage>(
@@ -225,6 +242,22 @@ class CompactionAgentStrategyTest {
             val output = strategy.compactWithUsage(messages, context, null)
             assertTrue(output.summary.contains("## Files Mentioned"))
             assertTrue(output.summary.contains("/src/main/kotlin/App.kt"))
+        }
+
+        @Test
+        fun `fallback does not surface render_visual fragment tokens as file references`() = runTest {
+            val visual = AssistantMessage(content = listOf(
+                TextContent("Here is the chart."),
+                ToolCallContent(
+                    id = "tc9", name = "render_visual",
+                    arguments = """{"title":"Revenue","code":"<svg><image href=\"assets/chart.svg\"/></svg>"}"""
+                )
+            ))
+            val output = strategy.compactWithUsage(listOf(visual), context, null)
+            assertFalse(
+                output.summary.contains("assets/chart.svg"),
+                "render_visual markup must not leak into Files Mentioned, got: ${output.summary}"
+            )
         }
 
         @Test

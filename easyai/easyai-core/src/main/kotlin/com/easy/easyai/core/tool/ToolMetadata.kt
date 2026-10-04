@@ -21,6 +21,16 @@ package com.easy.easyai.core.tool
  * @property alwaysInclude Whether this tool bypasses agent-level toolNames filtering.
  *   Session-scoped coordination tools (e.g., team tools) set this to true so they are
  *   always available when their builder produces them, regardless of agentDef.toolNames.
+ * @property systemPromptSegment Static guidance appended to the system prompt when this tool
+ *   is registered. Keeps prompt prefixes stable for LLM caching. Null = no segment.
+ * @property promptSegmentOrder Ascending sort key for [systemPromptSegment] within the assembled
+ *   system prompt. Declared explicitly so the prompt prefix does not drift with bean registration
+ *   order, which would silently invalidate LLM prompt caching. Ignored when there is no segment.
+ * @property capabilities Semantic capabilities provided by this tool, used by consumers
+ *   (prompt building, steering, sub-agent/team filtering, config validation) instead of
+ *   hard-coded tool names.
+ * @property contextProjector Rewrites this tool's call arguments before they are replayed
+ *   into the LLM context (e.g. eliding bulky display-only payloads). Null = arguments pass through.
  */
 data class ToolMetadata(
     val name: String,
@@ -32,5 +42,14 @@ data class ToolMetadata(
     val defaultPatternWildcard: Boolean = true,
     val skipOnResume: Boolean = false,
     val tracksFileChanges: Boolean = false,
-    val alwaysInclude: Boolean = false
-)
+    val alwaysInclude: Boolean = false,
+    val systemPromptSegment: String? = null,
+    val promptSegmentOrder: Int = DEFAULT_PROMPT_SEGMENT_ORDER,
+    val capabilities: Set<ToolCapability> = emptySet(),
+    val contextProjector: ToolContextProjector? = null
+) {
+    companion object {
+        /** Sort key for tools that declare a [ToolMetadata.systemPromptSegment] without an explicit position. */
+        const val DEFAULT_PROMPT_SEGMENT_ORDER: Int = 100
+    }
+}

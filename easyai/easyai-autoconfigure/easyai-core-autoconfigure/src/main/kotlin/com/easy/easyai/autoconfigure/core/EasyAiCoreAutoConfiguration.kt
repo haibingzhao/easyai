@@ -23,6 +23,7 @@ import com.easy.easyai.core.skill.SkillStore
 import com.easy.easyai.core.storage.ObjectStorageResolver
 import com.easy.easyai.core.tool.DefaultToolExecutionEngine
 import com.easy.easyai.core.tool.ToolBuilder
+import com.easy.easyai.core.tool.ToolContextProjector
 import com.easy.easyai.core.tool.ToolExecutionEngine
 import com.easy.easyai.core.tool.ToolFactory
 import com.easy.easyai.core.validation.InputSchemaValidator
@@ -74,8 +75,14 @@ open class EasyAiCoreAutoConfiguration(
 
     @Bean
     @ConditionalOnMissingBean
-    open fun messageConverter(objectStorageResolver: ObjectProvider<ObjectStorageResolver>): MessageConverter =
-        DefaultMessageConverter(objectStorageResolver = objectStorageResolver.getIfAvailable())
+    open fun messageConverter(
+        objectStorageResolver: ObjectProvider<ObjectStorageResolver>,
+        builders: List<ToolBuilder>
+    ): MessageConverter =
+        DefaultMessageConverter(
+            objectStorageResolver = objectStorageResolver.getIfAvailable(),
+            contextProjectors = ToolContextProjector.registryFrom(builders)
+        )
 
     @Bean
     @ConditionalOnMissingBean

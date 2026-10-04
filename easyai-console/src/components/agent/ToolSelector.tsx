@@ -1,7 +1,7 @@
 import React from 'react';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { Bot, Terminal, FileText, Search, FolderSearch, List, MessageSquare, CheckSquare, AlertTriangle } from 'lucide-react';
-import { selectableTools, toolGroupOf } from '@/constants/tools';
+import { selectableTools, subAgentBlockedToolNames, toolGroupOf } from '@/constants/tools';
 import { useWebSearchStatus } from '@/hooks/useWebSearchStatus';
 import { i18n } from '@/utils/i18n';
 
@@ -9,14 +9,13 @@ interface ToolSelectorProps {
   selectedTools: string[];
   onChange: (tools: string[]) => void;
   disabled?: boolean;
-  /** Tool names to hide from the list (e.g., tools unavailable in swarm context). */
-  excludeTools?: string[];
+  /** Tool names to hide from the list (e.g., tools unavailable in the current context). */
+  excludeTools?: Set<string>;
   /**
-   * Tool names that stay selectable but are blocked at runtime for the current
-   * agent type (e.g. task/run_swarm for SUBAGENT). Rendered de-emphasized with a
-   * "runtime unavailable" hint instead of being hidden.
+   * Render tools that stay selectable but cannot run for the current agent type (e.g. sub-agent
+   * spawning for a SUBAGENT) de-emphasized with a "runtime unavailable" hint, instead of hiding them.
    */
-  unavailableTools?: string[];
+  markRuntimeBlocked?: boolean;
 }
 
 /** Icon mapping by permissionCategory */
@@ -42,16 +41,16 @@ function getToolIcon(name: string, category?: string): React.ReactNode {
   return NAME_ICONS[name] || <Bot className="w-4 h-4" />;
 }
 
-export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onChange, disabled, excludeTools, unavailableTools }) => {
+export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onChange, disabled, excludeTools, markRuntimeBlocked }) => {
   const { tools } = useAgentStore();
   const { configured: webSearchConfigured } = useWebSearchStatus();
 
   // Auto-injected tools (alwaysInclude) are never manually selectable;
   // excludeTools removes context-specific tools (e.g. swarm-unsupported).
   const visibleTools = selectableTools(tools).filter(
-    (tool) => !excludeTools || !excludeTools.includes(tool.name)
+    (tool) => !excludeTools || !excludeTools.has(tool.name)
   );
-  const unavailableSet = new Set(unavailableTools ?? []);
+  const unavailableSet = markRuntimeBlocked ? subAgentBlockedToolNames(tools) : new Set<string>();
 
   const showWebSearchWarning = selectedTools.includes('websearch') && webSearchConfigured === false;
 

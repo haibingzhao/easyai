@@ -16,6 +16,7 @@ import com.easy.easyai.core.permission.PermissionService
 import com.easy.easyai.core.storage.ObjectStorageResolver
 import com.easy.easyai.core.team.TeamExecutionStore
 import com.easy.easyai.core.tool.ScriptEnvProvider
+import com.easy.easyai.core.tool.ToolFactory
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.repository.session.SessionExecutionService
@@ -244,6 +245,7 @@ open class WebAutoConfiguration {
     open fun configValidator(
         toolRegistry: ToolRegistry,
         agentStore: AsyncAgentStore,
+        toolFactory: ToolFactory,
         @Autowired(required = false) skillAccessResolver: SkillAccessResolver? = null,
         @Autowired(required = false) mcpClientManager: McpClientManager? = null,
         @Autowired(required = false) templateRenderer: TemplateRenderer? = null,
@@ -252,6 +254,7 @@ open class WebAutoConfiguration {
             toolRegistry = toolRegistry,
             agentStore = agentStore,
             objectMapper = com.easy.easyai.common.util.SharedObjectMapper.instance,
+            toolFactory = toolFactory,
             skillAccessResolver = skillAccessResolver,
             mcpClientManager = mcpClientManager,
             templateRenderer = templateRenderer,
@@ -289,6 +292,7 @@ open class WebAutoConfiguration {
         toolRegistry: ToolRegistry,
         agentStore: AsyncAgentStore,
         modelConfigStore: ModelProviderConfigStore,
+        toolFactory: ToolFactory,
         @Autowired(required = false) skillAccessResolver: SkillAccessResolver? = null,
         @Autowired(required = false) mcpClientManager: McpClientManager? = null,
     ): AgentBasedConfigGenerator {
@@ -300,6 +304,7 @@ open class WebAutoConfiguration {
             skillAccessResolver = skillAccessResolver,
             mcpClientManager = mcpClientManager,
             modelConfigStore = modelConfigStore,
+            toolFactory = toolFactory,
         )
     }
 }

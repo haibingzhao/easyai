@@ -94,7 +94,7 @@ class DelegateToMemberTool(
                 agentId = definition.id,
                 promptTemplate = definition.promptTemplate,
                 subAgents = emptyList()
-            ) to effectiveContext.tools.filter { it.name !in FORBIDDEN_MEMBER_TOOLS })
+            ) to effectiveContext.tools.filter { !isForbiddenForMember(it) })
 
         // 5. Create blocked-state holder + ask_leader signal tool
         val blockedRef = AtomicReference<Pair<String, String>?>(null)
@@ -117,7 +117,7 @@ class DelegateToMemberTool(
             projectPath = agentContext.projectPath,
             memoryAutoGeneration = agentContext.memoryAutoGeneration,
             customInstructions = buildMemberInstructions(definition, params.task),
-            tools = derivedTools.filter { it.name !in FORBIDDEN_MEMBER_TOOLS } + signalTool,
+            tools = derivedTools.filter { !isForbiddenForMember(it) } + signalTool,
             maxIterations = definition.maxIterations,
             parentAgentId = agentContext.agentId,
             agentRunId = toolCallId,
@@ -343,11 +343,22 @@ class DelegateToMemberTool(
             return null
         }
 
-        /** Tools never given to team members (prevent recursion and user interaction). */
-        private val FORBIDDEN_MEMBER_TOOLS = listOf(
-            "task", "ask_question",
-            "delegate_to_member", "wait_for_member_events", "resume_member"
+        /** Capabilities never given to team members (prevent recursion, nesting and user interaction). */
+        private val FORBIDDEN_MEMBER_CAPABILITIES = setOf(
+            ToolCapability.SPAWNS_SUBAGENTS,
+            ToolCapability.USER_INTERACTIVE,
+            ToolCapability.TEAM_COORDINATION
         )
+
+        /**
+         * Capability-based replacement for a hard-coded forbidden tool-name list.
+         *
+         * This is a denylist over opt-in metadata — a tool that declares no [ToolCapability] is passed
+         * through to members. See the contract on [ToolCapability].
+         */
+        @JvmStatic
+        fun isForbiddenForMember(tool: ToolDefinition): Boolean =
+            tool.capabilities.any { it in FORBIDDEN_MEMBER_CAPABILITIES }
 
         /**
          * Build member instructions: role definition + final response requirements.

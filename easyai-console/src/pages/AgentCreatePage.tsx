@@ -14,7 +14,7 @@ import { type VariableGroup } from '@/components/agent/VariableDropdown';
 import { AiConfigPanel } from '@/components/ai/AiConfigPanel';
 import type { AgentCreateRequest, AgentType, AgentEnv, McpBindingDto, InlineAgentSpec, TemplateValidationError } from '@/types/agent';
 import { agentService } from '@/services/agent-service';
-import { SWARM_EXCLUDED_TOOLS, SUBAGENT_BLOCKED_TOOLS, TEAM_EXCLUDED_TOOLS } from '@/constants/tools';
+import { swarmExcludedToolNames, teamExcludedToolNames } from '@/constants/tools';
 import { i18n } from '@/utils/i18n';
 import { useResizable } from '@/hooks/useResizable';
 
@@ -220,20 +220,27 @@ export const AgentCreatePage: React.FC = () => {
     []
   );
 
+  // Tools the swarm runtime does not support for worker agents. Kept in a ref for the
+  // same staleness reason as above: handleAiApply is memoized without `tools` in its deps.
+  const swarmExcludedNames = useMemo(() => swarmExcludedToolNames(tools), [tools]);
+  const swarmExcludedRef = useRef(swarmExcludedNames);
+  swarmExcludedRef.current = swarmExcludedNames;
+
   // Tools hidden from the selection list for the current context/agent type:
-  // swarm-unsupported tools in SWARM context, plus task for TEAM (always-empty
-  // subAgent whitelist makes task unusable for a team leader).
-  const excludedTools = useMemo(() => [
-    ...(isSwarmContext ? SWARM_EXCLUDED_TOOLS : []),
-    ...(agentType === 'TEAM' ? TEAM_EXCLUDED_TOOLS : []),
-  ], [isSwarmContext, agentType]);
+  // swarm-unsupported tools in SWARM context, plus tools a TEAM leader can never use
+  // (its subAgent whitelist is always empty).
+  const excludedTools = useMemo(() => {
+    const excluded = new Set<string>();
+    if (isSwarmContext) swarmExcludedNames.forEach(name => excluded.add(name));
+    if (agentType === 'TEAM') teamExcludedToolNames(tools).forEach(name => excluded.add(name));
+    return excluded;
+  }, [isSwarmContext, agentType, swarmExcludedNames, tools]);
 
   // Drop newly-excluded tools when context/type changes (e.g. task after switching
   // to TEAM), so hidden tools are not silently persisted.
   useEffect(() => {
-    if (excludedTools.length === 0) return;
-    const excluded = new Set(excludedTools);
-    setSelectedTools(prev => prev.filter(t => !excluded.has(t)));
+    if (excludedTools.size === 0) return;
+    setSelectedTools(prev => prev.filter(t => !excludedTools.has(t)));
   }, [excludedTools]);
 
   // Re-strip auto-injected tools once the tool list finishes loading. The edit-load
@@ -283,7 +290,7 @@ export const AgentCreatePage: React.FC = () => {
         ? config.agentContext : agentContext;
       const rawTools = config.toolNames as string[];
       setSelectedTools(stripAutoInjected(effectiveContext === 'SWARM'
-        ? rawTools.filter(t => !SWARM_EXCLUDED_TOOLS.includes(t))
+        ? rawTools.filter(t => !swarmExcludedRef.current.has(t))
         : rawTools));
     }
     if (Array.isArray(config.subAgentIds)) setSelectedSubAgents(config.subAgentIds as string[]);
@@ -726,7 +733,7 @@ export const AgentCreatePage: React.FC = () => {
                 onChange={setSelectedTools}
                 disabled={readOnly}
                 excludeTools={excludedTools}
-                unavailableTools={agentType === 'SUBAGENT' ? SUBAGENT_BLOCKED_TOOLS : undefined}
+                markRuntimeBlocked={agentType === 'SUBAGENT'}
               />
             )}
 

@@ -129,7 +129,7 @@ class ResumeMemberTool(
             projectPath = agentContext.projectPath,
             memoryAutoGeneration = agentContext.memoryAutoGeneration,
             customInstructions = DelegateToMemberTool.buildMemberInstructions(definition, blocked.originalAssignment),
-            tools = derivedTools.filter { it.name !in FORBIDDEN_MEMBER_TOOLS } + signalTool,
+            tools = derivedTools.filter { !DelegateToMemberTool.isForbiddenForMember(it) } + signalTool,
             maxIterations = definition.maxIterations,
             parentAgentId = agentContext.agentId,
             agentRunId = toolCallId,
@@ -328,12 +328,5 @@ class ResumeMemberTool(
         } catch (e: Exception) {
             logger.warn("Failed to mark execution {} as RESUMED: {}", originalExecutionId, e.message)
         }
-    }
-
-    companion object {
-        private val FORBIDDEN_MEMBER_TOOLS = listOf(
-            "task", "ask_question",
-            "delegate_to_member", "wait_for_member_events", "resume_member"
-        )
     }
 }

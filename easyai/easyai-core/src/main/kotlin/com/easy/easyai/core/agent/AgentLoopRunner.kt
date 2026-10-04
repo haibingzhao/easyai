@@ -7,6 +7,7 @@ import com.easy.easyai.core.model.*
 import com.easy.easyai.core.prompt.PromptContext
 import com.easy.easyai.core.resilience.LlmCircuitBreakerRegistry
 import com.easy.easyai.core.tool.EasyAiToolCallback
+import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
@@ -473,6 +474,10 @@ internal class AgentLoopRunner(
             instructions = context.instructions,
             cwd = context.projectPath?.toString(),
             tools = toolsData,
+            toolPromptSegments = context.tools
+                .sortedBy { it.promptSegmentOrder }
+                .mapNotNull { it.systemPromptSegment },
+            dynamicSubAgents = context.tools.any { ToolCapability.SPAWNS_SUBAGENTS in it.capabilities },
             outputSchema = context.outputSchema,
             outputSchemaMultiTurn = context.outputSchemaMultiTurn,
             inputVariables = context.inputVariables,

@@ -43,6 +43,17 @@ The script executes purely in memory; the sandbox rejects file, network, and pro
 operations at compile time.
 Output is the value of the last expression evaluated."""
 
+/** Static guidance for on-demand time access via the calc tool (cache-stable). */
+private const val TIME_ACCESS_SEGMENT = """
+## Current Time
+
+The current date and time is NOT included in this prompt to keep it stable for caching.
+When you need the current date, time, or timezone (e.g. to report today's date, reason about deadlines, or compute time differences), use the `calc` tool with a script such as:
+ZonedDateTime.now().toString()
+
+This returns the current timestamp with the system's local timezone, e.g. 2026-08-09T10:30:45+08:00[Asia/Shanghai].
+"""
+
 /**
  * Builder for [ScriptCalcTool].
  *
@@ -57,7 +68,9 @@ class ScriptCalcToolBuilder : ToolBuilder {
         permissionCategory = "calc",
         isDefaultTool = true,
         tracksFileChanges = false,
-        patternKeys = emptyList()
+        patternKeys = emptyList(),
+        systemPromptSegment = TIME_ACCESS_SEGMENT.trimIndent(),
+        promptSegmentOrder = 10
     )
 
     override val defaultPermissionRules = listOf(

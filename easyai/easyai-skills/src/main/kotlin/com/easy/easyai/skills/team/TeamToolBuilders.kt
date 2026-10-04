@@ -6,6 +6,7 @@ import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.team.TeamExecutionStore
 import com.easy.easyai.core.team.TeamMemberHistoryLoader
 import com.easy.easyai.core.tool.ToolBuilder
+import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import org.springframework.context.annotation.Lazy
@@ -77,6 +78,7 @@ class DelegateToMemberToolBuilder(
         permissionCategory = "team",
         isDefaultTool = false,
         alwaysInclude = true,
+        capabilities = setOf(ToolCapability.TEAM_COORDINATION),
     )
 
     override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
@@ -120,6 +122,7 @@ class WaitForMemberEventsToolBuilder(
         permissionCategory = "team",
         isDefaultTool = false,
         alwaysInclude = true,
+        capabilities = setOf(ToolCapability.TEAM_COORDINATION),
     )
 
     override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
@@ -153,6 +156,7 @@ class ResumeMemberToolBuilder(
         permissionCategory = "team",
         isDefaultTool = false,
         alwaysInclude = true,
+        capabilities = setOf(ToolCapability.TEAM_COORDINATION),
     )
 
     override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {

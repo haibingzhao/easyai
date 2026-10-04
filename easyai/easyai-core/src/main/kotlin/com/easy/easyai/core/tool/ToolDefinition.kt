@@ -123,6 +123,34 @@ interface ToolDefinition {
      */
     val alwaysInclude: Boolean get() = false
 
+    /**
+     * Static guidance appended to the system prompt when this tool is registered.
+     * Kept as fixed text so the prompt prefix stays stable for LLM caching.
+     * Default: null (no segment).
+     */
+    val systemPromptSegment: String? get() = null
+
+    /**
+     * Ascending sort key for [systemPromptSegment] within the assembled system prompt.
+     * Declared explicitly so the prompt prefix does not drift with tool registration order,
+     * which would silently invalidate LLM prompt caching.
+     * Default: [ToolMetadata.DEFAULT_PROMPT_SEGMENT_ORDER].
+     */
+    val promptSegmentOrder: Int get() = ToolMetadata.DEFAULT_PROMPT_SEGMENT_ORDER
+
+    /**
+     * Semantic capabilities provided by this tool. Consumers (prompt building, steering
+     * hints, sub-agent/team tool filtering) match on these instead of tool names.
+     * Default: none.
+     */
+    val capabilities: Set<ToolCapability> get() = emptySet()
+
+    /**
+     * Rewrites this tool's call arguments before they are replayed into the LLM context
+     * (e.g. eliding bulky display-only payloads). Default: null (arguments pass through).
+     */
+    val contextProjector: ToolContextProjector? get() = null
+
     suspend fun execute(
         agentContext: AgentContext,
         toolCallId: String,
@@ -154,6 +182,10 @@ abstract class BaseToolDefinition(
     override val skipOnResume: Boolean get() = metadata.skipOnResume
     override val tracksFileChanges: Boolean get() = metadata.tracksFileChanges
     override val alwaysInclude: Boolean get() = metadata.alwaysInclude
+    override val systemPromptSegment: String? get() = metadata.systemPromptSegment
+    override val promptSegmentOrder: Int get() = metadata.promptSegmentOrder
+    override val capabilities: Set<ToolCapability> get() = metadata.capabilities
+    override val contextProjector: ToolContextProjector? get() = metadata.contextProjector
 
     protected abstract fun parameterType(): Class<*>
 

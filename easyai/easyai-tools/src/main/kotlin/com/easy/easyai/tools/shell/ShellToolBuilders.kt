@@ -7,6 +7,7 @@ import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.permission.ToolPermissionEvaluator
 import com.easy.easyai.core.tool.ScriptEnvProvider
 import com.easy.easyai.core.tool.ToolBuilder
+import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import org.springframework.beans.factory.annotation.Autowired
@@ -45,7 +46,8 @@ Parameters:
         permissionCategory = "shell",
         tracksFileChanges = true,
         uiRenderer = "bash",
-        patternKeys = listOf("command", "cmd")
+        patternKeys = listOf("command", "cmd"),
+        capabilities = setOf(ToolCapability.SHELL_EXECUTION)
     )
     override val permissionEvaluator = ToolPermissionEvaluator { ctx ->
         ctx.sharedEvaluator.evaluateShellPermission(ctx.rules, ctx.projectPath, ctx.arguments, ctx.userId)

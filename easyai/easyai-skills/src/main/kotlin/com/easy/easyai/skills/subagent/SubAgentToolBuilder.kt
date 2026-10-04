@@ -4,6 +4,7 @@ import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.permission.PermissionAction
 import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.tool.ToolBuilder
+import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import org.springframework.context.annotation.Lazy
@@ -39,7 +40,8 @@ class SubAgentToolBuilder(
             "to inherit all your resources of that kind; an explicit list grants a subset of your own " +
             "(unknown names are rejected); an empty array grants none. " +
             "The sub-agent runs independently and returns its result.",
-        permissionCategory = "subagent"
+        permissionCategory = "subagent",
+        capabilities = setOf(ToolCapability.SPAWNS_SUBAGENTS)
     )
     override val defaultPermissionRules = listOf(
         PermissionRule("tool.execute.subagent", "*", PermissionAction.ALLOW)

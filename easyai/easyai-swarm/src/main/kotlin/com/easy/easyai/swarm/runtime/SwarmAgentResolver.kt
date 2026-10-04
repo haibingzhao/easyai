@@ -10,6 +10,7 @@ import com.easy.easyai.core.agent.AgentToolConfig
 import com.easy.easyai.core.agent.AsyncAgentStore
 import com.easy.easyai.core.agent.SubAgentContextResolver
 import com.easy.easyai.core.agent.TargetType
+import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.swarm.model.SwarmAgentSpec
 import com.easy.easyai.swarm.model.SwarmMcpBinding
@@ -100,8 +101,8 @@ class SwarmAgentResolver(
         val (resolvedContext, resolvedTools) = contextResolver.resolve(agentDef, parentContext)
 
         // 5. Build final worker context with swarm-specific overrides
-        // Swarm workers have no skills — clear skills data and remove load_skill tool
-        val swarmTools = resolvedTools.filter { it.name != "load_skill" }
+        // Swarm workers have no skills — clear skills data and remove skill-loading tools
+        val swarmTools = resolvedTools.filter { ToolCapability.SKILL_LOADING !in it.capabilities }
 
         // Determine effective system prompt: support stacking Agent + Task prompts
         // Pre-render systemPromptTemplate with flat variables (userVars + inputFromVars)
