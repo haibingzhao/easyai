@@ -51,12 +51,23 @@ class ObjectStorageException(
  * `Dispatchers.IO`; all methods here are `suspend` so callers never block a event-loop thread.
  *
  * Failure contract: implementations throw [ObjectStorageException]; a missing object is a
- * `null` result from [head]/[get], not an exception.
+ * `null` result from [head]/[get] or an empty result from [listKeys], not an exception.
  */
 interface ObjectStorage {
 
     /** Stat an object; null when it does not exist. */
     suspend fun head(key: String): ObjectMeta?
+
+    /**
+     * Enumerate every key stored under [prefix], recursively across directory separators. A blank
+     * prefix names the whole namespace.
+     *
+     * A prefix holding no object is an empty result, not an exception — same contract as [head].
+     * Callers verifying many keys in one namespace should prefer this over one [head] per key:
+     * implementations fetch a page at a time and one call costs a single round trip for a
+     * namespace that fits in a page.
+     */
+    suspend fun listKeys(prefix: String): Set<String>
 
     /** Read an object fully; null when it does not exist. */
     suspend fun get(key: String): ObjectContent?

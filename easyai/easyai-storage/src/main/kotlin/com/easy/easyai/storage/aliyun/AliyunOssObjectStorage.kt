@@ -3,6 +3,7 @@ package com.easy.easyai.storage.aliyun
 import com.aliyun.oss.OSS
 import com.aliyun.oss.OSSException
 import com.aliyun.oss.model.GeneratePresignedUrlRequest
+import com.aliyun.oss.model.ListObjectsRequest
 import com.aliyun.oss.model.ObjectMetadata
 import com.easy.easyai.core.storage.ObjectMeta
 import com.easy.easyai.core.storage.ObjectContent
@@ -43,6 +44,28 @@ class AliyunOssObjectStorage(
             )
         } catch (e: OSSException) {
             if (isNotFound(e)) null else throw ObjectStorageException("OSS head failed for $key: ${e.message}", e)
+        }
+    }
+
+    override suspend fun listKeys(prefix: String): Set<String> = withContext(Dispatchers.IO) {
+        val keys = mutableSetOf<String>()
+        try {
+            var marker: String? = null
+            var truncated = true
+            while (truncated) {
+                // A null delimiter keeps the listing recursive: every key under the prefix, not
+                // just its first directory level.
+                val listing = client.listObjects(ListObjectsRequest(bucket, prefix, marker, null, LIST_PAGE_SIZE))
+                listing.objectSummaries.forEach { keys += it.key }
+                // OSS only fills nextMarker for delimited listings, so the last key of the page is
+                // the cursor that keeps a truncated walk moving forward.
+                marker = listing.nextMarker?.takeIf { it.isNotBlank() }
+                    ?: listing.objectSummaries.lastOrNull()?.key
+                truncated = listing.isTruncated && marker != null
+            }
+            keys
+        } catch (e: Exception) {
+            throw ObjectStorageException("OSS list failed for prefix $prefix: ${e.message}", e)
         }
     }
 
@@ -127,5 +150,8 @@ class AliyunOssObjectStorage(
     private companion object {
         const val OSS_ERROR_NO_SUCH_KEY = "NoSuchKey"
         const val OSS_ERROR_NOT_FOUND = "NotFound"
+
+        /** OSS accepts up to 1000 keys per listing request; asking for the cap minimizes round trips. */
+        const val LIST_PAGE_SIZE = 1000
     }
 }

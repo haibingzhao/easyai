@@ -50,8 +50,10 @@ internal class RefreshSkillsTool(
             registry.rescan(setOf(SkillPaths.ownerRoot(config, viewer)))
         }
         logger.info(
-            "refresh_skills: note={} owners={} claimed={} pushed={} restored={} submitted={} failed={}",
+            "refresh_skills: note={} owners={} claimed={} pushed={} restored={} backfilled={} " +
+                "unclaimed={} submitted={} failed={}",
             args["note"], owner, outcome?.sync?.claimed, outcome?.sync?.pushed, outcome?.sync?.restored,
+            outcome?.sync?.backfilled, outcome?.sync?.unclaimed,
             outcome?.summary?.submitted, outcome?.summary?.failed
         )
         return ToolResult(content = listOf(TextContent(report(delta, outcome))))
@@ -69,7 +71,13 @@ internal class RefreshSkillsTool(
             } else {
                 appendLine("For owners ${outcome.owners}: claimed=${sync.claimed}, pushed=${sync.pushed} " +
                     "(local content re-uploaded to the package store), restored=${sync.restored}, " +
+                    "backfilled=${sync.backfilled} (packages that were absent from the current " +
+                    "storage re-uploaded from unchanged local content), " +
                     "skipped=${sync.skipped}, failed=${sync.failed}.")
+                if (sync.unclaimed > 0) {
+                    appendLine("Shared-layer directories left unclaimed=${sync.unclaimed}: the system root only " +
+                        "installs skills that already have a catalog row, so hand-placed files there stay private.")
+                }
             }
             val summary = outcome.summary
             if (summary == null) {

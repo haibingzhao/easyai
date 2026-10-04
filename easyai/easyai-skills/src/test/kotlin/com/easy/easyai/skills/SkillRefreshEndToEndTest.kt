@@ -42,15 +42,41 @@ class SkillRefreshEndToEndTest {
         @Test
         fun `unclaimed directories are claimed and confirmed for their owner root`() = runTest {
             val chain = SkillSyncFixture(temp)
-            chain.write("shared", owner = SkillModelFixture.SYSTEM)
-            assertNotNull(chain.refresher.refreshFor("system").summary)
-            assertNotNull(chain.refresher.refreshFor("alice").summary)
+            chain.write("private", owner = "alice")
+            val result = chain.refresher.refreshFor("alice")
             val rows = chain.catalog.allRows()
+            assertEquals(1, result.sync?.claimed)
             assertEquals(1, rows.size)
             val row = rows.single()
-            assertEquals("system", row.userId)
+            assertEquals("alice", row.userId)
             assertEquals(SkillSyncState.SYNCED, row.syncState)
             assertEquals(row.checksum, row.indexedChecksum)
+        }
+
+        @Test
+        fun `a hand-placed shared directory stays invisible until the system owner adds it`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            val file = chain.write("shared", owner = SkillModelFixture.SYSTEM)
+            val access = SkillAccessResolver(chain.registry, chain.catalog)
+
+            // Every request sweeps the shared root, so this pass used to turn the directory into a
+            // skill the whole machine could load.
+            chain.refresher.refreshFor("alice")
+
+            assertTrue(chain.catalog.allRows().isEmpty(), "the shared root creates no rows from disk")
+            assertTrue(
+                access.listScopedSkills("alice").isEmpty(),
+                "a registry entry without a catalog row must stay hidden"
+            )
+
+            val added = chain.refresher.addSkill(SkillModelFixture.SYSTEM, "shared", file.parent)
+            assertTrue(added is SkillAddResult.Added, "got: $added")
+            chain.refresher.refreshFor("alice")
+
+            val visible = access.listScopedSkills("alice")
+            assertEquals(listOf("shared"), visible.map { it.skill.name })
+            assertTrue(visible.single().shared)
+            assertEquals(SkillSyncState.SYNCED, visible.single().catalogEntry!!.syncState)
         }
 
         @Test
@@ -361,8 +387,21 @@ internal class TestSkillCatalog : AsyncSkillCatalogStore {
 internal class TestObjectStorage : ObjectStorage {
     val objects = LinkedHashMap<String, ObjectContent>()
     var failPut = false
+    var failList = false
+    val listedPrefixes = mutableListOf<String>()
+    var headCalls = 0
 
-    override suspend fun head(key: String): ObjectMeta? = objects[key]?.meta
+    override suspend fun head(key: String): ObjectMeta? {
+        headCalls++
+        return objects[key]?.meta
+    }
+
+    override suspend fun listKeys(prefix: String): Set<String> {
+        check(!failList) { "listing unavailable" }
+        listedPrefixes += prefix
+        return objects.keys.filter { it.startsWith(prefix) }.toSet()
+    }
+
     override suspend fun get(key: String): ObjectContent? = objects[key]
     override suspend fun put(key: String, bytes: ByteArray, contentType: String): ObjectMeta {
         check(!failPut) { "storage unavailable" }

@@ -38,6 +38,8 @@ class FetchMediaToolTest {
     private class InMemoryStorage : ObjectStorage {
         val objects = mutableMapOf<String, ObjectContent>()
         override suspend fun head(key: String): ObjectMeta? = objects[key]?.meta
+        override suspend fun listKeys(prefix: String): Set<String> =
+            objects.keys.filter { it.startsWith(prefix) }.toSet()
         override suspend fun get(key: String): ObjectContent? = objects[key]
         override suspend fun put(key: String, bytes: ByteArray, contentType: String): ObjectMeta {
             val meta = ObjectMeta(key = key, size = bytes.size.toLong())
