@@ -258,6 +258,7 @@ export function getToolRowSummary(toolName: string, argsString: string): string 
     case 'ls':
       return singleLine(getSearchPath(argsString));
     default:
-      return singleLine(argsString).slice(0, 120);
+      // Full args for the hover tooltip; visual clipping is handled by CSS truncate
+      return singleLine(argsString);
   }
 }

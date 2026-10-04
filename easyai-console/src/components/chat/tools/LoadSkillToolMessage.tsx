@@ -13,6 +13,7 @@ import remarkGfm from 'remark-gfm';
 import { Sparkles, CheckCircle2, AlertCircle, ChevronDown } from 'lucide-react';
 import type { ToolMessageProps } from './types';
 import { extractOutput, getToolRowSummary } from './parsers';
+import { ToolTooltip } from '@/components/agent/ToolItem';
 import { ToolRowHeader } from './ToolRowHeader';
 import { useStreamingRowExpand } from './useStreamingRowExpand';
 import { markdownCodeComponents } from '../markdownCodeComponents';
@@ -98,19 +99,20 @@ export function LoadSkillToolMessage({
       >
         <Sparkles className="size-4 shrink-0 text-violet-500 dark:text-violet-400" />
         <span className="text-sm font-medium shrink-0">Load Skill</span>
-        <span
-          className="text-sm text-violet-600 dark:text-violet-400 font-medium truncate min-w-0 flex-1"
-          title={skillName || undefined}
-        >
-          {skillName || toolCall.args}
-        </span>
+        <ToolTooltip name={skillName || toolCall.args} className="min-w-0 flex-1">
+          <span className="block text-sm text-violet-600 dark:text-violet-400 font-medium truncate">
+            {skillName || toolCall.args}
+          </span>
+        </ToolTooltip>
         {/* Status indicator */}
         {isStreaming ? (
           <span className="size-2 shrink-0 rounded-full bg-muted-foreground animate-pulse" />
         ) : isError ? (
-          <span className="shrink-0 cursor-help" title={output || 'Failed'}>
-            <AlertCircle className="size-4 text-destructive" />
-          </span>
+          <ToolTooltip description={output || 'Failed'}>
+            <span className="shrink-0 cursor-help">
+              <AlertCircle className="size-4 text-destructive" />
+            </span>
+          </ToolTooltip>
         ) : (
           <CheckCircle2 className="size-4 shrink-0 text-green-500" />
         )}

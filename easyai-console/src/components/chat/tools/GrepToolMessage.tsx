@@ -6,6 +6,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Search, ChevronDown } from 'lucide-react';
 import type { ToolMessageProps } from './types';
 import { parseGrepOutput, extractOutput, getGrepPattern, getToolRowSummary } from './parsers';
+import { ToolTooltip } from '@/components/agent/ToolItem';
 import { getToolDisplayName } from './icons';
 import { ToolRowHeader } from './ToolRowHeader';
 import { useNavStore } from '@/services/stores/nav-store';
@@ -100,26 +101,26 @@ export function GrepToolMessage({
                   ? match.filePath
                   : workDir ? `${workDir}/${match.filePath}` : match.filePath;
                 return (
-                  <div 
-                    key={index} 
-                    className="text-sm font-mono p-2 bg-muted rounded hover:bg-muted/80"
-                    title={match.content}
-                  >
-                    <span
-                      className="text-blue-600 cursor-pointer hover:underline"
-                      onClick={(e) => { e.stopPropagation(); openFile(absolutePath); }}
+                  <ToolTooltip key={index} name={match.content}>
+                    <div
+                      className="text-sm font-mono p-2 bg-muted rounded hover:bg-muted/80"
                     >
-                      {match.filePath}
-                    </span>
-                    {match.lineNum > 0 && (
-                      <span className="text-muted-foreground">:{match.lineNum}</span>
-                    )}
-                    {match.content && (
-                      <span className="text-muted-foreground block truncate">
-                        {match.content}
+                      <span
+                        className="text-blue-600 cursor-pointer hover:underline"
+                        onClick={(e) => { e.stopPropagation(); openFile(absolutePath); }}
+                      >
+                        {match.filePath}
                       </span>
-                    )}
-                  </div>
+                      {match.lineNum > 0 && (
+                        <span className="text-muted-foreground">:{match.lineNum}</span>
+                      )}
+                      {match.content && (
+                        <span className="text-muted-foreground block truncate">
+                          {match.content}
+                        </span>
+                      )}
+                    </div>
+                  </ToolTooltip>
                 );
               })}
             </div>

@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { ToolCallStatus } from '@/types/socket-event';
 import { getToolDisplayName, getToolIcon } from './icons';
 import { i18n } from '@/utils/i18n';
+import { ToolTooltip } from '@/components/agent/ToolItem';
 
 interface ToolRowHeaderProps {
   toolName: string;
@@ -79,7 +80,9 @@ export function ToolRowHeader({ toolName, status, summary, expanded, onToggle, e
       {summary && (
         <>
           <span className="text-muted-foreground/50 shrink-0">·</span>
-          <span className="text-xs text-muted-foreground font-mono truncate" title={summary}>{summary}</span>
+          <ToolTooltip name={toolName} description={summary} className="min-w-0">
+            <span className="block text-xs text-muted-foreground font-mono truncate">{summary}</span>
+          </ToolTooltip>
         </>
       )}
     </button>
