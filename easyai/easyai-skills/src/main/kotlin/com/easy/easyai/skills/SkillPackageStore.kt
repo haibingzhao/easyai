@@ -26,8 +26,21 @@ class SkillPackageStore(
     }
 
     /** `skills/{owner}/{name}.zip` — names are sanitized; the catalog row is authoritative for the key. */
-    fun keyFor(owner: String, name: String): String =
-        "$KEY_DIR/${SkillPaths.safeSegment(owner)}/${SkillPaths.safeSegment(name)}$ZIP_SUFFIX"
+    fun keyFor(owner: String, name: String): String = packagePrefix(owner) + SkillPaths.safeSegment(name) + ZIP_SUFFIX
+
+    /** The namespace holding [owner]'s packages, for one listing instead of a HEAD per row. */
+    fun packagePrefix(owner: String): String = "$KEY_DIR/${SkillPaths.safeSegment(owner)}/"
+
+    /**
+     * The package keys the storage [owner] resolves to right now actually holds. One request per
+     * sync pass covers every row, which is why [hasPackage] is only the fallback.
+     */
+    suspend fun presentPackageKeys(owner: String): Set<String> =
+        storageFor(owner).listKeys(packagePrefix(owner))
+
+    /** Whether the storage [owner] resolves to right now already holds [objectKey]. */
+    suspend fun hasPackage(owner: String, objectKey: String): Boolean =
+        storageFor(owner).head(requirePackageKey(objectKey)) != null
 
     /** Delete the package, best-effort: the catalog row has already been removed when this runs. */
     suspend fun deleteQuietly(owner: String, objectKey: String) {

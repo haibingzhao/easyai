@@ -35,6 +35,35 @@ class LocalDirObjectStorage(
         )
     }
 
+    /**
+     * A prefix is matched as a key string, exactly as an object store matches one: the walk starts
+     * at the prefix itself only when it ends in a separator and names a directory, otherwise at its
+     * parent, so keys that merely share the prefix still come back. A blank prefix is the namespace.
+     */
+    override suspend fun listKeys(prefix: String): Set<String> = withContext(Dispatchers.IO) {
+        val base = root.toAbsolutePath().normalize()
+        if (prefix.isBlank()) return@withContext walkKeys(base, base, "")
+        val resolved = resolveSafe(prefix) ?: return@withContext emptySet()
+        val start = if (prefix.endsWith("/") && Files.isDirectory(resolved)) resolved
+        else resolved.parent ?: return@withContext emptySet()
+        walkKeys(base, start, prefix)
+    }
+
+    private fun walkKeys(base: Path, start: Path, prefix: String): Set<String> {
+        if (!Files.isDirectory(start)) return emptySet()
+        return try {
+            Files.walk(start).use { stream ->
+                stream.filter { Files.isRegularFile(it) }
+                    .map { base.relativize(it).toString().replace('\\', '/') }
+                    .filter { it.startsWith(prefix.trimStart('/')) }
+                    .toList()
+                    .toSet()
+            }
+        } catch (e: Exception) {
+            throw ObjectStorageException("Failed to list objects under $prefix: ${e.message}", e)
+        }
+    }
+
     override suspend fun get(key: String): ObjectContent? = withContext(Dispatchers.IO) {
         val path = resolveSafe(key) ?: return@withContext null
         if (!Files.isRegularFile(path)) return@withContext null

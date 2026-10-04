@@ -15,8 +15,9 @@ import kotlin.time.Duration.Companion.milliseconds
  * keeps the retrieval index converged with a bounded background retry pass.
  *
  * Owners come from the catalog's distinct `user_id` values plus the shared `system` layer, which is
- * swept unconditionally — a fresh machine with an empty catalog still claims hand-placed skills under
- * its owner root at startup. Never from a guess about who is logged in.
+ * swept unconditionally so its rows stay installed on disk. Hand-placed directories only become
+ * skills inside a personal root — never in the shared layer, which exists purely through its rows.
+ * Never from a guess about who is logged in.
  * Each gets the same [SkillRefreshService.ensureSynced] pass a first request would trigger,
  * so a machine that was offline while a user's skills changed restores them from object storage
  * before anybody asks. The retry pass drives [SkillRefreshService.reconcilePending]: the catalog's
@@ -58,8 +59,8 @@ class SkillIndexStartupRunner(
     }
 
     private suspend fun syncKnownOwners() {
-        // The shared layer always exists — even with an empty or absent catalog, its owner root
-        // must be swept so directories placed on disk by hand get claimed at startup.
+        // The shared layer is always swept: its rows must be restored or backfilled even on a
+        // machine where nobody has logged in yet. Publishing a new shared skill is not part of it.
         val owners = (catalog?.listDistinctUserIds().orEmpty() + SkillCatalogEntry.DEFAULT_USER_ID).distinct()
         logger.info("Startup skill sync for {} owner(s)", owners.size)
         owners.forEach { refreshService.ensureSynced(it) }

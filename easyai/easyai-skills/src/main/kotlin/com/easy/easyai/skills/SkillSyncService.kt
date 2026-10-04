@@ -21,9 +21,17 @@ data class SkillSyncOutcome(
     val owners: List<String> = emptyList(),
     val claimed: Int = 0,
     val pushed: Int = 0,
+
+    /** Rows whose working copy was missing and came back from their package. */
     val restored: Int = 0,
+
+    /** Rows whose working copy is current but whose package was absent from the resolved storage. */
+    val backfilled: Int = 0,
     val skipped: Int = 0,
     val failed: Int = 0,
+
+    /** Shared-layer directories with no catalog row, deliberately left unclaimed. */
+    val unclaimed: Int = 0,
     val delta: RegistryDelta? = null
 )
 
@@ -53,11 +61,16 @@ sealed interface SkillUpload {
  * For one owner: DB rows whose directory is missing are restored from the zip at `object_key`
  * (checksum-verified before the files become visible); directories whose digest drifted from the
  * row are treated as the fresher copy and pushed back (re-pack → upload → CAS `updateContent`);
- * directories no row claims are packed and claimed. Everything runs under a per-owner mutex so
+ * directories no row claims are packed and claimed **in a personal root** — the shared `system`
+ * layer exists only through its rows, so a hand-placed directory there is reported and left alone;
+ * a row whose digest matches its directory but
+ * whose object is absent from the storage the owner resolves to *now* is re-uploaded from that
+ * directory, so content claimed before object storage existed still reaches the bucket.
+ * Everything runs under a per-owner mutex so
  * login syncs, lazy first-access syncs, `addSkill` and `deleteSkill` for one owner serialize.
  *
- * Lock discipline: the `…Locked`-style primitives ([pushContent], [claimPackage], [restore]) do
- * NOT take the owner lock — callers that need serialization wrap them in [withOwnerLock]. The
+ * Lock discipline: the `…Locked`-style primitives ([pushContent], [backfillPackage], [claimPackage],
+ * [restore]) do NOT take the owner lock — callers that need serialization wrap them in [withOwnerLock]. The
  * indexer holds the same lock across a reconcile, so its content writes go through these
  * primitives directly and can never interleave with a sync pass.
  */
@@ -86,17 +99,23 @@ class SkillSyncService(
         val roots = owners.map { SkillPaths.ownerRoot(config, it) }.toSet()
         if (catalog == null) {
             // No catalog to reconcile against: keep the in-memory view fresh from disk only.
-            return SkillSyncOutcome(owners, delta = registry?.rescan(roots) ?: RegistryDelta())
+            return SkillSyncOutcome(owners = owners, delta = registry?.rescan(roots) ?: RegistryDelta())
         }
-        var claimed = 0; var pushed = 0; var restored = 0; var skipped = 0; var failed = 0
+        var claimed = 0; var pushed = 0; var restored = 0; var backfilled = 0; var skipped = 0; var failed = 0
+        var unclaimed = 0
         for (o in owners) {
             val partial = withOwnerLock(o) { syncOwner(o) }
             claimed += partial.claimed; pushed += partial.pushed; restored += partial.restored
-            skipped += partial.skipped; failed += partial.failed
+            backfilled += partial.backfilled; skipped += partial.skipped; failed += partial.failed
+            unclaimed += partial.unclaimed
         }
         // Publication last: restored, pushed and claimed directories become registry entries here.
         val delta = registry?.rescan(roots)
-        return SkillSyncOutcome(owners, claimed, pushed, restored, skipped, failed, delta)
+        return SkillSyncOutcome(
+            owners = owners, claimed = claimed, pushed = pushed, restored = restored,
+            backfilled = backfilled, skipped = skipped, failed = failed,
+            unclaimed = unclaimed, delta = delta
+        )
     }
 
     /**
@@ -311,6 +330,33 @@ class SkillSyncService(
         return store.updateContent(row.id, row.revision, snapshot.checksum, snapshot.version, enable)
     }
 
+    /**
+     * Re-upload the package of a row whose working copy is current but whose object is missing from
+     * the storage this owner resolves to **now** — the shape left behind when object storage is
+     * configured after the skills were claimed into another backend. The bytes come from the
+     * directory whose digest already equals `row.checksum`, so the row needs no write and the index
+     * projection stays untouched. Returns false when the object is already there.
+     *
+     * [presentKeys] is the pass's one listing of the owner's package namespace; null means it was
+     * unavailable and this row falls back to a HEAD. Caller holds the owner lock.
+     */
+    internal suspend fun backfillPackage(
+        owner: String, installDir: Path, row: SkillCatalogEntry, presentKeys: Set<String>?
+    ): Boolean {
+        val key = row.objectKey.ifBlank { packages.keyFor(owner, row.name) }
+        val present = if (presentKeys != null && key.startsWith(packages.packagePrefix(owner))) {
+            key in presentKeys
+        } else {
+            // Not covered by the listing — it failed, or this key sits outside the namespace — so probe the key.
+            packages.hasPackage(owner, key)
+        }
+        if (present) return false
+        val bytes = SkillPackages.pack(installDir, config.packageMaxBytes)
+        packages.storageFor(owner).put(key, bytes, ZIP_CONTENT_TYPE)
+        logger.info("Skill package {} was missing; re-uploaded it for owner '{}'", key, owner)
+        return true
+    }
+
     /** Pack the snapshot's directory, upload it, then insert the row; conflict never overwrites. Caller holds the owner lock. */
     internal suspend fun claimPackage(owner: String, root: Path, snapshot: SkillSnapshot): PackageClaim {
         val store = catalog ?: return PackageClaim.Failed("Skill catalog is unavailable")
@@ -361,8 +407,21 @@ class SkillSyncService(
     }
 
     private data class OwnerCounters(
-        val claimed: Int, val pushed: Int, val restored: Int, val skipped: Int, val failed: Int
+        val claimed: Int, val pushed: Int, val restored: Int, val backfilled: Int,
+        val skipped: Int, val failed: Int, val unclaimed: Int = 0
     )
+
+    /** The owner's package keys as they exist right now; null when the namespace could not be listed. */
+    private suspend fun listPackages(owner: String): Set<String>? = try {
+        packages.presentPackageKeys(owner)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        logger.warn(
+            "Cannot list the skill packages of '{}'; falling back to one HEAD per row: {}", owner, e.message
+        )
+        null
+    }
 
     private suspend fun syncOwner(owner: String): OwnerCounters {
         val store = requireNotNull(catalog)
@@ -380,7 +439,10 @@ class SkillSyncService(
         // name drifted still pairs with its row here, and [snapshotOf] repairs the drift.
         val disk = withContext(Dispatchers.IO) { discovery.discoverOwnerRoot(root) }
             .associateBy { it.location.parent?.fileName?.toString() ?: it.name }
-        var claimed = 0; var pushed = 0; var restored = 0; var skipped = 0; var failed = 0
+        // One listing covers every checksum-quiet row in this pass. Losing it is not a reason to
+        // stop reconciling: the rows fall back to per-key HEADs, the cost this had before.
+        val presentKeys = listPackages(owner)
+        var claimed = 0; var pushed = 0; var restored = 0; var backfilled = 0; var skipped = 0; var failed = 0
         for (row in rows) {
             try {
                 val skill = disk[row.name]
@@ -398,8 +460,11 @@ class SkillSyncService(
                     continue
                 }
                 val snapshot = snapshotOf(dir) ?: continue
-                if (snapshot.checksum != row.checksum) {
-                    if (pushContent(owner, row, snapshot)) pushed++ else skipped++
+                when {
+                    snapshot.checksum != row.checksum -> {
+                        if (pushContent(owner, row, snapshot)) pushed++ else skipped++
+                    }
+                    else -> if (backfillPackage(owner, dir, row, presentKeys)) backfilled++
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -408,8 +473,21 @@ class SkillSyncService(
                 logger.warn("Skill sync could not process row '{}' of '{}': {}", row.name, owner, e.message)
             }
         }
-        for ((name, skill) in disk) {
-            if (rows.any { it.name == name }) continue
+        val orphaned = disk.filterKeys { name -> rows.none { it.name == name } }
+        // The shared layer exists only through its catalog rows. Claiming an unclaimed directory
+        // would let anyone who can write `{rootDir}/system` publish a skill every user can load,
+        // and no user asked for it — report the leftovers and touch nothing.
+        if (owner == SkillCatalogEntry.DEFAULT_USER_ID && orphaned.isNotEmpty()) {
+            logger.warn(
+                "Leaving {} directory-only skill(s) unclaimed in the shared root {}: {}",
+                orphaned.size, root, orphaned.keys
+            )
+            return OwnerCounters(
+                claimed = claimed, pushed = pushed, restored = restored, backfilled = backfilled,
+                skipped = skipped, failed = failed, unclaimed = orphaned.size
+            )
+        }
+        for ((name, skill) in orphaned) {
             try {
                 val dir = skill.location.parent ?: continue
                 val snapshot = snapshotOf(dir) ?: continue
@@ -431,7 +509,10 @@ class SkillSyncService(
                 logger.warn("Skill sync could not claim directory '{}' of '{}': {}", name, owner, e.message)
             }
         }
-        return OwnerCounters(claimed, pushed, restored, skipped, failed)
+        return OwnerCounters(
+            claimed = claimed, pushed = pushed, restored = restored, backfilled = backfilled,
+            skipped = skipped, failed = failed
+        )
     }
 
     /** Download and checksum-verify the row's package into its expected directory. Caller holds the owner lock. */

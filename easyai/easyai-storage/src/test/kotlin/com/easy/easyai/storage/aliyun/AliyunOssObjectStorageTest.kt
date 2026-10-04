@@ -4,7 +4,10 @@ import com.aliyun.oss.HttpMethod
 import com.aliyun.oss.OSS
 import com.aliyun.oss.OSSException
 import com.aliyun.oss.model.GeneratePresignedUrlRequest
+import com.aliyun.oss.model.ListObjectsRequest
 import com.aliyun.oss.model.OSSObject
+import com.aliyun.oss.model.OSSObjectSummary
+import com.aliyun.oss.model.ObjectListing
 import com.aliyun.oss.model.ObjectMetadata
 import com.aliyun.oss.model.PutObjectResult
 import com.easy.easyai.core.storage.ObjectStorageException
@@ -53,6 +56,13 @@ class AliyunOssObjectStorageTest {
                 setContentLength(bytes.size.toLong())
                 setLastModified(modified)
             }
+        }
+
+    private fun listing(keys: List<String>, nextMarker: String?, truncated: Boolean): ObjectListing =
+        ObjectListing().apply {
+            keys.forEach { addObjectSummary(OSSObjectSummary().apply { setKey(it); setSize(12L) }) }
+            setNextMarker(nextMarker)
+            setTruncated(truncated)
         }
 
     @Nested
@@ -118,6 +128,48 @@ class AliyunOssObjectStorageTest {
         }
 
         @Test
+        fun `list walks the pages of a namespace and returns their keys`() = runTest {
+            val requests = mutableListOf<ListObjectsRequest>()
+            every { client.listObjects(capture(requests)) } returnsMany listOf(
+                listing(keys = listOf("skills/alice/one.zip"), nextMarker = "skills/alice/one.zip", truncated = true),
+                listing(keys = listOf("skills/alice/deep/two.zip"), nextMarker = null, truncated = false)
+            )
+
+            val keys = storage.listKeys("skills/alice/")
+
+            assertEquals(setOf("skills/alice/one.zip", "skills/alice/deep/two.zip"), keys)
+            assertEquals("skills/alice/", requests[0].prefix)
+            assertNull(requests[0].marker, "the first page starts at the top of the namespace")
+            assertEquals(1000, requests[0].maxKeys, "one page must be the largest the service allows")
+            assertNull(requests[0].delimiter, "a delimiter would hide keys below the first directory level")
+            assertEquals("skills/alice/one.zip", requests[1].marker)
+            assertEquals(2, requests.size, "a truncated listing must be followed up")
+        }
+
+        @Test
+        fun `list follows the last key when the service returns no marker`() = runTest {
+            val requests = mutableListOf<ListObjectsRequest>()
+            every { client.listObjects(capture(requests)) } returnsMany listOf(
+                listing(keys = listOf("skills/alice/a.zip", "skills/alice/b.zip"), nextMarker = "", truncated = true),
+                listing(keys = listOf("skills/alice/c.zip"), nextMarker = null, truncated = false)
+            )
+
+            assertEquals(
+                setOf("skills/alice/a.zip", "skills/alice/b.zip", "skills/alice/c.zip"),
+                storage.listKeys("skills/alice/")
+            )
+            assertEquals("skills/alice/b.zip", requests[1].marker)
+        }
+
+        @Test
+        fun `an empty namespace is an empty listing, not an error`() = runTest {
+            every { client.listObjects(any<ListObjectsRequest>()) } returns
+                listing(keys = emptyList(), nextMarker = null, truncated = false)
+
+            assertEquals(emptySet(), storage.listKeys("skills/ghost/"))
+        }
+
+        @Test
         fun `presigning asks for a window of the requested length`() = runTest {
             val requested = slot<GeneratePresignedUrlRequest>()
             every { client.doesObjectExist(bucket, "skills/pdf/1.0.0.zip") } returns true
@@ -171,6 +223,13 @@ class AliyunOssObjectStorageTest {
             assertFailsWith<ObjectStorageException> {
                 storage.put("skills/pdf/1.0.0.zip", ByteArray(1), "application/zip")
             }
+        }
+
+        @Test
+        fun `a refused listing is a failure, not an empty namespace`() = runTest {
+            every { client.listObjects(any<ListObjectsRequest>()) } throws accessDenied("skills/alice/")
+
+            assertFailsWith<ObjectStorageException> { storage.listKeys("skills/alice/") }
         }
 
         @Test

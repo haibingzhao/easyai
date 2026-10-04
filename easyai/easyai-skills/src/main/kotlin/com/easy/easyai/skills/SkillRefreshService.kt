@@ -69,8 +69,10 @@ class SkillRefreshService(
             val sync = syncService.syncFor(userId)
             indexer.reconcileByDrift(owners)
             logger.info(
-                "Lazy skill sync for {} claimed={} pushed={} restored={}",
-                owners, sync.claimed, sync.pushed, sync.restored
+                "Lazy skill sync for {} claimed={} pushed={} restored={} backfilled={} " +
+                    "skipped={} failed={} unclaimed={}",
+                owners, sync.claimed, sync.pushed, sync.restored, sync.backfilled,
+                sync.skipped, sync.failed, sync.unclaimed
             )
         } catch (e: CancellationException) {
             syncedOwners.removeAll(claimed.toSet())

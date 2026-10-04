@@ -71,8 +71,29 @@ The RAG index is a projection of catalog rows whose whole-directory checksum mov
 pairs DB rows and `{root}` subdirectories by name: DB-only → restore from `object_key` and verify
 SHA-256 before the files become visible; both sides but checksum differs → the local copy is
 treated as newer (the user edited with `write`/an editor on this machine) and is re-packed,
-uploaded, and CAS-written via `updateContent`; directory-only → claimed through the add flow.
-There is no third state: nothing is deleted because a row is missing.
+uploaded, and CAS-written via `updateContent`; directory-only → claimed through the add flow
+**in a personal root**. There is no third state: nothing is deleted because a row is missing.
+
+**The shared `system` root never creates a skill from disk.** Existence there is catalog-only: an
+unclaimed directory under `{rootDir}/system` is counted as `unclaimed`, logged, and left untouched —
+whoever can write that path (any user's `write`/`bash` tool can, and no request identity is attached
+to a sync pass) would otherwise publish a skill every user on the machine can load. Shared skills are
+created only by the system identity through `addSkill`/`addUploaded`. Content drift of an *existing*
+system row still pushes, so admins keep editing installed built-ins on disk. What makes the ignore
+stick is `SkillAccessResolver`: no row, no exposure — even though `rescan` registers the directory
+into the in-memory view.
+
+**A checksum-quiet row can still have no package: re-upload it, don't re-write it.** `object_key`
+records a key, not the backend it landed in, and the backend an owner resolves to can change under
+it (object storage configured after the skills were claimed into the local fallback, a bucket
+switch). So when the directory digest equals the row checksum, the pass reads the owner's whole
+package namespace with **one** `ObjectStorage.listKeys` call and, for a key missing from that
+listing, `backfillPackage` re-packs the working copy and puts it — no
+`updateContent`, because the row already describes these bytes and bumping the revision would force
+a needless reindex. Counted separately as `backfilled`. A listing that fails, or a row keeping its
+key outside the owner's prefix, falls back to one HEAD per row, so an unreachable storage still
+raises per-row and lands in `failed` — which is intended: content that cannot be verified in the
+bucket is not durable.
 
 **Two-level ownership with user shadowing.** `user_id="system"` is the read-only shared layer
 (`SkillCatalogEntry.DEFAULT_USER_ID`); a requester's own rows shadow same-named system rows in
@@ -165,7 +186,9 @@ within the target owner returns `409` and the UI prompts for a new name (the new
 for the directory, the row, and the object key; frontmatter `name` is rewritten on mismatch). A
 name that only collides with a *shared* skill installs fine and shadows it — the response carries a
 warning. `400` = spec/size validation failure with the concrete reason, `403` = a non-system caller
-targeting the shared layer, `413` = package over `package-max-bytes`.
+targeting the shared layer, `413` = package over `package-max-bytes`. This is the **only** way a
+shared skill comes into existence: dropping a directory into `{rootDir}/system` installs nothing —
+`syncFor` reports it as `unclaimed` and leaves the files alone.
 
 **B. Agent authoring flow (kept).**
 1. `write` the files into `~/.easyai/skills/{userId}/{slug}/` — absolute paths only, one file per

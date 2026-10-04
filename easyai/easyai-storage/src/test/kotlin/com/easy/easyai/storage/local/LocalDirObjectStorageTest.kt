@@ -151,6 +151,51 @@ class LocalDirObjectStorageTest {
     }
 
     @Nested
+    inner class `listing a prefix` {
+
+        @Test
+        fun `every key under the prefix comes back, nested included`() = runTest {
+            storage.put("skills/alice/one.zip", zipBytes, "application/zip")
+            storage.put("skills/alice/deep/two.zip", zipBytes, "application/zip")
+            storage.put("skills/bob/three.zip", zipBytes, "application/zip")
+
+            assertEquals(
+                setOf("skills/alice/one.zip", "skills/alice/deep/two.zip"),
+                storage.listKeys("skills/alice/")
+            )
+        }
+
+        @Test
+        fun `a prefix that is only the beginning of a name still matches`() = runTest {
+            storage.put("skills/alice-one.zip", zipBytes, "application/zip")
+            storage.put("skills/alice/two.zip", zipBytes, "application/zip")
+            storage.put("skills/bob/three.zip", zipBytes, "application/zip")
+
+            assertEquals(
+                setOf("skills/alice-one.zip", "skills/alice/two.zip"),
+                storage.listKeys("skills/alice")
+            )
+        }
+
+        @Test
+        fun `a prefix ending in a separator is the directory namespace only`() = runTest {
+            storage.put("skills/alice-one.zip", zipBytes, "application/zip")
+            storage.put("skills/alice/two.zip", zipBytes, "application/zip")
+
+            assertEquals(setOf("skills/alice/two.zip"), storage.listKeys("skills/alice/"))
+        }
+
+        @Test
+        fun `an empty or escaping prefix lists nothing`() = runTest {
+            storage.put("skills/alice/one.zip", zipBytes, "application/zip")
+
+            assertEquals(emptySet(), storage.listKeys("skills/ghost/"))
+            assertEquals(emptySet(), storage.listKeys("../outside/"))
+            assertEquals(setOf("skills/alice/one.zip"), storage.listKeys(""), "a blank prefix is the whole namespace")
+        }
+    }
+
+    @Nested
     inner class `download links` {
 
         @Test

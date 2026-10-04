@@ -89,7 +89,10 @@ class SkillCatalogServiceTest {
         @Test
         fun `regular users cannot toggle shared rows but the system owner can`() = runTest {
             val chain = SkillSyncFixture(temp)
-            chain.write("shared", owner = SkillModelFixture.SYSTEM)
+            // A shared skill exists only through the add flow: a directory in the system root alone
+            // is deliberately never claimed.
+            val sharedDir = checkNotNull(chain.write("shared", owner = SkillModelFixture.SYSTEM).parent)
+            assertIs<SkillAddResult.Added>(chain.sync.addSkill(SkillModelFixture.SYSTEM, "shared", sharedDir))
             chain.refresher.refreshFor("system")
 
             val rejected = chain.management.setEnabled("shared", SkillOwnerContext("alice"), false)
@@ -131,10 +134,13 @@ class SkillCatalogServiceTest {
         @Test
         fun `own rows shadow shared names and mark shared rows in the list`() = runTest {
             val chain = SkillSyncFixture(temp)
-            chain.write("pdf", owner = SkillModelFixture.SYSTEM)
             chain.write("pdf", owner = "alice")
             chain.write("notes", owner = "alice")
-            chain.write("template", owner = SkillModelFixture.SYSTEM)
+            // Shared rows come from the add flow, not from a directory sitting in the system root.
+            for (name in listOf("pdf", "template")) {
+                val dir = checkNotNull(chain.write(name, owner = SkillModelFixture.SYSTEM).parent)
+                assertIs<SkillAddResult.Added>(chain.sync.addSkill(SkillModelFixture.SYSTEM, name, dir))
+            }
             chain.refresher.refreshFor("alice")
 
             val views = chain.management.list(SkillOwnerContext("alice"))
