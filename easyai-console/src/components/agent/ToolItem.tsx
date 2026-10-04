@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 
 interface ToolTooltipProps {
-  name: string;
+  name?: string;
   description?: string;
   children: React.ReactNode;
   className?: string;
@@ -51,23 +51,25 @@ export const ToolTooltip: React.FC<ToolTooltipProps> = ({ name, description, chi
 
   return (
     <>
-      <div
+      <span
         className={className}
         onMouseMove={handleMouseMove}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
         {children}
-      </div>
+      </span>
       {hovered && (
         <div
           ref={tooltipRef}
           className="fixed z-[9999] w-72 p-3 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl pointer-events-none overflow-y-auto"
           style={tooltipStyle}
         >
-          <p className="text-sm font-mono font-semibold text-zinc-100 mb-1">{name}</p>
+          {name && (
+            <p className="text-sm font-mono font-semibold text-zinc-100 mb-1 break-all">{name}</p>
+          )}
           {description && (
-            <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap">{description}</p>
+            <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap break-all">{description}</p>
           )}
         </div>
       )}

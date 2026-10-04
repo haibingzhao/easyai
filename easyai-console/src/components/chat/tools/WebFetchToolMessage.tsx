@@ -10,6 +10,7 @@ import { useState } from 'react';
 import { Globe, CheckCircle2, AlertCircle } from 'lucide-react';
 import type { ToolMessageProps } from './types';
 import { extractOutput, getToolRowSummary } from './parsers';
+import { ToolTooltip } from '@/components/agent/ToolItem';
 import { ToolRowHeader } from './ToolRowHeader';
 
 /**
@@ -70,19 +71,20 @@ export function WebFetchToolMessage({
       <div className="px-3 py-2 flex items-center gap-2">
         <Globe className="size-4 shrink-0 text-muted-foreground" />
         <span className="text-sm font-medium shrink-0">Web Fetch</span>
-        <span
-          className="text-sm text-muted-foreground truncate min-w-0 flex-1"
-          title={url || undefined}
-        >
-          {url || toolCall.args}
-        </span>
+        <ToolTooltip name={url || toolCall.args} className="min-w-0 flex-1">
+          <span className="block text-sm text-muted-foreground truncate">
+            {url || toolCall.args}
+          </span>
+        </ToolTooltip>
         {/* Status indicator */}
         {isStreaming ? (
           <span className="size-2 shrink-0 rounded-full bg-muted-foreground animate-pulse" />
         ) : isError ? (
-          <span className="shrink-0 cursor-help" title={errorOutput || 'Failed'}>
-            <AlertCircle className="size-4 text-destructive" />
-          </span>
+          <ToolTooltip description={errorOutput || 'Failed'}>
+            <span className="shrink-0 cursor-help">
+              <AlertCircle className="size-4 text-destructive" />
+            </span>
+          </ToolTooltip>
         ) : (
           <CheckCircle2 className="size-4 shrink-0 text-green-500" />
         )}
