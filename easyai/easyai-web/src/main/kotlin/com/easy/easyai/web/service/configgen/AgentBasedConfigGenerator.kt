@@ -10,6 +10,7 @@ import com.easy.easyai.core.model.SystemMessage
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.model.UserMessage
 import com.easy.easyai.core.tool.ToolDefinition
+import com.easy.easyai.core.tool.ToolFactory
 import com.easy.easyai.skills.SkillAccessResolver
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.web.model.AiConfigGenerateRequest
@@ -52,6 +53,7 @@ class AgentBasedConfigGenerator(
     private val skillAccessResolver: SkillAccessResolver?,
     private val mcpClientManager: McpClientManager?,
     private val modelConfigStore: ModelProviderConfigStore,
+    private val toolFactory: ToolFactory,
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper = SharedObjectMapper.instance
@@ -337,7 +339,8 @@ class AgentBasedConfigGenerator(
     private fun buildTools(configType: String, userId: String, finalizeAction: suspend (String?) -> String): List<ToolDefinition> {
         val listResources = ListResourcesTool(
             toolRegistry, agentStore, skillAccessResolver, mcpClientManager, modelConfigStore, userId, configType,
-            swarmContext = configType == "swarm"
+            swarmContext = configType == "swarm",
+            toolFactory = toolFactory
         )
         // Both agent and swarm use chunked block mode to prevent stream stalls with large configs
         return listOf(listResources, SubmitConfigBlockTool(), FinalizeConfigTool(finalizeAction))
@@ -653,38 +656,38 @@ When calling submit_config, provide the complete JSON configuration and a brief 
         }
 
         // Subagent blocks: collect into subAgentIds (global) + customSubAgents (inline)
-        val subagentBlocks = blocks.filter { it.blockType == "subagent" }.sortedBy { it.blockIndex }
-        if (subagentBlocks.isNotEmpty()) {
-            val subAgentIds = objectMapper.createArrayNode()
-            val customSubAgents = objectMapper.createArrayNode()
-            subagentBlocks.forEach { block ->
-                val agentId = block.data.path("agentId")
-                if (!agentId.isMissingNode && !agentId.isNull && agentId.asText().isNotBlank()) {
-                    subAgentIds.add(agentId.asText())
-                } else {
-                    customSubAgents.add(block.data)
-                }
-            }
-            if (subAgentIds.size() > 0) root.set("subAgentIds", subAgentIds)
-            if (customSubAgents.size() > 0) root.set("customSubAgents", customSubAgents)
-        }
+        mergeGlobalOrInlineBlocks(blocks, "subagent", "subAgentIds", "customSubAgents", root)
 
         // Member blocks: collect into memberIds (global) + customMembers (inline)
-        val memberBlocks = blocks.filter { it.blockType == "member" }.sortedBy { it.blockIndex }
-        if (memberBlocks.isNotEmpty()) {
-            val memberIds = objectMapper.createArrayNode()
-            val customMembers = objectMapper.createArrayNode()
-            memberBlocks.forEach { block ->
-                val agentId = block.data.path("agentId")
-                if (!agentId.isMissingNode && !agentId.isNull && agentId.asText().isNotBlank()) {
-                    memberIds.add(agentId.asText())
-                } else {
-                    customMembers.add(block.data)
-                }
+        mergeGlobalOrInlineBlocks(blocks, "member", "memberIds", "customMembers", root)
+    }
+
+    /**
+     * Collect blocks of [blockType] into a global-id array ([idsField]) plus an
+     * inline-object array ([inlineField]): blocks carrying a non-blank `agentId`
+     * contribute their id, the rest are merged verbatim.
+     */
+    private fun mergeGlobalOrInlineBlocks(
+        blocks: List<ConfigBlock>,
+        blockType: String,
+        idsField: String,
+        inlineField: String,
+        root: ObjectNode,
+    ) {
+        val targetBlocks = blocks.filter { it.blockType == blockType }.sortedBy { it.blockIndex }
+        if (targetBlocks.isEmpty()) return
+        val ids = objectMapper.createArrayNode()
+        val inline = objectMapper.createArrayNode()
+        targetBlocks.forEach { block ->
+            val agentId = block.data.path("agentId")
+            if (!agentId.isMissingNode && !agentId.isNull && agentId.asText().isNotBlank()) {
+                ids.add(agentId.asText())
+            } else {
+                inline.add(block.data)
             }
-            if (memberIds.size() > 0) root.set("memberIds", memberIds)
-            if (customMembers.size() > 0) root.set("customMembers", customMembers)
         }
+        if (ids.size() > 0) root.set(idsField, ids)
+        if (inline.size() > 0) root.set(inlineField, inline)
     }
 
     private fun assembleSwarmConfigFromBlocks(blocks: List<ConfigBlock>, root: ObjectNode) {
@@ -696,49 +699,37 @@ When calling submit_config, provide the complete JSON configuration and a brief 
         }
 
         // Agent blocks: merge by blockIndex into existing array
-        val agentBlocks = blocks.filter { it.blockType == "agent" }.sortedBy { it.blockIndex }
-        if (agentBlocks.isNotEmpty()) {
-            val agentsArr = (root.get("agents") as? ArrayNode)?.deepCopy()
-                ?: objectMapper.createArrayNode()
-            agentBlocks.forEach { block ->
-                if (block.blockIndex in 0 until agentsArr.size()) {
-                    agentsArr.set(block.blockIndex, block.data)
-                } else {
-                    agentsArr.add(block.data)
-                }
-            }
-            root.set("agents", agentsArr)
-        }
+        mergeBlocksByIndex(blocks, "agent", "agents", root)
 
         // Task blocks: merge by blockIndex into existing array
-        val taskBlocks = blocks.filter { it.blockType == "task" }.sortedBy { it.blockIndex }
-        if (taskBlocks.isNotEmpty()) {
-            val tasksArr = (root.get("tasks") as? ArrayNode)?.deepCopy()
-                ?: objectMapper.createArrayNode()
-            taskBlocks.forEach { block ->
-                if (block.blockIndex in 0 until tasksArr.size()) {
-                    tasksArr.set(block.blockIndex, block.data)
-                } else {
-                    tasksArr.add(block.data)
-                }
-            }
-            root.set("tasks", tasksArr)
-        }
+        mergeBlocksByIndex(blocks, "task", "tasks", root)
 
         // Variable blocks: merge by blockIndex into existing array
-        val varBlocks = blocks.filter { it.blockType == "variable" }.sortedBy { it.blockIndex }
-        if (varBlocks.isNotEmpty()) {
-            val varsArr = (root.get("variables") as? ArrayNode)?.deepCopy()
-                ?: objectMapper.createArrayNode()
-            varBlocks.forEach { block ->
-                if (block.blockIndex in 0 until varsArr.size()) {
-                    varsArr.set(block.blockIndex, block.data)
-                } else {
-                    varsArr.add(block.data)
-                }
+        mergeBlocksByIndex(blocks, "variable", "variables", root)
+    }
+
+    /**
+     * Merge blocks of [blockType] by their blockIndex into the existing array
+     * field [arrayField] on [root]: an in-range index overwrites, otherwise the
+     * block is appended.
+     */
+    private fun mergeBlocksByIndex(
+        blocks: List<ConfigBlock>,
+        blockType: String,
+        arrayField: String,
+        root: ObjectNode,
+    ) {
+        val targetBlocks = blocks.filter { it.blockType == blockType }.sortedBy { it.blockIndex }
+        if (targetBlocks.isEmpty()) return
+        val arr = (root.get(arrayField) as? ArrayNode)?.deepCopy() ?: objectMapper.createArrayNode()
+        targetBlocks.forEach { block ->
+            if (block.blockIndex in 0 until arr.size()) {
+                arr.set(block.blockIndex, block.data)
+            } else {
+                arr.add(block.data)
             }
-            root.set("variables", varsArr)
         }
+        root.set(arrayField, arr)
     }
 
     private fun buildDoneJson(config: JsonNode?, explanation: String, validation: ConfigValidationResult? = null): String {

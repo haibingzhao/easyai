@@ -35,6 +35,12 @@ export interface ToolInfo {
    * (e.g. team coordination tools). Not offered for manual selection.
    */
   alwaysInclude?: boolean;
+  /** Cannot run for a SUBAGENT (sub-agent recursion guard / main-agent-only). */
+  blockedForSubAgent?: boolean;
+  /** Can never function for a TEAM leader (no sub-agent whitelist). */
+  unusableForTeam?: boolean;
+  /** Not supported by the swarm runtime for worker agents. */
+  unsupportedInSwarm?: boolean;
 }
 
 /**

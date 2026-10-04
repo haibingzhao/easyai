@@ -9,7 +9,7 @@ import { ToolTooltip } from '@/components/agent/ToolItem';
 import { McpSelector } from '@/components/agent/McpSelector';
 import { type VariableGroup } from '@/components/agent/VariableDropdown';
 import { SWARM_PROMPT_VARIABLES } from '@/constants/swarm-variables';
-import { SWARM_EXCLUDED_TOOLS, selectableTools } from '@/constants/tools';
+import { swarmExcludedToolNames, selectableTools } from '@/constants/tools';
 import { useWebSearchStatus } from '@/hooks/useWebSearchStatus';
 import { i18n } from '@/utils/i18n';
 import { safeParseInt } from '@/utils/format';
@@ -113,10 +113,10 @@ export const SwarmAgentEditor: React.FC<SwarmAgentEditorProps> = ({
   const selectedModelConfig = availableModels.find(m => m.id === editForm.modelName);
 
   /** Tools selectable for inline custom agents (auto-injected and swarm-unsupported tools excluded). */
-  const selectableAgentTools = useMemo(
-    () => selectableTools(availableTools).filter((t) => !SWARM_EXCLUDED_TOOLS.includes(t.name)),
-    [availableTools]
-  );
+  const selectableAgentTools = useMemo(() => {
+    const excluded = swarmExcludedToolNames(availableTools);
+    return selectableTools(availableTools).filter((t) => !excluded.has(t.name));
+  }, [availableTools]);
 
   /** Variable groups for the custom agent System Prompt editor. */
   const systemPromptVariableGroups: VariableGroup[] = useMemo(() => [

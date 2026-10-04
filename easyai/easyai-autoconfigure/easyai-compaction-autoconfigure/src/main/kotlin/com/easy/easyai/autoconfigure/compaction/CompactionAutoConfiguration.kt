@@ -13,6 +13,8 @@ import com.easy.easyai.core.agent.TransformContextService
 import com.easy.easyai.core.memory.MemoryFlushAgent
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.model.aux.AuxModelResolver
+import com.easy.easyai.core.tool.ToolBuilder
+import com.easy.easyai.core.tool.ToolContextProjector
 import org.springframework.ai.chat.model.ChatModel
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Autowired
@@ -45,14 +47,16 @@ class CompactionAutoConfiguration(
     @ConditionalOnMissingBean
     fun compactionStrategy(
         agentServiceProvider: ObjectProvider<AgentService>,
-        @Autowired(required = false) chatModel: ChatModel?
+        @Autowired(required = false) chatModel: ChatModel?,
+        toolBuilders: ObjectProvider<ToolBuilder>
     ): CompactionStrategy {
         // Agent-based compaction: uses a lightweight Agent loop with update_variable tool.
         // ObjectProvider resolves AgentService lazily to avoid circular dependency:
         // AgentService -> TransformContextService -> CompactionStrategy -> AgentService
         return CompactionAgentStrategy(
             agentServiceProvider = { agentServiceProvider.getObject() },
-            fallbackChatModel = chatModel
+            fallbackChatModel = chatModel,
+            contextProjectors = ToolContextProjector.registryFrom(toolBuilders.orderedStream().toList())
         )
     }
 

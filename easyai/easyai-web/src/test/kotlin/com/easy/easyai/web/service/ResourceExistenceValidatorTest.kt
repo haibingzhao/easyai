@@ -7,6 +7,7 @@ import com.easy.easyai.core.agent.AgentEnv
 import com.easy.easyai.core.agent.AgentType
 import com.easy.easyai.core.agent.AsyncAgentStore
 import com.easy.easyai.web.service.validation.ResourceExistenceValidator
+import com.easy.easyai.web.service.validation.SkillLoaderToolFactory
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
@@ -15,7 +16,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class ResourceExistenceValidatorTest {
-    private val validator = ResourceExistenceValidator(mockk<ToolRegistry>(relaxed = true), mockk<AsyncAgentStore>(relaxed = true))
+    private val skillLoaders = setOf("load_skill")
+    private val validator = ResourceExistenceValidator(
+        mockk<ToolRegistry>(relaxed = true),
+        mockk<AsyncAgentStore>(relaxed = true),
+        toolFactory = SkillLoaderToolFactory
+    )
 
     @Nested
     inner class SkillToolConsistency {
@@ -24,7 +30,7 @@ class ResourceExistenceValidatorTest {
             for (env in AgentEnv.entries) {
                 for (type in AgentType.entries) {
                     val request = AgentCreateRequest("test", "Test", agentContext = env, agentType = type, skillNames = listOf("review"))
-                    val errors = validator.validate(request, "alice").filter { it.message.contains("'load_skill'") }
+                    val errors = validator.validate(request, "alice").filter { it.message.contains("load_skill") }
                     assertEquals(1, errors.size, "$type in $env must reject unusable skills")
                     assertEquals("error", errors.single().severity)
                 }
@@ -38,7 +44,7 @@ class ResourceExistenceValidatorTest {
                 customSubAgents = listOf(InlineAgentSpec("child", skillNames = listOf("review"))),
                 customMembers = listOf(InlineAgentSpec("member", skillNames = listOf("review")))
             )
-            val errors = ResourceExistenceValidator.validateSkillTools(request)
+            val errors = ResourceExistenceValidator.validateSkillTools(request, skillLoaders)
             assertEquals(setOf("customSubAgents[0].skillNames", "customMembers[0].skillNames"), errors.map { it.field }.toSet())
             assertTrue(errors.all { it.severity == "error" })
         }
@@ -46,10 +52,10 @@ class ResourceExistenceValidatorTest {
         @Test
         fun `empty skills and slash commands do not require load skill`() {
             assertTrue(ResourceExistenceValidator.validateSkillTools(
-                AgentCreateRequest("test", "Test", commandNames = listOf("review"))
+                AgentCreateRequest("test", "Test", commandNames = listOf("review")), skillLoaders
             ).isEmpty())
-            assertTrue(ResourceExistenceValidator.validateSkillTools(listOf("load_skill"), listOf("review")).isEmpty())
-            assertTrue(ResourceExistenceValidator.validateSkillTools(emptyList(), emptyList()).isEmpty())
+            assertTrue(ResourceExistenceValidator.validateSkillTools(listOf("load_skill"), listOf("review"), skillLoaderNames = skillLoaders).isEmpty())
+            assertTrue(ResourceExistenceValidator.validateSkillTools(emptyList(), emptyList(), skillLoaders).isEmpty())
         }
     }
 }

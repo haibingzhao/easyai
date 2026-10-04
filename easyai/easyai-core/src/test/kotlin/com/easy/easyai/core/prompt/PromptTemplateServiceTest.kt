@@ -16,163 +16,79 @@ class PromptTemplateServiceTest {
         defaultBuilder = SystemPromptBuilder(stubLoader)
     )
 
-    private fun contextWithTools(vararg toolNames: String): PromptContext = PromptContext(
-        tools = toolNames.map { mapOf<String, Any?>("name" to it, "description" to "desc") }
+    /**
+     * PromptTemplateService no longer maps tool names to guidance text — that responsibility moved
+     * to each tool's `systemPromptSegment` (collected by AgentLoopRunner into [PromptContext.toolPromptSegments])
+     * and to `capabilities` (collected into [PromptContext.dynamicSubAgents]). These tests exercise the
+     * mechanism: declared segments are appended verbatim, in order, for both default and custom templates.
+     */
+    private fun contextWith(
+        tools: List<String> = emptyList(),
+        segments: List<String> = emptyList(),
+        subAgents: List<Map<String, Any?>> = emptyList(),
+        dynamicSubAgents: Boolean = false
+    ): PromptContext = PromptContext(
+        tools = tools.map { mapOf<String, Any?>("name" to it, "description" to "desc") },
+        toolPromptSegments = segments,
+        subAgents = subAgents,
+        dynamicSubAgents = dynamicSubAgents
     )
 
     @Nested
-    inner class `time access guidance` {
+    inner class `tool prompt segments` {
+
+        private val timeSegment = "## Current Time\nUse the calc tool for the current date."
+        private val memorySegment = "## Memory\nRetrieve on demand via memory_search."
 
         @Test
-        fun `appends guidance when calc tool present on default prompt`() {
-            val rendered = service.build(null, contextWithTools("read", "calc"))
+        fun `appends a declared segment on the default prompt`() {
+            val rendered = service.build(null, contextWith(tools = listOf("read", "calc"), segments = listOf(timeSegment)))
             assertTrue(rendered.contains("## Current Time"))
-            assertTrue(rendered.contains("ZonedDateTime.now().toString()"))
         }
 
         @Test
-        fun `omits guidance when calc tool absent on default prompt`() {
-            val rendered = service.build(null, contextWithTools("read", "bash"))
+        fun `omits guidance when no segments declared on default prompt`() {
+            val rendered = service.build(null, contextWith(tools = listOf("read", "bash")))
             assertFalse(rendered.contains("## Current Time"))
         }
 
         @Test
-        fun `appends guidance on custom template when calc tool present`() {
-            val rendered = service.build("You are a coding agent.", contextWithTools("calc"))
+        fun `appends a declared segment on a custom template`() {
+            val rendered = service.build("You are a coding agent.", contextWith(tools = listOf("calc"), segments = listOf(timeSegment)))
             assertTrue(rendered.contains("You are a coding agent."))
             assertTrue(rendered.contains("## Current Time"))
         }
 
         @Test
-        fun `omits guidance on custom template when calc tool absent`() {
-            val rendered = service.build("You are a coding agent.", contextWithTools("read"))
+        fun `omits guidance on custom template when no segments declared`() {
+            val rendered = service.build("You are a coding agent.", contextWith(tools = listOf("read")))
             assertFalse(rendered.contains("## Current Time"))
         }
 
         @Test
+        fun `appends multiple declared segments in declaration order`() {
+            val rendered = service.build(null, contextWith(segments = listOf(timeSegment, memorySegment)))
+            assertTrue(rendered.contains("## Current Time"))
+            assertTrue(rendered.contains("## Memory"))
+            assertTrue(rendered.indexOf("## Current Time") < rendered.indexOf("## Memory"))
+        }
+
+        @Test
         fun `does not inject current date time into prompt`() {
-            val rendered = service.build(null, contextWithTools("calc"))
+            val rendered = service.build(null, contextWith(tools = listOf("calc"), segments = listOf(timeSegment)))
             assertFalse(rendered.contains("Current date and time:"))
             assertFalse(rendered.contains("current_date_time"))
         }
 
         @Test
         fun `blank prompt template still returns empty string`() {
-            val rendered = service.build("   ", contextWithTools("calc"))
+            val rendered = service.build("   ", contextWith(tools = listOf("calc"), segments = listOf(timeSegment)))
             assertTrue(rendered.isEmpty())
         }
-    }
-
-    @Nested
-    inner class `memory guidance` {
 
         @Test
-        fun `appends static guidance when memory_search tool registered on default prompt`() {
-            val rendered = service.build(null, contextWithTools("memory_search"))
-            assertTrue(rendered.contains("## Memory"))
-            assertTrue(rendered.contains("memory_search"))
-        }
-
-        @Test
-        fun `omits guidance when memory_search tool not registered`() {
-            val rendered = service.build(null, contextWithTools("read", "bash"))
-            assertFalse(rendered.contains("## Memory"))
-        }
-
-        @Test
-        fun `appends guidance on custom template when memory_search tool registered`() {
-            val rendered = service.build("You are a coding agent.", contextWithTools("memory_search"))
-            assertTrue(rendered.contains("You are a coding agent."))
-            assertTrue(rendered.contains("## Memory"))
-        }
-
-        @Test
-        fun `guidance output is stable across builds for cache friendliness`() {
-            val context = contextWithTools("memory_search")
-            val first = service.build(null, context)
-            val second = service.build(null, context)
-            assertTrue(first == second)
-        }
-
-        @Test
-        fun `guidance covers stale entry update and remove rules`() {
-            val guidance = service.build(null, contextWithTools("memory_search")).substringAfter("## Memory")
-            assertTrue(guidance.contains("### Keeping memories current"), guidance)
-            assertTrue(guidance.contains("action='update'"), guidance)
-            assertTrue(guidance.contains("action='remove'"), guidance)
-            // Staleness rules must stay free of concrete dates: injecting today would break
-            // the cache stability asserted above.
-            assertFalse(Regex("\\d{4}").containsMatchIn(guidance), guidance)
-        }
-    }
-
-    @Nested
-    inner class `knowledge guidance` {
-
-        @Test
-        fun `appends static guidance when knowledge_search tool registered on default prompt`() {
-            val rendered = service.build(null, contextWithTools("knowledge_search"))
-            assertTrue(rendered.contains("## Knowledge Base"))
-            assertTrue(rendered.contains("knowledge_search"))
-        }
-
-        @Test
-        fun `omits guidance when knowledge_search tool not registered`() {
-            val rendered = service.build(null, contextWithTools("read", "bash"))
-            assertFalse(rendered.contains("## Knowledge Base"))
-        }
-
-        @Test
-        fun `guides parallel issuance together with memory search`() {
-            val rendered = service.build(
-                null,
-                contextWithTools("memory_search", "knowledge_search")
-            )
-            assertTrue(rendered.contains("SAME response"))
-        }
-
-        @Test
-        fun `guidance output is stable across builds for cache friendliness`() {
-            val context = contextWithTools("knowledge_search")
-            val first = service.build(null, context)
-            val second = service.build(null, context)
-            assertTrue(first == second)
-        }
-    }
-
-    @Nested
-    inner class `render visual guidance` {
-
-        @Test
-        fun `appends static guidance when render_visual tool registered on default prompt`() {
-            val rendered = service.build(null, contextWithTools("render_visual"))
-            assertTrue(rendered.contains("## Inline Visuals"))
-            assertTrue(rendered.contains("render_visual"))
-        }
-
-        @Test
-        fun `omits guidance when render_visual tool not registered`() {
-            val rendered = service.build(null, contextWithTools("read", "bash"))
-            assertFalse(rendered.contains("## Inline Visuals"))
-        }
-
-        @Test
-        fun `appends guidance on custom template when render_visual tool registered`() {
-            val rendered = service.build("You are a coding agent.", contextWithTools("render_visual"))
-            assertTrue(rendered.contains("You are a coding agent."))
-            assertTrue(rendered.contains("## Inline Visuals"))
-        }
-
-        @Test
-        fun `guidance teaches mid-narrative placement instead of a trailing call`() {
-            val guidance = service.build(null, contextWithTools("render_visual")).substringAfter("## Inline Visuals")
-            assertTrue(guidance.contains("MIDDLE of your narrative"), guidance)
-            assertTrue(guidance.contains("never repeat or summarize the fragment code"), guidance)
-        }
-
-        @Test
-        fun `guidance output is stable across builds for cache friendliness`() {
-            val context = contextWithTools("render_visual")
+        fun `segment output is stable across builds for cache friendliness`() {
+            val context = contextWith(segments = listOf(memorySegment))
             val first = service.build(null, context)
             val second = service.build(null, context)
             assertTrue(first == second)
@@ -182,17 +98,9 @@ class PromptTemplateServiceTest {
     @Nested
     inner class `sub-agent guidance` {
 
-        private fun contextWith(
-            toolNames: List<String>,
-            subAgents: List<Map<String, Any?>> = emptyList()
-        ): PromptContext = PromptContext(
-            tools = toolNames.map { mapOf<String, Any?>("name" to it, "description" to "desc") },
-            subAgents = subAgents
-        )
-
         @Test
-        fun `renders ad-hoc section when task tool present without predefined sub-agents`() {
-            val rendered = service.build(null, contextWith(listOf("read", "task")))
+        fun `renders ad-hoc section when a sub-agent spawner is present without predefined sub-agents`() {
+            val rendered = service.build(null, contextWith(tools = listOf("read", "task"), dynamicSubAgents = true))
             assertTrue(rendered.contains("## Available Sub-Agents"))
             assertTrue(rendered.contains("### Ad-hoc Sub-Agents"))
             assertTrue(rendered.contains("agentType \"dynamic\""))
@@ -203,8 +111,9 @@ class PromptTemplateServiceTest {
             val rendered = service.build(
                 null,
                 contextWith(
-                    toolNames = listOf("task"),
-                    subAgents = listOf(mapOf("name" to "coder", "description" to "writes code"))
+                    tools = listOf("task"),
+                    subAgents = listOf(mapOf("name" to "coder", "description" to "writes code")),
+                    dynamicSubAgents = true
                 )
             )
             assertTrue(rendered.contains("`coder`: writes code"))
@@ -213,11 +122,11 @@ class PromptTemplateServiceTest {
         }
 
         @Test
-        fun `omits ad-hoc section when task tool absent but predefined sub-agents exist`() {
+        fun `omits ad-hoc section when no spawner but predefined sub-agents exist`() {
             val rendered = service.build(
                 null,
                 contextWith(
-                    toolNames = listOf("read"),
+                    tools = listOf("read"),
                     subAgents = listOf(mapOf("name" to "coder", "description" to "writes code"))
                 )
             )
@@ -226,8 +135,8 @@ class PromptTemplateServiceTest {
         }
 
         @Test
-        fun `omits section entirely without task tool and sub-agents`() {
-            val rendered = service.build(null, contextWith(listOf("read", "bash")))
+        fun `omits section entirely without spawner and sub-agents`() {
+            val rendered = service.build(null, contextWith(tools = listOf("read", "bash")))
             assertFalse(rendered.contains("## Available Sub-Agents"))
             assertFalse(rendered.contains("### Ad-hoc Sub-Agents"))
         }

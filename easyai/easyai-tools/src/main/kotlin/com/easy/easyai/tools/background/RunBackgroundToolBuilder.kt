@@ -26,6 +26,25 @@ Parameters:
 
 Note: Tools that require user permission (ASK) cannot be run in background. Call them directly first to obtain permission."""
 
+/** Static guidance for asynchronous execution via run_background / task_* tools (cache-stable). */
+private const val BACKGROUND_TASK_SEGMENT = """
+## Background (Async) Tasks
+
+You can run long operations ASYNCHRONOUSLY with the `run_background` tool. Instead of blocking
+on a slow tool (video generation, TTS, large builds, long shell commands, etc.), launch it in the
+background and keep reasoning or doing other work while it runs.
+
+- `run_background(tool_name, arguments, description?)` returns IMMEDIATELY with a `task_id`.
+- Check on it later with `task_status(task_id)` — pass its `sleep` parameter (seconds) to wait a
+  bit before reading the status instead of polling in a tight loop. Use `task_list()` for an
+  overview of all tasks in this session.
+- When a background task finishes, its result is injected into the conversation automatically,
+  so you do not need to keep polling — but you may check status at any time.
+
+Prefer `run_background` whenever a step is slow and you have other useful work to do meanwhile.
+Tools that require user approval (ASK) cannot be backgrounded — call those directly first.
+"""
+
 /**
  * Builder for [RunBackgroundTool].
  *
@@ -44,7 +63,9 @@ class RunBackgroundToolBuilder(
         permissionCategory = "background_task",
         uiRenderer = "background_task",
         isDefaultTool = true,
-        skipOnResume = false
+        skipOnResume = false,
+        systemPromptSegment = BACKGROUND_TASK_SEGMENT.trimIndent(),
+        promptSegmentOrder = 40
     )
 
     override val defaultPermissionRules = listOf(

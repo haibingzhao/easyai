@@ -5,6 +5,7 @@ import com.easy.easyai.core.agent.AgentLoop.Companion.MAX_COMPLETION_CHECK_BONUS
 import com.easy.easyai.core.event.*
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.tool.ToolCallResult
+import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.validation.InputSchemaValidator
@@ -385,10 +386,10 @@ internal class AgentLoop(
                     appendLine("Avoid immediately repeating these calls without evidence that another attempt will help.")
                 }
                 appendLine("Choose a justified next step: adjust your approach or request user direction.")
-                if (tools.any { it.name == "bash" }) {
+                if (tools.any { ToolCapability.SHELL_EXECUTION in it.capabilities }) {
                     appendLine("If a delay could help, use bash for a bounded sleep, subject to permissions, with a timeout longer than the delay. Finish waiting before retrying; do not run the wait and retry in the same batch.")
                 }
-                if (tools.any { it.name == "ask_question" }) {
+                if (tools.any { ToolCapability.USER_INTERACTIVE in it.capabilities }) {
                     appendLine("If continuing requires the user's decision, call ask_question alone to ask whether to continue or stop, then wait for the answer.")
                 } else {
                     appendLine("If user direction is needed, explain the repeated outcome and ask for instructions in your response.")

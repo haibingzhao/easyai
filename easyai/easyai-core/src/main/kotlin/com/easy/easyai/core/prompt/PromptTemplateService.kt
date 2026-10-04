@@ -49,9 +49,9 @@ class PromptTemplateService(
                 }
             } else null,
             subAgentsList = if (includeTools) {
-                // Render when predefined sub-agents exist OR the `task` tool is registered
+                // Render when predefined sub-agents exist OR a sub-agent-spawning tool is registered
                 // (primary agents can always create ad-hoc sub-agents dynamically).
-                val hasTaskTool = context.tools.any { it["name"] == "task" }
+                val hasTaskTool = context.dynamicSubAgents
                 val list = context.subAgents
                 if (list.isEmpty() && !hasTaskTool) null else buildString {
                     appendLine("## Available Sub-Agents")
@@ -160,21 +160,11 @@ class PromptTemplateService(
         }
         // Unconditionally append session variables (regardless of default or custom template)
         val varsSegment = buildSessionVariablesSegment(context.sessionVariables)
-        // Append time-access guidance when the calc tool is available.
-        // The segment is static text, keeping the system prompt prefix stable for LLM caching.
-        val timeAccessSegment = if (context.tools.any { it["name"] == "calc" }) TIME_ACCESS_SEGMENT else null
-        // Append memory guidance when the agent has memory_search tool registered. Static text for cache stability;
-        // actual memory retrieval happens on demand via memory_search / memory_read tool calls.
-        val memoryGuidanceSegment = if (context.tools.any { it["name"] == "memory_search" }) MEMORY_GUIDANCE_SEGMENT else null
-        // Append knowledge guidance when the agent has knowledge_search tool registered. Static text for cache stability;
-        // actual retrieval happens on demand via knowledge_search / knowledge_read tool calls.
-        val knowledgeGuidanceSegment = if (context.tools.any { it["name"] == "knowledge_search" }) KNOWLEDGE_GUIDANCE_SEGMENT else null
-        // Append background-task guidance when the agent has run_background tool registered. Static text for cache stability.
-        val backgroundTaskSegment = if (context.tools.any { it["name"] == "run_background" }) BACKGROUND_TASK_SEGMENT else null
-        // Append inline-visual guidance when the agent has render_visual registered. Without it models
-        // tend to emit one text block and call the tool once at the end; the segment teaches mid-narrative placement.
-        val renderVisualSegment = if (context.tools.any { it["name"] == "render_visual" }) RENDER_VISUAL_SEGMENT else null
-        return listOfNotNull(base.takeIf { it.isNotBlank() }, varsSegment, timeAccessSegment, memoryGuidanceSegment, knowledgeGuidanceSegment, backgroundTaskSegment, renderVisualSegment)
+        // Append each registered tool's own static guidance segment (ToolDefinition.systemPromptSegment),
+        // already sorted by promptSegmentOrder by the caller. Static text and a declared order keep the
+        // system prompt prefix stable for LLM caching; the tools own their guidance instead of this
+        // service matching on hard-coded tool names.
+        return (listOfNotNull(base.takeIf { it.isNotBlank() }, varsSegment) + context.toolPromptSegments)
             .joinToString("\n\n")
     }
 
@@ -219,90 +209,6 @@ curl -s -X POST "$EASYAI_BACKEND_URL/api/internal/llm/batch-process" \
 ```
 
 Use this when you need to process many files with LLM (transcription, summarization, translation, etc.) via generated scripts. The script does NOT need any API key — authentication is handled by the injected token.
-        """.trimIndent()
-
-        /** Static guidance for on-demand time access via the calc tool (cache-stable). */
-        private val TIME_ACCESS_SEGMENT = """
-## Current Time
-
-The current date and time is NOT included in this prompt to keep it stable for caching.
-When you need the current date, time, or timezone (e.g. to report today's date, reason about deadlines, or compute time differences), use the `calc` tool with a script such as:
-ZonedDateTime.now().toString()
-
-This returns the current timestamp with the system's local timezone, e.g. 2026-08-09T10:30:45+08:00[Asia/Shanghai].
-        """.trimIndent()
-
-        /** Static guidance for on-demand memory retrieval via memory_* tools (cache-stable). */
-        private val MEMORY_GUIDANCE_SEGMENT = """
-## Memory
-
-You have access to a persistent memory system via the memory_* tools. Memory content is NOT
-included in this prompt to keep it stable for caching — retrieve it on demand instead.
-
-At the START of each new task, proactively call `memory_search` with keywords extracted from
-the user's request to recall relevant context: user preferences, past decisions, project
-conventions, and prior conclusions. When `knowledge_search` is also available, issue it in the
-SAME response as `memory_search` so both run in parallel. Use `memory_read` to load the full
-content of a specific entry, and `memory_write` to persist durable facts worth remembering
-across sessions. When calling `memory_write`, pass the category via its 'type' parameter
-(never inside 'name') and keep 'name' as a bare file name without directories or '.md'.
-
-### Keeping memories current
-
-Each `memory_search` hit carries `updated` and `maturity`; read them to judge staleness.
-An entry that contradicts the current code or the user's latest statement must be corrected
-with `memory_write action='update'` — never add a rival entry alongside a stale one.
-Use `memory_write action='remove'` only for entries proven obsolete or superseded; when
-unsure, leave them untouched. `memory_list` adds `unused for N days` for a full review view.
-        """.trimIndent()
-
-        /** Static guidance for on-demand knowledge retrieval via knowledge_* tools (cache-stable). */
-        private val KNOWLEDGE_GUIDANCE_SEGMENT = """
-## Knowledge Base
-
-You have access to a knowledge base via the knowledge_* tools. Knowledge content is NOT
-included in this prompt to keep it stable for caching — retrieve it on demand instead.
-
-At the START of each new task, proactively call `knowledge_search` with keywords extracted
-from the user's request to retrieve relevant documents. When `memory_search` is also
-available, you MUST issue both calls in the SAME response so they run in parallel.
-Use `knowledge_read` to load the full content of a specific entry by its key.
-        """.trimIndent()
-
-        /** Static guidance for asynchronous execution via run_background / task_* tools (cache-stable). */
-        private val BACKGROUND_TASK_SEGMENT = """
-## Background (Async) Tasks
-
-You can run long operations ASYNCHRONOUSLY with the `run_background` tool. Instead of blocking
-on a slow tool (video generation, TTS, large builds, long shell commands, etc.), launch it in the
-background and keep reasoning or doing other work while it runs.
-
-- `run_background(tool_name, arguments, description?)` returns IMMEDIATELY with a `task_id`.
-- Check on it later with `task_status(task_id)` — pass its `sleep` parameter (seconds) to wait a
-  bit before reading the status instead of polling in a tight loop. Use `task_list()` for an
-  overview of all tasks in this session.
-- When a background task finishes, its result is injected into the conversation automatically,
-  so you do not need to keep polling — but you may check status at any time.
-
-Prefer `run_background` whenever a step is slow and you have other useful work to do meanwhile.
-Tools that require user approval (ASK) cannot be backgrounded — call those directly first.
-        """.trimIndent()
-
-        /** Static guidance for mid-narrative inline visuals via render_visual (cache-stable). */
-        private val RENDER_VISUAL_SEGMENT = """
-## Inline Visuals
-
-You can show HTML/SVG fragments inline in the conversation with the `render_visual` tool: the
-client renders the fragment as a visual card at the exact position where you call it.
-
-Call it in the MIDDLE of your narrative, not once at the end:
-1. Write the text that leads into the visual.
-2. Call `render_visual` with the fragment for that point in the story.
-3. Continue with the text that follows it, and repeat steps 1-3 for each further visual.
-
-The tool returns only an acknowledgement — the fragment itself reaches the user through the
-rendered card, so never repeat or summarize the fragment code in your text reply. Follow the
-input and style contract in the tool description (bare fragment, contract variables for colors).
         """.trimIndent()
     }
 }

@@ -10,12 +10,14 @@ import com.easy.easyai.core.agent.AgentToolConfig
 import com.easy.easyai.core.agent.AgentType
 import com.easy.easyai.core.agent.AsyncAgentStore
 import com.easy.easyai.core.agent.TargetType
+import com.easy.easyai.core.tool.ToolFactory
 import com.easy.easyai.web.model.ConfigValidationError
 import com.easy.easyai.web.model.ValidateTemplateRequest
 import com.easy.easyai.web.model.ValidateTemplateResponse
 import com.easy.easyai.web.model.TemplateValidationError
 import com.easy.easyai.web.security.getCurrentUserId
 import com.easy.easyai.web.service.validation.ResourceExistenceValidator
+import com.easy.easyai.web.service.validation.ToolAvailability
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.reactor.mono
@@ -54,8 +56,12 @@ class AgentController(
     private val toolRegistry: ToolRegistry,
     @param:Autowired(required = false)
     private val templateRenderer: TemplateRenderer? = null,
+    private val toolFactory: ToolFactory,
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
+
+    /** Tool names that load skill content at runtime, derived from tool capability metadata. */
+    private fun skillLoaderNames(): Set<String> = ToolAvailability.skillLoaders(toolFactory)
 
     @GetMapping
     fun listAll(): Mono<List<AgentDto>> = mono {
@@ -171,7 +177,7 @@ class AgentController(
         if (existing != null) {
             throw ResponseStatusException(HttpStatus.CONFLICT, "Agent already exists: ${request.id}")
         }
-        rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(request))
+        rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(request, skillLoaderNames()))
         validateTeamMembers(request.agentType, request.memberIds, request.customMembers, userId)
         val agent = AgentDefinition.create(
             id = request.id,
@@ -230,7 +236,7 @@ class AgentController(
         if (existing.userId == AuthConstants.SYSTEM_USER_ID) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot modify built-in agent: $id")
         }
-        rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(request))
+        rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(request, skillLoaderNames()))
         validateTeamMembers(request.agentType, request.memberIds, request.customMembers, userId)
 
         val updated = existing.copy(
@@ -290,7 +296,7 @@ class AgentController(
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot modify built-in agent: $id")
         }
         rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(
-            request.toolNames, agentStore.getAgentSkillNames(id)
+            request.toolNames, agentStore.getAgentSkillNames(id), skillLoaderNames = skillLoaderNames()
         ))
         agentStore.saveAgentTools(id, request.toolNames)
         request.toolNames
@@ -331,10 +337,10 @@ class AgentController(
         val type = parseTargetType(request.targetType)
         when (type) {
             TargetType.TOOL -> rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(
-                request.targetNames, agentStore.getAgentSkillNames(id)
+                request.targetNames, agentStore.getAgentSkillNames(id), skillLoaderNames = skillLoaderNames()
             ))
             TargetType.SKILL -> rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(
-                agentStore.getAgentToolNames(id), request.targetNames
+                agentStore.getAgentToolNames(id), request.targetNames, skillLoaderNames = skillLoaderNames()
             ))
             else -> Unit
         }

@@ -152,7 +152,11 @@ class R2dbcRepositoryAutoConfiguration(
     @ConditionalOnMissingBean(SessionToolResolver::class)
     fun sessionToolResolver(
         @Lazy toolFactory: ToolFactory,
-        agentService: AgentService,
+        // Lazy: agentService is only touched inside SessionToolResolver's runtime suspend methods.
+        // Injecting it eagerly closes a startup cycle — agentService -> messageConverter (which
+        // collects every ToolBuilder) -> swarmToolBuilder -> ... -> subAgentContextResolver ->
+        // sessionToolResolver -> agentService. Same reason toolFactory above is @Lazy.
+        @Lazy agentService: AgentService,
         agentStore: AsyncAgentStore,
         @Autowired(required = false) projectStore: AsyncProjectStore? = null,
         @Autowired(required = false) mcpToolProvider: McpToolProvider? = null

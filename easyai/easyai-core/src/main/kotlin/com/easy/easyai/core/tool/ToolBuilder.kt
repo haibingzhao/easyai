@@ -68,6 +68,18 @@ interface ToolBuilder {
      */
     val alwaysInclude: Boolean get() = metadata.alwaysInclude
 
+    /** Static guidance appended to the system prompt when this tool is registered. */
+    val systemPromptSegment: String? get() = metadata.systemPromptSegment
+
+    /** Ascending sort key for [systemPromptSegment]; keeps the prompt prefix independent of bean order. */
+    val promptSegmentOrder: Int get() = metadata.promptSegmentOrder
+
+    /** Semantic capabilities provided by this tool (matched instead of hard-coded names). */
+    val capabilities: Set<ToolCapability> get() = metadata.capabilities
+
+    /** Rewrites this tool's call arguments before they are replayed into the LLM context. */
+    val contextProjector: ToolContextProjector? get() = metadata.contextProjector
+
     /**
      * Permission evaluator for this tool.
      * Determines how permission checks are performed for this tool's calls.

@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -73,6 +74,54 @@ class RenderVisualToolTest {
             assertTrue(builder.metadata.isDefaultTool)
             assertEquals(emptyList(), builder.metadata.patternKeys)
             assertEquals("tool.execute.render_visual", builder.defaultPermissionRules.single().permission)
+        }
+
+        @Test
+        fun `builder declares mid-narrative guidance as system prompt segment`() {
+            val segment = RenderVisualToolBuilder().metadata.systemPromptSegment
+            assertTrue(segment != null)
+            assertTrue(segment.contains("## Inline Visuals"), segment)
+            assertTrue(segment.contains("MIDDLE of your narrative"), segment)
+            assertTrue(segment.contains("never repeat or summarize the fragment code"), segment)
+        }
+    }
+
+    @Nested
+    inner class ContextProjection {
+        private val projector = RenderVisualToolBuilder().metadata.contextProjector!!
+
+        /** Any fragment above the elision threshold; the exact size is asserted in the placeholder. */
+        private val bulkyFragment = "<svg>" + "x".repeat(8 * 1024) + "</svg>"
+
+        @Test
+        fun `elides the code fragment but keeps title`() {
+            val arguments = """{"title":"My Chart","code":"$bulkyFragment"}"""
+            val projected = projector.project(arguments)
+            assertTrue(projected.contains("\"title\":\"My Chart\""), projected)
+            assertTrue(
+                projected.contains("[fragment elided from context: ${bulkyFragment.length} bytes, rendered inline in the UI]"),
+                projected
+            )
+            assertFalse(projected.contains("<svg>"), projected)
+        }
+
+        @Test
+        fun `returns short arguments untouched without eliding`() {
+            val arguments = """{"title":"My Chart","code":"<svg></svg>"}"""
+            assertSame(arguments, projector.project(arguments))
+        }
+
+        @Test
+        fun `passes arguments through when code is absent or not a string`() {
+            val padding = "y".repeat(8 * 1024)
+            assertEquals("""{"title":"x","pad":"$padding"}""", projector.project("""{"title":"x","pad":"$padding"}"""))
+            assertEquals("""{"code":42,"pad":"$padding"}""", projector.project("""{"code":42,"pad":"$padding"}"""))
+        }
+
+        @Test
+        fun `passes malformed json through unchanged`() {
+            val malformed = "not-json" + "z".repeat(8 * 1024)
+            assertEquals(malformed, projector.project(malformed))
         }
     }
 }

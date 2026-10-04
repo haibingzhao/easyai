@@ -1,3 +1,5 @@
+import type { ToolInfo } from '@/types/agent';
+
 /**
  * Well-known tool names used for frontend behavior logic.
  * These constants centralize tool name references across the frontend.
@@ -20,32 +22,35 @@ export const TOOL_NAMES = {
 } as const;
 
 /**
- * Tools unavailable in Swarm runtime context.
- * The backend does not support Skills and Sub Agents for swarm agents:
- * - load_skill: skills are cleared in swarm context
- * - task: SubAgentTool is not created (parentAgentId recursion guard)
- * - run_swarm: mainAgentOnly tool, blocked for non-main agents
+ * Tool availability is decided by the backend: the availability flags on each ToolInfo are derived
+ * from tool metadata (capabilities + mainAgentOnly), so these helpers only project them into name
+ * sets. They must not re-implement the rules, or a runtime change would need a matching edit here.
  */
-export const SWARM_EXCLUDED_TOOLS: string[] = ['load_skill', 'task', 'run_swarm'];
 
 /**
- * Tools blocked at runtime for SUBAGENT-type agents.
- * A SUBAGENT always runs with a parent agent (parentAgentId != null), so:
- * - task: SubAgentTool is not built (parentAgentId recursion guard)
- * - run_swarm: mainAgentOnly tool, blocked for non-main agents
- * They remain selectable in the config UI (the agent could be re-purposed as a
- * main agent), but are shown with a de-emphasized "runtime unavailable" hint.
+ * Names of tools unavailable in a Swarm runtime context (skills are cleared for swarm agents,
+ * sub-agent spawning is recursion-guarded, main-agent-only tools are blocked).
  */
-export const SUBAGENT_BLOCKED_TOOLS: string[] = ['task', 'run_swarm'];
+export function swarmExcludedToolNames(tools: ToolInfo[]): Set<string> {
+  return new Set(tools.filter((t) => t.unsupportedInSwarm).map((t) => t.name));
+}
 
 /**
- * Tools hidden from the selection list for TEAM-type agents.
- * - task: SubAgentTool only launches agents in the subAgentIds whitelist, but the
- *   Sub Agents section is hidden for TEAM (leaders coordinate their defined members
- *   via delegate_to_member instead). With an always-empty whitelist, task can never
- *   succeed for a TEAM leader, so it is hidden rather than offered.
+ * Names of tools blocked at runtime for SUBAGENT-type agents. They remain selectable in the config
+ * UI (the agent could be re-purposed as a main agent), but are shown with a de-emphasized
+ * "runtime unavailable" hint.
  */
-export const TEAM_EXCLUDED_TOOLS: string[] = ['task'];
+export function subAgentBlockedToolNames(tools: ToolInfo[]): Set<string> {
+  return new Set(tools.filter((t) => t.blockedForSubAgent).map((t) => t.name));
+}
+
+/**
+ * Names of tools hidden from the selection list for TEAM-type agents. A leader coordinates its
+ * members via delegate_to_member instead, so sub-agent spawning can never succeed for it.
+ */
+export function teamExcludedToolNames(tools: ToolInfo[]): Set<string> {
+  return new Set(tools.filter((t) => t.unusableForTeam).map((t) => t.name));
+}
 
 /**
  * Tool groups that must be selected or deselected atomically.

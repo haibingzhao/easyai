@@ -9,6 +9,7 @@ import com.easy.easyai.auth.AuthConstants
 import com.easy.easyai.core.agent.AgentDefinition
 import com.easy.easyai.core.agent.AsyncAgentStore
 import com.easy.easyai.core.agent.TargetType
+import com.easy.easyai.web.service.validation.SkillLoaderToolFactory
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -24,7 +25,7 @@ import kotlin.test.assertTrue
 
 class AgentControllerSkillValidationTest {
     private val store = mockk<AsyncAgentStore>(relaxed = true)
-    private val controller = AgentController(store, mockk<ToolRegistry>())
+    private val controller = AgentController(store, mockk<ToolRegistry>(), toolFactory = SkillLoaderToolFactory)
     private val invalid = AgentCreateRequest("agent", "Agent", skillNames = listOf("review"))
     private val existing = AgentDefinition.create(id = "agent", name = "Agent").copy(userId = "alice")
 

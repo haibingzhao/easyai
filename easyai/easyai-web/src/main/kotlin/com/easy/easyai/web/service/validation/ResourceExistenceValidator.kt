@@ -4,6 +4,7 @@ import com.easy.easyai.agent.api.model.AgentCreateRequest
 import com.easy.easyai.agent.registry.ToolRegistry
 import com.easy.easyai.core.agent.AgentType
 import com.easy.easyai.core.agent.AsyncAgentStore
+import com.easy.easyai.core.tool.ToolFactory
 import com.easy.easyai.skills.SkillAccessResolver
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.web.model.ConfigValidationError
@@ -14,6 +15,7 @@ import com.easy.easyai.web.model.ConfigValidationError
 class ResourceExistenceValidator(
     private val toolRegistry: ToolRegistry,
     private val agentStore: AsyncAgentStore,
+    private val toolFactory: ToolFactory,
     private val skillAccessResolver: SkillAccessResolver? = null,
     private val mcpClientManager: McpClientManager? = null,
 ) : AgentConfigValidator {
@@ -83,9 +85,10 @@ class ResourceExistenceValidator(
         if (request.toolNames.isNotEmpty()) {
             when (request.agentType) {
                 AgentType.SUBAGENT -> {
-                    // A SUBAGENT always runs with a parent: `task` is not built
-                    // (recursion guard) and `run_swarm` is mainAgentOnly-blocked.
-                    val blocked = request.toolNames.filter { it in SUBAGENT_BLOCKED_TOOLS }
+                    // A SUBAGENT always runs with a parent: sub-agent-spawning tools are not
+                    // built (recursion guard) and mainAgentOnly tools are blocked.
+                    val blockedSet = ToolAvailability.subAgentBlocked(toolFactory)
+                    val blocked = request.toolNames.filter { it in blockedSet }
                     if (blocked.isNotEmpty()) {
                         errors.add(ConfigValidationError(
                             "toolNames",
@@ -95,9 +98,10 @@ class ResourceExistenceValidator(
                     }
                 }
                 AgentType.TEAM -> {
-                    // `task` only launches agents in the subAgentIds whitelist, which
-                    // is always empty for TEAM (no Sub-Agent config) — never usable.
-                    val unusable = request.toolNames.filter { it in TEAM_UNUSABLE_TOOLS }
+                    // Sub-agent-spawning tools only launch agents in the subAgentIds whitelist,
+                    // which is always empty for TEAM (no Sub-Agent config) — never usable.
+                    val unusableSet = ToolAvailability.teamUnusable(toolFactory)
+                    val unusable = request.toolNames.filter { it in unusableSet }
                     if (unusable.isNotEmpty()) {
                         errors.add(ConfigValidationError(
                             "toolNames",
@@ -110,7 +114,7 @@ class ResourceExistenceValidator(
             }
         }
 
-        errors.addAll(validateSkillTools(request))
+        errors.addAll(validateSkillTools(request, ToolAvailability.skillLoaders(toolFactory)))
 
         // Validate command/tool consistency: the /goal command creates a goal that
         // requires the 'goal' tool for lifecycle management (complete/block/pause).
@@ -143,33 +147,28 @@ class ResourceExistenceValidator(
     companion object {
         /** Shared by config validation and every Agent save endpoint, including inline agents. */
         @JvmStatic
-        fun validateSkillTools(request: AgentCreateRequest): List<ConfigValidationError> = buildList {
-            addAll(validateSkillTools(request.toolNames, request.skillNames))
+        fun validateSkillTools(request: AgentCreateRequest, skillLoaderNames: Set<String>): List<ConfigValidationError> = buildList {
+            addAll(validateSkillTools(request.toolNames, request.skillNames, skillLoaderNames))
             request.customSubAgents.forEachIndexed { index, spec ->
-                addAll(validateSkillTools(spec.toolNames, spec.skillNames, "customSubAgents[$index].skillNames"))
+                addAll(validateSkillTools(spec.toolNames, spec.skillNames, skillLoaderNames, "customSubAgents[$index].skillNames"))
             }
             request.customMembers.forEachIndexed { index, spec ->
-                addAll(validateSkillTools(spec.toolNames, spec.skillNames, "customMembers[$index].skillNames"))
+                addAll(validateSkillTools(spec.toolNames, spec.skillNames, skillLoaderNames, "customMembers[$index].skillNames"))
             }
         }
 
         @JvmStatic
-        @JvmOverloads
         fun validateSkillTools(
             toolNames: List<String>,
             skillNames: List<String>,
+            skillLoaderNames: Set<String>,
             field: String = "skillNames"
-        ): List<ConfigValidationError> = if (skillNames.isNotEmpty() && "load_skill" !in toolNames) {
-            listOf(ConfigValidationError(
-                field,
-                "Skills are configured but 'load_skill' tool is missing from toolNames — the agent cannot load skill content at runtime"
-            ))
-        } else emptyList()
-
-        /** Tools blocked at runtime for SUBAGENT agents (parentAgentId guard / mainAgentOnly). */
-        private val SUBAGENT_BLOCKED_TOOLS = setOf("task", "run_swarm")
-
-        /** Tools that can never function for a TEAM leader (empty sub-agent whitelist). */
-        private val TEAM_UNUSABLE_TOOLS = setOf("task")
+        ): List<ConfigValidationError> =
+            if (skillNames.isNotEmpty() && toolNames.none { it in skillLoaderNames }) {
+                listOf(ConfigValidationError(
+                    field,
+                    "Skills are configured but no skill-loading tool (${skillLoaderNames.joinToString(", ")}) is present in toolNames — the agent cannot load skill content at runtime"
+                ))
+            } else emptyList()
     }
 }

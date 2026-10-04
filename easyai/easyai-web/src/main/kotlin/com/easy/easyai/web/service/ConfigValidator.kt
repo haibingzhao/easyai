@@ -4,6 +4,7 @@ import com.easy.easyai.agent.api.model.AgentCreateRequest
 import com.easy.easyai.common.textio.template.InvalidTemplateException
 import com.easy.easyai.common.textio.template.TemplateRenderer
 import com.easy.easyai.core.agent.AsyncAgentStore
+import com.easy.easyai.core.tool.ToolFactory
 import com.easy.easyai.skills.SkillAccessResolver
 import com.easy.easyai.swarm.dag.DagAlgorithms
 import com.easy.easyai.swarm.model.DeliberationSpec
@@ -13,7 +14,6 @@ import com.easy.easyai.swarm.model.TaskType
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.web.model.ConfigValidationError
 import com.easy.easyai.web.model.ConfigValidationResult
-import com.easy.easyai.web.service.configgen.SWARM_UNSUPPORTED_TOOLS
 import com.easy.easyai.web.service.validation.*
 import org.slf4j.LoggerFactory
 import tools.jackson.databind.JsonNode
@@ -33,6 +33,7 @@ import tools.jackson.databind.ObjectMapper
  */
 class ConfigValidator(
     private val objectMapper: ObjectMapper,
+    private val toolFactory: ToolFactory,
     private val templateRenderer: TemplateRenderer? = null,
     private val agentStore: AsyncAgentStore? = null,
     private val agentValidators: List<AgentConfigValidator> = emptyList(),
@@ -111,6 +112,7 @@ class ConfigValidator(
 
         // 3. Validate agent references exist in DB (skip inline agents)
         val agentIds = agents.map { it.id }.toSet()
+        val swarmUnsupported = ToolAvailability.swarmUnsupported(toolFactory)
         val store = agentStore
         if (store != null) {
             for (agent in agents) {
@@ -122,7 +124,7 @@ class ConfigValidator(
                         ))
                     }
                     // Validate that toolNames don't include swarm-unsupported tools
-                    val unsupported = agent.toolNames.filter { it in SWARM_UNSUPPORTED_TOOLS }
+                    val unsupported = agent.toolNames.filter { it in swarmUnsupported }
                     if (unsupported.isNotEmpty()) {
                         errors.add(ConfigValidationError(
                             "agents", "Inline agent '${agent.id}' uses tools not available in swarm runtime: ${unsupported.joinToString(", ")}"
@@ -255,6 +257,7 @@ class ConfigValidator(
             toolRegistry: com.easy.easyai.agent.registry.ToolRegistry,
             agentStore: AsyncAgentStore,
             objectMapper: ObjectMapper,
+            toolFactory: ToolFactory,
             skillAccessResolver: SkillAccessResolver? = null,
             mcpClientManager: McpClientManager? = null,
             templateRenderer: TemplateRenderer? = null,
@@ -263,6 +266,7 @@ class ConfigValidator(
                 objectMapper = objectMapper,
                 templateRenderer = templateRenderer,
                 agentStore = agentStore,
+                toolFactory = toolFactory,
                 agentValidators = listOf(
                     FieldConstraintValidator(),
                     ResourceExistenceValidator(
@@ -270,6 +274,7 @@ class ConfigValidator(
                         agentStore = agentStore,
                         skillAccessResolver = skillAccessResolver,
                         mcpClientManager = mcpClientManager,
+                        toolFactory = toolFactory,
                     ),
                     TemplateSyntaxValidator(templateRenderer),
                     TemplateConsistencyValidator(),

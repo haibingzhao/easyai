@@ -378,7 +378,7 @@ class SubAgentTool(
         }
 
         // Built-in tools available to the parent (MCP tools are validated separately by server;
-        // FORBIDDEN_TOOLS stay validatable but are stripped later, not rejected)
+        // capability-forbidden tools stay validatable but are stripped later, not rejected)
         val parentToolNames = agentContext.tools
             .filter { it.permissionCategory != MCP_PERMISSION_CATEGORY }
             .map { it.name }
@@ -436,9 +436,9 @@ class SubAgentTool(
             maxIterations = (spec.maxIterations ?: DEFAULT_DYNAMIC_MAX_ITERATIONS)
                 .coerceIn(1, MAX_DYNAMIC_MAX_ITERATIONS),
         )
-        // FORBIDDEN_TOOLS are stripped even if requested; a requested MCP server brings all its tools
+        // Capability-forbidden tools are stripped even if requested; a requested MCP server brings all its tools
         val tools = agentContext.tools.filter {
-            it.name !in FORBIDDEN_TOOLS && (
+            !isForbiddenForSubAgent(it) && (
                 it.name in requestedToolNames ||
                 (it.permissionCategory == MCP_PERMISSION_CATEGORY &&
                     it.name.substringBefore(MCP_NAME_SEPARATOR) in requestedMcpServers)
@@ -476,8 +476,17 @@ class SubAgentTool(
         private const val MCP_PERMISSION_CATEGORY = "mcp"
         private const val MCP_NAME_SEPARATOR = "__"
 
-        /** Tools always removed from sub-agent tool sets for safety. */
-        private val FORBIDDEN_TOOLS = listOf("task", "ask_question")
+        /**
+         * Capability-based check: sub-agents must not spawn further sub-agents or interact with the user.
+         *
+         * This is a denylist over opt-in metadata — a tool that declares no [ToolCapability] is passed
+         * through. See the contract on [ToolCapability].
+         */
+        private val FORBIDDEN_CAPABILITIES = setOf(ToolCapability.SPAWNS_SUBAGENTS, ToolCapability.USER_INTERACTIVE)
+
+        @JvmStatic
+        internal fun isForbiddenForSubAgent(tool: ToolDefinition): Boolean =
+            tool.capabilities.any { it in FORBIDDEN_CAPABILITIES }
 
         /**
          * Mirror of McpToolDefinition.sanitize (easyai-skills must not depend on easyai-tools).
@@ -579,8 +588,8 @@ class SubAgentTool(
                 val allowedNames = whitelist.map { it.targetName }.toSet()
                 tools = tools.filter { it.name in allowedNames }
             }
-            // Always remove subagent itself (prevent recursion) + ask_question (not suitable for sub-agents)
-            tools = tools.filter { it.name !in FORBIDDEN_TOOLS }
+            // Always remove subagent-spawning tools (prevent recursion) + user-interactive tools
+            tools = tools.filter { !isForbiddenForSubAgent(it) }
             return tools
         }
 

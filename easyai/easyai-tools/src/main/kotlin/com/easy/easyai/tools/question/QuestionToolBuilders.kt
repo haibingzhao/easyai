@@ -5,6 +5,7 @@ import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.permission.PermissionAction
 import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.tool.ToolBuilder
+import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import org.springframework.stereotype.Component
@@ -32,7 +33,8 @@ class AskQuestionToolBuilder : ToolBuilder {
     """,
         permissionCategory = "interaction",
         uiRenderer = "ask_question",
-        skipOnResume = true
+        skipOnResume = true,
+        capabilities = setOf(ToolCapability.USER_INTERACTIVE)
     )
     override val defaultPermissionRules = listOf(
         PermissionRule("tool.execute.interaction", "*", PermissionAction.ALLOW)
