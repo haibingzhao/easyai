@@ -34,6 +34,8 @@ private const val RENDER_VISUAL_DESCRIPTION = """Render a self-contained HTML or
 
 [LAYOUT CONTRACT] Body text 13px, font weight only 400 or 500, never below 11px. No gradients, shadows, blur or glow. No HTML/CSS comments. No position:fixed; the root sizes itself via viewBox or width:100%.
 
+[SVG TEXT FIT] SVG never wraps or scrolls: anything past the viewBox edges is clipped away. Keep >=16 units clear on the left, right and bottom of every <text> (bottom means baseline + descender, so a 10px text needs its baseline at viewBox height - 12). Estimate width before placing it: CJK/full-width ≈ 1.0 × font-size per character, latin/digits/spaces ≈ 0.55 ×, and a 50-character CJK sentence at 11px is already ~550 units. For titles and footnotes: split into short <tspan> lines and grow the viewBox height to fit; in an HTML fragment put the sentence in a <p> below the chart so it wraps. Never solve an overflow by shrinking the font.
+
 [ACCESSIBILITY] SVG: role="img" with <title> and <desc> as first children. HTML: open with a visually hidden one-line summary."""
 
 /** Static guidance for mid-narrative inline visuals (cache-stable), appended to the system prompt. */
