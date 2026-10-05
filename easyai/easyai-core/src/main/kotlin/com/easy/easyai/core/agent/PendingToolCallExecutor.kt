@@ -25,7 +25,7 @@ internal class PendingToolCallExecutor(
 ) {
 
     private val logger = LoggerFactory.getLogger(javaClass)
-    private val logPrefix = agentLogPrefix(agentContext.parentAgentId)
+    private val logPrefix = agentLogPrefix(agentContext)
 
     /**
      * Detects and executes pending tool calls from a previously interrupted assistant message.

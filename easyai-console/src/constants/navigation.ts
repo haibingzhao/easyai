@@ -21,6 +21,20 @@ export const NAV_ITEMS: NavItem[] = [
 export const EXTRA_NAV_ITEMS: NavItem[] = [];
 
 /**
+ * Extra components rendered inside the top bar, between the page title and the
+ * user menu. Consumers push a component to surface app-specific context
+ * (e.g. the current identity / active workspace selector).
+ *
+ * The component is expected to consume whatever context it needs from the
+ * consumer's own provider, which must wrap `<AppLayout />`.
+ *
+ * @example
+ * import { TOPBAR_EXTRA_ITEMS } from '@easyai/console';
+ * TOPBAR_EXTRA_ITEMS.push(MyIdentityChip);
+ */
+export const TOPBAR_EXTRA_ITEMS: React.ComponentType[] = [];
+
+/**
  * Icon registry. External consumers can register additional icons
  * via `registerIcons()` so the Sidebar can render them by name.
  */

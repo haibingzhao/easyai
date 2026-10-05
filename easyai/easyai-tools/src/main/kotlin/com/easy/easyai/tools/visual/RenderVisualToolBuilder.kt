@@ -36,6 +36,8 @@ private const val RENDER_VISUAL_DESCRIPTION = """Render a self-contained HTML or
 
 [SVG TEXT FIT] SVG never wraps or scrolls: anything past the viewBox edges is clipped away. Keep >=16 units clear on the left, right and bottom of every <text> (bottom means baseline + descender, so a 10px text needs its baseline at viewBox height - 12). Estimate width before placing it: CJK/full-width ≈ 1.0 × font-size per character, latin/digits/spaces ≈ 0.55 ×, and a 50-character CJK sentence at 11px is already ~550 units. For titles and footnotes: split into short <tspan> lines and grow the viewBox height to fit; in an HTML fragment put the sentence in a <p> below the chart so it wraps. Never solve an overflow by shrinking the font.
 
+[SVG TEXT COLLISION] Two <text> elements with the same y are ONE line: their horizontal spans must not intersect. The span follows the anchor — start: [x, x+w], middle: [x-w/2, x+w/2], end: [x-w, x] — and end/middle grow LEFTWARD from x, so check that side against the 16-unit margin and against every other span sharing the baseline too. Prefer one footnote per own y, stepping down by font-size + 6, over packing two labels into one line.
+
 [ACCESSIBILITY] SVG: role="img" with <title> and <desc> as first children. HTML: open with a visually hidden one-line summary."""
 
 /** Static guidance for mid-narrative inline visuals (cache-stable), appended to the system prompt. */
@@ -53,6 +55,12 @@ Call it in the MIDDLE of your narrative, not once at the end:
 The tool returns only an acknowledgement — the fragment itself reaches the user through the
 rendered card, so never repeat or summarize the fragment code in your text reply. Follow the
 input and style contract in the tool description (bare fragment, contract variables for colors).
+
+The text around the calls is ONE continuous document: a section written earlier in this turn is
+final. After any tool call returns, resume at the next section number with new content only —
+never rewrite, renumber or re-polish sections already delivered, even when fresh tool data
+changes the picture. If an earlier conclusion turned out wrong, put a short correction paragraph
+where you resume (or a closing corrections section) and continue from there.
 """
 
 /**

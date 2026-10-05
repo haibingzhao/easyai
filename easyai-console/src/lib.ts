@@ -73,10 +73,12 @@ export { mergeToolResults } from './services/stores/chat/session-loader';
 // === Components ===
 export { ChatPanel } from './components/chat/ChatPanel';
 export { MessageList } from './components/chat/MessageList';
+export { RenderVisualToolMessage } from './components/chat/tools/RenderVisualToolMessage';
 export { AppLayout, SIDEBAR_COLLAPSED_WIDTH } from './components/layout/AppLayout';
 export { Sidebar } from './components/layout/Sidebar';
 
 // === Types ===
+export type { ToolCallStatus, SocketEvent } from './types/socket-event';
 export type {
   UserMessage,
   AssistantMessage,
@@ -102,7 +104,14 @@ export type {
 export type { NavItem } from './types/layout';
 
 // === Navigation constants ===
-export { NAV_ITEMS, EXTRA_NAV_ITEMS, APP_CONFIG, ICON_REGISTRY, registerIcons } from './constants/navigation';
+export {
+  NAV_ITEMS,
+  EXTRA_NAV_ITEMS,
+  TOPBAR_EXTRA_ITEMS,
+  APP_CONFIG,
+  ICON_REGISTRY,
+  registerIcons,
+} from './constants/navigation';
 
 // === Page components (for external routing) ===
 export { WorkflowPage } from './pages/WorkflowPage';

@@ -36,7 +36,7 @@ internal class AgentLoopRunner(
 ) {
 
     private val logger = LoggerFactory.getLogger(javaClass)
-    private val logPrefix = agentLogPrefix(context.parentAgentId)
+    private val logPrefix = agentLogPrefix(context)
 
     companion object {
         /**

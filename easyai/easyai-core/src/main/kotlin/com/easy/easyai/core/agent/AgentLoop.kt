@@ -46,7 +46,7 @@ internal class AgentLoop(
 ) {
 
     private val logger = LoggerFactory.getLogger(javaClass)
-    private val logPrefix = agentLogPrefix(context.parentAgentId)
+    private val logPrefix = agentLogPrefix(context)
 
     private val pendingToolCallExecutor = PendingToolCallExecutor(
         toolExecutor = services.toolExecutor,

@@ -83,6 +83,8 @@ class RenderVisualToolTest {
             assertTrue(segment.contains("## Inline Visuals"), segment)
             assertTrue(segment.contains("MIDDLE of your narrative"), segment)
             assertTrue(segment.contains("never repeat or summarize the fragment code"), segment)
+            assertTrue(segment.contains("ONE continuous document"), segment)
+            assertTrue(segment.contains("never rewrite, renumber or re-polish sections already delivered"), segment)
         }
     }
 
