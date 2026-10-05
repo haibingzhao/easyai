@@ -76,7 +76,7 @@ export const Sidebar: React.FC = () => {
 
         {/* Navigation items */}
         <nav className={`flex-1 py-2 ${sidebarCollapsed ? 'px-1' : 'px-2'} space-y-1 overflow-y-auto`}>
-          {[...EXTRA_NAV_ITEMS, ...NAV_ITEMS].map((item) => {
+          {[...EXTRA_NAV_ITEMS, ...NAV_ITEMS].filter((item) => item.visible?.() !== false).map((item) => {
             const Icon = resolveIcon(item.icon);
             const active = isActive(item.path);
             return (

@@ -10,18 +10,32 @@ const TASK_LABEL: Record<AuxModelTaskKey, string> = {
   compaction: 'Compaction Model',
   session_title: 'Session Title Model',
   skill_selection: 'Skill Selection Model',
+  asr: 'ASR Model',
+  dictation_refine: 'Dictation Refine Model',
+};
+
+/** Tasks whose blank choice disables a feature outright, instead of following the chat model. */
+const OPT_IN_TASKS: Partial<Record<AuxModelTaskKey, string>> = {
+  asr: 'Not configured (voice input off)',
+  dictation_refine: 'Not configured (no rewrite)',
 };
 
 /** Extra hint rendered under a specific task's picker. */
 const TASK_HINT: Partial<Record<AuxModelTaskKey, string>> = {
   skill_selection:
     'Routes each new user message through a decision model to pick the single best-matching skill; leave unset to rely on skill_search.',
+  asr:
+    'Powers the microphone button in the chat composer. The referenced model must expose an OpenAI-compatible audio transcriptions endpoint.',
+  dictation_refine:
+    'Rewrites a finished dictation round against its surrounding context to fix homophones and punctuation. Leave unset to keep raw transcriptions.',
 };
 
 const SOURCE_BADGE: Record<AuxModelConfig['effectiveSource'], { label: string; tone: string }> = {
   user: { label: 'Custom model', tone: 'text-green-500 bg-green-500/10' },
   default: { label: 'Follow chat model', tone: 'text-muted-foreground bg-muted' },
 };
+
+const NOT_ENABLED_BADGE = { label: 'Not enabled', tone: 'text-muted-foreground bg-muted' } as const;
 
 const taskLabel = (key: AuxModelTaskKey): string => TASK_LABEL[key] ?? key;
 
@@ -30,6 +44,7 @@ export const AuxModelsTab: React.FC = () => {
   const [loadError, setLoadError] = useState('');
   const [configs, setConfigs] = useState<AuxModelConfig[]>([]);
   const [models, setModels] = useState<ModelProviderConfig[]>([]);
+  const [asrModels, setAsrModels] = useState<ModelProviderConfig[]>([]);
   const [groupNames, setGroupNames] = useState<Record<string, string>>({});
   // Draft selection per task, keyed by taskKey; initialized from the server on load.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -38,13 +53,15 @@ export const AuxModelsTab: React.FC = () => {
 
   const load = useCallback(async () => {
     try {
-      const [auxList, modelList, groups] = await Promise.all([
+      const [auxList, modelList, groups, asrList] = await Promise.all([
         auxModelConfigService.list(),
         modelConfigService.getUserConfigurations(),
         modelConfigService.getGroups(),
+        modelConfigService.getUserConfigurations('ASR'),
       ]);
       setConfigs(auxList);
       setModels(modelList);
+      setAsrModels(asrList);
       const nameMap: Record<string, string> = {};
       for (const g of groups) nameMap[g.id] = g.name;
       setGroupNames(nameMap);
@@ -132,7 +149,9 @@ export const AuxModelsTab: React.FC = () => {
 
         <div className="space-y-5">
           {configs.map((config) => {
-            const badge = SOURCE_BADGE[config.effectiveSource];
+            const optInLabel = OPT_IN_TASKS[config.taskKey];
+            const badge = optInLabel && config.effectiveSource === 'default' ? NOT_ENABLED_BADGE : SOURCE_BADGE[config.effectiveSource];
+            const isAsrTask = config.taskKey === 'asr';
             const draft = drafts[config.taskKey] ?? '';
             const dirty = draft !== config.modelConfigId;
             return (
@@ -149,17 +168,25 @@ export const AuxModelsTab: React.FC = () => {
                   onChange={(e) => setDrafts((prev) => ({ ...prev, [config.taskKey]: e.target.value }))}
                   className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                 >
-                  <option value="">{i18n('Follow chat model (default)')}</option>
-                  {[...grouped.byGroup.entries()].map(([groupId, groupModels]) => (
-                    <optgroup key={groupId} label={groupNames[groupId]}>
-                      {groupModels.map((m) => (
-                        <option key={m.id} value={m.id}>{optionLabel(m)}</option>
-                      ))}
-                    </optgroup>
-                  ))}
-                  {grouped.ungrouped.map((m) => (
-                    <option key={m.id} value={m.id}>{optionLabel(m)}</option>
-                  ))}
+                  <option value="">{i18n(optInLabel ?? 'Follow chat model (default)')}</option>
+                  {isAsrTask
+                    ? asrModels.map((m) => (
+                        <option key={m.id} value={m.id}>{`${m.name || m.modelName || m.modelId} (${m.modelId})`}</option>
+                      ))
+                    : (
+                      <>
+                        {[...grouped.byGroup.entries()].map(([groupId, groupModels]) => (
+                          <optgroup key={groupId} label={groupNames[groupId]}>
+                            {groupModels.map((m) => (
+                              <option key={m.id} value={m.id}>{optionLabel(m)}</option>
+                            ))}
+                          </optgroup>
+                        ))}
+                        {grouped.ungrouped.map((m) => (
+                          <option key={m.id} value={m.id}>{optionLabel(m)}</option>
+                        ))}
+                      </>
+                    )}
                 </select>
 
                 {TASK_HINT[config.taskKey] && (

@@ -31,7 +31,7 @@ class AgentRunner(
     private val services: AgentService get() = agent.services
 
     private val logger = LoggerFactory.getLogger(javaClass)
-    private val logPrefix = agentLogPrefix(context.parentAgentId)
+    private val logPrefix = agentLogPrefix(context)
 
     /**
      * Execute the agent loop with new messages appended to the transcript.

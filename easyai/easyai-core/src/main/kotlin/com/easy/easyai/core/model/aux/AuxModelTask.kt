@@ -24,7 +24,20 @@ enum class AuxModelTask(val key: String) {
      * [AuxModelResolver.resolveConfig] — the referenced row supplies endpoint material
      * (apiKey/baseUrl/modelId) only; no ChatModel is built for it.
      */
-    SKILL_SELECTION("skill_selection");
+    SKILL_SELECTION("skill_selection"),
+
+    /**
+     * Chat-input dictation transcription (OpenAI-compatible `POST {base}/audio/transcriptions`).
+     * Unset means voice input is off; consumed through [AuxModelResolver.resolveConfig] like
+     * [SKILL_SELECTION] — the row supplies endpoint material only.
+     */
+    ASR("asr"),
+
+    /**
+     * Post-dictation context-aware rewrite of the dictated text. Unset means the refinement step
+     * is skipped and raw transcriptions stand.
+     */
+    DICTATION_REFINE("dictation_refine");
 
     companion object {
         /** The task for a persisted key; null when the key is unknown (e.g. from an older/newer build). */

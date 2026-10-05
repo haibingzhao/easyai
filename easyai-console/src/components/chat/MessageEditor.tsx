@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Send, Square, Loader2, Paperclip, ShieldCheck, Clock } from 'lucide-react';
+import { Send, Square, Loader2, Paperclip, ShieldCheck, Clock, Mic } from 'lucide-react';
 import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { useSideAskStore } from '@/services/stores/side-ask-store';
@@ -18,6 +18,8 @@ import { AutoApprovePanel } from './AutoApprovePanel';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { useSlashCommand } from '@/hooks/useSlashCommand';
 import { useAttachmentManager } from '@/hooks/useAttachmentManager';
+import { useVoiceInput } from '@/hooks/useVoiceInput';
+import { auxModelConfigService } from '@/services/aux-model-config-service';
 import { AttachmentPreviewBar } from './AttachmentPreviewBar';
 import { AttachmentImage } from './AttachmentImage';
 import type { SlashCommand } from '@/types/command';
@@ -49,6 +51,16 @@ export const MessageEditor: React.FC = () => {
   const [clockDismissed, setClockDismissed] = useState(false);
   // React roots for inline image chips, keyed by container element for cleanup
   const imageRootsRef = useRef<Map<HTMLElement, Root>>(new Map());
+  // Voice input: gated on the user's Task Models choices (asr enables the mic,
+  // dictation_refine only decides whether the stop-time rewrite runs).
+  const [asrReady, setAsrReady] = useState(false);
+  const refineReadyRef = useRef(false);
+  useEffect(() => {
+    auxModelConfigService.list().then((configs) => {
+      setAsrReady(configs.some((c) => c.taskKey === 'asr' && c.modelConfigId.trim() !== ''));
+      refineReadyRef.current = configs.some((c) => c.taskKey === 'dictation_refine' && c.modelConfigId.trim() !== '');
+    }).catch(() => { /* persistence off: voice input stays unavailable */ });
+  }, []);
 
   useEffect(() => {
     if (toolbarRowRef.current) {
@@ -561,6 +573,15 @@ export const MessageEditor: React.FC = () => {
     return editor ? readMessageEditorText(editor) : '';
   }, []);
 
+  const syncEditorValue = useCallback(() => setEditorValue(getEditorText()), [getEditorText]);
+  const isRefineEnabled = useCallback(() => refineReadyRef.current, []);
+  const voice = useVoiceInput({
+    editorRef,
+    isRefineEnabled,
+    onEditorChanged: syncEditorValue,
+    onError: (msg) => addMessage({ role: 'error', content: msg, timestamp: Date.now() }),
+  });
+
   /** Wrap handleFiles to insert inline image chips into the editor after processing. */
   const handleFilesWithChips = useCallback(async (files: File[]) => {
     const editor = editorRef.current;
@@ -855,6 +876,8 @@ export const MessageEditor: React.FC = () => {
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
+      // While dictating or polishing, Enter neither sends nor queues — stop the voice first.
+      if (voice.phase !== 'idle') return;
       const text = editorRef.current?.textContent?.trim() || '';
       const hasContent = selectedCommand || text;
       if (!isStreaming && !isAwaitingAskQuestion() && !isAwaitingPermission() && !isModelLoading && hasContent) {
@@ -993,6 +1016,12 @@ export const MessageEditor: React.FC = () => {
   return (
     <div className="flex flex-col gap-2 relative">
       {commandError && <div role="alert" className="text-xs text-destructive">{commandError}</div>}
+      {voice.phase === 'refining' && (
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          {i18n('Polishing your dictation, please wait…')}
+        </div>
+      )}
       {/* Queued messages panel */}
       <QueuedMessagesPanel />
 
@@ -1061,7 +1090,7 @@ export const MessageEditor: React.FC = () => {
             minHeight: 'calc(3 * 1.5em + 1rem)',
             maxHeight: 'calc(7 * 1.5em + 1rem)',
           }}
-          contentEditable={!isSubmitting && !isAwaitingAskQuestion() && !isAwaitingPermission()}
+          contentEditable={!isSubmitting && !isAwaitingAskQuestion() && !isAwaitingPermission() && voice.phase !== 'refining'}
         />
       </div>
 
@@ -1089,51 +1118,88 @@ export const MessageEditor: React.FC = () => {
           <ModelSelector onModelChange={handleModelChange} />
         </div>
         <div className="flex items-center gap-0.5">
-          {isStreaming ? (
+          {voice.phase === 'recording' ? (
             <>
-              {showStopButton && (
+              <VoiceWaveform analyserRef={voice.analyserRef} />
+              <button
+                className="p-1.5 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+                title={i18n('Stop voice input')}
+                onClick={() => { void voice.stopAndFinish(); }}
+              >
+                <Square className="w-4 h-4" />
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => { void voice.start(); }}
+                disabled={!asrReady || isStreaming || voice.phase !== 'idle' || isSubmitting}
+                className="p-1.5 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
+                title={
+                  !asrReady
+                    ? i18n('Please configure an ASR model in Settings → Task Models')
+                    : isStreaming
+                      ? i18n('Wait for the current response to finish')
+                      : i18n('Start voice input')
+                }
+              >
+                <Mic className="w-4 h-4" />
+              </button>
+              {voice.phase === 'refining' ? (
                 <button
-                  className="p-1.5 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
-                  title={i18n('Stop')}
-                  onClick={() => {
-                    commitStreamingMessage();
-                    getCurrentSendService()?.abort();
-                    abortAllActiveStreams();
-                    if (sessionId) {
-                      cancelChat(sessionId);
-                    }
-                    setCancelReason('Manually Cancelled');
-                    setStreaming(false);
-                    // Clear queued messages — they will not be consumed after cancel
-                    useChatStore.setState({ queuedMessages: [] });
-                  }}
+                  className="p-1.5 rounded-md bg-primary text-primary-foreground opacity-60"
+                  title={i18n('Polishing your dictation, please wait…')}
+                  disabled
                 >
-                  <Square className="w-4 h-4" />
+                  <Loader2 className="w-4 h-4 animate-spin" />
                 </button>
-              )}
-              {showClockButton && (
+              ) : isStreaming ? (
+                <>
+                  {showStopButton && (
+                    <button
+                      className="p-1.5 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+                      title={i18n('Stop')}
+                      onClick={() => {
+                        commitStreamingMessage();
+                        getCurrentSendService()?.abort();
+                        abortAllActiveStreams();
+                        if (sessionId) {
+                          cancelChat(sessionId);
+                        }
+                        setCancelReason('Manually Cancelled');
+                        setStreaming(false);
+                        // Clear queued messages — they will not be consumed after cancel
+                        useChatStore.setState({ queuedMessages: [] });
+                      }}
+                    >
+                      <Square className="w-4 h-4" />
+                    </button>
+                  )}
+                  {showClockButton && (
+                    <button
+                      className="p-1.5 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+                      title={hasQueuedMessages ? i18n('Cancel queued messages') : i18n('Show stop button')}
+                      onClick={handleClockClick}
+                    >
+                      <Clock className="w-4 h-4" />
+                    </button>
+                  )}
+                </>
+              ) : (
                 <button
-                  className="p-1.5 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
-                  title={hasQueuedMessages ? i18n('Cancel queued messages') : i18n('Show stop button')}
-                  onClick={handleClockClick}
+                  className="p-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                  disabled={!hasContent || processingFiles || isSubmitting || isAwaitingAskQuestion() || isAwaitingPermission() || isModelLoading}
+                  onClick={handleSend}
+                  title={isModelLoading ? i18n('Loading models...') : isAwaitingAskQuestion() ? i18n('Answer the question first') : i18n('Send')}
                 >
-                  <Clock className="w-4 h-4" />
+                  {processingFiles || isSubmitting ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Send className="w-4 h-4" />
+                  )}
                 </button>
               )}
             </>
-          ) : (
-            <button
-              className="p-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-              disabled={!hasContent || processingFiles || isSubmitting || isAwaitingAskQuestion() || isAwaitingPermission() || isModelLoading}
-              onClick={handleSend}
-              title={isModelLoading ? i18n('Loading models...') : isAwaitingAskQuestion() ? i18n('Answer the question first') : i18n('Send')}
-            >
-              {processingFiles || isSubmitting ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Send className="w-4 h-4" />
-              )}
-            </button>
           )}
         </div>
       </div>
@@ -1149,4 +1215,37 @@ export const MessageEditor: React.FC = () => {
       )}
     </div>
   );
+};
+
+/** Live mic-level bars drawn from the recording analyser, replacing the send button while dictating. */
+const VoiceWaveform: React.FC<{ analyserRef: React.RefObject<AnalyserNode | null> }> = ({ analyserRef }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    let raf = 0;
+    const data = new Uint8Array(128);
+    const bars = 16;
+    const draw = () => {
+      raf = requestAnimationFrame(draw);
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      const analyser = analyserRef.current;
+      if (!analyser) return;
+      analyser.getByteTimeDomainData(data);
+      ctx.fillStyle = '#10b981';
+      const step = Math.floor(data.length / bars);
+      for (let i = 0; i < bars; i++) {
+        let peak = 0;
+        for (let j = 0; j < step; j++) peak = Math.max(peak, Math.abs(data[i * step + j] - 128));
+        const bh = Math.max(2, (peak / 128) * (h - 2));
+        ctx.fillRect((i * w) / bars + 1, (h - bh) / 2, w / bars - 2, bh);
+      }
+    };
+    draw();
+    return () => cancelAnimationFrame(raf);
+  }, [analyserRef]);
+  return <canvas ref={canvasRef} width={96} height={20} className="mx-1" />;
 };

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useLocation } from 'react-router-dom';
 import { Menu } from 'lucide-react';
-import { NAV_ITEMS } from '@/constants/navigation';
+import { NAV_ITEMS, EXTRA_NAV_ITEMS, TOPBAR_EXTRA_ITEMS } from '@/constants/navigation';
 import { useNavStore } from '@/services/stores/nav-store';
 import { i18n } from '@/utils/i18n';
 import { UserMenu } from './UserMenu';
@@ -12,7 +12,7 @@ export const TopBar: React.FC = () => {
   const location = useLocation();
   const setMobileSidebarOpen = useNavStore((s) => s.setMobileSidebarOpen);
 
-  const currentNav = NAV_ITEMS.find((item) => {
+  const currentNav = [...EXTRA_NAV_ITEMS, ...NAV_ITEMS].find((item) => {
     if (item.path === '/') return location.pathname === '/';
     return location.pathname.startsWith(item.path);
   });
@@ -36,6 +36,9 @@ export const TopBar: React.FC = () => {
 
       {/* User menu + Theme toggle (right side) */}
       <div className="flex items-center gap-1">
+        {TOPBAR_EXTRA_ITEMS.map((Extra, index) => (
+          <Extra key={index} />
+        ))}
         <ProjectSelector />
         <UserMenu />
         <ThemeToggle />
