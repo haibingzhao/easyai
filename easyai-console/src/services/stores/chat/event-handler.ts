@@ -14,6 +14,7 @@ import type {
   RetryEvent,
   SessionContextEvent,
   BackgroundTaskEvent,
+  ToolFoldEvent,
 } from '@/types/socket-event';
 import type { Message, ToolResult, ToolResultContentBlock, ContextReferences, QueuedMessage } from '@/types/message';
 import type { TodoInfo, SubAgentTodoGroup } from '@/types/todo';
@@ -61,6 +62,8 @@ export interface ChatStateShape {
   currentGoal: GoalStatusEvent | null;
   queuedMessages: QueuedMessage[];
   backgroundTasks: Record<string, BackgroundTaskEvent>;
+  /** Latest tool_fold event of the current session; null when this run has not folded anything */
+  toolFoldInfo: ToolFoldEvent | null;
 
   // Actions
   appendToTextBlock: (delta: string, messageId?: string) => void;
@@ -196,7 +199,7 @@ export function handleChatEvent(
         set((s) => ({ sessionId: s.sessionId || event.sessionId }));
       }
       // Clear any stale cancelReason when a new run starts
-      set({ cancelReason: null, retryInfo: null });
+      set({ cancelReason: null, retryInfo: null, toolFoldInfo: null });
       break;
     case 'text_delta':
       state.appendToTextBlock(event.delta, event.messageId);
@@ -416,6 +419,12 @@ export function handleChatEvent(
     }
     case 'compaction_end':
       handleCompactionEnd(event as CompactionEndEvent, state, set);
+      break;
+    case 'tool_fold':
+      // Latest fold report of this run — surfaced as a hint on TokenContextBar.
+      // contextTokens is NOT adjusted: it comes from real per-turn LLM usage,
+      // which already reflects the post-fold prompt.
+      set({ toolFoldInfo: event as ToolFoldEvent });
       break;
     case 'message_end': {
       handleMessageEnd(event as MessageEndEvent, get, set);

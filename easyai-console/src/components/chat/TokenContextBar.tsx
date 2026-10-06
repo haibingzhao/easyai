@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { FoldHorizontal, Loader2 } from 'lucide-react';
 import { useChatStore } from '@/services/stores/chat-store';
 import { formatTokenCount } from '@/utils/format';
 import { i18n } from '@/utils/i18n';
@@ -35,6 +35,7 @@ export const TokenContextBar: React.FC = () => {
     isStreaming,
     isAwaitingAskQuestion,
     isCompacting,
+    toolFoldInfo,
     setCompacting,
     handleEvent,
   } = useChatStore();
@@ -97,6 +98,18 @@ export const TokenContextBar: React.FC = () => {
         <span className="text-xs text-muted-foreground">
           {i18n('context used')}
         </span>
+        {toolFoldInfo && toolFoldInfo.foldedToolCallCount > 0 && (
+          <span
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground"
+            title={i18n('Folded {runs} earlier runs · {calls} tool calls (~{tokens} tokens saved)')
+              .replace('{runs}', String(toolFoldInfo.foldedRunCount))
+              .replace('{calls}', String(toolFoldInfo.foldedToolCallCount))
+              .replace('{tokens}', formatTokenCount(toolFoldInfo.tokensSavedEstimate))}
+          >
+            <FoldHorizontal className="size-3.5" />
+            <span className="tabular-nums">{toolFoldInfo.foldedToolCallCount}</span>
+          </span>
+        )}
         <button
           onClick={handleCompact}
           disabled={compactDisabled}

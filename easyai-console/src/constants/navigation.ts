@@ -21,6 +21,38 @@ export const NAV_ITEMS: NavItem[] = [
 export const EXTRA_NAV_ITEMS: NavItem[] = [];
 
 /**
+ * Does `itemPath` own `pathname` — i.e. is it that path, or an ancestor of it?
+ *
+ * The ancestor case is what makes a section entry stay lit while you are on one of
+ * its pages (`/workflow` at `/workflow/create`). The match must land on a segment
+ * boundary, so `/a/b` covers `/a/b/c` but never `/a/bc`.
+ */
+export function matchesNavPath(itemPath: string, pathname: string): boolean {
+  if (itemPath === '/') return pathname === '/';
+  return pathname === itemPath || pathname.startsWith(`${itemPath}/`);
+}
+
+/**
+ * The nav item that owns `pathname` — the **most specific** match, or `undefined`.
+ *
+ * Nav paths are allowed to nest: a section entry plus a page entry below it, e.g.
+ * `/home/family` and `/home/family/permissions`. Tested one by one, prefix matching
+ * lights up both at once, which reads as "two items selected". Comparing every match
+ * and keeping the longest path leaves exactly one item marked current.
+ *
+ * `items` order is irrelevant; ties (two entries sharing one path) resolve to the
+ * first one seen.
+ */
+export function resolveActiveNavItem(items: NavItem[], pathname: string): NavItem | undefined {
+  let match: NavItem | undefined;
+  for (const item of items) {
+    if (!matchesNavPath(item.path, pathname)) continue;
+    if (!match || item.path.length > match.path.length) match = item;
+  }
+  return match;
+}
+
+/**
  * Extra components rendered inside the top bar, between the page title and the
  * user menu. Consumers push a component to surface app-specific context
  * (e.g. the current identity / active workspace selector).

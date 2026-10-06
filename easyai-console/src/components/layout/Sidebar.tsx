@@ -1,7 +1,7 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { MessageSquare, GitBranch, Settings, Bot, Database, Blocks, Brain, Terminal, Cpu, PanelLeftClose, PanelLeft, BookOpen, Sparkles } from 'lucide-react';
-import { NAV_ITEMS, EXTRA_NAV_ITEMS, APP_CONFIG, ICON_REGISTRY } from '@/constants/navigation';
+import { NAV_ITEMS, EXTRA_NAV_ITEMS, APP_CONFIG, ICON_REGISTRY, resolveActiveNavItem } from '@/constants/navigation';
 import { useNavStore } from '@/services/stores/nav-store';
 import { SIDEBAR_COLLAPSED_WIDTH } from './AppLayout';
 import { i18n } from '@/utils/i18n';
@@ -30,10 +30,16 @@ export const Sidebar: React.FC = () => {
   const location = useLocation();
   const { sidebarCollapsed, mobileSidebarOpen, sidebarWidth, toggleSidebar, setMobileSidebarOpen } = useNavStore();
 
-  const isActive = (path: string) => {
-    if (path === '/') return location.pathname === '/';
-    return location.pathname.startsWith(path);
-  };
+  /**
+   * Rendered items, and which one of them is "current".
+   *
+   * Only the **most specific** match counts (see `resolveActiveNavItem`): with prefix
+   * matching alone, `/home/family` would also light up on `/home/family/permissions`,
+   * and the sidebar would look like two entries are selected at once. Comparing by
+   * `id` keeps exactly one winner even if two consumers register the same path.
+   */
+  const visibleItems = [...EXTRA_NAV_ITEMS, ...NAV_ITEMS].filter((item) => item.visible?.() !== false);
+  const activeItem = resolveActiveNavItem(visibleItems, location.pathname);
 
   const handleNavClick = (path: string) => {
     navigate(path);
@@ -76,15 +82,19 @@ export const Sidebar: React.FC = () => {
 
         {/* Navigation items */}
         <nav className={`flex-1 py-2 ${sidebarCollapsed ? 'px-1' : 'px-2'} space-y-1 overflow-y-auto`}>
-          {[...EXTRA_NAV_ITEMS, ...NAV_ITEMS].filter((item) => item.visible?.() !== false).map((item) => {
+          {visibleItems.map((item) => {
             const Icon = resolveIcon(item.icon);
-            const active = isActive(item.path);
+            const active = item.id === activeItem?.id;
             return (
               <button
                 key={item.id}
                 onClick={() => handleNavClick(item.path)}
                 className={[
                   'w-full flex items-center gap-3 py-2 text-sm rounded-md transition-colors',
+                  // Keyboard focus gets the themed ring; the mouse does not leave the
+                  // browser's default outline behind, which is easy to mistake for a
+                  // second selection.
+                  'outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   sidebarCollapsed ? 'justify-center px-1' : 'px-2',
                   active ? 'bg-muted font-medium' : 'hover:bg-muted',
                 ].join(' ')}

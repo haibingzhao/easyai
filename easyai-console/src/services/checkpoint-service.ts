@@ -12,6 +12,15 @@ export async function getCheckpoints(sessionId: string): Promise<CheckpointInfo[
 }
 
 /**
+ * Global snapshot capability probe — whether the backend's snapshot system is a real
+ * implementation (false for no-op overrides that disable file tracking).
+ * Session-independent; fetched once at startup to gate the Review UI before any session loads.
+ */
+export async function getSnapshotCapability(): Promise<boolean> {
+  return fetchJson<boolean>(`${API_BASE}/snapshot-capability`);
+}
+
+/**
  * Revert files to the state before the specified message's changes.
  */
 export async function revertToMessage(sessionId: string, messageId: string): Promise<RevertResponse> {

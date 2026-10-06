@@ -146,6 +146,14 @@ object ChatEventConverter {
                 variables = event.variables.ifEmpty { null }
             )
         )
+        is ToolFoldEvent -> listOf(
+            ChatStreamEvent.ToolFold(
+                turnId = event.turnId,
+                foldedRunCount = event.foldedRunCount,
+                foldedToolCallCount = event.foldedToolCallCount,
+                tokensSavedEstimate = event.tokensSavedEstimate
+            )
+        )
         is PermissionRequestEvent -> listOf(
             ChatStreamEvent.PermissionRequest(
                 toolCallId = event.toolCallId,

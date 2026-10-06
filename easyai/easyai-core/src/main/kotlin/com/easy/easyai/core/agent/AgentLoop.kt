@@ -4,6 +4,9 @@ import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.AgentLoop.Companion.MAX_COMPLETION_CHECK_BONUS
 import com.easy.easyai.core.event.*
 import com.easy.easyai.core.model.*
+import com.easy.easyai.core.message.ToolFoldConfig
+import com.easy.easyai.core.message.ToolFoldProjection
+import com.easy.easyai.core.tool.RecallToolResultTool
 import com.easy.easyai.core.tool.ToolCallResult
 import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
@@ -74,6 +77,18 @@ internal class AgentLoop(
 
     private val loopRunner = AgentLoopRunner(context, chatModel, services)
 
+    private val foldConfig = ToolFoldConfig(
+        enabled = context.toolFoldEnabled,
+        keepRecentRuns = context.toolFoldKeepRecentRuns
+    )
+
+    /**
+     * Per-run memo of tool-call fold placeholders (ref → text), shared by every [ToolFoldProjection.project]
+     * call in this loop so historical arguments JSON is parsed once, not once per turn/projection.
+     * A ref's arguments are immutable within a run; the map is loop-scoped and never shared across runs.
+     */
+    private val foldPlaceholderCache = HashMap<String, String>()
+
     /**
      * Bonus iteration budget: allows completion checks to grant extra iterations
      * beyond [AgentContext.maxIterations]. Each grant decrements the budget;
@@ -142,8 +157,14 @@ internal class AgentLoop(
                 }
             }
 
-            // Detect and execute pending toolCalls (resume scenario)
-            pendingToolCallExecutor.executePendingToolCallsIfNeeded(transcript, this)
+            // Detect and execute pending toolCalls (resume scenario). When folding is on, a
+            // pending recall_tool_result call must stay resolvable — inject it bound to this transcript.
+            val resumeExtraTools = if (context.toolFoldEnabled) {
+                listOf(RecallToolResultTool(transcriptProvider = { transcript.toList() }))
+            } else {
+                emptyList()
+            }
+            pendingToolCallExecutor.executePendingToolCallsIfNeeded(transcript, this, resumeExtraTools)
 
             // Warn once if the same check class is registered twice: both instances share a
             // single ledger entry, so the effective nudge budget is halved.
@@ -226,10 +247,32 @@ internal class AgentLoop(
 
         logger.debug("${logPrefix}[Turn {}] Transforming context ({} messages)", turnId, transcript.size)
         val messageTimestamps = services.getMessageTimestamps()
-        val transformedMessages = transformContext(transcript, turnId, messageTimestamps, CompactionTriggerType.Auto)
+
+        // Cross-run tool fold: send-time projection. The transcript always keeps originals.
+        // The pre-compaction view only measures the trigger; the view actually sent is projected
+        // from the transform output, because compaction may have rewritten the transcript head.
+        val measureView = ToolFoldProjection.project(transcript.toList(), foldConfig, foldPlaceholderCache).first
+        val transformedMessages = transformContext(transcript, turnId, messageTimestamps, CompactionTriggerType.Auto, measureView)
+        val (promptView, foldReport) = ToolFoldProjection.project(transformedMessages, foldConfig, foldPlaceholderCache)
+        if (foldReport.hasFolds) {
+            push(
+                ToolFoldEvent(
+                    turnId = turnId,
+                    sessionId = context.sessionId ?: "default",
+                    foldedRunCount = foldReport.foldedRunCount,
+                    foldedToolCallCount = foldReport.foldedToolCallCount,
+                    tokensSavedEstimate = foldReport.tokensSavedEstimate
+                )
+            )
+        }
+        val promptTools = if (foldReport.hasFolds) {
+            tools + RecallToolResultTool(transcriptProvider = { transcript.toList() })
+        } else {
+            tools
+        }
 
         // Prepare the prompt with system prompt and tool callbacks
-        val prompt = loopRunner.preparePrompt(transformedMessages, tools)
+        val prompt = loopRunner.preparePrompt(promptView, promptTools)
 
         val messageId = generateMessageId()
         push(MessageStartEvent(messageId, turnId, context.sessionId ?: "default"))
@@ -240,7 +283,8 @@ internal class AgentLoop(
             prompt = prompt,
             messageId = messageId,
             turnId = turnId,
-            messageTimestamps = messageTimestamps
+            messageTimestamps = messageTimestamps,
+            promptTools = promptTools
         )
 
         // Attach context references (rules only at this point; memory refs added after tool execution)
@@ -281,7 +325,7 @@ internal class AgentLoop(
             toolResults = executeToolCallsWithHooks(
                 messageId = messageId,
                 toolCalls = toolCalls,
-                tools = tools,
+                tools = promptTools,
                 eventStream = this,
                 turnId = turnId
             )
@@ -746,12 +790,16 @@ internal class AgentLoop(
     /**
      * Transform context with the specified trigger type.
      * Updates the transcript if compaction occurred.
+     *
+     * @param measureView optional folded projection used for compaction trigger measurement only;
+     *   selection and summarization still operate on the original transcript.
      */
     private suspend fun ProducerScope<AgentEvent, List<AssistantMessage>>.transformContext(
         transcript: MutableList<EasyAiMessage>,
         turnId: Int,
         messageTimestamps: Map<String, Long>,
-        triggerType: CompactionTriggerType
+        triggerType: CompactionTriggerType,
+        measureView: List<EasyAiMessage>? = null
     ): List<EasyAiMessage> {
         val transformInput = TransformContextInput(
             agentContext = context,
@@ -761,7 +809,8 @@ internal class AgentLoop(
             compactionTriggerType = triggerType,
             messageTimestamps = messageTimestamps,
             eventPusher = { event -> push(event) },
-            chatModel = chatModel
+            chatModel = chatModel,
+            compactionMeasureMessages = measureView
         )
         val transformedMessages = services.transformContextService.transform(transformInput)
 
@@ -796,7 +845,8 @@ internal class AgentLoop(
         prompt: Prompt,
         messageId: String,
         turnId: Int,
-        messageTimestamps: Map<String, Long>
+        messageTimestamps: Map<String, Long>,
+        promptTools: List<ToolDefinition>
     ): AssistantMessage {
         try {
             return loopRunner.callLLMAndBuildResponse(
@@ -822,8 +872,16 @@ internal class AgentLoop(
                     triggerType = CompactionTriggerType.Overflow(context.modelId)
                 )
 
-                // Prepare new prompt with compacted messages
-                val newPrompt = loopRunner.preparePrompt(compactedMessages, tools)
+                // Prepare new prompt with compacted messages, folded again for the retry view
+                val (retryView, retryReport) = ToolFoldProjection.project(compactedMessages, foldConfig, foldPlaceholderCache)
+                val retryTools = if (retryReport.hasFolds &&
+                    promptTools.none { it.name == RecallToolResultTool.TOOL_NAME }
+                ) {
+                    promptTools + RecallToolResultTool(transcriptProvider = { transcript.toList() })
+                } else {
+                    promptTools
+                }
+                val newPrompt = loopRunner.preparePrompt(retryView, retryTools)
 
                 // Retry LLM call with compacted context
                 return loopRunner.callLLMAndBuildResponse(

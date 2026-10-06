@@ -80,6 +80,10 @@ export interface AgentDto {
   color: string | null;
   enabled: boolean;
   instructionsEnabled: boolean;
+  /** Cross-run tool-message folding master switch (send-time projection). */
+  toolFoldEnabled: boolean;
+  /** Completed runs kept verbatim in addition to the current run. */
+  toolFoldKeepRecentRuns: number;
   inputSchema: string | null;
   outputSchema: string | null;
   outputSchemaMultiTurn: boolean;
@@ -115,6 +119,8 @@ export interface AgentCreateRequest {
   color?: string;
   enabled: boolean;
   instructionsEnabled?: boolean;
+  toolFoldEnabled?: boolean;
+  toolFoldKeepRecentRuns?: number;
   inputSchema?: string;
   outputSchema?: string;
   outputSchemaMultiTurn?: boolean;

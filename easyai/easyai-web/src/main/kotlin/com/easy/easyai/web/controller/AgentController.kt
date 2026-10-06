@@ -193,6 +193,9 @@ class AgentController(
             color = request.color,
             enabled = request.enabled,
             instructionsEnabled = request.instructionsEnabled ?: true,
+            toolFoldEnabled = request.toolFoldEnabled ?: false,
+            toolFoldKeepRecentRuns = (request.toolFoldKeepRecentRuns ?: 1)
+                .coerceIn(MIN_TOOL_FOLD_KEEP_RECENT_RUNS, MAX_TOOL_FOLD_KEEP_RECENT_RUNS),
             inputSchema = request.inputSchema,
             outputSchema = request.outputSchema,
             outputSchemaMultiTurn = request.outputSchemaMultiTurn ?: false
@@ -251,6 +254,9 @@ class AgentController(
             color = request.color,
             enabled = request.enabled,
             instructionsEnabled = request.instructionsEnabled ?: existing.instructionsEnabled,
+            toolFoldEnabled = request.toolFoldEnabled ?: existing.toolFoldEnabled,
+            toolFoldKeepRecentRuns = (request.toolFoldKeepRecentRuns ?: existing.toolFoldKeepRecentRuns)
+                .coerceIn(MIN_TOOL_FOLD_KEEP_RECENT_RUNS, MAX_TOOL_FOLD_KEEP_RECENT_RUNS),
             inputSchema = request.inputSchema,
             outputSchema = request.outputSchema,
             outputSchemaMultiTurn = request.outputSchemaMultiTurn ?: existing.outputSchemaMultiTurn,
@@ -436,6 +442,8 @@ class AgentController(
         color = this.color,
         enabled = this.enabled,
         instructionsEnabled = this.instructionsEnabled,
+        toolFoldEnabled = this.toolFoldEnabled,
+        toolFoldKeepRecentRuns = this.toolFoldKeepRecentRuns,
         builtin = this.userId == AuthConstants.SYSTEM_USER_ID,
         createdAt = this.createdAt,
         updatedAt = this.updatedAt
@@ -471,6 +479,8 @@ class AgentController(
         color = this.color,
         enabled = this.enabled,
         instructionsEnabled = this.instructionsEnabled,
+        toolFoldEnabled = this.toolFoldEnabled,
+        toolFoldKeepRecentRuns = this.toolFoldKeepRecentRuns,
         inputSchema = this.inputSchema,
         outputSchema = this.outputSchema,
         outputSchemaMultiTurn = this.outputSchemaMultiTurn,
@@ -554,6 +564,10 @@ class AgentController(
 
     private companion object {
         private const val MAX_DESCRIPTION_LENGTH = 200
+
+        /** Clamp for [AgentCreateRequest.toolFoldKeepRecentRuns]; mirrors the frontend 0..5 range. */
+        private const val MIN_TOOL_FOLD_KEEP_RECENT_RUNS = 0
+        private const val MAX_TOOL_FOLD_KEEP_RECENT_RUNS = 5
         private val objectMapper = SharedObjectMapper.instance
 
         /** Convert AgentToolConfig list (targetType=MCP) to McpBindingDto list.

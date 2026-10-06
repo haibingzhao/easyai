@@ -47,6 +47,10 @@ data class AgentDto(
     val color: String? = null,
     val enabled: Boolean = true,
     val instructionsEnabled: Boolean = true,
+    /** Cross-run tool-message folding for sessions using this agent. Off by default. */
+    val toolFoldEnabled: Boolean = false,
+    /** Completed runs kept verbatim (besides the current run) when folding. */
+    val toolFoldKeepRecentRuns: Int = 1,
     val inputSchema: String? = null,
     val outputSchema: String? = null,
     val outputSchemaMultiTurn: Boolean = false,
@@ -83,6 +87,8 @@ data class AgentCreateRequest(
     val color: String? = null,
     val enabled: Boolean = true,
     val instructionsEnabled: Boolean? = null,
+    val toolFoldEnabled: Boolean? = null,
+    val toolFoldKeepRecentRuns: Int? = null,
     val inputSchema: String? = null,
     val outputSchema: String? = null,
     val outputSchemaMultiTurn: Boolean? = null

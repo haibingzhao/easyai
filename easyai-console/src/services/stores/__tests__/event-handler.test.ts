@@ -33,6 +33,7 @@ function createMockState(overrides: Partial<ChatStateShape> = {}): ChatStateShap
     sessionVariables: {},
     isCompacting: false,
     retryInfo: null,
+    toolFoldInfo: null,
     checkpointsByMessageId: {},
     revertState: null,
     fileReviewOverrides: {},
@@ -463,6 +464,29 @@ describe('handleChatEvent', () => {
           customType: 'compaction',
         })
       );
+    });
+  });
+
+  describe('tool_fold event', () => {
+    it('should store the fold report for the context bar hint', () => {
+      const event: SocketEvent = {
+        type: 'tool_fold',
+        turnId: 2,
+        foldedRunCount: 3,
+        foldedToolCallCount: 12,
+        tokensSavedEstimate: 8000,
+      };
+
+      handleChatEvent(event, get, set);
+
+      expect(mockState.toolFoldInfo).toMatchObject({
+        foldedRunCount: 3,
+        foldedToolCallCount: 12,
+        tokensSavedEstimate: 8000,
+      });
+      // Folding is a send-time projection; real per-turn usage already reflects it,
+      // so the handler must not rewrites contextTokens.
+      expect(mockState.contextTokens).toBe(0);
     });
   });
 

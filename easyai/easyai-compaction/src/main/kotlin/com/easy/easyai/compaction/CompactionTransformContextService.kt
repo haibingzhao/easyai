@@ -64,8 +64,11 @@ class CompactionTransformContextService(
         }
 
         val triggerChecker = CompactionTriggerChecker(config, tokenEstimator)
+        // Folded views measure smaller: trigger on the view actually sent to the LLM,
+        // while selection and summarization below still operate on the original messages.
+        val measureMessages = input.compactionMeasureMessages ?: input.messages
         val shouldCompact = triggerChecker.shouldCompact(
-            input.messages,
+            measureMessages,
             input.modelContextLength,
             input.compactionTriggerType
         )
