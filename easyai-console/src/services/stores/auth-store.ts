@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { setAccessToken, getAccessToken } from '@/services/api-client';
 import { authService } from '@/services/auth-service';
 import type { UserProfile } from '@/services/auth-service';
+import { uploadAvatar } from '@/services/user-service';
 import { useProjectStore } from './project-store';
 import { useChatStore } from './chat-store';
 
@@ -12,8 +13,16 @@ interface AuthState {
 
   checkAuth: () => Promise<boolean>;
   login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string, email: string, displayName?: string) => Promise<void>;
+  register: (
+    username: string,
+    password: string,
+    email: string,
+    displayName?: string,
+    avatarFile?: File,
+  ) => Promise<void>;
   logout: () => Promise<void>;
+  /** Write back a profile the backend just mutated, so the header updates without another /me read. */
+  applyProfile: (user: UserProfile) => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -67,11 +76,19 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ user: response.user, isAuthenticated: true });
   },
 
-  register: async (username, password, email, displayName) => {
+  register: async (username, password, email, displayName, avatarFile) => {
     const response = await authService.register(username, password, email, displayName);
     setAccessToken(response.accessToken);
     resetUserScopedState();
     set({ user: response.user, isAuthenticated: true });
+    if (!avatarFile) return;
+    // The avatar rides on the account that now exists: picking one must never be a reason to fail signup,
+    // and Settings offers the same upload if this call is cut short.
+    try {
+      set({ user: await uploadAvatar(avatarFile) });
+    } catch {
+      // Ignored on purpose.
+    }
   },
 
   logout: async () => {
@@ -84,6 +101,8 @@ export const useAuthStore = create<AuthState>((set) => ({
     resetUserScopedState();
     set({ user: null, isAuthenticated: false });
   },
+
+  applyProfile: (user) => set({ user }),
 }));
 
 /** Reset user-scoped stores (project selection, chat) to prevent cross-user state leakage */

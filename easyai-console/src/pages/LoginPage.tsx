@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuthStore } from '@/services/stores/auth-store';
+import { normalizeAvatarImage } from '@/utils/avatar-image';
 import { LogIn, UserPlus, Loader2 } from 'lucide-react';
 import { i18n } from '@/utils/i18n';
 import { ThemeToggle } from '@/components/layout/ThemeToggle';
@@ -11,8 +12,32 @@ export function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => () => {
+    if (avatarPreview) URL.revokeObjectURL(avatarPreview);
+  }, [avatarPreview]);
+
+  const pickAvatar = async (file: File | undefined) => {
+    if (!file) return;
+    setError('');
+    try {
+      const normalized = await normalizeAvatarImage(file);
+      setAvatarFile(normalized);
+      setAvatarPreview(URL.createObjectURL(normalized));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const clearAvatar = () => {
+    setAvatarPreview(null);
+    setAvatarFile(null);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -20,7 +45,7 @@ export function LoginPage() {
     setLoading(true);
     try {
       if (isRegister) {
-        await register(username, password, email, displayName || undefined);
+        await register(username, password, email, displayName || undefined, avatarFile ?? undefined);
       } else {
         await login(username, password);
       }
@@ -46,6 +71,58 @@ export function LoginPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {isRegister && (
+            <div>
+              <span className="block text-sm font-medium text-foreground mb-1">
+                {i18n('Avatar')}
+              </span>
+              <div className="flex items-center gap-3">
+                {avatarPreview ? (
+                  <div className="w-12 h-12 rounded-full overflow-hidden border border-border shrink-0">
+                    <img src={avatarPreview} alt="" className="w-full h-full object-cover" />
+                  </div>
+                ) : (
+                  <div className="w-12 h-12 rounded-full border border-dashed border-border shrink-0 flex items-center justify-center text-xs text-muted-foreground">
+                    ?
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => fileInput.current?.click()}
+                      className="px-3 py-1.5 text-sm rounded-lg border border-border hover:bg-muted transition-colors"
+                    >
+                      {i18n('Choose an image')}
+                    </button>
+                    {avatarFile && (
+                      <button
+                        type="button"
+                        onClick={clearAvatar}
+                        className="text-sm text-muted-foreground hover:underline"
+                      >
+                        {i18n('Remove')}
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {i18n('Optional — cropped to a square automatically')}
+                  </p>
+                </div>
+              </div>
+              <input
+                ref={fileInput}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                className="hidden"
+                onChange={(e) => {
+                  void pickAvatar(e.target.files?.[0]);
+                  e.target.value = '';
+                }}
+              />
+            </div>
+          )}
+
           {isRegister && (
             <div>
               <label htmlFor="displayName" className="block text-sm font-medium text-foreground mb-1">

@@ -90,6 +90,34 @@ class MediaFileControllerTest {
     }
 
     @Test
+    fun `an avatar is served to its owner from the local tier too`() {
+        val key = "avatars/alice/0f0a2b1c-3d4e-5f60-7182-93a4b5c6d7e8.png"
+        val local = storageHolding(key)
+        val noUserStorage = mockk<ObjectStorageResolver> { coEvery { resolve("alice") } returns null }
+
+        client(noUserStorage, local)
+            .get().uri("/api/media/file?key=$key")
+            .exchange().expectStatus().isOk
+
+        coVerify { local.get(key) }
+    }
+
+    @Test
+    fun `another user's avatar key is refused without a single lookup`() {
+        val foreign = "avatars/bob/0f0a2b1c-3d4e-5f60-7182-93a4b5c6d7e8.png"
+        val userStorage = storageHolding(foreign)
+        val local = storageHolding(foreign)
+        val resolver = mockk<ObjectStorageResolver> { coEvery { resolve("alice") } returns userStorage }
+
+        client(resolver, local)
+            .get().uri("/api/media/file?key=$foreign")
+            .exchange().expectStatus().isNotFound
+
+        coVerify(exactly = 0) { userStorage.get(any()) }
+        coVerify(exactly = 0) { local.get(any()) }
+    }
+
+    @Test
     fun `chat-images keys stay reserved and traversal is rejected`() {
         val local = storageHolding("media/alice/chat-images/x.png")
 

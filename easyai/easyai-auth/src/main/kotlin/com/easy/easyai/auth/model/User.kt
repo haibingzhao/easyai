@@ -1,5 +1,7 @@
 package com.easy.easyai.auth.model
 
+import com.easy.easyai.auth.AuthConstants
+
 /**
  * User entity representing an authenticated user in the system.
  */
@@ -8,7 +10,7 @@ data class User(
     val username: String,
     val displayName: String,
     val passwordHash: String,
-    val avatar: String = "avatar-1",
+    val avatar: String = AuthConstants.DEFAULT_AVATAR,
     val email: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
@@ -17,6 +19,10 @@ data class User(
 /**
  * Public user info (without sensitive data like password hash).
  * Used for API responses.
+ *
+ * [avatar] is the persisted reference as stored: the preset [AuthConstants.DEFAULT_AVATAR], an uploaded
+ * `avatars/{owner}/{uuid}.png` object key, or a user-supplied http(s) image URL. It is deliberately not
+ * resolved here — presigned links expire, so clients turn the key into `GET /api/media/file?key=` themselves.
  */
 data class UserProfile(
     val id: String,

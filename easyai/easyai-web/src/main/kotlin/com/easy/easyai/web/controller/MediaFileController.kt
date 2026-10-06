@@ -30,7 +30,8 @@ import reactor.core.publisher.Mono
  * When the caller has no (or missing) object storage, the deployment-local media directory acts as
  * fallback; local keys embed the owner's sanitized user id, so reads there are ownership-checked.
  *
- * Chat image keys are reserved for the session-authorized file endpoint.
+ * Chat image keys are reserved for the session-authorized file endpoint. Avatar keys (`avatars/…`) are
+ * personal and served only to their owner.
  */
 @RestController
 @RequestMapping("/api/media")
@@ -51,6 +52,11 @@ class MediaFileController(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid media key")
         }
         val userId = getCurrentUserId()
+        // An avatar is read only by its owner, unlike generated media, so a key outside the caller's own
+        // segment is a plain 404 — neither a leak nor a 403 that confirms the object exists.
+        if (key.startsWith(AVATAR_PREFIX) && !key.startsWith("$AVATAR_PREFIX${sanitize(userId)}/")) {
+            throw ResponseStatusException(HttpStatus.NOT_FOUND, "Media object not found")
+        }
         val userStorage = objectStorageResolver?.resolve(userId)
         if (userStorage == null && localStorage == null) {
             throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Object storage is not configured")
@@ -70,13 +76,18 @@ class MediaFileController(
     /** Read from the local fallback only when the key is namespaced to the requesting user. */
     private suspend fun readLocalIfOwned(key: String, userId: String): ObjectContent? {
         val storage = localStorage ?: return null
-        if (!key.startsWith("media/${sanitize(userId)}/")) return null
+        val owner = sanitize(userId)
+        if (!key.startsWith("media/$owner/") && !key.startsWith("$AVATAR_PREFIX$owner/")) return null
         return storage.get(key)
     }
 
-    /** Mirrors the storage-side key sanitization in `MediaArtifacts`. */
+    /** Mirrors the storage-side key sanitization in `MediaArtifacts` and `AvatarStorageService`. */
     private fun sanitize(userId: String): String =
         userId.map { if (it.isLetterOrDigit() || it == '-' || it == '_') it else '-' }.joinToString("")
+
+    companion object {
+        private const val AVATAR_PREFIX = "avatars/"
+    }
 
     private fun contentTypeFor(key: String): String = when {
         key.endsWith(".png") -> "image/png"

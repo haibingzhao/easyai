@@ -94,7 +94,7 @@ class AuthController(
                 id = AuthConstants.SYSTEM_USER_ID,
                 username = "system",
                 displayName = "System",
-                avatar = "avatar-1",
+                avatar = AuthConstants.DEFAULT_AVATAR,
                 email = null
             )
         } else {
@@ -155,13 +155,7 @@ class AuthController(
         user = user.toDto()
     )
 
-    private fun UserProfile.toDto() = UserProfileDto(
-        id = id,
-        username = username,
-        displayName = displayName,
-        avatar = avatar,
-        email = email
-    )
+    private fun UserProfile.toDto() = UserProfileDto.from(this)
 }
 
 // ─── Request / Response DTOs ──────────────────────────────────────────────────
@@ -189,4 +183,15 @@ data class UserProfileDto(
     val displayName: String,
     val avatar: String,
     val email: String?
-)
+) {
+    companion object {
+        @JvmStatic
+        fun from(profile: UserProfile) = UserProfileDto(
+            id = profile.id,
+            username = profile.username,
+            displayName = profile.displayName,
+            avatar = profile.avatar,
+            email = profile.email
+        )
+    }
+}

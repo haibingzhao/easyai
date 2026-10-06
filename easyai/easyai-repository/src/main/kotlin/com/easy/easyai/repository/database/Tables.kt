@@ -19,7 +19,8 @@ object Tables {
     /**
      * User account table.
      * passwordHash stores BCrypt hash (never plaintext).
-     * avatar stores a preset avatar ID string (e.g. "avatar-1").
+     * avatar holds a reference, never image bytes: the preset "avatar-1", an object key
+     * "avatars/{owner}/{uuid}.png" served via GET /api/media/file, or a user-supplied http(s) URL.
      */
     object UserTable : Table("app_user") {
         val id = varchar("id", 255)
@@ -27,7 +28,7 @@ object Tables {
         val displayName = varchar("display_name", 255)
         val email = varchar("email", 255).nullable()
         val passwordHash = varchar("password_hash", 256)
-        val avatar = varchar("avatar", 64).default("avatar-1")
+        val avatar = varchar("avatar", 512).default("avatar-1")
         val createdAt = long("created_at")
         val updatedAt = long("updated_at")
         override val primaryKey = PrimaryKey(id)

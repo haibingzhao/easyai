@@ -13,6 +13,7 @@ import com.easy.easyai.core.goal.GoalStore
 import com.easy.easyai.core.message.DefaultMessageConverter
 import com.easy.easyai.core.message.MessageConverter
 import com.easy.easyai.core.permission.PermissionService
+import com.easy.easyai.core.storage.ObjectStorage
 import com.easy.easyai.core.storage.ObjectStorageResolver
 import com.easy.easyai.core.team.TeamExecutionStore
 import com.easy.easyai.core.tool.ScriptEnvProvider
@@ -44,6 +45,7 @@ import org.springframework.ai.chat.model.ChatModel
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.SmartInitializingSingleton
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
@@ -156,6 +158,20 @@ open class WebAutoConfiguration {
     ): FileStorageService {
         return FileStorageService(dataDir, objectStorageResolver.ifAvailable)
     }
+
+    /**
+     * Profile pictures share the two media tiers — the caller's own object storage, else the
+     * deployment-local media directory — but live in a personal `avatars/` namespace that needs no session,
+     * because only their owner ever reads them back.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    open fun avatarStorageService(
+        objectStorageResolver: ObjectProvider<ObjectStorageResolver>,
+        @Autowired(required = false)
+        @Qualifier("localMediaObjectStorage")
+        localStorage: ObjectStorage? = null
+    ): AvatarStorageService = AvatarStorageService(objectStorageResolver.ifAvailable, localStorage)
 
     /**
      * After all singletons are created, configure the [DefaultMessageConverter]'s allowed base directory
