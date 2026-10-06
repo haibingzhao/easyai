@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { SocketEvent, PermissionRequestEvent, GoalStatusEvent, BackgroundTaskEvent } from '@/types/socket-event';
+import type { SocketEvent, PermissionRequestEvent, GoalStatusEvent, BackgroundTaskEvent, ToolFoldEvent } from '@/types/socket-event';
 import type { TodoInfo, SubAgentTodoGroup } from '@/types/todo';
 import type { TaskSummary } from '@/services/swarm-service';
 import type { Message, ToolResult, ToolResultContentBlock, ContextReferences, QueuedMessage } from '@/types/message';
@@ -76,6 +76,8 @@ interface ChatState {
   pendingMessageData: Record<string, { usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number; durationMs?: number; modelName?: string }; references?: ContextReferences }>;
   /** Background task events keyed by taskId (for real-time status updates in tool cards) */
   backgroundTasks: Record<string, BackgroundTaskEvent>;
+  /** Latest tool_fold event of the current session (null when no folding happened in this run yet) */
+  toolFoldInfo: ToolFoldEvent | null;
   /** ID of a session detected as still running on the backend */
   runningSessionId: string | null;
   /** Internal: raw MessageSnapshot[] from last full/incremental load, used for incremental merge. */
@@ -84,9 +86,12 @@ interface ChatState {
   forkRootId: string | null;
   /** Whether the backend snapshot/checkpoint system is active for the current session (gates the Review panel). Defaults to true for older backends. */
   snapshotEnabled: boolean;
+  /** App-wide snapshot capability from GET /api/chat/snapshot-capability (false for no-op backend overrides). Global — not reset on session switch. */
+  snapshotCapability: boolean;
   setRunningSessionId: (id: string | null) => void;
   setForkRootId: (id: string | null) => void;
   setSnapshotEnabled: (enabled: boolean) => void;
+  setSnapshotCapability: (enabled: boolean) => void;
 
   setSessionId: (id: string | null) => void;
   setAgentId: (id: string) => void;
@@ -168,6 +173,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   retryInfo: null,
   pendingMessageData: {},
   backgroundTasks: {},
+  toolFoldInfo: null,
   checkpointsByMessageId: {},
   revertState: null,
   fileReviewOverrides: {},
@@ -177,6 +183,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   _lastSnapshots: [],
   forkRootId: null,
   snapshotEnabled: true,
+  snapshotCapability: true,
 
   // When the session identity changes, clear streaming render state left over from the
   // old session (streamingBlocks / isStreaming / ...), otherwise the previous session's
@@ -199,6 +206,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   setRunningSessionId: (id) => set({ runningSessionId: id, ...(id !== null ? { _lastSnapshots: [] } : {}) }),
   setForkRootId: (id) => set({ forkRootId: id }),
   setSnapshotEnabled: (enabled) => set({ snapshotEnabled: enabled }),
+  setSnapshotCapability: (enabled) => set({ snapshotCapability: enabled }),
 
   setAgentId: (id) => set({ agentId: id }),
 
@@ -486,6 +494,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     pendingPermission: null,
     pendingMessageData: {},
     backgroundTasks: {},
+    toolFoldInfo: null,
     checkpointsByMessageId: {},
     revertState: null,
     fileReviewOverrides: {},

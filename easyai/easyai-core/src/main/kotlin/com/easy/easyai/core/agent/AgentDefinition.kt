@@ -30,6 +30,10 @@ data class AgentDefinition(
     val color: String? = null,
     val enabled: Boolean = true,
     val instructionsEnabled: Boolean = true,
+    /** Cross-run tool-message folding for sessions using this agent. Off by default. */
+    val toolFoldEnabled: Boolean = false,
+    /** Completed runs kept verbatim (besides the current run) when folding. */
+    val toolFoldKeepRecentRuns: Int = 1,
     val inputSchema: String? = null,
     val outputSchema: String? = null,
     /** When true, defer structured output to a final enforced iteration after multi-turn tool calling. */
@@ -53,16 +57,23 @@ data class AgentDefinition(
             color: String? = null,
             enabled: Boolean = true,
             instructionsEnabled: Boolean = true,
+            toolFoldEnabled: Boolean = false,
+            toolFoldKeepRecentRuns: Int = 1,
             inputSchema: String? = null,
             outputSchema: String? = null,
             outputSchemaMultiTurn: Boolean = false
         ): AgentDefinition {
             val now = Instant.now().epochSecond
             return AgentDefinition(
-                id, name, agentType, agentContext, description, promptTemplate,
-                customInstructions, toolNames, maxIterations, maxSubAgentDepth,
-                color, enabled, instructionsEnabled, inputSchema, outputSchema,
-                outputSchemaMultiTurn, "system", now, now
+                id = id, name = name, agentType = agentType, agentContext = agentContext,
+                description = description, promptTemplate = promptTemplate,
+                customInstructions = customInstructions, toolNames = toolNames,
+                maxIterations = maxIterations, maxSubAgentDepth = maxSubAgentDepth,
+                color = color, enabled = enabled, instructionsEnabled = instructionsEnabled,
+                toolFoldEnabled = toolFoldEnabled, toolFoldKeepRecentRuns = toolFoldKeepRecentRuns,
+                inputSchema = inputSchema, outputSchema = outputSchema,
+                outputSchemaMultiTurn = outputSchemaMultiTurn,
+                userId = "system", createdAt = now, updatedAt = now
             )
         }
     }

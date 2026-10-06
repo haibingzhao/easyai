@@ -63,6 +63,8 @@ class SessionAgentFactory(
             promptTemplate = agentDef.promptTemplate,
             customInstructions = agentDef.customInstructions,
             maxIterations = agentDef.maxIterations,
+            toolFoldEnabled = agentDef.toolFoldEnabled,
+            toolFoldKeepRecentRuns = agentDef.toolFoldKeepRecentRuns,
             inputSchema = agentDef.inputSchema,
             outputSchema = agentDef.outputSchema,
             outputSchemaMultiTurn = agentDef.outputSchemaMultiTurn

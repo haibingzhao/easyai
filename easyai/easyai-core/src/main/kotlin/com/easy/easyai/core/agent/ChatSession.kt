@@ -208,7 +208,12 @@ class ChatSession(
             }
 
             if (hasInterruptedContext) {
-                workingMessages.add(UserMessage("The previous response was interrupted. Please continue from where you left off or re-evaluate your approach."))
+                workingMessages.add(
+                    UserMessage(
+                        content = listOf(TextContent("The previous response was interrupted. Please continue from where you left off or re-evaluate your approach.")),
+                        metadata = mapOf(UserMessage.SYSTEM_ORIGIN_KEY to UserMessage.ORIGIN_RESUME_GUIDANCE)
+                    )
+                )
             } else if (lastEndReason == "max_iterations") {
                 lastEndReason = "normal" // consume the reason to avoid re-triggering on subsequent resumes
                 workingMessages.add(

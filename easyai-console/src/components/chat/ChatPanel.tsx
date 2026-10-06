@@ -7,7 +7,7 @@ import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { getStreamingStatus } from '@/services/chat-service';
 import { sessionService } from '@/services/session-service';
-import { getCheckpoints, getFileReviewState } from '@/services/checkpoint-service';
+import { getCheckpoints, getFileReviewState, getSnapshotCapability } from '@/services/checkpoint-service';
 import { Badge } from '../ui/Badge';
 import { TokenContextBar } from './TokenContextBar';
 import { PermissionBar } from './PermissionBar';
@@ -252,6 +252,14 @@ export const ChatPanel: React.FC = () => {
     loadAgents();
     loadTools();
   }, [loadAgents, loadTools]);
+
+  // Fetch the global snapshot capability once at mount — gates the Review panel
+  // at startup, before any session detail is loaded (false for no-op backends).
+  useEffect(() => {
+    getSnapshotCapability()
+      .then((v) => useChatStore.getState().setSnapshotCapability(v))
+      .catch(() => { /* probe unavailable — keep the optimistic default */ });
+  }, []);
 
   // Restore goal state when switching sessions
   useEffect(() => {

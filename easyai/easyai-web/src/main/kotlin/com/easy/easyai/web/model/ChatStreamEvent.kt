@@ -32,6 +32,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore
     JsonSubTypes.Type(value = ChatStreamEvent.Retry::class, name = "retry"),
     JsonSubTypes.Type(value = ChatStreamEvent.CompactionStart::class, name = "compaction_start"),
     JsonSubTypes.Type(value = ChatStreamEvent.CompactionEnd::class, name = "compaction_end"),
+    JsonSubTypes.Type(value = ChatStreamEvent.ToolFold::class, name = "tool_fold"),
     JsonSubTypes.Type(value = ChatStreamEvent.PermissionRequest::class, name = "permission_request"),
     JsonSubTypes.Type(value = ChatStreamEvent.MessageEnd::class, name = "message_end"),
     JsonSubTypes.Type(value = ChatStreamEvent.UserMessageAdded::class, name = "user_message_added"),
@@ -276,6 +277,17 @@ sealed interface ChatStreamEvent {
         val variables: Map<String, String>? = null
     ) : ChatStreamEvent {
         override val type: String get() = "compaction_end"
+    }
+
+    /** Cross-run tool folding applied to the prompt for this turn */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    data class ToolFold(
+        val turnId: Int,
+        val foldedRunCount: Int,
+        val foldedToolCallCount: Int,
+        val tokensSavedEstimate: Int
+    ) : ChatStreamEvent {
+        override val type: String get() = "tool_fold"
     }
 
     /** Permission request for tool execution - SSE stream will pause until user responds */

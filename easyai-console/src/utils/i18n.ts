@@ -267,6 +267,11 @@ const translations: Record<string, Record<string, string>> = {
     'Session compacted': 'Session compacted',
     'Saved {tokens} tokens': 'Saved {tokens} tokens',
     'Compacted {tokens} tokens': 'Compacted {tokens} tokens',
+    'Folded {runs} earlier runs · {calls} tool calls (~{tokens} tokens saved)': 'Folded {runs} earlier runs · {calls} tool calls (~{tokens} tokens saved)',
+    'Tool Fold': 'Tool Fold',
+    'When a new question arrives, tool-call arguments and results from older runs are folded into one-line placeholders before being sent to the LLM. The model can recall the originals on demand.': 'When a new question arrives, tool-call arguments and results from older runs are folded into one-line placeholders before being sent to the LLM. The model can recall the originals on demand.',
+    'Keep Recent Runs': 'Keep Recent Runs',
+    'Completed runs kept verbatim in addition to the current run. Older runs are folded.': 'Completed runs kept verbatim in addition to the current run. Older runs are folded.',
     // Auth / Login
     'Create a new account': 'Create a new account',
     'Sign in to your account': 'Sign in to your account',
@@ -866,6 +871,11 @@ const translations: Record<string, Record<string, string>> = {
     'Session compacted': '会话已压缩',
     'Saved {tokens} tokens': '已节省 {tokens} tokens',
     'Compacted {tokens} tokens': '压缩 {tokens} tokens',
+    'Folded {runs} earlier runs · {calls} tool calls (~{tokens} tokens saved)': '已折叠 {runs} 轮历史请求 · {calls} 次工具调用（约节省 {tokens} tokens）',
+    'Tool Fold': '工具折叠',
+    'When a new question arrives, tool-call arguments and results from older runs are folded into one-line placeholders before being sent to the LLM. The model can recall the originals on demand.': '当新问题到来时，较早轮次的工具调用参数与结果会在发送给 LLM 前被折叠成单行占位符。模型可按需召回原始内容。',
+    'Keep Recent Runs': '保留最近轮次',
+    'Completed runs kept verbatim in addition to the current run. Older runs are folded.': '除当前轮次外，额外逐字保留的已完成轮次数。更早的轮次会被折叠。',
     // Auth / Login
     'Create a new account': '创建新账户',
     'Sign in to your account': '登录你的账户',

@@ -18,6 +18,9 @@ import org.springframework.ai.chat.model.ChatModel
  *   to the agent's event stream during transformation. May be null if events are not needed.
  * @property chatModel The session-specific ChatModel instance. Used by compaction strategies
  *   that need LLM calls (e.g., LlmSummaryStrategy). May be null if not available.
+ * @property compactionMeasureMessages Optional view of the conversation used for trigger
+ *   measurement only (e.g. the tool-folded projection of [messages]). When set, compaction
+ *   still selects and summarizes [messages] so the transcript keeps originals.
  */
 data class TransformContextInput(
     val agentContext: AgentContext,
@@ -27,5 +30,6 @@ data class TransformContextInput(
     val compactionTriggerType: CompactionTriggerType = CompactionTriggerType.Auto,
     val messageTimestamps: Map<String, Long> = emptyMap(),
     val eventPusher: (suspend (AgentEvent) -> Unit)? = null,
-    val chatModel: ChatModel? = null
+    val chatModel: ChatModel? = null,
+    val compactionMeasureMessages: List<EasyAiMessage>? = null
 )

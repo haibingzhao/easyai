@@ -37,11 +37,19 @@ internal class PendingToolCallExecutor(
      * This method always executes directly without re-evaluating permissions —
      * the resume caller has already approved (Allow Once / Always Allow) or denied
      * (results already saved) the tool calls before invoking this method.
+     *
+     * @param extraTools turn-scoped tools not present in the loop-level list (e.g. the
+     *   fold-injected `recall_tool_result`), so a pending call to them still resolves on resume.
      */
     suspend fun executePendingToolCallsIfNeeded(
         transcript: MutableList<EasyAiMessage>,
-        scope: ProducerScope<AgentEvent, List<AssistantMessage>>
+        scope: ProducerScope<AgentEvent, List<AssistantMessage>>,
+        extraTools: List<ToolDefinition> = emptyList()
     ) {
+        // Turn-scoped tools (e.g. recall_tool_result injected while folds exist) are not part of
+        // the loop-level [tools]; the caller passes them so a pending call can still be resolved.
+        val effectiveTools = if (extraTools.isEmpty()) tools else tools + extraTools
+
         // Find the last AssistantMessage
         val lastAssistantIndex = transcript.indexOfLast { it is AssistantMessage }
         if (lastAssistantIndex == -1) return
@@ -69,7 +77,7 @@ internal class PendingToolCallExecutor(
         val unresolvedToolCalls = allPendingToolCalls.filter { it.id !in existingResultToolCallIds }
 
         // Build a set of tool names that should be skipped on resume
-        val skipOnResumeToolNames = tools.filter { it.skipOnResume }.map { it.name }.toSet()
+        val skipOnResumeToolNames = effectiveTools.filter { it.skipOnResume }.map { it.name }.toSet()
 
         // Filter out tools that should be skipped on resume (e.g., ask_question)
         // These tools returned WaitForUserContent and represent pending user interactions,
@@ -111,7 +119,7 @@ internal class PendingToolCallExecutor(
         val results = toolExecutor.executeToolCalls(
             agentContext = agentContext,
             toolCalls = executableToolCalls,
-            tools = tools,
+            tools = effectiveTools,
             eventStream = scope,
             scope = scope,
             turnId = 0,
@@ -119,7 +127,7 @@ internal class PendingToolCallExecutor(
         )
 
         // Post-execution hook: commit LLM changes after tools complete
-        val fileChangingToolNames = tools.filter { it.tracksFileChanges }.map { it.name }.toSet()
+        val fileChangingToolNames = effectiveTools.filter { it.tracksFileChanges }.map { it.name }.toSet()
         val hasFileChangingTools = executableToolCalls.any { it.name in fileChangingToolNames }
         eventListeners.forEach { listener ->
             try {

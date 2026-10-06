@@ -72,6 +72,10 @@ data class AgentContext(
     val tools: List<ToolDefinition> = emptyList(),
     val maxIterations: Int = 100,
     val maxRetries: Int = 3,
+    /** Master switch for cross-run tool-message folding (send-time projection). */
+    val toolFoldEnabled: Boolean = false,
+    /** Completed runs kept verbatim in addition to the current run when folding. */
+    val toolFoldKeepRecentRuns: Int = 1,
     val initialMessages: List<EasyAiMessage> = emptyList(),
     val modelContextLength: Int = 204_800,  // Default context window size (200K)
     /** JSON Schema for structured output enforcement. Injected into ChatOptions and system prompt. */

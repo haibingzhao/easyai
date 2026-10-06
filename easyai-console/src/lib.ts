@@ -111,6 +111,10 @@ export {
   APP_CONFIG,
   ICON_REGISTRY,
   registerIcons,
+  // Consumers that render their own nav (or highlight a nav entry elsewhere, e.g. a
+  // breadcrumb) use these to agree with the Sidebar on what counts as "current".
+  matchesNavPath,
+  resolveActiveNavItem,
 } from './constants/navigation';
 
 // === Page components (for external routing) ===

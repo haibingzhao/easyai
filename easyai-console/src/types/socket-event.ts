@@ -22,6 +22,7 @@ export type EventType =
   | 'retry'
   | 'compaction_start'
   | 'compaction_end'
+  | 'tool_fold'
   | 'permission_request'
   | 'message_end'
   | 'user_message_added'
@@ -221,6 +222,17 @@ export interface CompactionEndEvent extends BaseEvent {
   variables?: Record<string, string>;
 }
 
+export interface ToolFoldEvent extends BaseEvent {
+  type: 'tool_fold';
+  turnId: number;
+  /** Historical user-request runs whose tool calls were folded for this turn's prompt */
+  foldedRunCount: number;
+  /** Total folded tool-call/tool-result blocks across those runs */
+  foldedToolCallCount: number;
+  /** Estimated tokens saved by folding for this turn */
+  tokensSavedEstimate: number;
+}
+
 export interface PermissionRequestEvent extends BaseEvent {
   type: 'permission_request';
   toolCallId: string;
@@ -332,6 +344,7 @@ export type ChatStreamEvent =
   | RetryEvent
   | CompactionStartEvent
   | CompactionEndEvent
+  | ToolFoldEvent
   | PermissionRequestEvent
   | MessageEndEvent
   | UserMessageAddedEvent

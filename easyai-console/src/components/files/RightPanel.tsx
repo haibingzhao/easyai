@@ -51,18 +51,22 @@ export const RightPanel: React.FC<RightPanelProps> = ({ onClose, references, ses
   const setSelectedFile = useNavStore((s) => s.setSelectedFile);
   const currentProject = useProjectStore((s) => s.currentProject);
   const snapshotEnabled = useChatStore((s) => s.snapshotEnabled);
+  const snapshotCapability = useChatStore((s) => s.snapshotCapability);
+  // Review needs both: the backend's snapshot system is real (global probe, covers the
+  // no-session startup state) AND active for the current session (per-detail flag).
+  const reviewVisible = snapshotEnabled && snapshotCapability;
 
   const rootPath = currentProject?.path || '';
   const projectId = currentProject?.id || '';
 
-  // Team tab only visible for TEAM agents; Review tab only when the backend snapshot system is active.
+  // Team tab only visible for TEAM agents; Review tab only when the snapshot system is visible.
   // Fall back to summary if a hidden tab is stale-active.
   const tabs = [
     ...(isTeamAgent ? [TEAM_TAB] : []),
-    ...(snapshotEnabled ? BASE_TABS : BASE_TABS.filter((tab) => tab.id !== 'review')),
+    ...(reviewVisible ? BASE_TABS : BASE_TABS.filter((tab) => tab.id !== 'review')),
   ];
   const effectiveTab =
-    (activeTab === 'team' && !isTeamAgent) || (activeTab === 'review' && !snapshotEnabled)
+    (activeTab === 'team' && !isTeamAgent) || (activeTab === 'review' && !reviewVisible)
       ? 'summary'
       : activeTab;
 

@@ -25,6 +25,7 @@ import org.springframework.web.bind.annotation.*
 import org.springframework.web.server.ResponseStatusException
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
+import java.nio.file.Path
 import java.time.Duration
 
 /**
@@ -803,6 +804,21 @@ class ChatController(
             val state = snapshotService.loadFileReviewState(projectPath, sessionId)
                 ?: return@mono null
             FileReviewStateResponse(reviews = state.reviews)
+        }
+    }
+
+    /**
+     * Global snapshot capability probe — whether the snapshot/checkpoint system is a real
+     * implementation, independent of any session. A no-op SnapshotService override (used by
+     * apps that disable file tracking) reports isEnabled=false for every path, so probing a
+     * guaranteed-valid directory answers service-level availability. The frontend uses this
+     * to hide the file-review UI at startup, before any session detail is loaded.
+     */
+    @GetMapping("/snapshot-capability")
+    fun getSnapshotCapability(): Mono<Boolean> {
+        return mono {
+            val service = snapshotService ?: return@mono false
+            service.isEnabled(Path.of(System.getProperty("user.home")))
         }
     }
 

@@ -77,6 +77,8 @@ export const AgentCreatePage: React.FC = () => {
   const [selectedCommands, setSelectedCommands] = useState<string[]>([]);
   const [maxIterations, setMaxIterations] = useState(50);
   const [instructionsEnabled, setInstructionsEnabled] = useState(true);
+  const [toolFoldEnabled, setToolFoldEnabled] = useState(false);
+  const [toolFoldKeepRecentRuns, setToolFoldKeepRecentRuns] = useState(1);
   const [inputSchemaEnabled, setInputSchemaEnabled] = useState(false);
   const [inputSchema, setInputSchema] = useState('');
   const [outputSchemaEnabled, setOutputSchemaEnabled] = useState(false);
@@ -167,6 +169,8 @@ export const AgentCreatePage: React.FC = () => {
         setSelectedCommands(agent.commandNames || []);
         setMaxIterations(agent.maxIterations);
         setInstructionsEnabled(agent.instructionsEnabled);
+        setToolFoldEnabled(agent.toolFoldEnabled);
+        setToolFoldKeepRecentRuns(agent.toolFoldKeepRecentRuns);
         setInputSchemaEnabled(!!agent.inputSchema);
         setInputSchema(agent.inputSchema || '');
         setOutputSchemaEnabled(!!agent.outputSchema);
@@ -302,6 +306,8 @@ export const AgentCreatePage: React.FC = () => {
     if (Array.isArray(config.commandNames)) setSelectedCommands(config.commandNames as string[]);
     if (typeof config.maxIterations === 'number') setMaxIterations(config.maxIterations);
     if (typeof config.instructionsEnabled === 'boolean') setInstructionsEnabled(config.instructionsEnabled);
+    if (typeof config.toolFoldEnabled === 'boolean') setToolFoldEnabled(config.toolFoldEnabled);
+    if (typeof config.toolFoldKeepRecentRuns === 'number') setToolFoldKeepRecentRuns(config.toolFoldKeepRecentRuns);
     if (typeof config.inputSchema === 'string') { setInputSchemaEnabled(true); setInputSchema(config.inputSchema); }
     if (typeof config.outputSchema === 'string') { setOutputSchemaEnabled(true); setOutputSchema(config.outputSchema); }
   }, [agentContext]);
@@ -369,6 +375,8 @@ export const AgentCreatePage: React.FC = () => {
       maxSubAgentDepth: 1,
       enabled: true,
       instructionsEnabled,
+      toolFoldEnabled,
+      toolFoldKeepRecentRuns,
       inputSchema: inputSchemaEnabled && inputSchema.trim() ? inputSchema.trim() : undefined,
       outputSchema: outputSchemaEnabled && outputSchema.trim() ? outputSchema.trim() : undefined,
       outputSchemaMultiTurn: outputSchemaEnabled && outputSchemaMultiTurn,
@@ -705,6 +713,52 @@ export const AgentCreatePage: React.FC = () => {
                       />
                     </button>
                   </div>
+                </div>
+
+                {/* Tool Fold */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="text-sm font-medium">{i18n('Tool Fold')}</label>
+                      <p className="text-xs text-muted-foreground">
+                        {i18n('When a new question arrives, tool-call arguments and results from older runs are folded into one-line placeholders before being sent to the LLM. The model can recall the originals on demand.')}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={toolFoldEnabled}
+                      onClick={() => setToolFoldEnabled(!toolFoldEnabled)}
+                      disabled={readOnly}
+                      className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${
+                        toolFoldEnabled ? '' : 'bg-muted'
+                      } ${readOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                      style={toolFoldEnabled ? { backgroundColor: '#22c55e' } : undefined}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-background shadow ring-0 transition duration-200 ease-in-out ${
+                          toolFoldEnabled ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  {toolFoldEnabled && (
+                    <div className="space-y-2 pt-2">
+                      <label className="text-sm font-medium">{i18n('Keep Recent Runs')}</label>
+                      <p className="text-xs text-muted-foreground">
+                        {i18n('Completed runs kept verbatim in addition to the current run. Older runs are folded.')}
+                      </p>
+                      <input
+                        type="number"
+                        min={0}
+                        max={5}
+                        value={toolFoldKeepRecentRuns}
+                        onChange={(e) => setToolFoldKeepRecentRuns(Math.max(0, Math.min(5, parseInt(e.target.value) || 0)))}
+                        disabled={readOnly}
+                        className="w-40 px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60 disabled:cursor-not-allowed"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 {/* Max Iterations */}

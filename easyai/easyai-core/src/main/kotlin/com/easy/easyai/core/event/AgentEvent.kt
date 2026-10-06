@@ -189,6 +189,20 @@ data class CompactionEndEvent(
 }
 
 /**
+ * Event emitted when cross-run tool-message folding changed the view sent to the LLM.
+ * One event per turn (folding is deterministic, so counts repeat while the run progresses).
+ */
+data class ToolFoldEvent(
+    val turnId: Int,
+    val sessionId: String,
+    val foldedRunCount: Int,
+    val foldedToolCallCount: Int,
+    val tokensSavedEstimate: Int
+) : AgentEvent {
+    override val type: String get() = "tool_fold"
+}
+
+/**
  * Event emitted when a tool call requires user permission before execution.
  * The agent loop will pause after this event, waiting for user approval.
  */
