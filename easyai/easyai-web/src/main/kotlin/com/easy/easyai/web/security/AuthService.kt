@@ -43,7 +43,7 @@ class AuthService(
             username = username,
             displayName = displayName ?: username,
             passwordHash = passwordHash,
-            email = email
+            email = normalizeEmail(email)
         )
         userStore.save(user)
         logger.info("Registered new user: {} ({})", username, user.id)
@@ -100,6 +100,62 @@ class AuthService(
         return user.toProfile()
     }
 
+    /**
+     * Change the nickname and email a user shows. A `null` field keeps the stored value, so the console
+     * can send only what the user touched; an empty email clears it.
+     */
+    suspend fun updateProfile(userId: String, displayName: String?, email: String?): UserProfile {
+        val user = requireEditableUser(userId)
+        val name = displayName?.trim()?.also {
+            if (it.isEmpty()) throw AuthException("Display name must not be blank", 400)
+            if (it.length > MAX_DISPLAY_NAME_LENGTH) {
+                throw AuthException("Display name must be at most $MAX_DISPLAY_NAME_LENGTH characters", 400)
+            }
+        } ?: user.displayName
+        val mail = if (email == null) user.email else normalizeEmail(email)
+        // copy() off the loaded row, never a rebuilt User: R2dbcUserStore.update writes password_hash
+        // unconditionally, so a partially built entity would blank the stored hash.
+        return userStore.update(user.copy(displayName = name, email = mail)).toProfile()
+    }
+
+    /**
+     * Store an avatar key. Only an upload handler may call this, with the key [save] just minted for
+     * this same owner: a client must not be able to name an arbitrary object through the profile editor.
+     */
+    suspend fun setAvatarKey(userId: String, key: String): UserProfile = writeAvatar(userId, key)
+
+    /** Store an externally hosted picture. A bare http(s) link only: a `data:` URI would put image bytes in every read. */
+    suspend fun setAvatarUrl(userId: String, url: String): UserProfile = writeAvatar(userId, validateAvatarUrl(url))
+
+    /** Back to the preset, which is what makes the console render initials again. */
+    suspend fun clearAvatar(userId: String): UserProfile = writeAvatar(userId, AuthConstants.DEFAULT_AVATAR)
+
+    private suspend fun writeAvatar(userId: String, avatar: String): UserProfile {
+        val user = requireEditableUser(userId)
+        return userStore.update(user.copy(avatar = avatar)).toProfile()
+    }
+
+    /** `matches` anchors both ends, so a `data:` URI, embedded whitespace and over-long links all fail. */
+    private fun validateAvatarUrl(url: String): String {
+        val value = url.trim()
+        if (!AVATAR_URL.matches(value)) {
+            throw AuthException("Avatar link must be a direct http(s) image URL", 400)
+        }
+        return value
+    }
+
+    /**
+     * Only a signed-in account owns a profile. The `system` identity is the shared read-only owner of
+     * seed data and storage settings, never a row to write to, and it is what an unauthenticated call to
+     * the publicly reachable auth range resolves to. Upload handlers call this before writing any bytes.
+     */
+    internal suspend fun requireEditableUser(userId: String): User {
+        if (userId == AuthConstants.SYSTEM_USER_ID) {
+            throw AuthException("Profile editing requires an account", 403)
+        }
+        return userStore.findById(userId) ?: throw AuthException("User not found", 404)
+    }
+
     private suspend fun generateTokenPair(user: User): AuthResponse {
         val accessToken = jwtTokenProvider.generateAccessToken(user.id, user.username)
         val refreshToken = jwtTokenProvider.generateRefreshToken(user.id)
@@ -118,6 +174,19 @@ class AuthService(
             refreshToken = refreshToken,
             user = user.toProfile()
         )
+    }
+
+    /**
+     * One email rule for both entry points: `null` keeps the stored value, blank clears it, anything
+     * else must look like an address. Registration used to accept whatever was typed.
+     */
+    private fun normalizeEmail(raw: String?): String? {
+        val trimmed = raw?.trim().orEmpty()
+        if (trimmed.isEmpty()) return null
+        if (trimmed.length > MAX_EMAIL_LENGTH || !EMAIL.matches(trimmed)) {
+            throw AuthException("Email address is not valid", 400)
+        }
+        return trimmed
     }
 
     private fun hashPassword(password: String): String {
@@ -142,6 +211,14 @@ class AuthService(
         avatar = avatar,
         email = email
     )
+
+    companion object {
+        private const val MAX_DISPLAY_NAME_LENGTH = 64
+        private const val MAX_EMAIL_LENGTH = 255
+        private val EMAIL = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+
+        private val AVATAR_URL = Regex("https?://\\S{1,500}")
+    }
 }
 
 /**

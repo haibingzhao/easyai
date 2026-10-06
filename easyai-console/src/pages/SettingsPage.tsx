@@ -8,6 +8,9 @@ import { IntegrationsTab } from '@/components/settings/IntegrationsTab';
 import { RagTab } from '@/components/settings/RagTab';
 import { StorageTab } from '@/components/settings/StorageTab';
 import { AuxModelsTab } from '@/components/settings/AuxModelsTab';
+import { UserAvatar } from '@/components/user/UserAvatar';
+import { ProfileEditDialog } from '@/components/user/ProfileEditDialog';
+import { Button } from '@/components/ui/Button';
 import { i18n } from '@/utils/i18n';
 import {
   User,
@@ -100,33 +103,42 @@ export const SettingsPage: React.FC = () => {
 };
 
 const AccountTab: React.FC = () => {
-  const { user, logout } = useAuthStore();
+  const user = useAuthStore((state) => state.user);
+  const logout = useAuthStore((state) => state.logout);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   const handleLogout = async () => {
     setLoggingOut(true);
     await logout();
   };
 
-  const initial = (user?.displayName || user?.username || '?').charAt(0).toUpperCase();
-  const avatarUrl = user?.avatar && /^(https?:\/\/|data:)/.test(user.avatar) ? user.avatar : null;
+  // With auth switched off the backend reports the shared `system` identity, which owns no profile row.
+  const canEdit = !!user && user.id !== 'system';
+  const openEditor = canEdit ? () => setEditing(true) : undefined;
 
   return (
     <div className="space-y-6 max-w-lg">
       {/* Profile card */}
       <div className="p-5 rounded-lg border border-border">
         <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-full bg-primary/15 text-primary flex items-center justify-center text-xl font-semibold shrink-0">
-            {avatarUrl ? (
-              <img src={avatarUrl} alt="" className="w-full h-full rounded-full object-cover" />
-            ) : (
-              initial
-            )}
-          </div>
-          <div className="min-w-0">
+          <UserAvatar
+            avatar={user?.avatar}
+            name={user?.displayName || user?.username || '?'}
+            seed={user?.id ?? ''}
+            size="lg"
+            onClick={openEditor}
+            title={i18n('Edit profile')}
+          />
+          <div className="min-w-0 flex-1">
             <p className="font-medium text-lg truncate">{user?.displayName || user?.username || '-'}</p>
             <p className="text-sm text-muted-foreground truncate">@{user?.username || '-'}</p>
           </div>
+          {canEdit && (
+            <Button variant="outline" size="sm" onClick={openEditor}>
+              {i18n('Edit')}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -161,6 +173,8 @@ const AccountTab: React.FC = () => {
           {i18n('Logout')}
         </button>
       </div>
+
+      <ProfileEditDialog open={editing} onClose={() => setEditing(false)} />
     </div>
   );
 };

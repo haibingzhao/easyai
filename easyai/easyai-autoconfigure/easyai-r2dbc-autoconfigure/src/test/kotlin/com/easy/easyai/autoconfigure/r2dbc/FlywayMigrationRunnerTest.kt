@@ -190,6 +190,66 @@ class FlywayMigrationRunnerTest {
         }
 
         @Test
+        fun `the migrated user table holds a long avatar reference`() {
+            val jdbcUrl = "jdbc:h2:mem:flyway_avatar;MODE=MYSQL;DB_CLOSE_DELAY=-1"
+            Flyway.configure()
+                .dataSource(jdbcUrl, "sa", "")
+                .locations("classpath:db/migration")
+                .load()
+                .migrate()
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                val avatarColumn = connection.avatarColumnWidthAndConstraints()
+                assertTrue(
+                    avatarColumn.length >= 512L,
+                    "an avatar object key is ~85 characters, got ${avatarColumn.length}"
+                )
+                assertEquals("NO", avatarColumn.nullable)
+                assertTrue(
+                    "avatar-1" in avatarColumn.defaultValue,
+                    "widening must not drop the preset default, got ${avatarColumn.defaultValue}"
+                )
+
+                val key = "avatars/alice/0f0a2b1c-3d4e-5f60-7182-93a4b5c6d7e8.png"
+                connection.insertUserWithAvatar(key)
+                assertEquals(key, connection.readAvatar())
+
+                // Replaying the widening on a database that already carries a real reference must neither
+                // fail nor reset it: that is what lets a restored H2 file database start on this schema.
+                statementsOf(AVATAR_MIGRATION).forEach { connection.createStatement().execute(it) }
+                assertEquals(key, connection.readAvatar())
+            }
+        }
+
+        private fun Connection.avatarColumnWidthAndConstraints(): AvatarColumn {
+            createStatement().executeQuery(
+                "SELECT CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS " +
+                    "WHERE UPPER(TABLE_NAME) = 'APP_USER' AND UPPER(COLUMN_NAME) = 'AVATAR'"
+            ).use { result ->
+                assertTrue(result.next(), "app_user.avatar is missing from the migrated schema")
+                return AvatarColumn(
+                    length = result.getLong(1),
+                    nullable = result.getString(2),
+                    defaultValue = result.getString(3) ?: ""
+                )
+            }
+        }
+
+        private fun Connection.insertUserWithAvatar(avatar: String) {
+            createStatement().execute(
+                "INSERT INTO app_user (id, username, display_name, password_hash, avatar, created_at, updated_at) " +
+                    "VALUES ('avatar-user', 'avatar-user', 'Avatar User', 'hash', '$avatar', 1, 1)"
+            )
+        }
+
+        private fun Connection.readAvatar(): String {
+            createStatement().executeQuery("SELECT avatar FROM app_user WHERE id = 'avatar-user'").use { result ->
+                assertTrue(result.next(), "the avatar row disappeared")
+                return result.getString(1)
+            }
+        }
+
+        @Test
         fun `the skill migration can be replayed without error`() {
             // Every statement is `IF NOT EXISTS`, which is what lets a partially migrated or restored
             // database come up: replaying the scripts must not raise a duplicate-object error.
@@ -234,6 +294,7 @@ class FlywayMigrationRunnerTest {
 
     companion object {
         private const val SKILL_MIGRATION = "/db/migration/V3__create_skill_table.sql"
+        private const val AVATAR_MIGRATION = "/db/migration/V13__widen_user_avatar_column.sql"
 
         /** Owner id of the shared read-only layer (`SkillCatalogEntry.DEFAULT_USER_ID`). */
         private const val SHARED_OWNER = "system"
@@ -243,3 +304,6 @@ class FlywayMigrationRunnerTest {
             flyway.info().all().mapNotNull { it.version }.maxOf { it }.toString()
     }
 }
+
+/** The `app_user.avatar` column as the migrated H2 schema reports it. */
+private data class AvatarColumn(val length: Long, val nullable: String, val defaultValue: String)
