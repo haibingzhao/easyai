@@ -143,8 +143,11 @@ class AsrServiceTest {
             assertEquals("你好，世界。", refined)
         }
 
+        // runBlocking, not runTest: refine() guards the model call with withTimeout over Dispatchers.IO,
+        // and runTest's virtual clock can leap straight to that deadline while the real IO dispatch is still
+        // warming up (slow mock generation on a cold JVM), turning this into a spurious 504.
         @Test
-        fun `answers 502 when the model call fails`() = runTest {
+        fun `answers 502 when the model call fails`() = runBlocking {
             val chatModel = mockk<ChatModel>()
             coEvery { chatModel.call(any<Prompt>()) } throws
                 IllegalStateException("boom")
