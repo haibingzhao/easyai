@@ -37,6 +37,7 @@ easyai-web/src/main/kotlin/com/easy/easyai/web/
 └── service/
     ├── ChatStreamService.kt       # Core: AgentLoop → Flux<ServerSentEvent> bridge
     ├── SessionService.kt          # Session lifecycle, message loading
+    ├── DefaultWorkspaceService.kt # Per-session temporary workspace (kind=temp project) for project-less chats; also the orphan sweep
     ├── ConfigValidator.kt         # Prompt template + config validation
     ├── FileStorageService.kt      # File upload handling
     ├── GoalCommandHandler.kt      # /goal slash command

@@ -3,6 +3,7 @@ import { Dialog } from '../ui/Dialog';
 import { SessionItem } from '../ui/SessionItem';
 import { useSessionStore } from '@/services/stores/session-store';
 import { useChatStore } from '@/services/stores/chat-store';
+import { adoptSessionWorkspace } from '@/services/stores/project-store';
 import { useNavStore } from '@/services/stores/nav-store';
 import { sessionService } from '@/services/session-service';
 import { getCheckpoints, getFileReviewState } from '@/services/checkpoint-service';
@@ -40,6 +41,7 @@ export const NewSessionDialog: React.FC<NewSessionDialogProps> = ({ open, onClos
         }),
       ]);
       loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, sessionId);
+      adoptSessionWorkspace(detail);
       // Applied after setSessionId below — the identity-change reset restores the optimistic default.
       const snapshotEnabled = detail.snapshotEnabled !== false;
       useNavStore.getState().setSelectedFile(null);

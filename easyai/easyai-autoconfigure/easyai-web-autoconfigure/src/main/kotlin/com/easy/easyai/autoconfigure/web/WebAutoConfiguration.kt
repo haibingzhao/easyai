@@ -12,6 +12,7 @@ import com.easy.easyai.core.goal.GoalStatusNotifier
 import com.easy.easyai.core.goal.GoalStore
 import com.easy.easyai.core.message.DefaultMessageConverter
 import com.easy.easyai.core.message.MessageConverter
+import com.easy.easyai.core.permission.PermissionRuleStore
 import com.easy.easyai.core.permission.PermissionService
 import com.easy.easyai.core.storage.ObjectStorage
 import com.easy.easyai.core.storage.ObjectStorageResolver
@@ -48,6 +49,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.AutoConfiguration
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
@@ -83,6 +85,28 @@ open class WebAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnBean(AsyncProjectStore::class)
+    open fun defaultWorkspaceService(
+        projectStore: AsyncProjectStore,
+        @Autowired(required = false)
+        sessionStore: AsyncSessionStore? = null,
+        @Autowired(required = false)
+        permissionRuleStore: PermissionRuleStore? = null,
+        @Autowired(required = false)
+        snapshotService: SnapshotService? = null,
+        @Value("\${easyai.data-dir:\${user.home}/.easyai}") dataDir: String
+    ): DefaultWorkspaceService =
+        DefaultWorkspaceService(projectStore, sessionStore, permissionRuleStore, snapshotService, dataDir)
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(DefaultWorkspaceService::class)
+    open fun tempWorkspaceSweepRunner(
+        defaultWorkspaceService: DefaultWorkspaceService
+    ): TempWorkspaceSweepRunner = TempWorkspaceSweepRunner(defaultWorkspaceService)
+
+    @Bean
+    @ConditionalOnMissingBean
     open fun chatStreamService(
         sessionManager: SessionManager,
         configStore: ModelProviderConfigStore,
@@ -114,12 +138,14 @@ open class WebAutoConfiguration {
         @Autowired(required = false)
         skillTurnRouter: SkillTurnRouter? = null,
         @Autowired(required = false)
-        backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null
+        backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null,
+        @Autowired(required = false)
+        defaultWorkspaceService: DefaultWorkspaceService? = null
     ): ChatStreamService {
         return ChatStreamService(sessionManager, configStore, modelFactories,
             transformContextService, permissionService, sessionStore, projectStore, snapshotService,
             customEventConverters ?: emptyList(), commandService, goalStatusNotifier, goalStore, fileStorageService,
-            scriptEnvProvider, executionService, skillTurnRouter, backgroundTaskManagerRegistry)
+            scriptEnvProvider, executionService, skillTurnRouter, backgroundTaskManagerRegistry, defaultWorkspaceService)
     }
 
     @Bean
@@ -205,9 +231,11 @@ open class WebAutoConfiguration {
         @Autowired(required = false)
         configStore: ModelProviderConfigStore? = null,
         @Autowired(required = false)
-        backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null
+        backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null,
+        @Autowired(required = false)
+        defaultWorkspaceService: DefaultWorkspaceService? = null
     ): SessionService {
-        return SessionService(sessionManager, sessionStore, snapshotService, fileStorageService, teamStateRegistry, teamExecutionStore, configStore, backgroundTaskManagerRegistry)
+        return SessionService(sessionManager, sessionStore, snapshotService, fileStorageService, teamStateRegistry, teamExecutionStore, configStore, backgroundTaskManagerRegistry, defaultWorkspaceService)
     }
 
     @Bean

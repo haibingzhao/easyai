@@ -3,12 +3,12 @@ import { Send, Square, Loader2, Paperclip, ShieldCheck, Clock, Mic } from 'lucid
 import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { useSideAskStore } from '@/services/stores/side-ask-store';
-import { useProjectStore } from '@/services/stores/project-store';
+import { useProjectStore, adoptHandshakeWorkspace } from '@/services/stores/project-store';
 import { useNavStore } from '@/services/stores/nav-store';
 import { pathToFile, IMAGE_EXTS } from '@/services/file-browser-service';
 import { sendMessageToBackend, abortAllActiveStreams, cancelChat, getCurrentSendService, type ChatService } from '../../services/chat-service';
 import { SessionService, sessionService } from '../../services/session-service';
-import { isImageAttachment, isTextAttachment, toChatAttachment, buildMessageWithTextAttachments, buildFileRef, buildFolderRef } from '../../utils/attachment-utils';
+import { isImageAttachment, isTextAttachment, toChatAttachment, buildMessageWithTextAttachments, buildFileRef, buildFolderRef, resolveEmptyFileRefs } from '../../utils/attachment-utils';
 import { useMention } from '@/hooks/useMention';
 import type { MentionItem } from '@/hooks/useMention';
 import { ResourceMentionPopover } from '@/components/chat/ResourceMentionPopover';
@@ -98,7 +98,12 @@ export const MessageEditor: React.FC = () => {
 
   // Read selected agent from global agent store
   const selectedAgentId = useAgentStore((state) => state.selectedAgentId);
-  const currentProjectId = useProjectStore((state) => state.currentProject?.id);
+  // A temporary workspace belongs to the session that minted it — never hand it to a new chat,
+  // or the backend would bind the new session to another session's scratch dir. Existing
+  // sessions keep their binding server-side, so omitting it here is always safe.
+  const currentProjectId = useProjectStore((state) =>
+    state.currentProject?.kind === 'temp' ? undefined : state.currentProject?.id
+  );
 
   // Slash command autocomplete (must be after selectedAgentId is defined)
   const slashCommand = useSlashCommand(selectedAgentId);
@@ -488,7 +493,7 @@ export const MessageEditor: React.FC = () => {
         return;
       }
       const textDrafts = uploadedAttachments.filter((a) => !a.filePath && isTextAttachment(a));
-      const finalMessage = buildMessageWithTextAttachments(messageText, textDrafts);
+      const finalMessage = buildMessageWithTextAttachments(resolveEmptyFileRefs(messageText, uploadedAttachments), textDrafts);
       const storedAttachments = uploadedAttachments.filter((a) => a.filePath);
       const chatAttachments = storedAttachments.map(toChatAttachment);
       try {
@@ -524,7 +529,11 @@ export const MessageEditor: React.FC = () => {
           modelId: currentModelId,
           projectId: currentProjectId,
           attachments: chatAttachments.length > 0 ? chatAttachments : undefined,
-          onEvent: (event) => { if (!isStaleStream()) handleEvent(event); },
+          onEvent: (event) => {
+            if (isStaleStream()) return;
+            if (event.type === 'session_context') adoptHandshakeWorkspace(event);
+            handleEvent(event);
+          },
           onDone: (event) => {
             if (isStaleStream()) return;
             handleEvent(event);
@@ -717,7 +726,7 @@ export const MessageEditor: React.FC = () => {
         return;
       }
       const textDrafts = uploadedAttachments.filter((a) => !a.filePath && isTextAttachment(a));
-      const finalMessage = buildMessageWithTextAttachments(messageText, textDrafts);
+      const finalMessage = buildMessageWithTextAttachments(resolveEmptyFileRefs(messageText, uploadedAttachments), textDrafts);
       const storedAttachments = uploadedAttachments.filter((a) => a.filePath);
       const chatAttachments = storedAttachments.map(toChatAttachment);
 

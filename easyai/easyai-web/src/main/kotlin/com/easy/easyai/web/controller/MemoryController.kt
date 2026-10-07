@@ -7,12 +7,15 @@ import com.easy.easyai.core.memory.MemoryOwnerContext
 import com.easy.easyai.core.memory.MemoryScope
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.memory.MemoryType
+import com.easy.easyai.core.model.ProjectKind
+import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.web.model.CreateMemoryRequest
 import com.easy.easyai.web.model.MemoryConfigDto
 import com.easy.easyai.web.model.MemoryEntryDto
 import com.easy.easyai.web.model.UpdateMemoryConfigRequest
 import com.easy.easyai.web.model.UpdateMemoryRequest
 import com.easy.easyai.web.security.getCurrentUserId
+import com.easy.easyai.web.service.DefaultWorkspaceService
 import kotlinx.coroutines.reactor.mono
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpStatus
@@ -25,7 +28,9 @@ import java.time.LocalDate
 @RestController
 @RequestMapping("/api/memories")
 class MemoryController(
-    @param:Autowired(required = false) private val memoryStore: MemoryStore?
+    @param:Autowired(required = false) private val memoryStore: MemoryStore?,
+    @param:Autowired(required = false) private val projectStore: AsyncProjectStore? = null,
+    @param:Autowired(required = false) private val workspaceService: DefaultWorkspaceService? = null
 ) {
 
     @GetMapping
@@ -73,6 +78,7 @@ class MemoryController(
             }
             val memoryScope = parseScope(request.scope)
             val owner = ownerContext(memoryScope, request.projectPath)
+            requireProjectScopeWritable(memoryScope, request.projectPath)
             val memoryType = parseType(request.type)
             val maturity = request.maturity?.let { MemoryMaturity.fromApiName(it) }
             val scenarios = request.scenarios.map { it.trim() }.filter { it.isNotEmpty() }
@@ -106,6 +112,7 @@ class MemoryController(
             val store = memoryStore ?: throw memoryNotEnabled()
             val memoryScope = parseScope(scope)
             val owner = ownerContext(memoryScope, projectPath)
+            requireProjectScopeWritable(memoryScope, projectPath)
             val existing = store.findByName(name, memoryScope, owner)
                 ?: throw IllegalArgumentException("Memory not found: $name")
             val maturity = request.maturity?.let { MemoryMaturity.fromApiName(it) }
@@ -132,6 +139,7 @@ class MemoryController(
             val store = memoryStore ?: throw memoryNotEnabled()
             val memoryScope = parseScope(scope)
             val owner = ownerContext(memoryScope, projectPath)
+            requireProjectScopeWritable(memoryScope, projectPath)
             val entry = store.findByName(name, memoryScope, owner)
                 ?: throw IllegalArgumentException("Memory not found: $name")
             val deleted = store.delete(entry.path, memoryScope, owner)
@@ -148,6 +156,7 @@ class MemoryController(
             val store = memoryStore ?: throw memoryNotEnabled()
             val memoryScope = parseScope(scope)
             val owner = ownerContext(memoryScope, projectPath)
+            requireProjectScopeWritable(memoryScope, projectPath)
             val count = store.deleteAll(memoryScope, owner)
             mapOf("deleted" to count)
         }
@@ -174,6 +183,28 @@ class MemoryController(
 
     private fun memoryNotEnabled(): ResponseStatusException =
         ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Memory system is not enabled")
+
+    /**
+     * Reject PROJECT-scope writes that target a temporary workspace: that directory is removed
+     * when its session ends, so an entry stored there would be lost without ever being readable.
+     */
+    private suspend fun requireProjectScopeWritable(scope: MemoryScope, projectPath: String?) {
+        if (scope != MemoryScope.PROJECT || projectPath.isNullOrBlank()) return
+        // Checked before the row lookup: a path that never matches a stored row exactly must not slip through.
+        if (workspaceService?.isTemporaryPath(projectPath) == true) {
+            throw temporaryWorkspaceRejected()
+        }
+        val store = projectStore ?: return
+        val project = store.findByPath(projectPath, getCurrentUserId()) ?: return
+        if (project.kind == ProjectKind.TEMP) {
+            throw temporaryWorkspaceRejected()
+        }
+    }
+
+    private fun temporaryWorkspaceRejected(): ResponseStatusException = ResponseStatusException(
+        HttpStatus.BAD_REQUEST,
+        "PROJECT scope is not available in temporary workspaces"
+    )
 
     /**
      * Build the ownership context for backend isolation. PROJECT scope

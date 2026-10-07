@@ -5,7 +5,7 @@ import { i18n } from '@/utils/i18n';
 import { DirectoryBrowser } from './DirectoryBrowser';
 
 export function ProjectSelectPage() {
-  const { projects, currentProject, projectsLoading, createProject, selectProject, deleteProject, loadProjects } = useProjectStore();
+  const { projects, currentProject, projectsLoading, createProject, selectProject, startWithoutProject, deleteProject, loadProjects } = useProjectStore();
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
   const [path, setPath] = useState('');
@@ -207,6 +207,14 @@ export function ProjectSelectPage() {
             </div>
           </div>
         )}
+
+        {/* Chat without a project: the backend gives every session its own scratch directory */}
+        <button
+          onClick={startWithoutProject}
+          className="mt-4 w-full text-center text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
+        >
+          {i18n('Skip: use a temporary workspace')}
+        </button>
       </div>
     </div>
   );

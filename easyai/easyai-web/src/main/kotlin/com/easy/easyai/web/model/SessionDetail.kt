@@ -31,7 +31,17 @@ data class SessionDetail(
      * or the service reports the project disabled (e.g. a no-op override).
      * The frontend hides the file-review UI when this is false.
      */
-    val snapshotEnabled: Boolean = false
+    val snapshotEnabled: Boolean = false,
+    /**
+     * Project the session runs in, as resolved by the backend. [workspaceKind] is "temp" for a
+     * system-managed per-session scratch workspace, which the frontend shows instead of a project
+     * name and excludes from project-scoped features such as PROJECT memory.
+     */
+    val workspaceProjectId: String? = null,
+    val workspacePath: String? = null,
+    val workspaceKind: String? = null,
+    /** Tags attached to this session (empty when none). */
+    val tags: List<String> = emptyList()
 )
 
 /**

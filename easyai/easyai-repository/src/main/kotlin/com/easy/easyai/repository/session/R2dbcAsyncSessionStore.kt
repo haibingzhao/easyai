@@ -30,6 +30,9 @@ class R2dbcAsyncSessionStore(
 ) : AsyncSessionStore {
     private val logger = LoggerFactory.getLogger(javaClass)
 
+    private val maxTagLength = 32
+    private val maxTagCount = 20
+
     override suspend fun save(session: PersistedSession, userId: String) {
         suspendTransaction(db) {
             val existingCount = Tables.Session
@@ -100,6 +103,22 @@ class R2dbcAsyncSessionStore(
      */
     private fun notForkSession(): Op<Boolean> = Tables.Session.forkRootSessionId.isNull()
 
+    /**
+     * Condition matching project-less sessions: those running in a system-managed temporary
+     * workspace, those carrying no project id, and those whose workspace row is already gone
+     * (released while the session outlived it). Only a registered project anchors a session
+     * outside this scope.
+     */
+    private fun tempWorkspaceSession(userId: String): Op<Boolean> = notExists(
+        Tables.Project
+            .select(Tables.Project.id)
+            .where {
+                (Tables.Project.id eq Tables.Session.projectId) and
+                    (Tables.Project.kind eq ProjectKind.USER.value) and
+                    UserScope.filterStrict(Tables.Project.userId, userId)
+            }
+    )
+
     override suspend fun findIdsByLimit(limit: Int, offset: Int, projectId: String?, userId: String, excludeSwarm: Boolean): SessionPageResult {
         return suspendTransaction(db) {
             val fetchSize = limit + 1
@@ -135,7 +154,7 @@ class R2dbcAsyncSessionStore(
         }
     }
 
-    override suspend fun findMetadataByLimit(limit: Int, offset: Int, projectId: String?, userId: String, excludeSwarm: Boolean): Pair<List<SessionListMetadata>, Boolean> {
+    override suspend fun findMetadataByLimit(limit: Int, offset: Int, projectId: String?, userId: String, excludeSwarm: Boolean, tags: List<String>?, tempWorkspaceOnly: Boolean): Pair<List<SessionListMetadata>, Boolean> {
         return suspendTransaction(db) {
             val fetchSize = limit + 1
             val userFilter = UserScope.filterStrict(Tables.Session.userId, userId)
@@ -150,12 +169,29 @@ class R2dbcAsyncSessionStore(
                     } else {
                         userFilter and activeStatuses
                     }
-                    val swarmFilter = if (excludeSwarm) {
-                        baseFilter and Tables.Session.swarmRunId.isNull()
+                    val scopeFilter = if (tempWorkspaceOnly) {
+                        baseFilter and tempWorkspaceSession(userId)
                     } else {
                         baseFilter
                     }
-                    swarmFilter and notTeamMemberSession() and notForkSession()
+                    val swarmFilter = if (excludeSwarm) {
+                        scopeFilter and Tables.Session.swarmRunId.isNull()
+                    } else {
+                        scopeFilter
+                    }
+                    val listFilter = swarmFilter and notTeamMemberSession() and notForkSession()
+                    // Optional OR tag filter: keep sessions carrying at least one of [tags].
+                    if (!tags.isNullOrEmpty()) {
+                        val tagSubQuery = Tables.SessionTag
+                            .select(Tables.SessionTag.sessionId)
+                            .where {
+                                (Tables.SessionTag.tag inList tags) and
+                                    UserScope.filterStrict(Tables.SessionTag.userId, userId)
+                            }
+                        listFilter and (Tables.Session.id inSubQuery tagSubQuery)
+                    } else {
+                        listFilter
+                    }
                 }
                 .orderBy(Tables.Session.createdAt to SortOrder.DESC)
                 .limit(fetchSize)
@@ -168,6 +204,17 @@ class R2dbcAsyncSessionStore(
             if (resultRows.isEmpty()) {
                 return@suspendTransaction emptyList<SessionListMetadata>() to hasMore
             }
+
+            // Batch-load tags for the result page (single query, avoids N+1).
+            val pageIds = resultRows.map { it[Tables.Session.id] }
+            val tagsBySession = Tables.SessionTag
+                .select(Tables.SessionTag.sessionId, Tables.SessionTag.tag)
+                .where {
+                    (Tables.SessionTag.sessionId inList pageIds) and
+                        UserScope.filterStrict(Tables.SessionTag.userId, userId)
+                }
+                .toList()
+                .groupBy({ it[Tables.SessionTag.sessionId] }, { it[Tables.SessionTag.tag] })
 
             // Build metadata with lightweight per-session queries
             val metadataList = resultRows.map { row ->
@@ -200,7 +247,8 @@ class R2dbcAsyncSessionStore(
                     updatedAt = row[Tables.Session.updatedAt],
                     messageCount = msgCount,
                     firstUserMessageText = firstUserText?.take(50),
-                    streaming = row[Tables.Session.status] == "streaming"
+                    streaming = row[Tables.Session.status] == "streaming",
+                    tags = tagsBySession[id] ?: emptyList()
                 )
             }
 
@@ -252,6 +300,12 @@ class R2dbcAsyncSessionStore(
                 Tables.TodoTable.deleteWhere { Tables.TodoTable.sessionId eq sessionId }
                 Tables.Message.deleteWhere { Tables.Message.sessionId eq sessionId }
             }
+            if (sessionIds.isNotEmpty()) {
+                Tables.SessionTag.deleteWhere {
+                    (Tables.SessionTag.sessionId inList sessionIds) and
+                        UserScope.filterStrict(Tables.SessionTag.userId, userId)
+                }
+            }
 
             // Delete all sessions belonging to this project (user-scoped)
             val deleted = Tables.Session.deleteWhere {
@@ -302,9 +356,13 @@ class R2dbcAsyncSessionStore(
                 }
 
                 for (sid in toDelete) {
-                    // Delete todos (all scopes) + messages (includes ToolResultMessage)
+                    // Delete todos (all scopes) + messages (includes ToolResultMessage) + tags
                     Tables.TodoTable.deleteWhere { sessionId eq sid }
                     Tables.Message.deleteWhere { Tables.Message.sessionId eq sid }
+                    Tables.SessionTag.deleteWhere {
+                        (Tables.SessionTag.sessionId eq sid) and
+                            UserScope.filterStrict(Tables.SessionTag.userId, userId)
+                    }
                     Tables.Session.deleteWhere {
                         (Tables.Session.id eq sid) and UserScope.filterStrict(Tables.Session.userId, userId)
                     }
@@ -1288,4 +1346,88 @@ class R2dbcAsyncSessionStore(
                 ?.let { SessionForkInfo(it[Tables.Session.forkedFromSessionId], it[Tables.Session.forkRootSessionId]) }
         }
     }
+
+    override suspend fun updateTags(sessionId: String, tags: List<String>, userId: String) {
+        val normalized = normalizeTags(tags)
+        suspendTransaction(db) {
+            val owned = Tables.Session
+                .selectAll()
+                .where { (Tables.Session.id eq sessionId) and UserScope.filterStrict(Tables.Session.userId, userId) }
+                .count()
+            if (owned == 0L) {
+                logger.debug("Session {} not owned by user {}, skipping tag update", sessionId, userId)
+                return@suspendTransaction
+            }
+            Tables.SessionTag.deleteWhere {
+                (Tables.SessionTag.sessionId eq sessionId) and
+                    UserScope.filterStrict(Tables.SessionTag.userId, userId)
+            }
+            for (tag in normalized) {
+                Tables.SessionTag.insert {
+                    it[Tables.SessionTag.sessionId] = sessionId
+                    it[Tables.SessionTag.tag] = tag
+                    it[Tables.SessionTag.userId] = userId
+                }
+            }
+            logger.info("Updated {} tag(s) for session {}", normalized.size, sessionId)
+        }
+    }
+
+    override suspend fun findTagsMap(sessionIds: List<String>, userId: String): Map<String, List<String>> {
+        if (sessionIds.isEmpty()) return emptyMap()
+        return suspendTransaction(db) {
+            Tables.SessionTag
+                .select(Tables.SessionTag.sessionId, Tables.SessionTag.tag)
+                .where {
+                    (Tables.SessionTag.sessionId inList sessionIds) and
+                        UserScope.filterStrict(Tables.SessionTag.userId, userId)
+                }
+                .toList()
+                .groupBy({ it[Tables.SessionTag.sessionId] }, { it[Tables.SessionTag.tag] })
+        }
+    }
+
+    override suspend fun findAllTags(projectId: String?, userId: String, tempWorkspaceOnly: Boolean): List<String> {
+        return suspendTransaction(db) {
+            val userFilter = UserScope.filterStrict(Tables.SessionTag.userId, userId)
+            Tables.SessionTag
+                .select(Tables.SessionTag.tag)
+                .where {
+                    if (projectId != null || tempWorkspaceOnly) {
+                        val projectSessions = Tables.Session
+                            .select(Tables.Session.id)
+                            .where {
+                                val sessionFilter = if (projectId != null) {
+                                    UserScope.filterStrict(Tables.Session.userId, userId) and
+                                        (Tables.Session.projectId eq projectId)
+                                } else {
+                                    UserScope.filterStrict(Tables.Session.userId, userId)
+                                }
+                                if (tempWorkspaceOnly) {
+                                    sessionFilter and tempWorkspaceSession(userId)
+                                } else {
+                                    sessionFilter
+                                }
+                            }
+                        userFilter and (Tables.SessionTag.sessionId inSubQuery projectSessions)
+                    } else {
+                        userFilter
+                    }
+                }
+                .toList()
+                .map { it[Tables.SessionTag.tag] }
+                .distinct()
+                .sorted()
+        }
+    }
+
+    /** Trim, drop blanks, de-duplicate, cap each tag length and the total count. */
+    private fun normalizeTags(tags: List<String>): List<String> =
+        tags.asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .map { if (it.length > maxTagLength) it.substring(0, maxTagLength) else it }
+            .distinct()
+            .take(maxTagCount)
+            .toList()
 }

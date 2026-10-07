@@ -371,7 +371,15 @@ sealed interface ChatStreamEvent {
     data class SessionContext(
         val sessionId: String,
         val modelContextLength: Int,
-        val modelId: String? = null
+        val modelId: String? = null,
+        /**
+         * Project the turn actually runs against, as resolved by the backend. [projectKind] is
+         * "temp" for a system-managed per-session workspace — the case where the frontend has no
+         * project of its own and needs to render (and address) the scratch directory.
+         */
+        val projectId: String? = null,
+        val projectPath: String? = null,
+        val projectKind: String? = null
     ) : ChatStreamEvent {
         override val type: String get() = "session_context"
     }

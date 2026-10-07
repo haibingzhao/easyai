@@ -7,6 +7,7 @@ import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.permission.ToolPermissionEvaluator
 import com.easy.easyai.core.tool.ToolBuilder
 import com.easy.easyai.core.tool.ToolDefinition
+import com.easy.easyai.tools.fallbackWorkDir
 import java.nio.file.Path
 
 /**
@@ -26,7 +27,7 @@ abstract class AbstractFileReadToolBuilder : ToolBuilder {
     override val rulePermissionType = "file.read.other"
 
     override fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
-        val workDir = context.projectPath ?: Path.of(".")
+        val workDir = context.projectPath ?: fallbackWorkDir(context.sessionId)
         return createTool(workDir)
     }
 
@@ -50,7 +51,7 @@ abstract class AbstractFileWriteToolBuilder : ToolBuilder {
     override val rulePermissionType = "file.write.other"
 
     override fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
-        val workDir = context.projectPath ?: Path.of(".")
+        val workDir = context.projectPath ?: fallbackWorkDir(context.sessionId)
         return createTool(workDir)
     }
 

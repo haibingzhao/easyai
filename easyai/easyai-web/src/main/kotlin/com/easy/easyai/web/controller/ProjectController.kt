@@ -1,12 +1,14 @@
 package com.easy.easyai.web.controller
 
 import com.easy.easyai.core.model.ProjectInfo
+import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.web.model.CreateProjectRequest
 import com.easy.easyai.web.model.ProjectResponse
 import com.easy.easyai.web.model.UpdateProjectRequest
 import com.easy.easyai.web.security.getCurrentUserId
+import com.easy.easyai.web.service.DefaultWorkspaceService
 import com.easy.easyai.web.service.FileStorageService
 import kotlinx.coroutines.reactor.asFlux
 import kotlinx.coroutines.reactor.mono
@@ -39,7 +41,9 @@ class ProjectController(
     private val projectStore: AsyncProjectStore,
     private val sessionStore: AsyncSessionStore,
     @param:Autowired(required = false)
-    private val fileStorageService: FileStorageService? = null
+    private val fileStorageService: FileStorageService? = null,
+    @param:Autowired(required = false)
+    private val workspaceService: DefaultWorkspaceService? = null
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
 
@@ -212,7 +216,14 @@ class ProjectController(
             if (deletedSessions > 0) {
                 logger.info("Cascade deleted {} sessions for project: {}", deletedSessions, id)
             }
-            projectStore.delete(id, userId)
+            if (project.kind == ProjectKind.TEMP) {
+                // Temporary workspaces own their directory and snapshot repo: the release
+                // removes rules, repo, files and the project row itself. Fall back to a plain
+                // row delete if the workspace bean is absent, so a TEMP row can never leak.
+                workspaceService?.releaseWorkspace(id, userId) ?: projectStore.delete(id, userId)
+            } else {
+                projectStore.delete(id, userId)
+            }
             ResponseEntity.noContent().build<Void>()
         }
     }
@@ -224,6 +235,7 @@ class ProjectController(
             path = project.path,
             description = project.description,
             memoryAutoGeneration = project.memoryAutoGeneration,
+            kind = project.kind.value,
             createdAt = project.createdAt.toEpochMilli(),
             updatedAt = project.updatedAt.toEpochMilli()
         )

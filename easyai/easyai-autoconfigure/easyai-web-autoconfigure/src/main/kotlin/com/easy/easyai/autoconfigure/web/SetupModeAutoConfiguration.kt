@@ -3,6 +3,7 @@ package com.easy.easyai.autoconfigure.web
 import com.easy.easyai.web.setup.SetupController
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 
@@ -20,7 +21,9 @@ import org.springframework.context.annotation.Import
 open class SetupModeAutoConfiguration {
 
     @Bean
-    open fun setupController(): SetupController {
-        return SetupController()
+    open fun setupController(
+        @Value("\${easyai.web.project-selection-enabled:true}") projectSelectionEnabled: Boolean
+    ): SetupController {
+        return SetupController(projectSelectionEnabled)
     }
 }

@@ -85,7 +85,10 @@ interface AutoApprovePanelProps {
 // ---------------------------------------------------------------------------
 
 export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) => {
-  const currentProjectId = useProjectStore((s) => s.currentProject?.id);
+  // Permission rules are stored per project. A temporary workspace is deleted with its session,
+  // so rules attached to it would be orphaned — treat it as having no project and rely on defaults.
+  const currentProjectId = useProjectStore((s) =>
+    (s.currentProject?.kind === 'temp' ? undefined : s.currentProject?.id));
 
   const [settings, setSettings] = useState<PermissionSettingsDto | null>(null);
   const [isLoading, setIsLoading] = useState(true);

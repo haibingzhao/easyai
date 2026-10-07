@@ -9,9 +9,10 @@ export const FILE_REF_CHAR = '\u201b';
 /** Emoji prefix used in folder reference names to distinguish from file references. */
 export const FOLDER_PREFIX = '\u{1F4C1}'; // 📁
 
-/** Create a fresh regex for matching file/folder refs (must be new instance each time due to /g stateful lastIndex) */
+/** Create a fresh regex for matching file/folder refs (must be new instance each time due to /g stateful lastIndex).
+ *  The path group allows empty paths so a draft ref never swallows adjacent refs. */
 function createRefRegex(): RegExp {
-  return new RegExp(`${FILE_REF_CHAR}\\[([^\\]]+)\\]\\(([\\s\\S]+?)\\)${FILE_REF_CHAR}`, 'g');
+  return new RegExp(`${FILE_REF_CHAR}\\[([^\\]]+)\\]\\(([\\s\\S]*?)\\)${FILE_REF_CHAR}`, 'g');
 }
 
 /** Parse file references from message text. Returns array of { name, path }. */
@@ -29,6 +30,20 @@ export function parseFileRefs(text: string): { name: string; path: string }[] {
 /** Build a file reference string to embed in message text. */
 export function buildFileRef(name: string, path: string): string {
   return `${FILE_REF_CHAR}[${name}](${path})${FILE_REF_CHAR}`;
+}
+
+/** Backfill filePaths into refs serialized before upload finished (draft chips carry an empty path). */
+export function resolveEmptyFileRefs(text: string, attachments: Attachment[]): string {
+  let resolved = text;
+  for (const attachment of attachments) {
+    if (!attachment.filePath) continue;
+    const emptyRef = buildFileRef(attachment.name, '');
+    const index = resolved.indexOf(emptyRef);
+    if (index >= 0) {
+      resolved = resolved.slice(0, index) + buildFileRef(attachment.name, attachment.filePath) + resolved.slice(index + emptyRef.length);
+    }
+  }
+  return resolved;
 }
 
 export async function loadAttachment(file: File): Promise<Attachment> {

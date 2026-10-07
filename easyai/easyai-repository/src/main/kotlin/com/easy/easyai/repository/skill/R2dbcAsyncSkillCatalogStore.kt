@@ -4,6 +4,7 @@ import com.easy.easyai.core.skill.AsyncSkillCatalogStore
 import com.easy.easyai.core.skill.SkillCatalogEntry
 import com.easy.easyai.core.skill.SkillSyncState
 import com.easy.easyai.core.skill.SkillSyncUpdate
+import com.easy.easyai.repository.database.SqlErrorClassifier
 import com.easy.easyai.repository.database.Tables
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.firstOrNull
@@ -62,7 +63,7 @@ class R2dbcAsyncSkillCatalogStore(private val db: R2dbcDatabase) : AsyncSkillCat
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (!isUniqueViolation(e)) throw e
+                if (!SqlErrorClassifier.isUniqueViolation(e)) throw e
             }
         }
         error("Concurrent skill claim did not converge")
@@ -165,17 +166,6 @@ class R2dbcAsyncSkillCatalogStore(private val db: R2dbcDatabase) : AsyncSkillCat
         indexedChecksum = row[table.indexedChecksum], syncState = SkillSyncState.valueOf(row[table.syncState]),
         revision = row[table.revision], nextAttemptAt = row[table.nextAttemptAt], lastError = row[table.lastError]
     )
-
-    private fun isUniqueViolation(error: Throwable): Boolean {
-        var current: Throwable? = error
-        while (current != null) {
-            val message = current.message.orEmpty().lowercase()
-            if (message.contains("23505") || message.contains("unique index") ||
-                message.contains("unique constraint") || message.contains("duplicate key")) return true
-            current = current.cause
-        }
-        return false
-    }
 
     private companion object { const val MAX_RETRIES = 8 }
 }

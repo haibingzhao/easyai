@@ -310,6 +310,10 @@ export interface SessionContextEvent extends BaseEvent {
   /** Active model's context window in tokens (from model config options.contextToken). */
   modelContextLength: number;
   modelId?: string;
+  /** Project the turn runs in, as resolved by the backend. 'temp' = per-session scratch workspace. */
+  projectId?: string;
+  projectPath?: string;
+  projectKind?: 'user' | 'temp';
 }
 
 export interface BackgroundTaskEvent extends BaseEvent {

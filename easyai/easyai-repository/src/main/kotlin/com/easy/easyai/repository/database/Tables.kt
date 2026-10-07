@@ -135,6 +135,8 @@ object Tables {
         val description = text("description").nullable()
         val userId = varchar("user_id", 255).default("system")
         val memoryAutoGeneration = bool("memory_auto_generation").default(true)
+        /** 'user' = user-registered project, 'temp' = system-managed per-session scratch workspace. */
+        val kind = varchar("kind", 32).default("user")
         val createdAt = long("created_at")
         val updatedAt = long("updated_at")
 
@@ -175,6 +177,27 @@ object Tables {
         init {
             index(false, forkRootSessionId)
             index(false, forkedFromSessionId)
+        }
+    }
+
+    /**
+     * Session tag join table: one row per (session, tag).
+     * Enables index-backed OR filtering by tag and cheap DISTINCT aggregation
+     * for the tag autocomplete / filter row (a JSON text column would force a
+     * full-table scan with LIKE '%"tag"%').
+     * userId is denormalized from the owning session for strict user isolation.
+     */
+    object SessionTag : Table("session_tag") {
+        val sessionId = varchar("session_id", 255)
+        val tag = varchar("tag", 128)
+        val userId = varchar("user_id", 255).default("system")
+
+        override val primaryKey = PrimaryKey(sessionId, tag)
+
+        init {
+            // session_id needs no separate index: the PK's leftmost prefix covers it.
+            index(false, tag)
+            index(false, userId)
         }
     }
 

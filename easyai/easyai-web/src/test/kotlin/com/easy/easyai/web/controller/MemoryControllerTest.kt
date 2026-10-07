@@ -6,14 +6,19 @@ import com.easy.easyai.core.memory.MemoryOwnerContext
 import com.easy.easyai.core.memory.MemoryScope
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.memory.MemoryType
+import com.easy.easyai.core.model.ProjectInfo
+import com.easy.easyai.core.model.ProjectKind
+import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.web.model.CreateMemoryRequest
 import com.easy.easyai.web.model.UpdateMemoryConfigRequest
 import com.easy.easyai.web.model.UpdateMemoryRequest
+import com.easy.easyai.web.service.DefaultWorkspaceService
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import org.springframework.http.HttpStatus
 import org.springframework.web.server.ResponseStatusException
 import java.nio.file.Path
@@ -214,5 +219,72 @@ class MemoryControllerTest {
 
         assertEquals(1, dtos?.size)
         assertEquals("b", dtos?.first()?.name)
+    }
+
+    @Test
+    fun `project scope write is rejected inside a temporary workspace`() = runTest {
+        val store = mockk<MemoryStore>(relaxed = true)
+        val projectStore = mockk<AsyncProjectStore>(relaxed = true)
+        val controller = MemoryController(store, projectStore)
+        val scratch = "/home/test/.easyai/project/system/session-1"
+        coEvery { projectStore.findByPath(scratch, any()) } returns ProjectInfo(
+            id = "tmp-session-1", name = "temp", path = scratch, kind = ProjectKind.TEMP
+        )
+
+        val e = assertFailsWith<ResponseStatusException> {
+            controller.createOrUpdateMemory(
+                CreateMemoryRequest(
+                    name = "fact", description = "d", type = "experience_lessons",
+                    scope = "project", content = "c", projectPath = scratch
+                )
+            ).block()
+        }
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.statusCode)
+        coVerify(exactly = 0) { store.write(any(), any(), any()) }
+    }
+
+    @Test
+    fun `project scope write is allowed for a user project`() = runTest {
+        val store = mockk<MemoryStore>(relaxed = true)
+        val projectStore = mockk<AsyncProjectStore>(relaxed = true)
+        val controller = MemoryController(store, projectStore)
+        val repo = "/home/test/repo"
+        coEvery { projectStore.findByPath(repo, any()) } returns ProjectInfo(
+            id = "p-1", name = "repo", path = repo, kind = ProjectKind.USER
+        )
+
+        controller.createOrUpdateMemory(
+            CreateMemoryRequest(
+                name = "fact", description = "d", type = "experience_lessons",
+                scope = "project", content = "c", projectPath = repo
+            )
+        ).block()
+
+        coVerify { store.write(any(), MemoryScope.PROJECT, any()) }
+    }
+
+    @Test
+    fun `project scope write is rejected under the workspace root even without a row`(
+        @TempDir tempDir: Path
+    ) = runTest {
+        val store = mockk<MemoryStore>(relaxed = true)
+        val projectStore = mockk<AsyncProjectStore>(relaxed = true)
+        val workspaceService = DefaultWorkspaceService(projectStore, dataDir = tempDir.toString())
+        val controller = MemoryController(store, projectStore, workspaceService)
+        val scratch = tempDir.resolve(".temp-workspaces").resolve("system").resolve("session-1").toString()
+        coEvery { projectStore.findByPath(scratch, any()) } returns null
+
+        val e = assertFailsWith<ResponseStatusException> {
+            controller.createOrUpdateMemory(
+                CreateMemoryRequest(
+                    name = "fact", description = "d", type = "experience_lessons",
+                    scope = "project", content = "c", projectPath = scratch
+                )
+            ).block()
+        }
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.statusCode)
+        coVerify(exactly = 0) { store.write(any(), any(), any()) }
     }
 }

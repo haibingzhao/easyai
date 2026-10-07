@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { Send, X, Bot, Paperclip } from 'lucide-react';
 import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
-import { useProjectStore } from '@/services/stores/project-store';
+import { useProjectStore, adoptHandshakeWorkspace } from '@/services/stores/project-store';
 import { useNavStore } from '@/services/stores/nav-store';
 import { pathToFile, IMAGE_EXTS } from '@/services/file-browser-service';
 import { sendMessageToBackend, getCurrentSendService, type ChatService } from '../../services/chat-service';
@@ -22,7 +22,7 @@ import { parseCommand, serializeCommand } from '@/utils/command-utils';
 import { createCommandChip, populateMessageEditor, readMessageEditorText, copyMessageSelection } from '@/utils/attachment-utils';
 import type { Message, Attachment } from '../../types/message';
 import type { ModelCapabilities } from '@/types/settings';
-import { isImageAttachment, isTextAttachment, toChatAttachment, buildMessageWithTextAttachments, buildFileRef, buildFolderRef, parseFileRefs } from '../../utils/attachment-utils';
+import { isImageAttachment, isTextAttachment, toChatAttachment, buildMessageWithTextAttachments, buildFileRef, buildFolderRef, parseFileRefs, resolveEmptyFileRefs } from '../../utils/attachment-utils';
 import { useMention } from '@/hooks/useMention';
 import type { MentionItem } from '@/hooks/useMention';
 import { ResourceMentionPopover } from '@/components/chat/ResourceMentionPopover';
@@ -566,7 +566,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     // Validate and persist image uploads before deleting any history or rolling back files.
     const uploadedAttachments = await uploadPendingAttachments(sessionId!);
     const textDrafts = uploadedAttachments.filter((a) => !a.filePath && isTextAttachment(a));
-    const finalMessage = buildMessageWithTextAttachments(messageText, textDrafts);
+    const finalMessage = buildMessageWithTextAttachments(resolveEmptyFileRefs(messageText, uploadedAttachments), textDrafts);
     const storedAttachments = uploadedAttachments.filter((a) => a.filePath);
     const chatAttachments = storedAttachments.map(toChatAttachment);
 
@@ -613,7 +613,11 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
       modelId: currentModelId,
       projectId: currentProjectId,
       attachments: chatAttachments.length > 0 ? chatAttachments : undefined,
-      onEvent: (event) => { if (!isStaleStream()) handleEvent(event); },
+      onEvent: (event) => {
+        if (isStaleStream()) return;
+        if (event.type === 'session_context') adoptHandshakeWorkspace(event);
+        handleEvent(event);
+      },
       onDone: (event) => {
         if (isStaleStream()) return;
         handleEvent(event);

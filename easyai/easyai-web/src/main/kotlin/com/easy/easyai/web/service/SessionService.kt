@@ -2,6 +2,7 @@ package com.easy.easyai.web.service
 
 import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.common.util.SharedObjectMapper
+import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.SessionManager
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.team.TeamExecutionStore
@@ -28,7 +29,9 @@ class SessionService(
     /** Optional: resolves the last message's model config to report its context window. */
     private val configStore: ModelProviderConfigStore? = null,
     /** Optional: cleans up background task manager on session deletion. */
-    private val backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null
+    private val backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null,
+    /** Optional: releases the temporary workspace a project-less session was given. */
+    private val workspaceService: DefaultWorkspaceService? = null
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper = SharedObjectMapper.instance
@@ -38,8 +41,12 @@ class SessionService(
         val hasMore: Boolean
     )
 
-    suspend fun listSessions(limit: Int, offset: Int, projectId: String? = null, userId: String = "system"): SessionListResponse {
-        val (metadataList, hasMore) = sessionStore.findMetadataByLimit(limit, offset, projectId, userId)
+    /**
+     * @param tempWorkspace Only list sessions that run in a temporary workspace (or carry no
+     *   project) — the History list of the project-less "No Project" mode.
+     */
+    suspend fun listSessions(limit: Int, offset: Int, projectId: String? = null, userId: String = "system", tags: List<String>? = null, tempWorkspace: Boolean = false): SessionListResponse {
+        val (metadataList, hasMore) = sessionStore.findMetadataByLimit(limit, offset, projectId, userId, tags = tags, tempWorkspaceOnly = tempWorkspace)
         val items = metadataList.map { meta ->
             SessionListItem(
                 id = meta.id,
@@ -47,7 +54,8 @@ class SessionService(
                 createdAt = meta.createdAt,
                 updatedAt = meta.updatedAt,
                 messageCount = meta.messageCount,
-                streaming = meta.streaming
+                streaming = meta.streaming,
+                tags = meta.tags
             )
         }
         return SessionListResponse(
@@ -55,6 +63,20 @@ class SessionService(
             hasMore = hasMore
         )
     }
+
+    /**
+     * Overwrite the tag set of a session. Tags are normalized in the store layer.
+     */
+    suspend fun updateSessionTags(id: String, tags: List<String>, userId: String = "system") {
+        sessionStore.updateTags(id, tags, userId)
+    }
+
+    /**
+     * Distinct tags in use, for the History panel autocomplete + filter chip row.
+     * [tempWorkspace] scopes the aggregation to project-less sessions, matching [listSessions].
+     */
+    suspend fun listSessionTags(projectId: String? = null, userId: String = "system", tempWorkspace: Boolean = false): List<String> =
+        sessionStore.findAllTags(projectId, userId, tempWorkspaceOnly = tempWorkspace)
 
     suspend fun getSessionDetail(id: String, userId: String = "system"): SessionDetail? {
         val session = sessionManager.getSessionDetail(id, userId) ?: return null
@@ -87,6 +109,12 @@ class SessionService(
         // Fork lineage so the frontend can locate this session in the branch list
         val forkInfo = sessionStore.findForkInfo(id, userId)
 
+        // Tags attached to this session (empty when none)
+        val tags = sessionStore.findTagsMap(listOf(id), userId)[id] ?: emptyList()
+
+        // Agent context carries the project — or temporary workspace — this session runs in.
+        val context = resolveSessionContext(id, userId)
+
         return SessionDetail(
             id = session.id,
             title = extractTitle(session.messages),
@@ -102,8 +130,25 @@ class SessionService(
             variables = variables,
             forkedFromSessionId = forkInfo?.forkedFromSessionId,
             forkRootSessionId = forkInfo?.forkRootSessionId,
-            snapshotEnabled = resolveSnapshotEnabled(id, userId)
+            snapshotEnabled = resolveSnapshotEnabled(context),
+            workspaceProjectId = context?.projectId,
+            workspacePath = context?.projectPath?.toString(),
+            workspaceKind = context?.projectKind?.value,
+            tags = tags
         )
+    }
+
+    /**
+     * Best-effort agent context of a session: carries the project (or temporary workspace)
+     * the session runs in. Never fails the detail load.
+     */
+    private suspend fun resolveSessionContext(sessionId: String, userId: String): AgentContext? = try {
+        sessionManager.getSessionContext(sessionId, userId)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        logger.warn("Failed to resolve agent context for session {}: {}", sessionId, e.message)
+        null
     }
 
     /**
@@ -112,17 +157,12 @@ class SessionService(
      * no-op SnapshotService override (or a session without a project) reports false and
      * the frontend can hide the file-review UI. Best-effort: never fails the detail load.
      */
-    private suspend fun resolveSnapshotEnabled(sessionId: String, userId: String): Boolean {
+    private fun resolveSnapshotEnabled(context: AgentContext?): Boolean {
         val service = snapshotService ?: return false
-        return try {
-            val projectPath = sessionManager.getSessionContext(sessionId, userId)?.projectPath
-            projectPath != null && service.isEnabled(projectPath)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger.warn("Failed to resolve snapshot capability for session {}: {}", sessionId, e.message)
-            false
-        }
+        val projectPath = context?.projectPath ?: return false
+        return runCatching { service.isEnabled(projectPath) }
+            .onFailure { logger.warn("Failed to resolve snapshot capability for session {}: {}", context.sessionId, it.message) }
+            .getOrDefault(false)
     }
 
     /**
@@ -536,13 +576,9 @@ class SessionService(
     }
 
     suspend fun deleteSession(id: String, userId: String = "system") {
-        // Resolve project path once for all file-based cleanups
-        val projectPath = try {
-            sessionManager.getSessionContext(id, userId)?.projectPath
-        } catch (e: Exception) {
-            logger.warn("Failed to resolve session context for {}: {}", id, e.message)
-            null
-        }
+        // Resolve project context once for all file-based cleanups
+        val context = resolveSessionContext(id, userId)
+        val projectPath = context?.projectPath
 
         // Clean up snapshot session files before closing
         try {
@@ -604,6 +640,18 @@ class SessionService(
             }
         } catch (e: Exception) {
             logger.warn("Failed to clean up team records for session {}: {}", id, e.message)
+        }
+        // Release the temporary workspace last: forks and team member sessions deleted above
+        // may still share it, and the sibling check needs their rows to be gone. The id prefix is
+        // the marker here because a scratch directory already deleted out from under the DB leaves
+        // the resolved context without a kind; releaseWorkspace still verifies the row is temporary.
+        val workspaceProjectId = context?.projectId
+        if (workspaceProjectId != null && workspaceProjectId.startsWith(DefaultWorkspaceService.TEMP_ID_PREFIX)) {
+            try {
+                workspaceService?.releaseForSession(id, workspaceProjectId, userId)
+            } catch (e: Exception) {
+                logger.warn("Failed to release temporary workspace of session {}: {}", id, e.message)
+            }
         }
         logger.info("Deleted session: {}", id)
     }

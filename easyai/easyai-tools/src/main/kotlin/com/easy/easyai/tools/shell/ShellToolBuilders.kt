@@ -10,9 +10,9 @@ import com.easy.easyai.core.tool.ToolBuilder
 import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
+import com.easy.easyai.tools.fallbackWorkDir
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
-import java.nio.file.Path
 
 /**
  * Builder for [BashTool].
@@ -60,7 +60,7 @@ Parameters:
     override val rulePermissionType = "shell.other"
 
     override fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
-        val workDir = context.projectPath ?: Path.of(".")
+        val workDir = context.projectPath ?: fallbackWorkDir(context.sessionId)
         // Probe the user's login shell env once (cached) so that commands like
         // mvn/node/go resolve correctly even when Spring Boot was launched from
         // an IDE or systemd with an incomplete PATH.

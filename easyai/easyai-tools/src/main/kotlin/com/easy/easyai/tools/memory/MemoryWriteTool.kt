@@ -8,6 +8,7 @@ import com.easy.easyai.core.memory.MemoryOwnerContext
 import com.easy.easyai.core.memory.MemoryScope
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.memory.MemoryType
+import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.tool.BaseToolDefinition
 import com.easy.easyai.core.tool.ToolExecutionMode
@@ -39,7 +40,7 @@ internal class MemoryWriteTool(
         val content: String? = null,
         @field:JsonPropertyDescription("Exact substring to replace during update; omit to replace the whole content.")
         val oldText: String? = null,
-        @field:JsonPropertyDescription("'project' (default) or 'global'.")
+        @field:JsonPropertyDescription("'project' (default) or 'global'. Entries written in a session without a real project workspace always land in 'global'.")
         val scope: String? = null,
         @field:JsonPropertyDescription("Optional maturity tag, e.g. 'high', 'medium', 'low'.")
         val maturity: String? = null,
@@ -84,7 +85,10 @@ internal class MemoryWriteTool(
             return errorResult("Error: Invalid parameters: ${e.message}")
         }
 
-        val scope = resolveScope(params.scope)
+        val requestedScope = resolveScope(params.scope)
+        // A temporary workspace is deleted with its session, so PROJECT entries would not
+        // outlive it; they belong in the user's global store instead.
+        val scope = if (agentContext.projectKind == ProjectKind.TEMP) MemoryScope.GLOBAL else requestedScope
         val owner = MemoryOwnerContext(agentContext.userId, agentContext.projectPath)
 
         // Batch mode: operations array

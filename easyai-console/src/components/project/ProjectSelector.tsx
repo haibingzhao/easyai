@@ -6,10 +6,18 @@ import { i18n } from '@/utils/i18n';
 import { DirectoryBrowser } from './DirectoryBrowser';
 import type { Project } from '@/services/project-service';
 
-export function ProjectSelector() {
-  const { currentProject, selectProject, loadRecentProjects, searchProjects } = useProjectStore();
+interface ProjectSelectorProps {
+  /** False when the deployment turns project selection off: render a read-only badge instead. */
+  selectable?: boolean;
+}
+
+export function ProjectSelector({ selectable = true }: ProjectSelectorProps) {
+  const { currentProject, workspaceOnly, selectProject, startWithoutProject, loadRecentProjects, searchProjects } = useProjectStore();
   const { isStreaming, isAwaitingAskQuestion } = useChatStore();
   const isLocked = isStreaming || isAwaitingAskQuestion();
+
+  // The scratch workspace exists once a turn has run; before that the mode still shows as such.
+  const showTempChip = currentProject?.kind === 'temp' || (workspaceOnly && !currentProject);
 
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -85,6 +93,26 @@ export function ProjectSelector() {
     }
   };
 
+  // Selection off: the badge only tells where this session is running, it cannot switch anything.
+  if (!selectable) {
+    if (!currentProject) return null;
+    if (currentProject.kind !== 'temp') {
+      return (
+        <span className="text-sm font-medium truncate max-w-[200px]" title={currentProject.path}>
+          {currentProject.name}
+        </span>
+      );
+    }
+    return (
+      <span
+        title={currentProject.path}
+        className="inline-flex items-center border border-dashed border-muted-foreground rounded px-2 py-0.5 text-xs text-muted-foreground"
+      >
+        {i18n('Temporary Workspace')}
+      </span>
+    );
+  }
+
   return (
     <div ref={containerRef} className="relative">
       {/* Trigger button */}
@@ -92,12 +120,22 @@ export function ProjectSelector() {
         onClick={toggleOpen}
         disabled={isLocked}
         className="flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed max-w-[200px]"
-        title={isLocked ? i18n('Outputting, please wait...') : i18n('Switch Project')}
+        title={
+          showTempChip
+            ? currentProject?.path ?? i18n('Temporary Workspace')
+            : isLocked ? i18n('Outputting, please wait...') : i18n('Switch Project')
+        }
       >
         <div className="flex-1 min-w-0 text-left">
-          <div className="text-sm font-medium truncate">
-            {currentProject?.name ?? i18n('Select Project')}
-          </div>
+          {showTempChip ? (
+            <span className="inline-flex items-center border border-dashed border-muted-foreground rounded px-2 py-0.5 text-xs text-muted-foreground">
+              {i18n('Temporary Workspace')}
+            </span>
+          ) : (
+            <div className="text-sm font-medium truncate">
+              {currentProject?.name ?? i18n('Select Project')}
+            </div>
+          )}
         </div>
         <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />
       </button>
@@ -173,6 +211,18 @@ export function ProjectSelector() {
                     ))}
                   </ul>
                 )}
+              </div>
+
+              {/* Chat without a project: each session then gets its own scratch directory */}
+              <div className="border-t border-border">
+                <button
+                  onClick={() => { startWithoutProject(); setIsOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted transition-colors"
+                  title={i18n('Each session runs in its own temporary workspace')}
+                >
+                  <FolderOpen className="w-4 h-4" />
+                  {i18n('No Project (Temporary Workspace)')}
+                </button>
               </div>
 
               {/* Create new project button */}

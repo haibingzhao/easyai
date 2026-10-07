@@ -9,5 +9,6 @@ data class SessionListItem(
     val createdAt: Long,
     val updatedAt: Long,
     val messageCount: Int,
-    val streaming: Boolean = false
+    val streaming: Boolean = false,
+    val tags: List<String> = emptyList()
 )

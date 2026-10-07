@@ -170,5 +170,6 @@ class PermissionEvaluatorTest {
         override suspend fun saveRules(projectId: String, rules: List<PermissionRule>) {}
         override suspend fun addRule(projectId: String, rule: PermissionRule) {}
         override suspend fun deleteRule(projectId: String, permission: String, pattern: String) {}
+        override suspend fun deleteProjectRules(projectId: String) {}
     }
 }
