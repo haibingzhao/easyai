@@ -3,7 +3,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { MessageSnapshot } from '../session-service';
 import { convertSnapshot } from '../stores/chat/message-converter';
-import { toChatAttachment, buildFileRef, buildFolderRef } from '@/utils/attachment-utils';
+import { toChatAttachment, buildFileRef, buildFolderRef, parseFileRefs, resolveEmptyFileRefs, splitByFileRefs } from '@/utils/attachment-utils';
 import { getAttachmentImageSource } from '@/hooks/useAttachmentImage';
 import { UserMessage } from '@/components/chat/UserMessage';
 
@@ -210,5 +210,30 @@ describe('attachment image source routing', () => {
   it('never treats storage references or invalid bytes as base64 image data', () => {
     expect(getAttachmentImageSource({ mimeType: 'image/png', data: ref }).kind).toBe('missing');
     expect(getAttachmentImageSource({ mimeType: 'image/png', data: '', url: 'storage://invalid' }).kind).toBe('missing');
+  });
+});
+
+describe('draft file references with empty paths', () => {
+  const draftRefs = `根据 ${buildFileRef('bb.png', '')} ${buildFileRef('dd.png', '')} ${buildFileRef('girl.png', '')} 这三张图片`;
+
+  it('parses consecutive empty-path refs individually instead of swallowing neighbors', () => {
+    expect(parseFileRefs(draftRefs).map((r) => r.name)).toEqual(['bb.png', 'dd.png', 'girl.png']);
+    const chipNames = splitByFileRefs(draftRefs).filter((s) => s.type === 'fileRef').map((s) => s.name);
+    expect(chipNames).toEqual(['bb.png', 'dd.png', 'girl.png']);
+  });
+
+  it('fills filePaths after upload so the sent message carries resolvable refs', () => {
+    const uploaded = [
+      { id: '1', name: 'bb.png', mimeType: 'image/png', data: '', size: 1, filePath: '/upload/bb.png' },
+      { id: '2', name: 'dd.png', mimeType: 'image/png', data: '', size: 1, filePath: '/upload/dd.png' },
+      { id: '3', name: 'girl.png', mimeType: 'image/png', data: '', size: 1, filePath: '/upload/girl.png' },
+    ];
+    const resolved = resolveEmptyFileRefs(draftRefs, uploaded);
+    expect(resolved).toBe(`根据 ${buildFileRef('bb.png', '/upload/bb.png')} ${buildFileRef('dd.png', '/upload/dd.png')} ${buildFileRef('girl.png', '/upload/girl.png')} 这三张图片`);
+    expect(parseFileRefs(resolved).map((r) => r.path)).toEqual(['/upload/bb.png', '/upload/dd.png', '/upload/girl.png']);
+  });
+
+  it('leaves refs without a matching uploaded attachment untouched', () => {
+    expect(resolveEmptyFileRefs(draftRefs, [])).toBe(draftRefs);
   });
 });

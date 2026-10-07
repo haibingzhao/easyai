@@ -197,7 +197,9 @@ export const EditMemoryDialog: React.FC<EditMemoryDialogProps> = ({
               disabled={isEdit}
               className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
             >
-              {SCOPES.map((s) => (
+              {(currentProjectPath || memory?.scope === 'project'
+                ? SCOPES
+                : SCOPES.filter((s) => s !== 'project')).map((s) => (
                 <option key={s} value={s}>
                   {s === 'global' ? i18n('Global') : i18n('Current Project')}
                 </option>

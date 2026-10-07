@@ -14,14 +14,29 @@ import { i18n } from '@/utils/i18n';
  * Replaces the SessionHistoryDialog modal.
  */
 export const SessionsTab: React.FC = () => {
-  const { remoteSessions, remoteSessionHasMore, remoteSessionLoading, setCurrentSessionId, loadRemoteSessions, loadMoreRemoteSessions, deleteRemoteSession } = useSessionStore();
+  const {
+    remoteSessions, remoteSessionHasMore, remoteSessionLoading,
+    setCurrentSessionId, loadRemoteSessions, loadMoreRemoteSessions, deleteRemoteSession,
+    availableTags, activeTagFilter, setTagFilter, loadSessionTags, updateRemoteSessionTags,
+  } = useSessionStore();
   const { clearChat, sessionId: chatSessionId, isStreaming, messages } = useChatStore();
   const { currentProject } = useProjectStore();
 
-  // Load sessions on mount
+  // A temporary workspace belongs to one session only, so filtering the list by it would show
+  // exactly that session. Project-less mode instead lists the project-less sessions: those
+  // running in a temporary workspace, plus any that carry no project at all.
+  const listProjectId = currentProject && currentProject.kind !== 'temp' ? currentProject.id : undefined;
+  const tempWorkspaceOnly = listProjectId === undefined;
+  const filterActive = activeTagFilter.length > 0;
+
+  // Load sessions + available tags on mount / project change / filter change
   useEffect(() => {
-    loadRemoteSessions(20, false, currentProject?.id);
-  }, [currentProject?.id]);
+    loadRemoteSessions(20, false, listProjectId, tempWorkspaceOnly);
+  }, [listProjectId, activeTagFilter]);
+
+  useEffect(() => {
+    loadSessionTags(listProjectId, tempWorkspaceOnly);
+  }, [listProjectId]);
 
   // Overlay the active chat session's live streaming state onto the list so the
   // "Running" indicator appears on send and clears on completion — without waiting
@@ -35,7 +50,9 @@ export const SessionsTab: React.FC = () => {
       s.id === chatSessionId ? { ...s, streaming: isStreaming } : s
     );
 
-    if (!exists) {
+    // While a tag filter is active, don't inject an untagged brand-new session that
+    // the server-side filter would have excluded.
+    if (!exists && !filterActive) {
       const firstUser = messages.find(
         (m) => m.role === 'user' || m.role === 'user-with-attachments'
       );
@@ -65,7 +82,7 @@ export const SessionsTab: React.FC = () => {
     }
 
     return list;
-  }, [remoteSessions, chatSessionId, isStreaming, messages]);
+  }, [remoteSessions, chatSessionId, isStreaming, messages, filterActive]);
 
   const handleSelectSession = async (sessionId: string) => {
     try {
@@ -87,6 +104,13 @@ export const SessionsTab: React.FC = () => {
     }
   };
 
+  const toggleTagFilter = (tag: string) => {
+    const next = activeTagFilter.includes(tag)
+      ? activeTagFilter.filter((t) => t !== tag)
+      : [...activeTagFilter, tag];
+    setTagFilter(next);
+  };
+
   const grouped = groupSessionsByTime(displaySessions);
 
   const renderGroup = (title: string, sessions: SessionListItem[]) => {
@@ -101,8 +125,10 @@ export const SessionsTab: React.FC = () => {
               session={session}
               isSelected={chatSessionId === session.id}
               showDelete={true}
+              availableTags={availableTags}
               onSelect={handleSelectSession}
               onDelete={handleDeleteSession}
+              onUpdateTags={updateRemoteSessionTags}
             />
           ))}
         </div>
@@ -112,6 +138,41 @@ export const SessionsTab: React.FC = () => {
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
+      {/* Tag filter chip row */}
+      {availableTags.length > 0 && (
+        <div className="shrink-0 px-3 pb-2 flex flex-wrap gap-1.5 border-b border-border">
+          <button
+            type="button"
+            onClick={() => setTagFilter([])}
+            className={`px-2 py-0.5 rounded-full text-[11px] border transition-colors ${
+              !filterActive
+                ? 'bg-primary/15 border-primary/30 text-primary'
+                : 'bg-muted border-border text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {i18n('All')}
+          </button>
+          {availableTags.map((tag) => {
+            const on = activeTagFilter.includes(tag);
+            return (
+              <button
+                key={tag}
+                type="button"
+                title={tag}
+                onClick={() => toggleTagFilter(tag)}
+                className={`px-2 py-0.5 rounded-full text-[11px] border max-w-[160px] truncate transition-colors ${
+                  on
+                    ? 'bg-primary/15 border-primary/30 text-primary'
+                    : 'bg-muted border-border text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {tag}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Session list */}
       <div className="flex-1 overflow-y-auto py-2">
         {displaySessions.length === 0 ? (
@@ -132,7 +193,7 @@ export const SessionsTab: React.FC = () => {
         <div className="shrink-0 border-t border-border">
           <button
             className="w-full py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-            onClick={() => loadMoreRemoteSessions(20, currentProject?.id)}
+            onClick={() => loadMoreRemoteSessions(20, listProjectId, tempWorkspaceOnly)}
             disabled={remoteSessionLoading}
           >
             {remoteSessionLoading ? i18n('Loading...') : i18n('Load More')}

@@ -27,6 +27,8 @@ export interface SessionListItem {
   messageCount: number;
   /** True when DB status is "streaming" (session has an active SSE stream somewhere) */
   streaming?: boolean;
+  /** Tags attached to this session (empty/absent when none). */
+  tags?: string[];
 }
 
 export type ContentBlockType = 'text' | 'image' | 'thinking' | 'toolCall' | 'custom' | 'fileRef' | 'folderRef';
@@ -162,6 +164,12 @@ export interface SessionDetail {
   forkRootSessionId?: string | null;
   /** Whether the backend snapshot/checkpoint system is active for this session's project. Absent (older backend) = enabled. */
   snapshotEnabled?: boolean;
+  /** Project (or temporary workspace, kind='temp') this session actually runs in, as resolved by the backend. */
+  workspaceProjectId?: string | null;
+  workspacePath?: string | null;
+  workspaceKind?: 'user' | 'temp' | null;
+  /** Tags attached to this session (empty/absent when none). */
+  tags?: string[];
 }
 
 /** One fork branch entry for the Summary panel branch list. */
@@ -212,12 +220,36 @@ export class SessionService {
     return data.sessionId;
   }
 
-  async listSessions(limit: number = 10, offset: number = 0, projectId?: string): Promise<{ sessions: SessionListItem[], hasMore: boolean }> {
+  /**
+   * @param tempWorkspace List project-less sessions only (temporary workspaces and no project) —
+   *   the History scope of the "No Project" mode.
+   */
+  async listSessions(limit: number = 10, offset: number = 0, projectId?: string, tags?: string[], tempWorkspace?: boolean): Promise<{ sessions: SessionListItem[], hasMore: boolean }> {
     const params = new URLSearchParams();
     params.set('limit', String(limit));
     params.set('offset', String(offset));
     if (projectId) params.set('projectId', projectId);
+    if (tags && tags.length > 0) tags.forEach((t) => params.append('tags', t));
+    if (tempWorkspace) params.set('tempWorkspace', 'true');
     return fetchJson<{ sessions: SessionListItem[], hasMore: boolean }>(`${API_BASE}/sessions?${params.toString()}`);
+  }
+
+  /** Overwrite the tag set of a session. An empty array clears all tags. */
+  async updateSessionTags(sessionId: string, tags: string[]): Promise<void> {
+    return fetchVoid(`${API_BASE}/session/${sessionId}/tags`, {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ tags }),
+    });
+  }
+
+  /** Distinct tags in use, for autocomplete + the History filter chip row. */
+  async listSessionTags(projectId?: string, tempWorkspace?: boolean): Promise<string[]> {
+    const params = new URLSearchParams();
+    if (projectId) params.set('projectId', projectId);
+    if (tempWorkspace) params.set('tempWorkspace', 'true');
+    const qs = params.toString();
+    return fetchJson<string[]>(`${API_BASE}/sessions/tags${qs ? `?${qs}` : ''}`);
   }
 
   async getSessionDetail(id: string): Promise<SessionDetail> {

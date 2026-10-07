@@ -76,9 +76,9 @@ class DefaultMessageConverter(
                     msg.content.forEachIndexed { index, block -> blockSeq.putIfAbsent(block, index) }
                     val anchoredInsertions = mutableListOf<AnchoredInsertion>()
                     var hasImageMarkers = false
-                    fun imageMarker(ref: FileRefContent): String {
+                    fun imageMarker(ref: FileRefContent, url: String? = ref.accessibleUrl): String {
                         val base = "[image ${mediaList.size}: ${ref.name}"
-                        return if (ref.accessibleUrl != null) "$base (${ref.accessibleUrl})]" else "$base]"
+                        return if (url != null) "$base ($url)]" else "$base]"
                     }
                     for (img in images) {
                         mediaList.add(
@@ -90,13 +90,16 @@ class DefaultMessageConverter(
                     }
                     for (ref in fileRefs) {
                         if (StoredFileReference.isStored(ref.filePath)) {
-                            // Marker carries no URL: the persisted accessibleUrl expires within the
-                            // signing TTL and would leak into every later turn's context.
-                            mediaList.add(resolveStoredImage(ref, userId))
+                            // The marker carries this turn's freshly signed URL so tools can consume it
+                            // directly. Markers are rebuilt from the persisted refs on every request and
+                            // never persisted themselves; stale copies the model echoed into later tool
+                            // arguments are re-signed by sanitizePresignedUrls.
+                            val stored = resolveStoredImage(ref, userId)
+                            mediaList.add(stored.media)
                             anchoredInsertions.add(
                                 AnchoredInsertion(
                                     ref.displayOffset, blockSeq[ref] ?: 0,
-                                    "[image ${mediaList.size}: ${ref.name}]"
+                                    imageMarker(ref, stored.signedUrl)
                                 )
                             )
                             hasImageMarkers = true
@@ -220,8 +223,9 @@ class DefaultMessageConverter(
                     if (hasImageMarkers) {
                         // Stated once for all positional image markers
                         textParts.add(
-                            "(Markers like [image N: name] in the text above show where each attached image " +
-                                "appeared in the user's message; image N is the N-th image attached to it.)"
+                            "(Markers like [image N: name] or [image N: name (url)] in the text above show where each " +
+                                "attached image appeared in the user's message; image N is the N-th image attached to it. " +
+                                "The URL in a marker, when present, is a fresh link you may pass to tools.)"
                         )
                     }
 
@@ -357,7 +361,10 @@ class DefaultMessageConverter(
         return expires - nowSeconds <= PRESIGNED_URL_REFRESH_MARGIN_SECONDS
     }
 
-    private suspend fun resolveStoredImage(ref: FileRefContent, userId: String): Media {
+    /** Media for a stored chat image plus this turn's tool-usable signed URL (null on the byte fallback). */
+    private data class StoredImage(val media: Media, val signedUrl: String?)
+
+    private suspend fun resolveStoredImage(ref: FileRefContent, userId: String): StoredImage {
         val stored = StoredFileReference.parse(ref.filePath, userId)
         require(ref.mimeType in STORED_IMAGE_MIME_TYPES) { "Unsupported stored chat image MIME type" }
         val storage = objectStorageResolver?.resolve(userId)
@@ -376,13 +383,13 @@ class DefaultMessageConverter(
         val mimeType = MimeType.valueOf(ref.mimeType)
         // Anthropic only accepts HTTPS URL media. Do not rewrite a signature's scheme.
         if (signedUri?.scheme == "https" && !signedUri.host.isNullOrBlank()) {
-            return Media.builder().mimeType(mimeType).data(signedUri).build()
+            return StoredImage(Media.builder().mimeType(mimeType).data(signedUri).build(), signedUri.toString())
         }
         val content = storage.get(stored.key)
             ?: throw ObjectStorageException("Stored chat image could not be read: ${stored.key}")
         validateStoredImageSize(content.meta.size)
         validateStoredImageSize(content.bytes.size.toLong())
-        return Media.builder().mimeType(mimeType).data(content.bytes).build()
+        return StoredImage(Media.builder().mimeType(mimeType).data(content.bytes).build(), null)
     }
 
     private fun validateStoredImageSize(size: Long) {

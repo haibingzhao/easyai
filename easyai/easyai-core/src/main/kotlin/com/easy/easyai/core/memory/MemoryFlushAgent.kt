@@ -52,7 +52,8 @@ class MemoryFlushAgent(
      * @param modelContextLength Total context window size in tokens.
      * @param estimatedTokenCount Current estimated token usage.
      * @param chatModel ChatModel to use for extraction.
-     * @param scope Memory scope to write to (default: PROJECT).
+     * @param scope Memory scope to write to (default: PROJECT). Ignored — and forced to
+     *   [MemoryScope.GLOBAL] — when the session runs in a temporary workspace.
      * @return FlushResult if flush was executed, null if not needed or nothing was written.
      */
     suspend fun maybeFlush(
@@ -71,6 +72,11 @@ class MemoryFlushAgent(
         if (usageRatio < threshold) return null
         if (messages.size < 5) return null  // Too few messages to extract from
 
+        // A temporary workspace is per-session scratch: PROJECT memories would fragment across
+        // sessions and be deleted with it, so they are written to the user's global store instead.
+        val memoryScope =
+            if (agentContext.projectKind == ProjectKind.TEMP) MemoryScope.GLOBAL else scope
+
         // Dedup: hash recent messages
         val recentMessages = messages.takeLast(20)
         val contextHash = computeHash(recentMessages)
@@ -86,7 +92,7 @@ class MemoryFlushAgent(
         // fire-and-forget and would miss entries stored moments ago. A snapshot failure degrades
         // to an empty map rather than cancelling the flush.
         val existingByName: Map<String, MemoryEntry> = runCatching {
-            store.list(scope, owner).associateBy { it.name }
+            store.list(memoryScope, owner).associateBy { it.name }
         }.getOrElse { e ->
             logger.warn("Memory flush: failed to snapshot existing memories: {}", e.message)
             emptyMap()
@@ -115,7 +121,7 @@ class MemoryFlushAgent(
 
         val counts = FlushCounts()
         for (item in entries) {
-            when (applyEntry(item, existingByName, counts, scope, owner)) {
+            when (applyEntry(item, existingByName, counts, memoryScope, owner)) {
                 ApplyOutcome.WRITTEN -> counts.written++
                 ApplyOutcome.UPDATED -> counts.updated++
                 ApplyOutcome.REMOVED -> counts.removed++

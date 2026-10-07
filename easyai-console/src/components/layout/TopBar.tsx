@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { Menu } from 'lucide-react';
 import { NAV_ITEMS, EXTRA_NAV_ITEMS, TOPBAR_EXTRA_ITEMS, resolveActiveNavItem } from '@/constants/navigation';
 import { useNavStore } from '@/services/stores/nav-store';
+import { useFeatureStore } from '@/services/stores/feature-store';
 import { i18n } from '@/utils/i18n';
 import { UserMenu } from './UserMenu';
 import { ThemeToggle } from './ThemeToggle';
@@ -11,6 +12,7 @@ import { ProjectSelector } from '@/components/project/ProjectSelector';
 export const TopBar: React.FC = () => {
   const location = useLocation();
   const setMobileSidebarOpen = useNavStore((s) => s.setMobileSidebarOpen);
+  const projectSelectionEnabled = useFeatureStore((s) => s.projectSelectionEnabled);
 
   // Title follows the *most specific* matching entry, so a nested page (`/home/family/permissions`)
   // is titled after itself rather than after its parent section (`/home/family`).
@@ -38,7 +40,7 @@ export const TopBar: React.FC = () => {
         {TOPBAR_EXTRA_ITEMS.map((Extra, index) => (
           <Extra key={index} />
         ))}
-        <ProjectSelector />
+        <ProjectSelector selectable={projectSelectionEnabled} />
         <UserMenu />
         <ThemeToggle />
       </div>

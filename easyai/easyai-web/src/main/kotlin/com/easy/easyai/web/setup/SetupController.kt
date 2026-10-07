@@ -5,6 +5,7 @@ import io.r2dbc.spi.ConnectionFactories
 import io.r2dbc.spi.ConnectionFactoryOptions
 import kotlinx.coroutines.reactor.mono
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.web.bind.annotation.*
 import reactor.core.publisher.Mono
 
@@ -21,23 +22,25 @@ import reactor.core.publisher.Mono
  */
 @RestController
 @RequestMapping("/api/setup")
-class SetupController {
+class SetupController(
+    /**
+     * Whether the console may offer project selection. Reported to the frontend through
+     * [status] so a deployment can run entirely on temporary workspaces.
+     */
+    @Value("\${easyai.web.project-selection-enabled:true}")
+    private val projectSelectionEnabled: Boolean
+) {
 
     private val logger = LoggerFactory.getLogger(javaClass)
 
     @GetMapping("/status")
     fun status(): Mono<Map<String, Any?>> = mono {
         val config = DatabaseConfig.load()
+        val common = mapOf("projectSelectionEnabled" to projectSelectionEnabled)
         if (config != null) {
-            mapOf(
-                "mode" to "normal",
-                "dbType" to config.dbType
-            )
+            common + mapOf("mode" to "normal", "dbType" to config.dbType)
         } else {
-            mapOf(
-                "mode" to "setup",
-                "dbType" to null
-            )
+            common + mapOf("mode" to "setup", "dbType" to null)
         }
     }
 

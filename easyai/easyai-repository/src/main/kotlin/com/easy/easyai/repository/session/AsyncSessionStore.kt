@@ -35,7 +35,8 @@ data class SessionListMetadata(
     val updatedAt: Long,
     val messageCount: Int,
     val firstUserMessageText: String?,
-    val streaming: Boolean = false
+    val streaming: Boolean = false,
+    val tags: List<String> = emptyList()
 )
 
 /**
@@ -95,11 +96,43 @@ interface AsyncSessionStore {
      * @param projectId Optional project ID filter; null to include all projects
      * @param userId User scope filter (defaults to "system"); uses strict user isolation
      * @param excludeSwarm When true, excludes swarm (multi-agent) sessions from results
+     * @param tags Optional OR tag filter; when non-empty, only sessions carrying at least
+     *             one of these tags are returned. Null/empty means no tag filtering.
+     * @param tempWorkspaceOnly When true, only sessions running in a temporary workspace are
+     *                          returned — i.e. their project row has kind = temp, or they carry
+     *                          no project at all. Used by the project-less ("No Project") mode.
      * @return A pair where `first` is the list of [SessionListMetadata] (at most [limit] entries)
      *         and `second` is a boolean indicating whether more results exist beyond this page
      */
-    suspend fun findMetadataByLimit(limit: Int, offset: Int = 0, projectId: String? = null, userId: String = "system", excludeSwarm: Boolean = true): Pair<List<SessionListMetadata>, Boolean>
+    suspend fun findMetadataByLimit(limit: Int, offset: Int = 0, projectId: String? = null, userId: String = "system", excludeSwarm: Boolean = true, tags: List<String>? = null, tempWorkspaceOnly: Boolean = false): Pair<List<SessionListMetadata>, Boolean>
     suspend fun delete(id: String, userId: String = "system")
+
+    /**
+     * Overwrite the tag set of a session (delete-then-insert). Tags are normalized
+     * (trimmed, de-duplicated, length/count capped) before persistence. An empty list
+     * clears all tags.
+     *
+     * @param sessionId The session ID
+     * @param tags The full desired tag list
+     * @param userId User ID for data isolation (strict)
+     */
+    suspend fun updateTags(sessionId: String, tags: List<String>, userId: String = "system")
+
+    /**
+     * Batch-load tags for a set of sessions.
+     * @return Map of sessionId → its tag list (sessions without tags are omitted).
+     */
+    suspend fun findTagsMap(sessionIds: List<String>, userId: String = "system"): Map<String, List<String>> = emptyMap()
+
+    /**
+     * Aggregate the distinct set of tags in use, for autocomplete and the filter chip row.
+     * @param projectId Optional project scope; null aggregates across all of the user's projects.
+     * @param userId User ID for data isolation (strict)
+     * @param tempWorkspaceOnly Restrict to sessions in a temporary workspace (or with no project),
+     *                          mirroring [findMetadataByLimit]'s filter of the same name.
+     * @return Distinct tags, sorted.
+     */
+    suspend fun findAllTags(projectId: String? = null, userId: String = "system", tempWorkspaceOnly: Boolean = false): List<String> = emptyList()
     /**
      * Upsert messages for a session with explicit chat context.
      * The context values (agentId, modelId) are from the chat request, not from the session,

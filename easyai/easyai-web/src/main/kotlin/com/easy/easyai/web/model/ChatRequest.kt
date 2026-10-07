@@ -15,7 +15,8 @@ data class ChatRequest(
 
     /**
      * Optional project ID for multi-project isolation.
-     * If not provided, the session will not be associated with any project.
+     * If not provided, the session runs in a per-session temporary workspace under
+     * `{easyai.data-dir}/.temp-workspaces/{userId}/{sessionId}` instead of an unscoped directory.
      */
     val projectId: String? = null,
 

@@ -34,4 +34,11 @@ interface PermissionRuleStore {
      * @param pattern The pattern to match
      */
     suspend fun deleteRule(projectId: String, permission: String, pattern: String)
+
+    /**
+     * Delete every rule of a project. Used when the project itself goes away, so
+     * system-managed workspaces do not leave orphan rows behind.
+     * @param projectId The project ID
+     */
+    suspend fun deleteProjectRules(projectId: String)
 }

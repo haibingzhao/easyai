@@ -4,6 +4,7 @@ import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.AgentDefinition
 import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.agent.AsyncAgentStore
+import com.easy.easyai.core.model.ProjectInfo
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolFactory
 import com.easy.easyai.repository.project.AsyncProjectStore
@@ -29,27 +30,33 @@ class SessionToolResolver(
     private val logger = LoggerFactory.getLogger(javaClass)
 
     /**
-     * Resolve project path from projectId using the projectStore.
-     * Returns null if projectId is null, project not found, or path is invalid.
+     * Resolve the project row for [projectId].
+     * Returns null when projectId is null, projectStore is absent, the project is unknown to
+     * this user, or its directory no longer exists on disk.
      */
-    suspend fun resolveProjectPath(projectId: String?, userId: String = "system"): Path? {
+    suspend fun resolveProject(projectId: String?, userId: String = "system"): ProjectInfo? {
         if (projectId == null || projectStore == null) return null
         return try {
-            val project = projectStore.findById(projectId, userId)
-            project?.path?.let {
-                val path = Path.of(it).toAbsolutePath().normalize()
-                if (!Files.exists(path)) {
-                    logger.warn("Project path does not exist for projectId {}: {}", projectId, path)
-                    null
-                } else {
-                    path
-                }
+            val project = projectStore.findById(projectId, userId) ?: return null
+            val path = Path.of(project.path).toAbsolutePath().normalize()
+            if (!Files.exists(path)) {
+                logger.warn("Project path does not exist for projectId {}: {}", projectId, path)
+                null
+            } else {
+                project
             }
         } catch (e: Exception) {
             logger.warn("Failed to resolve project path for projectId {}: {}", projectId, e.message)
             null
         }
     }
+
+    /**
+     * Resolve project path from projectId using the projectStore.
+     * Returns null if projectId is null, project not found, or path is invalid.
+     */
+    suspend fun resolveProjectPath(projectId: String?, userId: String = "system"): Path? =
+        resolveProject(projectId, userId)?.path?.let { Path.of(it).toAbsolutePath().normalize() }
 
     /**
      * Create all tools for a session using ToolBuilder pattern.

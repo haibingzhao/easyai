@@ -4,6 +4,7 @@ import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.core.event.CustomEvent
 import com.easy.easyai.core.memory.MemoryAccessTracker
 import com.easy.easyai.core.model.EasyAiMessage
+import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.prompt.InstructionInfo
 import com.easy.easyai.core.tool.ToolDefinition
 import java.nio.file.Path
@@ -44,6 +45,8 @@ data class AgentContext(
     val userId: String? = null,
     val projectId: String? = null,
     val projectPath: Path? = null,
+    /** Kind of the bound project. [ProjectKind.TEMP] marks a per-session scratch workspace, which disables project-scoped memory. */
+    val projectKind: ProjectKind = ProjectKind.USER,
     /** Whether automatic memory generation (MemoryFlushAgent) is enabled for the current project. */
     val memoryAutoGeneration: Boolean = true,
     /** Calling agent ID. Null = top-level (user-selected). Tracks call chain depth. */

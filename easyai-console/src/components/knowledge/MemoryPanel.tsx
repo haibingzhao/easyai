@@ -31,6 +31,9 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
   const deleteMemory = useMemoryStore((s) => s.deleteMemory);
   const deleteAll = useMemoryStore((s) => s.deleteAll);
   const currentProject = useProjectStore((s) => s.currentProject);
+  // A temporary workspace is deleted with its session, so PROJECT-scope memories have no future
+  // there: sessions without a real project see the global scope only.
+  const projectForMemory = currentProject && currentProject.kind !== 'temp' ? currentProject : null;
   const projects = useProjectStore((s) => s.projects);
   const updateProject = useProjectStore((s) => s.updateProject);
   const [selected, setSelected] = useState<SelectedMemory | null>(null);
@@ -137,9 +140,9 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
   };
 
   const handleToggleAutoGen = async (enabled: boolean) => {
-    if (!currentProject) return;
+    if (!projectForMemory) return;
     try {
-      await updateProject(currentProject.id, { memoryAutoGeneration: enabled });
+      await updateProject(projectForMemory.id, { memoryAutoGeneration: enabled });
     } catch {
       // error already set in store
     }
@@ -152,9 +155,9 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
         <MemorySidebar
           entries={entries}
           projects={projects}
-          currentProject={currentProject}
+          currentProject={projectForMemory}
           selected={selected}
-          autoGeneration={currentProject?.memoryAutoGeneration ?? false}
+          autoGeneration={projectForMemory?.memoryAutoGeneration ?? false}
           onToggleAutoGeneration={handleToggleAutoGen}
           onSelect={handleSelect}
         />
@@ -226,7 +229,7 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
         onSave={handleSaveCreate}
         onUpdate={handleSaveUpdate}
         memory={editingMemory}
-        currentProjectPath={currentProject?.path ?? null}
+        currentProjectPath={projectForMemory?.path ?? null}
       />
     </div>
   );

@@ -506,6 +506,19 @@ class GitSnapshotService(
             }
         }
 
+    override suspend fun removeWorkspace(projectPath: Path) =
+        withContext(Dispatchers.IO) {
+            val snapshotRepoDir = getSnapshotRepoDir(projectPath)
+            val deleted = runCatching { snapshotRepoDir.toFile().deleteRecursively() }
+                .onFailure { logger.warn("Failed to remove snapshot repo {}: {}", snapshotRepoDir, it.message) }
+                .getOrDefault(false)
+            // Per-session workspaces would otherwise leak one mutex each.
+            repoMutexes.remove(projectPath.toAbsolutePath().toString())
+            if (deleted) {
+                logger.info("Removed snapshot repo {} for deleted workspace", snapshotRepoDir)
+            }
+        }
+
     // ==================== Session Tracking State ====================
 
     override suspend fun getLastTrackedHash(projectPath: Path, sessionId: String): String? =

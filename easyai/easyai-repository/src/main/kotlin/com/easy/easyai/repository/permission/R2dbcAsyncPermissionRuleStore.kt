@@ -89,4 +89,15 @@ class R2dbcAsyncPermissionRuleStore(
             logger.debug("Deleted permission rule: {}={} for project {}", permission, pattern, projectId)
         }
     }
+
+    override suspend fun deleteProjectRules(projectId: String) {
+        suspendTransaction(db) {
+            val deleted = Tables.PermissionRuleTable.deleteWhere {
+                Tables.PermissionRuleTable.projectId eq projectId
+            }
+            if (deleted > 0) {
+                logger.info("Deleted {} permission rules for project {}", deleted, projectId)
+            }
+        }
+    }
 }

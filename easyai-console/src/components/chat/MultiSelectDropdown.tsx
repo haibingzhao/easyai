@@ -12,6 +12,11 @@ interface MultiSelectDropdownProps {
   placeholder?: string;
   /** Whether the user can type custom values that are not in the option list */
   allowCustom?: boolean;
+  /**
+   * Max length for typed custom values. Set this to match the backend's truncation limit
+   * so users see the cap while typing instead of having over-long values silently trimmed.
+   */
+  maxCustomLength?: number;
   /** Visual variant – 'compact' is shorter */
   variant?: 'default' | 'compact';
 }
@@ -31,6 +36,7 @@ export const MultiSelectDropdown: React.FC<MultiSelectDropdownProps> = ({
   options,
   placeholder = '搜索或输入...',
   allowCustom = false,
+  maxCustomLength,
   variant = 'default',
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -164,6 +170,7 @@ export const MultiSelectDropdown: React.FC<MultiSelectDropdownProps> = ({
         <input
           type="text"
           value={search}
+          maxLength={maxCustomLength}
           onChange={(e) => {
             setSearch(e.target.value);
             setIsOpen(true);

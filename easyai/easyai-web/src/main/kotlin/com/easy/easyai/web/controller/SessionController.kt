@@ -4,6 +4,7 @@ import com.easy.easyai.web.model.ForkBranchInfo
 import com.easy.easyai.web.model.ForkSessionRequest
 import com.easy.easyai.web.model.SessionDetail
 import com.easy.easyai.web.model.SessionResponse
+import com.easy.easyai.web.model.UpdateSessionTagsRequest
 import com.easy.easyai.web.security.getCurrentUserId
 import com.easy.easyai.web.service.SessionService
 import kotlinx.coroutines.reactor.mono
@@ -20,11 +21,26 @@ class SessionController(
     fun listSessions(
         @RequestParam(defaultValue = "10") limit: Int,
         @RequestParam(defaultValue = "0") offset: Int,
-        @RequestParam(required = false) projectId: String?
+        @RequestParam(required = false) projectId: String?,
+        @RequestParam(required = false) tags: List<String>?,
+        /** Restrict to project-less sessions (temporary workspaces); the "No Project" mode. */
+        @RequestParam(required = false, defaultValue = "false") tempWorkspace: Boolean
     ): Mono<SessionService.SessionListResponse> {
         return mono {
             val userId = getCurrentUserId()
-            sessionService.listSessions(limit, offset, projectId, userId)
+            sessionService.listSessions(limit, offset, projectId, userId, tags, tempWorkspace)
+        }
+    }
+
+    /** Distinct tags in use, for the History panel autocomplete + filter chip row. */
+    @GetMapping("/sessions/tags")
+    fun listSessionTags(
+        @RequestParam(required = false) projectId: String?,
+        @RequestParam(required = false, defaultValue = "false") tempWorkspace: Boolean
+    ): Mono<List<String>> {
+        return mono {
+            val userId = getCurrentUserId()
+            sessionService.listSessionTags(projectId, userId, tempWorkspace)
         }
     }
 
@@ -34,6 +50,18 @@ class SessionController(
             val userId = getCurrentUserId()
             sessionService.getSessionDetail(id, userId) ?: throw IllegalArgumentException("Session not found")
         }
+    }
+
+    /** Overwrite the tag set of a session. */
+    @PutMapping("/session/{id}/tags")
+    fun updateSessionTags(
+        @PathVariable id: String,
+        @RequestBody request: UpdateSessionTagsRequest
+    ): Mono<Void> {
+        return mono {
+            val userId = getCurrentUserId()
+            sessionService.updateSessionTags(id, request.tags, userId)
+        }.then()
     }
 
     @PostMapping("/session")

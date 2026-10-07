@@ -1,6 +1,7 @@
 package com.easy.easyai.core.memory
 
 import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.model.UserMessage
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -118,6 +119,26 @@ class MemoryFlushAgentTest {
         assertEquals(MemoryMaturity.MEDIUM, first.maturity)
         assertEquals(listOf("frp", "tunnel"), first.keywords)
         assertEquals(listOf("remote access"), first.scenarios)
+    }
+
+    @Test
+    fun `temporary workspace downgrades the write scope to global`() = runTest {
+        val entries = mutableListOf<MemoryEntry>()
+        val scopeSlot = slot<MemoryScope>()
+        coEvery { store.write(capture(entries), capture(scopeSlot), any()) } returns Path.of("x")
+
+        val result = MemoryFlushAgent(store).maybeFlush(
+            agentContext = agentContext.copy(projectKind = ProjectKind.TEMP),
+            messages = messages,
+            modelContextLength = 100_000,
+            estimatedTokenCount = 90_000,
+            chatModel = chatModelReturning(sampleJson()),
+            scope = MemoryScope.PROJECT
+        )
+
+        assertEquals(2, result?.written)
+        assertEquals(MemoryScope.GLOBAL, scopeSlot.captured)
+        coVerify(exactly = 2) { store.write(any(), MemoryScope.GLOBAL, any()) }
     }
 
     @Test

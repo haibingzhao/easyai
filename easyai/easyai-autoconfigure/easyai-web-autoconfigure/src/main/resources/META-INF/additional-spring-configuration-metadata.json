@@ -1,0 +1,11 @@
+{
+  "properties": [
+    {
+      "name": "easyai.web.project-selection-enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the console offers project selection. When false the UI hides the project picker and every chat runs in a per-session temporary workspace; the API still accepts an explicit projectId.",
+      "sourceType": "com.easy.easyai.web.setup.SetupController",
+      "defaultValue": true
+    }
+  ]
+}

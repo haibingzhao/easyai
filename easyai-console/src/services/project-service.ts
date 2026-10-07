@@ -6,6 +6,8 @@ export interface Project {
   path: string;
   description: string | null;
   memoryAutoGeneration: boolean;
+  /** 'temp' marks a system-managed per-session workspace; it is absent from project lists. */
+  kind?: 'user' | 'temp';
   createdAt: number;
   updatedAt: number;
 }
@@ -20,6 +22,36 @@ export interface UpdateProjectRequest {
   name?: string;
   description?: string;
   memoryAutoGeneration?: boolean;
+}
+
+/** Workspace fields a session detail carries about the project (or temporary workspace) it runs in. */
+export interface SessionWorkspaceInfo {
+  workspaceProjectId?: string | null;
+  workspacePath?: string | null;
+  workspaceKind?: string | null;
+}
+
+/**
+ * Extract the project-store adoption payload from a session detail.
+ * Returns null when the backend reported no workspace (older backend, or a session that
+ * never ran a turn).
+ */
+export function sessionWorkspace(detail: SessionWorkspaceInfo): { projectId: string; path: string; kind: string } | null {
+  if (!detail.workspaceProjectId || !detail.workspacePath) return null;
+  return {
+    projectId: detail.workspaceProjectId,
+    path: detail.workspacePath,
+    kind: detail.workspaceKind ?? 'user',
+  };
+}
+
+/**
+ * Extract the workspace payload of a `session_context` SSE handshake, which carries the same
+ * information under its event field names.
+ */
+export function eventWorkspace(event: { projectId?: string; projectPath?: string; projectKind?: 'user' | 'temp' }): { projectId: string; path: string; kind: string } | null {
+  if (!event.projectId || !event.projectPath) return null;
+  return { projectId: event.projectId, path: event.projectPath, kind: event.projectKind ?? 'user' };
 }
 
 const API_BASE = '/api/projects';

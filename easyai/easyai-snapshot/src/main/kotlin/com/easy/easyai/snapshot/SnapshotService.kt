@@ -237,6 +237,17 @@ interface SnapshotService {
      */
     suspend fun cleanupSession(projectPath: Path, sessionId: String)
 
+    /**
+     * Discard the whole snapshot store of a workspace that is about to be deleted
+     * (e.g. a per-session temporary workspace). Implementations that keep no per-workspace
+     * storage can leave this as a no-op.
+     *
+     * @param projectPath Root path of the workspace being removed
+     */
+    suspend fun removeWorkspace(projectPath: Path) {
+        // No snapshot storage to reclaim.
+    }
+
     // ==================== Session Tracking State ====================
 
     /**

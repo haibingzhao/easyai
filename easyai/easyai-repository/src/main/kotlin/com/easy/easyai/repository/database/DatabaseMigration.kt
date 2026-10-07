@@ -42,6 +42,7 @@ class DatabaseMigration(
                 Tables.AgentToolTable,
                 Tables.Project,
                 Tables.Session,
+                Tables.SessionTag,
                 Tables.Message,
                 Tables.ModelConfigGroupTable,
                 Tables.ModelProviderConfigTable,

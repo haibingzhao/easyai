@@ -17,6 +17,8 @@ import { fetchJson, JSON_HEADERS } from '@/services/api-client';
 export interface SetupStatus {
   mode: 'setup' | 'normal';
   dbType: string | null;
+  /** False when the backend runs without project selection (temporary workspaces only). */
+  projectSelectionEnabled?: boolean;
 }
 
 export interface DatabaseSetupRequest {

@@ -537,9 +537,14 @@ class MessageConverterTest {
             assertEquals(secondUrl, second.media.single().data)
             assertEquals("image/png", first.media.single().mimeType.toString())
             assertTrue(
-                first.text!!.startsWith("Look [image 1: screenshot.png]"),
-                "Expected positional image marker at the ref offset, got: ${first.text}"
+                first.text!!.startsWith("Look [image 1: screenshot.png ($firstUrl)]"),
+                "Expected the first turn's marker to carry its fresh signature, got: ${first.text}"
             )
+            assertTrue(
+                second.text!!.startsWith("Look [image 1: screenshot.png ($secondUrl)]"),
+                "Expected the second turn's marker to carry its own fresh signature, got: ${second.text}"
+            )
+            assertFalse(second.text!!.contains("signature=first"), "Stale signatures must not be replayed")
             assertEquals(original, message)
             assertSame(ref, message.content[1])
             assertEquals(path, ref.filePath)
@@ -552,6 +557,23 @@ class MessageConverterTest {
                 storage.head(key)
                 storage.presignedGetUrl(key, 3600L)
             }
+        }
+
+        @Test
+        fun `marker carries the fresh signature, never the persisted accessibleUrl`() = runTest {
+            val freshUrl = "https://objects.example/image.png?signature=fresh%2Fvalue"
+            coEvery { storage.presignedGetUrl(key, 3600L) } returns freshUrl
+            val persisted = ref.copy(accessibleUrl = "/stale/local-copy.png")
+
+            val result = storedConverter.toSpringAiMessages(
+                listOf(UserMessage(content = listOf(TextContent("Look "), persisted))), userId
+            ).single() as SpringAiUserMsg
+
+            assertTrue(
+                result.text!!.contains("[image 1: screenshot.png ($freshUrl)]"),
+                "Expected the marker to carry this turn's signature, got: ${result.text}"
+            )
+            assertFalse(result.text!!.contains("/stale/local-copy.png"), "Persisted accessibleUrl must not be replayed")
         }
 
         @ParameterizedTest
@@ -571,6 +593,10 @@ class MessageConverterTest {
                 val result = storedConverter.toSpringAiMessages(messages, userId).single() as SpringAiUserMsg
                 assertContentEquals(bytes, assertIs<ByteArray>(result.media.single().data))
                 assertEquals("image/png", result.media.single().mimeType.toString())
+                assertTrue(
+                    result.text!!.contains("[image 1: screenshot.png]"),
+                    "Byte-fallback signatures must stay out of the marker, got: ${result.text}"
+                )
             }
 
             assertEquals(original, message)

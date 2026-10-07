@@ -138,6 +138,7 @@ export { DatabaseSetupPage } from './pages/DatabaseSetupPage';
 export { setTheme } from './utils/theme';
 export { setupService } from './services/setup-service';
 export { useProjectStore } from './services/stores/project-store';
+export { useFeatureStore } from './services/stores/feature-store';
 export { useNavStore } from './services/stores/nav-store';
 
 // === Full App (for embedding the complete easyai-console experience) ===

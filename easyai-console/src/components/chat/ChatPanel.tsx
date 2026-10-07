@@ -4,6 +4,7 @@ import { MessageEditor } from './MessageEditor';
 import { ArtifactPanel } from '../artifacts/ArtifactPanel';
 import { WelcomeScreen } from './WelcomeScreen';
 import { useChatStore } from '@/services/stores/chat-store';
+import { adoptSessionWorkspace } from '@/services/stores/project-store';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { getStreamingStatus } from '@/services/chat-service';
 import { sessionService } from '@/services/session-service';
@@ -313,6 +314,7 @@ export const ChatPanel: React.FC = () => {
           if (detail) {
             loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, runningSessionId);
             useChatStore.getState().setSnapshotEnabled(detail.snapshotEnabled !== false);
+            adoptSessionWorkspace(detail);
           }
         } else {
           // Safe to use incremental merge — pass pendingPermission from backend
@@ -326,6 +328,7 @@ export const ChatPanel: React.FC = () => {
         if (detail) {
           loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, runningSessionId);
           useChatStore.getState().setSnapshotEnabled(detail.snapshotEnabled !== false);
+          adoptSessionWorkspace(detail);
         }
       }
 

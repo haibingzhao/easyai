@@ -19,6 +19,7 @@ import { DatabaseSetupPage } from './pages/DatabaseSetupPage';
 import { ProjectSelectPage } from './components/project/ProjectSelectPage';
 import { useSettingsStore } from '@/services/stores/settings-store';
 import { useProjectStore } from '@/services/stores/project-store';
+import { useFeatureStore } from '@/services/stores/feature-store';
 import { useAuthStore } from '@/services/stores/auth-store';
 import { useCategoryStore } from '@/services/stores/category-store';
 import { setupService } from '@/services/setup-service';
@@ -29,7 +30,8 @@ import './index.css';
 
 function App() {
   const loadSettings = useSettingsStore((state) => state.loadSettings);
-  const { currentProject, loadProjects } = useProjectStore();
+  const { currentProject, workspaceOnly, loadProjects } = useProjectStore();
+  const projectSelectionEnabled = useFeatureStore((state) => state.projectSelectionEnabled);
   const { isAuthenticated, authLoading, checkAuth } = useAuthStore();
   const loadCategories = useCategoryStore((state) => state.loadCategories);
   const [setupMode, setSetupMode] = useState<boolean | null>(null);
@@ -44,6 +46,7 @@ function App() {
   useEffect(() => {
     setupService.getStatus()
       .then((status) => {
+        useFeatureStore.getState().setProjectSelectionEnabled(status.projectSelectionEnabled !== false);
         if (status.mode === 'setup') {
           setSetupMode(true);
         } else {
@@ -89,7 +92,7 @@ function App() {
     return <LoginPage />;
   }
 
-  if (!currentProject) {
+  if (projectSelectionEnabled && !currentProject && !workspaceOnly) {
     return <ProjectSelectPage />;
   }
 

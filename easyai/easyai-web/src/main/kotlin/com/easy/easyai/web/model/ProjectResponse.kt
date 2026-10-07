@@ -12,6 +12,8 @@ data class ProjectResponse(
     val path: String,
     val description: String? = null,
     val memoryAutoGeneration: Boolean = true,
+    /** 'user' = user-registered project, 'temp' = system-managed per-session scratch workspace. */
+    val kind: String = "user",
     val createdAt: Long,
     val updatedAt: Long
 )

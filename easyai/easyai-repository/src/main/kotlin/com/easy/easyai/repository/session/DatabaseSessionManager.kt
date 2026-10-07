@@ -5,6 +5,7 @@ import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.model.EasyAiMessage
+import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.model.TodoInfo
 import com.easy.easyai.core.prompt.InstructionsLoader
 import com.easy.easyai.core.team.TeamExecutionStore
@@ -390,7 +391,8 @@ class DatabaseSessionManager(
         val agentId = lastConfig?.agentId
 
         // Resolve a project path
-        val projectPath = toolResolver.resolveProjectPath(persistedSession.projectId, userId)
+        val project = toolResolver.resolveProject(persistedSession.projectId, userId)
+        val projectPath = project?.path?.let { Path.of(it).toAbsolutePath().normalize() }
 
         // Get config from last message's configId (stored per-message, not on session)
         val configId = lastConfig?.configId
@@ -402,10 +404,11 @@ class DatabaseSessionManager(
         }
 
         // Restore session with correct agent configuration
+        val restoredKind = project?.kind ?: ProjectKind.USER
         val chatSession = if (agentId != null) {
-            restoreSessionWithAgent(agentId, sessionId, config, projectPath, persistedSession.projectId, userId)
+            restoreSessionWithAgent(agentId, sessionId, config, projectPath, persistedSession.projectId, userId, restoredKind)
         } else {
-            restoreSessionWithConfig(sessionId, config, projectPath, persistedSession.projectId, userId)
+            restoreSessionWithConfig(sessionId, config, projectPath, persistedSession.projectId, userId, restoredKind)
         }
 
         // Restore endReason from DB so resume() can inject the correct continuation guidance
@@ -423,12 +426,13 @@ class DatabaseSessionManager(
         config: ModelProviderConfig,
         projectPath: Path?,
         projectId: String?,
-        userId: String = "system"
+        userId: String = "system",
+        projectKind: ProjectKind = ProjectKind.USER
     ): ChatSession {
         val agentDef = agentLookup?.invoke(agentId, userId)
         if (agentDef == null) {
             logger.warn("AgentDefinition not found for agentId {}, falling back to config-based session", agentId)
-            return restoreSessionWithConfig(sessionId, config, projectPath, projectId, userId)
+            return restoreSessionWithConfig(sessionId, config, projectPath, projectId, userId, projectKind)
         }
 
         // Apply skill filtering for this agent
@@ -440,6 +444,7 @@ class DatabaseSessionManager(
             userId = userId,
             projectId = projectId,
             projectPath = projectPath,
+            projectKind = projectKind,
             subAgents = subAgentsData,
             modelContextLength = config.options?.contextToken ?: 204_800
         )
@@ -458,7 +463,8 @@ class DatabaseSessionManager(
         config: ModelProviderConfig,
         projectPath: Path?,
         projectId: String?,
-        userId: String = "system"
+        userId: String = "system",
+        projectKind: ProjectKind = ProjectKind.USER
     ): ChatSession {
         val subAgentsData = resolveSubAgentsData(DEFAULT_AGENT_ID, userId)
         // Default local agent: explicit whitelist from the effective view, built before tools.
@@ -470,6 +476,7 @@ class DatabaseSessionManager(
             userId = userId,
             projectId = projectId,
             projectPath = projectPath,
+            projectKind = projectKind,
             skills = skillsFor(userId, defaultSkillNames),
             allowedSkillNames = defaultSkillNames,
             subAgents = subAgentsData,
@@ -596,7 +603,8 @@ class DatabaseSessionManager(
         } else {
             null
         }
-        val projectPath = toolResolver.resolveProjectPath(persistedSession.projectId, userId)
+        val project = toolResolver.resolveProject(persistedSession.projectId, userId)
+        val projectPath = project?.path?.let { Path.of(it).toAbsolutePath().normalize() }
 
         return AgentContext(
             sessionId = sessionId,
@@ -605,6 +613,7 @@ class DatabaseSessionManager(
             userId = userId,
             projectId = persistedSession.projectId,
             projectPath = projectPath,
+            projectKind = project?.kind ?: ProjectKind.USER,
             modelContextLength = modelConfig?.options?.contextToken ?: 204_800
         )
     }

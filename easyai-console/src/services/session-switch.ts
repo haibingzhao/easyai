@@ -5,6 +5,7 @@ import { useChatStore } from '@/services/stores/chat-store';
 import { useSessionStore } from '@/services/stores/session-store';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { useSettingsStore } from '@/services/stores/settings-store';
+import { adoptSessionWorkspace } from '@/services/stores/project-store';
 import { useNavStore } from '@/services/stores/nav-store';
 import type { CheckpointInfo } from '@/types/checkpoint';
 
@@ -30,6 +31,9 @@ export async function switchToSession(sessionId: string): Promise<void> {
   ]);
   loadSessionMessages(detail!.messages, detail!.pendingPermission, checkpoints, detail!.endReason, detail!.variables, detail!.modelContextLength, sessionId);
   setForkRootId(detail!.forkRootSessionId ?? sessionId);
+  // The session owns its workspace: adopt it so the file panel, mentions and memory UI point at
+  // the directory the agent actually worked in, and drop a stale one when it has none yet.
+  adoptSessionWorkspace(detail);
   // Applied after setSessionId below — the identity-change reset restores the optimistic default.
   const snapshotEnabled = detail!.snapshotEnabled !== false;
   useNavStore.getState().setSelectedFile(null);

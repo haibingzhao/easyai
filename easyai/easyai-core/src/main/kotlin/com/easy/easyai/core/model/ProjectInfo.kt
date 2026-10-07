@@ -13,6 +13,8 @@ data class ProjectInfo(
     val description: String? = null,
     /** Whether automatic memory generation (MemoryFlushAgent) is enabled for this project. */
     val memoryAutoGeneration: Boolean = true,
+    /** [ProjectKind.TEMP] workspaces are system-managed scratch directories, invisible in project lists. */
+    val kind: ProjectKind = ProjectKind.USER,
     val createdAt: Instant = Instant.now(),
     val updatedAt: Instant = Instant.now()
 )

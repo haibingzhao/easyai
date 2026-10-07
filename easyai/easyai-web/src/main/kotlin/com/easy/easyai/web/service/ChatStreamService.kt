@@ -73,7 +73,9 @@ class ChatStreamService(
      * sub-agents keep the whitelist + suppression baseline with `skill_search` as the escape hatch.
      */
     private val skillTurnRouter: SkillTurnRouter? = null,
-    private val backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null
+    private val backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null,
+    /** Allocates the per-session scratch workspace for chats that come in without a project. */
+    private val workspaceService: DefaultWorkspaceService? = null
 ) : DisposableBean {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper: ObjectMapper = SharedObjectMapper.instance
@@ -239,7 +241,10 @@ class ChatStreamService(
         ChatStreamEvent.SessionContext(
             sessionId = session.id,
             modelContextLength = session.agentContext.modelContextLength,
-            modelId = session.agentContext.modelId
+            modelId = session.agentContext.modelId,
+            projectId = session.agentContext.projectId,
+            projectPath = session.agentContext.projectPath?.toString(),
+            projectKind = session.agentContext.projectKind.value
         ).toSse()
 
     // ==================== Public API ====================
@@ -265,7 +270,10 @@ class ChatStreamService(
         val agentId = request.agentId
 
         return try {
-            val agentContext = createAgentContext(agentId, config, request.sessionId, request.projectId, userId).let { ctx ->
+            // Mint the session id up front: a project-less chat resolves its temporary workspace
+            // by session, so the very first turn must already run inside that directory.
+            val sessionId = request.sessionId ?: UUID.randomUUID().toString()
+            val agentContext = createAgentContext(agentId, config, sessionId, request.projectId, userId).let { ctx ->
                 if (request.inputData != null) ctx.copy(inputVariables = request.inputData) else ctx
             }
 
@@ -603,6 +611,52 @@ class ChatStreamService(
         return message.copy(metadata = metadata)
     }
 
+    /**
+     * Resolve the project backing one chat turn.
+     *
+     * A turn carries either the project the user picked (or the one already bound to the session)
+     * or nothing at all. "Nothing at all" is not an error: the session gets its own temporary
+     * workspace so tools run inside a contained directory instead of the backend process directory.
+     */
+    private suspend fun resolveTurnProject(
+        requestedProjectId: String?,
+        sessionId: String?,
+        userId: String
+    ): TurnProject? {
+        if (requestedProjectId != null) {
+            val found = projectStore?.findById(requestedProjectId, userId)
+            if (found != null) return TurnProject(found.id, found)
+            // A temporary workspace row can be gone while its session outlives it (partial
+            // cleanup, resumed stream): re-allocate rather than failing the turn.
+            if (sessionId != null && requestedProjectId.startsWith(DefaultWorkspaceService.TEMP_ID_PREFIX)
+                && workspaceService != null
+            ) {
+                val workspace = workspaceService.resolveOrCreate(sessionId, userId)
+                logger.info("Re-allocated temporary workspace {} for session {}", workspace.projectId, sessionId)
+                return TurnProject(workspace.projectId, toProjectInfo(workspace))
+            }
+            throw IllegalArgumentException("Project is not available to this user")
+        }
+        if (sessionId != null && workspaceService != null) {
+            val workspace = workspaceService.resolveOrCreate(sessionId, userId)
+            return TurnProject(workspace.projectId, toProjectInfo(workspace))
+        }
+        return null
+    }
+
+    private fun toProjectInfo(workspace: Workspace): ProjectInfo = ProjectInfo(
+        id = workspace.projectId,
+        name = DefaultWorkspaceService.TEMP_PROJECT_NAME,
+        path = workspace.path.toString(),
+        kind = workspace.kind
+    )
+
+    /** The project a turn runs against: which row to bind and how to resolve its directory. */
+    private data class TurnProject(
+        val projectId: String,
+        val project: ProjectInfo
+    )
+
     private suspend fun createAgentContext(
         agentId: String,
         config: ModelProviderConfig,
@@ -614,10 +668,18 @@ class ChatStreamService(
             throw IllegalArgumentException("Session is not available to this user")
         }
         val persisted = sessionId?.let { sessionStore?.findById(it, userId) }
-        val verifiedProjectId = if (persisted != null) persisted.projectId else projectId
-        val project = verifiedProjectId?.let {
-            projectStore?.findById(it, userId) ?: throw IllegalArgumentException("Project is not available to this user")
+        // A brand-new session must never adopt a client-supplied temporary workspace id: that
+        // scratch dir belongs to another session (stale frontend state). Nulling it lets
+        // resolveTurnProject mint this session's own workspace, while an existing session keeps
+        // its persisted binding (forks and resumed streams share workspaces by design).
+        val requestedProjectId = when {
+            persisted != null -> persisted.projectId
+            projectId != null && projectId.startsWith(DefaultWorkspaceService.TEMP_ID_PREFIX) -> null
+            else -> projectId
         }
+        val turn = resolveTurnProject(requestedProjectId, sessionId, userId)
+        val verifiedProjectId = turn?.projectId
+        val project = turn?.project
         val projectPath = project?.let {
             require(it.path.isNotBlank()) { "Project directory is unavailable" }
             val path = Path.of(it.path).toAbsolutePath().normalize()
@@ -641,6 +703,7 @@ class ChatStreamService(
             userId = userId,
             projectId = verifiedProjectId,
             projectPath = projectPath,
+            projectKind = project?.kind ?: ProjectKind.USER,
             memoryAutoGeneration = project?.memoryAutoGeneration ?: true,
             modelContextLength = config.options?.contextToken ?: 204_800,
             scriptEnv = scriptEnv,
