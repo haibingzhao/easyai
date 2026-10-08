@@ -3,9 +3,14 @@ package com.easy.easyai.web.security
 import com.easy.easyai.auth.AuthConstants
 import com.easy.easyai.auth.UserStore
 import com.easy.easyai.auth.RefreshTokenStore
+import com.easy.easyai.auth.group.AccessTokenClaimsContributor
+import com.easy.easyai.auth.group.GroupClaims
+import com.easy.easyai.auth.group.NoopClaimsContributor
 import com.easy.easyai.auth.jwt.JwtTokenProvider
+import com.easy.easyai.auth.model.RefreshToken
 import com.easy.easyai.auth.model.User
 import com.easy.easyai.auth.model.UserProfile
+import kotlinx.coroutines.CancellationException
 import org.slf4j.LoggerFactory
 import at.favre.lib.crypto.bcrypt.BCrypt
 import java.security.MessageDigest
@@ -18,7 +23,8 @@ class AuthService(
     private val userStore: UserStore,
     private val refreshTokenStore: RefreshTokenStore,
     private val jwtTokenProvider: JwtTokenProvider,
-    private val authProperties: AuthProperties
+    private val authProperties: AuthProperties,
+    private val claimsContributor: AccessTokenClaimsContributor = NoopClaimsContributor
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
 
@@ -51,7 +57,7 @@ class AuthService(
         return generateTokenPair(user)
     }
 
-    suspend fun login(username: String, password: String): AuthResponse {
+    suspend fun login(username: String, password: String, groupId: String? = null): AuthResponse {
         val user = userStore.findByUsername(username)
             ?: throw AuthException("Invalid username or password", 401)
 
@@ -59,30 +65,36 @@ class AuthService(
             throw AuthException("Invalid username or password", 401)
         }
 
-        logger.info("User logged in: {} ({})", username, user.id)
-        return generateTokenPair(user)
+        logger.info("User logged in: {} ({}) group={}", username, user.id, groupId)
+        return generateTokenPair(user, groupId)
     }
 
     suspend fun refresh(refreshTokenValue: String): AuthResponse {
-        val claims = jwtTokenProvider.validateRefreshToken(refreshTokenValue)
-            ?: throw AuthException("Invalid refresh token", 401)
+        val session = authorizeRefresh(refreshTokenValue)
+        // Rotate: revoke the presented token, then mint its replacement.
+        refreshTokenStore.delete(session.storedTokenId)
+        // Re-run the contributor against the group this login acted under (recovered from the
+        // refresh token) so member/owner changes take effect on the next refresh, no invalidation hook.
+        return generateTokenPair(session.user, session.claims.groupId)
+    }
 
-        val tokenHash = hashToken(refreshTokenValue)
-        val storedToken = refreshTokenStore.findByTokenHash(tokenHash)
-            ?: throw AuthException("Refresh token not found or revoked", 401)
-
-        if (storedToken.expiresAt < System.currentTimeMillis()) {
-            refreshTokenStore.delete(storedToken.id)
-            throw AuthException("Refresh token expired", 401)
+    /**
+     * Switch the active group without re-entering credentials: validate the current refresh token and
+     * re-mint a token pair under [groupId] (null leaves the group, back to a personal session).
+     *
+     * Membership is re-checked by the contributor, never trusted from the request. If the caller asked
+     * for a group whose bucket the contributor could not resolve, they are not a member — refuse with
+     * 403 BEFORE rotating, so a rejected switch leaves the current session usable instead of logging
+     * the caller out.
+     */
+    suspend fun switchGroup(refreshTokenValue: String, groupId: String?): AuthResponse {
+        val session = authorizeRefresh(refreshTokenValue)
+        val group = resolveGroupClaims(session.user.id, groupId)
+        if (groupId != null && group.groupUserId == null) {
+            throw AuthException("Not a member of the requested group", 403)
         }
-
-        val user = userStore.findById(claims.userId)
-            ?: throw AuthException("User not found", 401)
-
-        // Revoke old refresh token
-        refreshTokenStore.delete(storedToken.id)
-
-        return generateTokenPair(user)
+        refreshTokenStore.delete(session.storedTokenId)
+        return mintTokenPair(session.user, group)
     }
 
     suspend fun logout(refreshTokenValue: String?) {
@@ -156,12 +168,15 @@ class AuthService(
         return userStore.findById(userId) ?: throw AuthException("User not found", 404)
     }
 
-    private suspend fun generateTokenPair(user: User): AuthResponse {
-        val accessToken = jwtTokenProvider.generateAccessToken(user.id, user.username)
-        val refreshToken = jwtTokenProvider.generateRefreshToken(user.id)
+    private suspend fun generateTokenPair(user: User, groupId: String? = null): AuthResponse =
+        mintTokenPair(user, resolveGroupClaims(user.id, groupId))
+
+    private suspend fun mintTokenPair(user: User, group: GroupClaims): AuthResponse {
+        val accessToken = jwtTokenProvider.generateAccessToken(user.id, user.username, group)
+        val refreshToken = jwtTokenProvider.generateRefreshToken(user.id, group.groupId)
 
         // Store refresh token hash
-        val refreshTokenEntity = com.easy.easyai.auth.model.RefreshToken(
+        val refreshTokenEntity = RefreshToken(
             id = UUID.randomUUID().toString(),
             userId = user.id,
             tokenHash = hashToken(refreshToken),
@@ -174,6 +189,58 @@ class AuthService(
             refreshToken = refreshToken,
             user = user.toProfile()
         )
+    }
+
+    /**
+     * Resolve the group claims for this mint, falling back to a personal session (no additional owners)
+     * on any contributor failure: a broken group lookup must degrade to the caller's own assets, never
+     * to a guessed owner set that could leak another group's data. The claims are then frozen into the
+     * access token for its whole lifetime, so this is the one place membership is checked.
+     */
+    private suspend fun resolveGroupClaims(userId: String, groupId: String?): GroupClaims =
+        try {
+            claimsContributor.contributions(userId, groupId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Pass the throwable, not just its message: a product contributor's unexpected failure
+            // (e.g. an NPE) must be diagnosable from the stack trace.
+            logger.warn(
+                "Group claims contributor failed for user '{}' group '{}'; falling back to personal session",
+                userId, groupId, e
+            )
+            GroupClaims()
+        }
+
+    /** A validated refresh presentation: the user and claims it carries, loaded but not yet rotated. */
+    private data class ValidatedRefresh(
+        val user: User,
+        val claims: JwtTokenProvider.JwtClaims,
+        val storedTokenId: String
+    )
+
+    /**
+     * Validate a refresh token and load its user, WITHOUT rotating it. Rotation (revoking the old
+     * token) stays a separate caller step so a request that must be refused — e.g. [switchGroup]
+     * rejecting a group the caller is not in — can bail out leaving the current session intact.
+     */
+    private suspend fun authorizeRefresh(refreshTokenValue: String): ValidatedRefresh {
+        val claims = jwtTokenProvider.validateRefreshToken(refreshTokenValue)
+            ?: throw AuthException("Invalid refresh token", 401)
+
+        val tokenHash = hashToken(refreshTokenValue)
+        val storedToken = refreshTokenStore.findByTokenHash(tokenHash)
+            ?: throw AuthException("Refresh token not found or revoked", 401)
+
+        if (storedToken.expiresAt < System.currentTimeMillis()) {
+            refreshTokenStore.delete(storedToken.id)
+            throw AuthException("Refresh token expired", 401)
+        }
+
+        val user = userStore.findById(claims.userId)
+            ?: throw AuthException("User not found", 401)
+
+        return ValidatedRefresh(user, claims, storedToken.id)
     }
 
     /**

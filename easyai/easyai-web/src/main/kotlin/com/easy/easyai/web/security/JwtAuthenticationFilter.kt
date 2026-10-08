@@ -50,6 +50,10 @@ class JwtAuthenticationFilter(
                 val auth = UsernamePasswordAuthenticationToken(
                     claims.userId, null, listOf(SimpleGrantedAuthority("ROLE_USER"))
                 )
+                // Principal stays the bare userId String (getCurrentUserId() reads it in 100+ call
+                // sites); the group claims ride along in `details`, type-safe, so the boundary helpers
+                // in SecurityUtils can read them without reparsing authority strings.
+                auth.details = claims.toGroupClaims()
                 chain.filter(exchange)
                     .contextWrite(ReactiveSecurityContextHolder.withAuthentication(auth))
             } else {

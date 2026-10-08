@@ -1,5 +1,6 @@
 package com.easy.easyai.auth.jwt
 
+import com.easy.easyai.auth.group.GroupClaims
 import io.jsonwebtoken.Claims
 import io.jsonwebtoken.Jwts
 import io.jsonwebtoken.security.SignatureException
@@ -29,12 +30,22 @@ class JwtTokenProvider(
 
     /**
      * Parsed JWT claims.
+     *
+     * The group fields default to "no group" so a token minted before group sharing (or by the
+     * no-op contributor) parses to an empty owner set and the runtime falls back to `{self, system}`.
      */
     data class JwtClaims(
         val userId: String,
         val username: String?,
-        val tokenId: String
-    )
+        val tokenId: String,
+        val owners: List<String> = emptyList(),
+        val groupId: String? = null,
+        val groupUserId: String? = null,
+        val isGroupOwner: Boolean = false
+    ) {
+        /** The subset carried into the security context for per-request boundary reads. */
+        fun toGroupClaims(): GroupClaims = GroupClaims(owners, groupId, groupUserId, isGroupOwner)
+    }
 
     /**
      * Parsed script token claims with session and model binding.
@@ -48,15 +59,24 @@ class JwtTokenProvider(
 
     /**
      * Generate a short-lived access token (default 2 hours).
+     *
+     * [group] carries the group-sharing claims resolved at sign-in; the default (empty) mints a
+     * token with no group, equivalent to the pre-group behaviour. Empty/null fields are omitted
+     * rather than written as null claims.
      */
-    fun generateAccessToken(userId: String, username: String): String {
+    fun generateAccessToken(userId: String, username: String, group: GroupClaims = GroupClaims()): String {
         val now = Date()
         val expiry = Date(now.time + accessExpirySeconds * 1000)
-        return Jwts.builder()
+        val builder = Jwts.builder()
             .id(UUID.randomUUID().toString())
             .subject(userId)
             .claim(CLAIM_USERNAME, username)
             .claim(CLAIM_TYPE, TOKEN_TYPE_ACCESS)
+        if (group.owners.isNotEmpty()) builder.claim(CLAIM_OWNERS, group.owners)
+        group.groupId?.let { builder.claim(CLAIM_GROUP_ID, it) }
+        group.groupUserId?.let { builder.claim(CLAIM_GROUP_USER_ID, it) }
+        if (group.isGroupOwner) builder.claim(CLAIM_GROUP_OWNER, true)
+        return builder
             .issuedAt(now)
             .expiration(expiry)
             .signWith(privateKey, Jwts.SIG.RS256)
@@ -65,14 +85,21 @@ class JwtTokenProvider(
 
     /**
      * Generate a long-lived refresh token (default 180 days).
+     *
+     * [groupId] is the group this login acted under. It is minted into the refresh token so that a
+     * later refresh — which only carries the user subject otherwise — can recover the active group
+     * and re-run the claims contributor against it. Without it, a multi-group user would lose their
+     * group context on every refresh.
      */
-    fun generateRefreshToken(userId: String): String {
+    fun generateRefreshToken(userId: String, groupId: String? = null): String {
         val now = Date()
         val expiry = Date(now.time + refreshExpirySeconds * 1000)
-        return Jwts.builder()
+        val builder = Jwts.builder()
             .id(UUID.randomUUID().toString())
             .subject(userId)
             .claim(CLAIM_TYPE, TOKEN_TYPE_REFRESH)
+        groupId?.let { builder.claim(CLAIM_GROUP_ID, it) }
+        return builder
             .issuedAt(now)
             .expiration(expiry)
             .signWith(privateKey, Jwts.SIG.RS256)
@@ -167,7 +194,11 @@ class JwtTokenProvider(
             JwtClaims(
                 userId = claims.subject,
                 username = claims[CLAIM_USERNAME] as? String,
-                tokenId = claims.id
+                tokenId = claims.id,
+                owners = (claims[CLAIM_OWNERS] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+                groupId = claims[CLAIM_GROUP_ID] as? String,
+                groupUserId = claims[CLAIM_GROUP_USER_ID] as? String,
+                isGroupOwner = claims[CLAIM_GROUP_OWNER] as? Boolean ?: false
             )
         } catch (_: SignatureException) {
             logger.debug("Invalid JWT signature")
@@ -183,6 +214,10 @@ class JwtTokenProvider(
         private const val CLAIM_TYPE = "type"
         private const val CLAIM_SESSION_ID = "sessionId"
         private const val CLAIM_MODEL_CONFIG_ID = "modelConfigId"
+        private const val CLAIM_OWNERS = "owners"
+        private const val CLAIM_GROUP_ID = "grpId"
+        private const val CLAIM_GROUP_USER_ID = "grpUid"
+        private const val CLAIM_GROUP_OWNER = "grpOwner"
         private const val TOKEN_TYPE_ACCESS = "access"
         private const val TOKEN_TYPE_REFRESH = "refresh"
         private const val TOKEN_TYPE_SCRIPT = "script"

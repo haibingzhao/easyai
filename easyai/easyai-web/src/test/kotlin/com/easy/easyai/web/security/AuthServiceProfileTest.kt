@@ -23,8 +23,8 @@ class AuthServiceProfileTest {
     private val userStore = mockk<UserStore>()
     private val refreshTokenStore = mockk<RefreshTokenStore>(relaxed = true)
     private val jwtTokenProvider = mockk<JwtTokenProvider> {
-        every { generateAccessToken(any(), any()) } returns "access"
-        every { generateRefreshToken(any()) } returns "refresh"
+        every { generateAccessToken(any(), any(), any()) } returns "access"
+        every { generateRefreshToken(any(), any()) } returns "refresh"
     }
     private val service = AuthService(userStore, refreshTokenStore, jwtTokenProvider, AuthProperties())
 
