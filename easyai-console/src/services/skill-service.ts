@@ -1,5 +1,6 @@
 import type { SkillInfo } from '@/types/agent';
-import { authFetch, fetchJson, fetchVoid, JSON_HEADERS } from './api-client';
+import { authFetch, fetchJson, fetchVoid, scopeQuery, resolveWriteScope, JSON_HEADERS } from './api-client';
+import type { AssetScope } from './api-client';
 
 const API_BASE = '/api/skills';
 
@@ -44,18 +45,22 @@ export class SkillService {
     return fetchJson<SkillInfo[]>(API_BASE, { signal });
   }
 
-  static async installFromDirectory(request: DirectoryInstallRequest): Promise<SkillInstallResult> {
-    return sendInstall(API_BASE, {
+  static async installFromDirectory(request: DirectoryInstallRequest, scope?: AssetScope): Promise<SkillInstallResult> {
+    return sendInstall(`${API_BASE}${scopeQuery(scope)}`, {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(request),
     });
   }
 
-  static async installFromUpload(request: UploadInstallRequest): Promise<SkillInstallResult> {
+  static async installFromUpload(request: UploadInstallRequest, scope?: AssetScope): Promise<SkillInstallResult> {
     const form = new FormData();
     form.append('name', request.name);
     form.append('shared', String(request.shared));
+    // This endpoint is multipart: the backend reads the scope from a form field, not the query string,
+    // so it can't reuse scopeQuery — resolve the effective scope (explicit or host default) here.
+    const effectiveScope = resolveWriteScope(scope);
+    if (effectiveScope) form.append('scope', effectiveScope);
     if (request.archive) {
       form.append('archive', request.archive);
     } else {
@@ -66,16 +71,16 @@ export class SkillService {
     return sendInstall(`${API_BASE}/upload`, { method: 'POST', body: form });
   }
 
-  static async setEnabled(name: string, enabled: boolean): Promise<{ name: string; enabled: boolean; indexSynced: boolean }> {
-    return fetchJson(`${API_BASE}/enabled`, {
+  static async setEnabled(name: string, enabled: boolean, scope?: AssetScope): Promise<{ name: string; enabled: boolean; indexSynced: boolean }> {
+    return fetchJson(`${API_BASE}/enabled${scopeQuery(scope)}`, {
       method: 'PATCH',
       headers: JSON_HEADERS,
       body: JSON.stringify({ name, enabled }),
     });
   }
 
-  static async remove(name: string): Promise<void> {
-    return fetchVoid(`${API_BASE}/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  static async remove(name: string, scope?: AssetScope): Promise<void> {
+    return fetchVoid(`${API_BASE}/${encodeURIComponent(name)}${scopeQuery(scope)}`, { method: 'DELETE' });
   }
 }
 

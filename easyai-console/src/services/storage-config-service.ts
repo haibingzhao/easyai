@@ -1,14 +1,11 @@
 import type { StorageConfig, SaveStorageConfigRequest, StorageTestResult } from '@/types/settings';
-import { fetchJson, JSON_HEADERS } from '@/services/api-client';
+import { fetchJson, scopeQuery, JSON_HEADERS } from '@/services/api-client';
+import type { AssetScope } from '@/services/api-client';
 
 const API_BASE = '/api/storage';
 
 /** Which ownership bucket a write targets; `group` writes the shared bucket (group owner only). */
-export type AssetScope = 'personal' | 'group';
-
-function scopeQuery(scope?: AssetScope): string {
-  return scope ? `?scope=${scope}` : '';
-}
+export type { AssetScope };
 
 export const storageConfigService = {
   /**

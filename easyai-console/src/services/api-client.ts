@@ -107,6 +107,45 @@ export async function authFetch(
 export const JSON_HEADERS = { 'Content-Type': 'application/json' } as const;
 
 /**
+ * Which ownership bucket a write targets. `group` writes the shared bucket and is refused (403) for
+ * non-owners by the backend gate; the default (omitted) is the caller's personal bucket. Reads do not
+ * take a scope — the backend folds the active group's bucket in from the token claims automatically.
+ */
+export type AssetScope = 'personal' | 'group';
+
+/**
+ * Fallback write scope for every console write that does not name one explicitly. Hosts that fold
+ * group ownership into the login (e.g. home-console) set this once after auth so all service calls —
+ * present and future — route into the group bucket without threading `scope` through each page.
+ * Left `undefined`, writes default to the caller's personal bucket (zero impact on standalone use).
+ */
+let defaultWriteScope: AssetScope | undefined;
+
+/** Route every console write into `scope`'s bucket; pass `undefined` to restore personal-bucket default. */
+export function setDefaultAssetScope(scope: AssetScope | undefined): void {
+  defaultWriteScope = scope;
+}
+
+/** The effective write scope for a call: the explicit one, else the host default. */
+export function resolveWriteScope(scope?: AssetScope): AssetScope | undefined {
+  return scope ?? defaultWriteScope;
+}
+
+/** Build the `?scope=` suffix for a write endpoint; empty when the effective scope is personal. */
+export function scopeQuery(scope?: AssetScope): string {
+  const s = resolveWriteScope(scope);
+  return s ? `?scope=${s}` : '';
+}
+
+/** Append the effective `scope` to a URL that may already carry a query string. */
+export function withScope(url: string, scope?: AssetScope): string {
+  const s = resolveWriteScope(scope);
+  if (!s) return url;
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}scope=${s}`;
+}
+
+/**
  * Convenience wrapper: authFetch + ok-check + JSON parse.
  * Throws an Error with the response body (or status) on non-ok responses.
  */

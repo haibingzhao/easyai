@@ -41,6 +41,8 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
   const code = args?.code ?? '';
   const tooLarge = args !== null && byteLength(code) > MAX_FRAGMENT_BYTES;
   const emptyFragment = args !== null && code.trim() === '';
+  /** Persisted calls whose code is the backend's context-elision placeholder have nothing to render. */
+  const elidedPlaceholder = args !== null && code.trimStart().startsWith('[fragment elided from context:');
   const toolFailed = result?.isError === true || status === 'FAILED';
 
   const [viewMode, setViewMode] = useState<ViewMode>('ui');
@@ -55,7 +57,7 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
 
   const sandboxId = toolCall.id;
   /** Without a renderable fragment a sandbox is pointless — those cases stay in source view. */
-  const sandboxUsable = args !== null && !tooLarge && !emptyFragment && !toolFailed;
+  const sandboxUsable = args !== null && !tooLarge && !emptyFragment && !elidedPlaceholder && !toolFailed;
   const srcdoc = useMemo(() => buildShellSrcdoc(sandboxId, tokensCssForMode(currentMode())), [sandboxId]);
   const sanitized = useMemo(
     () => (sandboxUsable ? sanitizeFragment(code) : ''),
@@ -170,7 +172,7 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
     );
   }
 
-  const notice = noticeText({ tooLarge, emptyFragment, toolFailed, frameError, result, streamingOutput });
+  const notice = noticeText({ tooLarge, emptyFragment, elidedPlaceholder, toolFailed, frameError, result, streamingOutput });
 
   return (
     <CardShell
@@ -260,6 +262,7 @@ function requestSandboxExportOrThrow(iframe: HTMLIFrameElement | null, id: strin
 interface NoticeInput {
   tooLarge: boolean;
   emptyFragment: boolean;
+  elidedPlaceholder: boolean;
   toolFailed: boolean;
   frameError: string | null;
   result: ToolMessageProps['result'];
@@ -269,6 +272,7 @@ interface NoticeInput {
 function noticeText(input: NoticeInput): string | null {
   if (input.tooLarge) return i18n('Fragment too large, shown as source');
   if (input.emptyFragment) return i18n('Empty fragment');
+  if (input.elidedPlaceholder) return i18n('Fragment missing: only a context-elision placeholder was stored');
   if (input.frameError !== null) return i18n('Render failed, shown as source');
   if (input.toolFailed) {
     return extractOutput({ result: input.result, streamingOutput: input.streamingOutput }) || i18n('Render failed, shown as source');
@@ -278,7 +282,7 @@ function noticeText(input: NoticeInput): string | null {
 
 function CardShell({ title, toolbar, children }: { title: string; toolbar?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="relative overflow-hidden rounded-xl border border-border bg-card">
+    <div className="relative rounded-xl border border-border bg-card">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2 pr-36">
         <Shapes className="size-4 shrink-0 text-muted-foreground" />
         <span className="truncate text-sm font-medium">{title}</span>

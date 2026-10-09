@@ -13,7 +13,13 @@ interface AuthState {
   authLoading: boolean;
 
   checkAuth: () => Promise<boolean>;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string, groupId?: string) => Promise<void>;
+  /**
+   * Re-mint the session under a different group without re-entering credentials, then reset
+   * user-scoped state and reload capabilities so the newly active group's assets are what the UI shows.
+   * A null groupId drops back to a personal, group-less session.
+   */
+  switchGroup: (groupId?: string | null) => Promise<void>;
   register: (
     username: string,
     password: string,
@@ -71,8 +77,16 @@ export const useAuthStore = create<AuthState>((set) => ({
     return false;
   },
 
-  login: async (username, password) => {
-    const response = await authService.login(username, password);
+  login: async (username, password, groupId) => {
+    const response = await authService.login(username, password, groupId);
+    setAccessToken(response.accessToken);
+    resetUserScopedState();
+    set({ user: response.user, isAuthenticated: true });
+    void useCapabilityStore.getState().load();
+  },
+
+  switchGroup: async (groupId) => {
+    const response = await authService.switchGroup(groupId);
     setAccessToken(response.accessToken);
     resetUserScopedState();
     set({ user: response.user, isAuthenticated: true });

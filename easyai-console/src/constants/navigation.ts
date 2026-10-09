@@ -89,4 +89,13 @@ export function registerIcons(icons: Record<string, React.ComponentType<{ classN
  */
 export const APP_CONFIG = {
   appName: 'Easy AI',
+  /**
+   * Whether the top bar shows the project selector.
+   *
+   * Complements the backend flag `easyai.web.project-selection-enabled`: that one governs whether
+   * the console may *offer* project selection, this one lets a host drop the entry point entirely
+   * when its product has no project concept (a host that always runs in per-session temporary
+   * workspaces would otherwise keep a read-only workspace badge in the bar).
+   */
+  showProjectSelector: true,
 };

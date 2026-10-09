@@ -30,13 +30,20 @@ import {
   Cpu
 } from 'lucide-react';
 
-interface MenuItem {
+export interface SettingsMenuItem {
   id: string;
   label: string;
   icon: React.ReactNode;
 }
 
-const menuItems: MenuItem[] = [
+/**
+ * Settings tab list. Exported and mutable (same idiom as NAV_ITEMS / EXTRA_NAV_ITEMS) so host apps
+ * can trim tabs they don't surface — e.g. home-console drops `database` / `rag` / `integrations`.
+ * Mutate in place before render (`SETTINGS_MENU_ITEMS.splice(...)`); reassigning the binding is a
+ * no-op for consumers. Tab bodies below are keyed by id, so removing an entry hides only its menu
+ * button — the host also owns routing to `?tab=` to keep hidden tabs unreachable.
+ */
+export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
   { id: 'account', label: 'Account', icon: <User className="w-4 h-4" /> },
   { id: 'general', label: 'General', icon: <Settings className="w-4 h-4" /> },
   { id: 'integrations', label: 'Integrations', icon: <Globe className="w-4 h-4" /> },
@@ -71,7 +78,7 @@ export const SettingsPage: React.FC = () => {
   return (
     <div className="flex h-full overflow-hidden">
       <aside className="w-56 border-r border-border p-4 space-y-1 overflow-y-auto shrink-0">
-        {menuItems.map(item => (
+        {SETTINGS_MENU_ITEMS.map(item => (
           <button
             key={item.id}
             onClick={() => handleMenuClick(item.id)}
@@ -88,7 +95,7 @@ export const SettingsPage: React.FC = () => {
       </aside>
 
       <main className="flex-1 overflow-y-auto p-6">
-        <h1 className="text-2xl font-semibold mb-6">{i18n(menuItems.find(m => m.id === activeTab)?.label || 'Settings')}</h1>
+        <h1 className="text-2xl font-semibold mb-6">{i18n(SETTINGS_MENU_ITEMS.find(m => m.id === activeTab)?.label || 'Settings')}</h1>
 
         {activeTab === 'account' && <AccountTab />}
         {activeTab === 'general' && <GeneralTab />}

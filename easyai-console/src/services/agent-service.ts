@@ -1,5 +1,6 @@
 import type { AgentDto, AgentCreateRequest, ToolInfo, AgentToolConfig, AgentConfigsRequest, TargetType, SkillInfo, ValidateTemplateResponse } from '@/types/agent';
-import { authFetch, fetchJson, fetchVoid, downloadBlob, JSON_HEADERS } from '@/services/api-client';
+import { authFetch, fetchJson, fetchVoid, downloadBlob, scopeQuery, JSON_HEADERS } from '@/services/api-client';
+import type { AssetScope } from '@/services/api-client';
 
 const API_BASE = '/api/agents';
 
@@ -16,24 +17,24 @@ export class AgentService {
     return fetchJson<AgentDto>(`${API_BASE}/${id}`);
   }
 
-  async createAgent(request: AgentCreateRequest): Promise<AgentDto> {
-    return fetchJson<AgentDto>(API_BASE, {
+  async createAgent(request: AgentCreateRequest, scope?: AssetScope): Promise<AgentDto> {
+    return fetchJson<AgentDto>(`${API_BASE}${scopeQuery(scope)}`, {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(request),
     });
   }
 
-  async updateAgent(id: string, request: AgentCreateRequest): Promise<AgentDto> {
-    return fetchJson<AgentDto>(`${API_BASE}/${id}`, {
+  async updateAgent(id: string, request: AgentCreateRequest, scope?: AssetScope): Promise<AgentDto> {
+    return fetchJson<AgentDto>(`${API_BASE}/${id}${scopeQuery(scope)}`, {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify(request),
     });
   }
 
-  async deleteAgent(id: string): Promise<void> {
-    return fetchVoid(`${API_BASE}/${id}`, { method: 'DELETE' });
+  async deleteAgent(id: string, scope?: AssetScope): Promise<void> {
+    return fetchVoid(`${API_BASE}/${id}${scopeQuery(scope)}`, { method: 'DELETE' });
   }
 
   async listTools(): Promise<ToolInfo[]> {
@@ -47,8 +48,8 @@ export class AgentService {
     return fetchJson<AgentToolConfig[]>(url);
   }
 
-  async saveAgentConfigs(id: string, request: AgentConfigsRequest): Promise<AgentToolConfig[]> {
-    return fetchJson<AgentToolConfig[]>(`${API_BASE}/${id}/configs`, {
+  async saveAgentConfigs(id: string, request: AgentConfigsRequest, scope?: AssetScope): Promise<AgentToolConfig[]> {
+    return fetchJson<AgentToolConfig[]>(`${API_BASE}/${id}/configs${scopeQuery(scope)}`, {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify(request),
