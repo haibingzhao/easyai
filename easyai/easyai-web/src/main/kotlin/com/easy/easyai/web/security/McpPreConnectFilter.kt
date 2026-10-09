@@ -43,7 +43,7 @@ class McpPreConnectFilter(
                 try {
                     val claims = jwtTokenProvider.validateAccessToken(token)
                     if (claims != null) {
-                        triggerPreConnect(claims.userId)
+                        triggerPreConnect(claims.userId, claims.owners)
                     }
                 } catch (_: Exception) {
                     // Token validation failed — skip pre-connect, let the auth filter handle it
@@ -53,11 +53,17 @@ class McpPreConnectFilter(
         return chain.filter(exchange)
     }
 
-    private fun triggerPreConnect(userId: String) {
+    private fun triggerPreConnect(userId: String, owners: List<String>) {
         if (userId == AuthConstants.SYSTEM_USER_ID) return
+        // Pre-warm the caller's own servers plus any group bucket they belong to; system servers are
+        // already connected at startup, so they are excluded here.
+        val targets = (owners + userId)
+            .filter { it.isNotBlank() && it != AuthConstants.SYSTEM_USER_ID }
+            .distinct()
+        if (targets.isEmpty()) return
         scope.launch {
             try {
-                mcpClientManager.ensureUserConnected(userId)
+                mcpClientManager.ensureOwnersConnected(targets)
             } catch (e: Exception) {
                 logger.debug("MCP pre-connect failed for user '{}': {}", userId, e.message)
             }

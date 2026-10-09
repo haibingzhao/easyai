@@ -44,6 +44,8 @@ export interface DatabaseInfo {
   configured: boolean;
   dbType: string;
   info: Record<string, string | null>;
+  /** `spring` when pinned by deployment-wide `easyai.r2dbc.*` (read-only), else `file` (editable). */
+  source?: 'file' | 'spring' | 'none';
 }
 
 export class SetupService {

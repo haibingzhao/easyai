@@ -35,4 +35,16 @@ interface ModelConfigGroupStore {
      * denormalized connection fields (protocol, baseUrl, apiKey, timeoutSeconds, isCustom).
      */
     suspend fun updateGroupConnection(id: String, request: SaveModelConfigGroupRequest, userId: String = "system"): ModelConfigGroup
+
+    // ─── Group-aware reads ───────────────────────────────────────────────────────
+    // Visible if the group's owner is any of [owners] (self, group bucket, system). Defaults fan out
+    // over the single-id forms; the R2dbc store overrides with one `IN (owners)` query.
+
+    /** Get a group (with members) visible to any of [owners]. */
+    suspend fun getGroup(id: String, owners: Collection<String>): ModelConfigGroup? =
+        owners.distinct().mapNotNull { getGroup(id, it) }.firstOrNull()
+
+    /** Get all groups visible to any of [owners]. */
+    suspend fun getAllGroups(owners: Collection<String>): List<ModelConfigGroup> =
+        owners.distinct().flatMap { getAllGroups(it) }.distinctBy { it.id }
 }

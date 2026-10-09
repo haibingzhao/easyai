@@ -92,19 +92,35 @@ class SkillSyncService(
         userId?.takeIf { it.isNotBlank() } ?: SkillCatalogEntry.DEFAULT_USER_ID
 
     /** Reconcile [userId]'s root and the shared `system` root; [SkillCatalogEntry.DEFAULT_USER_ID] only syncs itself. */
-    suspend fun syncFor(userId: String?): SkillSyncOutcome {
-        val owner = ownerOf(userId)
-        val owners = if (owner == SkillCatalogEntry.DEFAULT_USER_ID) listOf(owner)
-        else listOf(SkillCatalogEntry.DEFAULT_USER_ID, owner)
-        val roots = owners.map { SkillPaths.ownerRoot(config, it) }.toSet()
+    suspend fun syncFor(userId: String?): SkillSyncOutcome =
+        syncForOwners(listOf(ownerOf(userId)), ownerOf(userId))
+
+    /**
+     * Reconcile every owner root in [owners] plus the shared `system` root. Group sharing passes the
+     * caller's full visibility set (`{self, groupUserId, system}`) so a member's machine also restores
+     * the group's skill directories, not just their own. Owner order is deduplicated and `system` is
+     * always included as the final layer.
+     *
+     * [self] is the acting caller's own bucket id — the ONLY owner besides `system` whose disk may be
+     * written back (claim an orphan directory / push drifted content). A sync pass carries no request
+     * identity, so without this the group bucket would be claimable/pushable by any member who can drop
+     * a file into `{root}/{groupUserId}` with a `write`/`bash` tool — the same exposure the shared
+     * `system` root is protected from. Every owner that is neither [self] nor `system` (i.e. the group
+     * bucket) is a read-only mirror: orphan directories are left unclaimed and drifted content is
+     * re-restored from its package, never pushed. [self] null (a background pass with no caller) makes
+     * every personal bucket read-only too, which is the safe default.
+     */
+    suspend fun syncForOwners(owners: Collection<String>, self: String? = null): SkillSyncOutcome {
+        val resolved = resolveOwners(owners)
+        val roots = resolved.map { SkillPaths.ownerRoot(config, it) }.toSet()
         if (catalog == null) {
             // No catalog to reconcile against: keep the in-memory view fresh from disk only.
-            return SkillSyncOutcome(owners = owners, delta = registry?.rescan(roots) ?: RegistryDelta())
+            return SkillSyncOutcome(owners = resolved, delta = registry?.rescan(roots) ?: RegistryDelta())
         }
         var claimed = 0; var pushed = 0; var restored = 0; var backfilled = 0; var skipped = 0; var failed = 0
         var unclaimed = 0
-        for (o in owners) {
-            val partial = withOwnerLock(o) { syncOwner(o) }
+        for (o in resolved) {
+            val partial = withOwnerLock(o) { syncOwner(o, self) }
             claimed += partial.claimed; pushed += partial.pushed; restored += partial.restored
             backfilled += partial.backfilled; skipped += partial.skipped; failed += partial.failed
             unclaimed += partial.unclaimed
@@ -112,10 +128,17 @@ class SkillSyncService(
         // Publication last: restored, pushed and claimed directories become registry entries here.
         val delta = registry?.rescan(roots)
         return SkillSyncOutcome(
-            owners = owners, claimed = claimed, pushed = pushed, restored = restored,
+            owners = resolved, claimed = claimed, pushed = pushed, restored = restored,
             backfilled = backfilled, skipped = skipped, failed = failed,
             unclaimed = unclaimed, delta = delta
         )
+    }
+
+    /** Distinct non-blank owners in priority order with `system` first, matching the historical layout. */
+    private fun resolveOwners(owners: Collection<String>): List<String> {
+        val system = SkillCatalogEntry.DEFAULT_USER_ID
+        val cleaned = owners.map { ownerOf(it) }.filter { it != system }.distinct()
+        return listOf(system) + cleaned
     }
 
     /**
@@ -423,10 +446,15 @@ class SkillSyncService(
         null
     }
 
-    private suspend fun syncOwner(owner: String): OwnerCounters {
+    private suspend fun syncOwner(owner: String, self: String?): OwnerCounters {
         val store = requireNotNull(catalog)
         val root = SkillPaths.ownerRoot(config, owner)
         withContext(Dispatchers.IO) { Files.createDirectories(root) }
+        // Only the acting caller's own *personal* bucket may be written back from disk. `system`
+        // keeps its admin-edits-built-ins push path but is never claimable from disk (it exists only
+        // through its rows), and any other owner (the group bucket) is read-only.
+        val writable = self != null && owner == self && owner != SkillCatalogEntry.DEFAULT_USER_ID
+        val pushAllowed = writable || owner == SkillCatalogEntry.DEFAULT_USER_ID
         val rows = store.listByUser(owner)
         // root_path is authoritative: sanitized directory segments can differ from owner ids.
         val pinnings = HashMap<String, String>()
@@ -462,7 +490,13 @@ class SkillSyncService(
                 val snapshot = snapshotOf(dir) ?: continue
                 when {
                     snapshot.checksum != row.checksum -> {
-                        if (pushContent(owner, row, snapshot)) pushed++ else skipped++
+                        if (pushAllowed) {
+                            if (pushContent(owner, row, snapshot)) pushed++ else skipped++
+                        } else {
+                            // Read-only bucket: disk is not authoritative. Re-mirror the row from its
+                            // package instead of pushing whatever a member dropped on disk.
+                            if (restore(owner, root, row, force = true)) restored++ else skipped++
+                        }
                     }
                     else -> if (backfillPackage(owner, dir, row, presentKeys)) backfilled++
                 }
@@ -474,12 +508,13 @@ class SkillSyncService(
             }
         }
         val orphaned = disk.filterKeys { name -> rows.none { it.name == name } }
-        // The shared layer exists only through its catalog rows. Claiming an unclaimed directory
-        // would let anyone who can write `{rootDir}/system` publish a skill every user can load,
-        // and no user asked for it — report the leftovers and touch nothing.
-        if (owner == SkillCatalogEntry.DEFAULT_USER_ID && orphaned.isNotEmpty()) {
+        // A bucket this pass may not write (the shared `system` layer, or a group bucket the caller does
+        // not own) exists only through its catalog rows. Claiming an unclaimed directory there would let
+        // anyone who can write `{rootDir}/{owner}` publish a skill every member loads, and no request
+        // identity is attached to a sync pass — report the leftovers and touch nothing.
+        if (!writable && orphaned.isNotEmpty()) {
             logger.warn(
-                "Leaving {} directory-only skill(s) unclaimed in the shared root {}: {}",
+                "Leaving {} directory-only skill(s) unclaimed in the read-only root {}: {}",
                 orphaned.size, root, orphaned.keys
             )
             return OwnerCounters(
@@ -515,8 +550,13 @@ class SkillSyncService(
         )
     }
 
-    /** Download and checksum-verify the row's package into its expected directory. Caller holds the owner lock. */
-    private suspend fun restore(owner: String, root: Path, row: SkillCatalogEntry): Boolean {
+    /**
+     * Download and checksum-verify the row's package into its expected directory. Caller holds the owner
+     * lock. [force] overwrites an existing readable directory — used to re-mirror a read-only (group)
+     * bucket whose disk copy drifted from its row; a personal bucket's local edits are never overwritten
+     * (force=false), they are pushed instead.
+     */
+    private suspend fun restore(owner: String, root: Path, row: SkillCatalogEntry, force: Boolean = false): Boolean {
         val expected = SkillPaths.installDir(root, row.name)
         if (SkillPaths.canonicalizeOrNull(row.installPath) != SkillPaths.canonicalize(expected)) {
             logger.warn("Skill '{}' of owner '{}' installs outside its owner root: {}", row.name, owner, row.installPath)
@@ -524,8 +564,9 @@ class SkillSyncService(
         }
         // Discovery only reports parsable skills, so an existing SKILL.md here means content the
         // sync could not read — local edits, not a leftover. Never overwrite those; the user fixes
-        // or deletes the directory, and the next pass reconciles it.
-        if (withContext(Dispatchers.IO) { Files.isRegularFile(expected.resolve(SkillPaths.SKILL_FILE_NAME)) }) {
+        // or deletes the directory, and the next pass reconciles it. A read-only bucket has no
+        // legitimate local edits, so [force] re-mirrors it from the authoritative package.
+        if (!force && withContext(Dispatchers.IO) { Files.isRegularFile(expected.resolve(SkillPaths.SKILL_FILE_NAME)) }) {
             logger.warn(
                 "Skill '{}' of owner '{}' has an unreadable local directory at {}; refusing to restore over it",
                 row.name, owner, expected

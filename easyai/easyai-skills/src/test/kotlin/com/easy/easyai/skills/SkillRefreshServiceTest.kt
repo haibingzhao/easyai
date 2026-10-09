@@ -34,22 +34,22 @@ class SkillRefreshServiceTest {
         @Test
         fun `sync runs before the index pass and covers the shared layer first`() = runTest {
             val owners = listOf(SkillCatalogEntry.DEFAULT_USER_ID, "alice")
-            coEvery { sync.syncFor("alice") } returns SkillSyncOutcome(owners)
-            coEvery { indexer.reconcileByDrift(owners) } returns ReconcileSummary(owners = 2)
+            coEvery { sync.syncForOwners(owners, any()) } returns SkillSyncOutcome(owners)
+            coEvery { indexer.reconcileByDrift(owners, any()) } returns ReconcileSummary(owners = 2)
 
             val outcome = service().refreshFor("alice")
 
             assertEquals(owners, outcome.owners)
             coVerifyOrder {
-                sync.syncFor("alice")
-                indexer.reconcileByDrift(owners)
+                sync.syncForOwners(owners, any())
+                indexer.reconcileByDrift(owners, any())
             }
         }
 
         @Test
         fun `a sync failure still indexes what the catalog already holds`() = runTest {
-            coEvery { sync.syncFor("alice") } throws IllegalStateException("database down")
-            coEvery { indexer.reconcileByDrift(any()) } returns ReconcileSummary(owners = 2)
+            coEvery { sync.syncForOwners(any(), any()) } throws IllegalStateException("database down")
+            coEvery { indexer.reconcileByDrift(any(), any()) } returns ReconcileSummary(owners = 2)
 
             val outcome = service().refreshFor("alice")
 
@@ -60,8 +60,8 @@ class SkillRefreshServiceTest {
 
         @Test
         fun `an index failure keeps the sync counters`() = runTest {
-            coEvery { sync.syncFor("alice") } returns SkillSyncOutcome(listOf("alice"), claimed = 1)
-            coEvery { indexer.reconcileByDrift(any()) } throws IllegalStateException("rag down")
+            coEvery { sync.syncForOwners(any(), any()) } returns SkillSyncOutcome(listOf("alice"), claimed = 1)
+            coEvery { indexer.reconcileByDrift(any(), any()) } throws IllegalStateException("rag down")
 
             val outcome = service().refreshFor("alice")
 
@@ -71,9 +71,9 @@ class SkillRefreshServiceTest {
 
         @Test
         fun `cancellation propagates instead of reporting a partial refresh`() = runTest {
-            coEvery { sync.syncFor("alice") } throws CancellationException("closing")
+            coEvery { sync.syncForOwners(any(), any()) } throws CancellationException("closing")
             assertFailsWith<CancellationException> { service().refreshFor("alice") }
-            coVerify(exactly = 0) { indexer.reconcileByDrift(any()) }
+            coVerify(exactly = 0) { indexer.reconcileByDrift(any(), any()) }
         }
 
         @Test
@@ -83,6 +83,14 @@ class SkillRefreshServiceTest {
             }
             assertEquals(listOf(SkillCatalogEntry.DEFAULT_USER_ID, "alice"), service().ownersFor("alice"))
         }
+
+        @Test
+        fun `a group owner set is normalized with the shared layer first`() = runTest {
+            assertEquals(
+                listOf(SkillCatalogEntry.DEFAULT_USER_ID, "alice", "grp-1"),
+                service().ownersForOwners(listOf("alice", "grp-1", SkillCatalogEntry.DEFAULT_USER_ID))
+            )
+        }
     }
 
     @Nested
@@ -90,24 +98,25 @@ class SkillRefreshServiceTest {
         @Test
         fun `the first access reconciles once and later accesses are free`() = runTest {
             val service = service()
-            coEvery { sync.syncFor("alice") } returns SkillSyncOutcome(listOf("alice"))
+            val owners = listOf(SkillCatalogEntry.DEFAULT_USER_ID, "alice")
+            coEvery { sync.syncForOwners(owners, any()) } returns SkillSyncOutcome(listOf("alice"))
 
             service.ensureSynced("alice")
             service.ensureSynced("alice")
 
-            coVerify(exactly = 1) { sync.syncFor("alice") }
-            coVerify(exactly = 1) { indexer.reconcileByDrift(any()) }
+            coVerify(exactly = 1) { sync.syncForOwners(owners, any()) }
+            coVerify(exactly = 1) { indexer.reconcileByDrift(any(), any()) }
         }
 
         @Test
         fun `a failed pass is retried on the next access`() = runTest {
             val service = service()
-            coEvery { sync.syncFor("alice") } throws IllegalStateException("db down") andThen SkillSyncOutcome()
+            coEvery { sync.syncForOwners(any(), any()) } throws IllegalStateException("db down") andThen SkillSyncOutcome()
 
             service.ensureSynced("alice")
             service.ensureSynced("alice")
 
-            coVerify(exactly = 2) { sync.syncFor("alice") }
+            coVerify(exactly = 2) { sync.syncForOwners(any(), any()) }
         }
 
         @Test
@@ -116,8 +125,8 @@ class SkillRefreshServiceTest {
             service.ensureSynced("alice")
             service.ensureSynced("bob")
 
-            coVerify(exactly = 1) { sync.syncFor("alice") }
-            coVerify(exactly = 1) { sync.syncFor("bob") }
+            coVerify(exactly = 1) { sync.syncForOwners(listOf(SkillCatalogEntry.DEFAULT_USER_ID, "alice"), any()) }
+            coVerify(exactly = 1) { sync.syncForOwners(listOf(SkillCatalogEntry.DEFAULT_USER_ID, "bob"), any()) }
         }
     }
 

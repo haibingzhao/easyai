@@ -279,9 +279,13 @@ class SkillRefreshEndToEndTest {
         fun `lazy first-access sync then request paths read the claimed row`() = runTest {
             val chain = SkillSyncFixture(temp)
             chain.write("draft", owner = "alice")
-            val prompt = SkillPromptSource(chain.registry, chain.catalog, true, false, firstAccessSync = chain.refresher::ensureSynced)
+            // Authoring paths (login hook / refresh) thread `self`, so they claim the dropped
+            // directory. The prompt gate below is read-warm and restore-only: it mirrors what the
+            // catalog already holds but never claims a fresh orphan for the caller's own bucket.
+            chain.refresher.ensureSynced("alice")
+            val prompt = SkillPromptSource(chain.registry, chain.catalog, true, false, firstAccessSync = chain.refresher::ensureSyncedOwners)
             assertEquals(listOf("draft"), prompt.effectiveNames("alice"))
-            // The lazy pass claimed and indexed the directory; later writes need an explicit refresh.
+            // The gate already ran for this process, so a later write needs an explicit refresh.
             chain.write("later", owner = "alice")
             assertEquals(listOf("draft"), prompt.effectiveNames("alice"))
             chain.refresher.refreshFor("alice")

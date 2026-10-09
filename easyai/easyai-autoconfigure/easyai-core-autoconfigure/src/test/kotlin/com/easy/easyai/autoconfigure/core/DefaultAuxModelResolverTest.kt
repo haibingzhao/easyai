@@ -56,7 +56,7 @@ class DefaultAuxModelResolverTest {
         @Test
         fun `null user returns null without touching the store`() = runTest {
             assertNull(resolver(factory).resolve(null, AuxModelTask.COMPACTION))
-            coVerify(exactly = 0) { store.get(any(), any()) }
+            coVerify(exactly = 0) { store.get(any<String>(), any()) }
         }
 
         @Test
@@ -210,6 +210,73 @@ class DefaultAuxModelResolverTest {
             r.refresh("user-1", AuxModelTask.SKILL_SELECTION)
             assertSame(config, r.resolveConfig("user-1", AuxModelTask.SKILL_SELECTION))
             assertSame(chatModel, r.resolve("user-1", AuxModelTask.COMPACTION)?.chatModel)
+        }
+    }
+
+    @Nested
+    inner class `group owners resolve in priority order` {
+
+        @Test
+        fun `self choice wins over the group bucket`() = runTest {
+            coEvery { store.get("alice", AuxModelTask.COMPACTION) } returns
+                AuxModelSettings(AuxModelTask.COMPACTION.key, "cfg-self")
+            coEvery { configStore.getConfig("cfg-self", "alice") } returns config
+            every { config.protocol } returns Protocol.OPENAI
+            every { factory.supports(Protocol.OPENAI) } returns true
+            every { factory.create(config, any()) } returns chatModel
+            val r = resolver(factory)
+
+            assertSame(chatModel, r.resolve(listOf("alice", "grp-1", "system"), AuxModelTask.COMPACTION)?.chatModel)
+
+            coVerify(exactly = 0) { store.get("grp-1", any()) }
+            coVerify(exactly = 1) { configStore.getConfig("cfg-self", "alice") }
+        }
+
+        @Test
+        fun `falls through to the group bucket when self is unconfigured`() = runTest {
+            coEvery { store.get("alice", AuxModelTask.COMPACTION) } returns null
+            coEvery { store.get("grp-1", AuxModelTask.COMPACTION) } returns
+                AuxModelSettings(AuxModelTask.COMPACTION.key, "cfg-grp")
+            coEvery { configStore.getConfig("cfg-grp", "grp-1") } returns config
+            every { config.protocol } returns Protocol.OPENAI
+            every { factory.supports(Protocol.OPENAI) } returns true
+            every { factory.create(config, any()) } returns chatModel
+            val r = resolver(factory)
+
+            assertSame(config, r.resolve(listOf("alice", "grp-1", "system"), AuxModelTask.COMPACTION)?.modelConfig)
+
+            coVerify(exactly = 1) { configStore.getConfig("cfg-grp", "grp-1") }
+            coVerify(exactly = 0) { store.get("system", any()) }
+        }
+
+        @Test
+        fun `refresh on the group bucket evicts every member resolution`() = runTest {
+            coEvery { store.get("alice", AuxModelTask.COMPACTION) } returns null
+            coEvery { store.get("bob", AuxModelTask.COMPACTION) } returns null
+            coEvery { store.get("grp-1", AuxModelTask.COMPACTION) } returns
+                AuxModelSettings(AuxModelTask.COMPACTION.key, "cfg-grp")
+            coEvery { configStore.getConfig("cfg-grp", "grp-1") } returns config
+            every { config.protocol } returns Protocol.OPENAI
+            every { factory.supports(Protocol.OPENAI) } returns true
+            every { factory.create(config, any()) } returns chatModel
+            val r = resolver(factory)
+
+            r.resolve(listOf("alice", "grp-1"), AuxModelTask.COMPACTION)
+            r.resolve(listOf("bob", "grp-1"), AuxModelTask.COMPACTION)
+            coVerify(exactly = 2) { configStore.getConfig("cfg-grp", "grp-1") }
+
+            r.refresh("grp-1", AuxModelTask.COMPACTION)
+            r.resolve(listOf("alice", "grp-1"), AuxModelTask.COMPACTION)
+            r.resolve(listOf("bob", "grp-1"), AuxModelTask.COMPACTION)
+            coVerify(exactly = 4) { configStore.getConfig("cfg-grp", "grp-1") }
+        }
+
+        @Test
+        fun `empty or all-blank owners return null without touching the store`() = runTest {
+            val r = resolver(factory)
+            assertNull(r.resolve(emptyList<String>(), AuxModelTask.COMPACTION))
+            assertNull(r.resolve(listOf("", "  "), AuxModelTask.COMPACTION))
+            coVerify(exactly = 0) { store.get(any<String>(), any()) }
         }
     }
 }

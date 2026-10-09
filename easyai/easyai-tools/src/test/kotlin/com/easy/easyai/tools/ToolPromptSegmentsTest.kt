@@ -48,7 +48,7 @@ class ToolPromptSegmentsTest {
 
     @Test
     fun `knowledge segment guides parallel issuance together with memory search`() {
-        val guidance = segment(KnowledgeSearchToolBuilder().metadata.systemPromptSegment)
+        val guidance = segment(KnowledgeSearchToolBuilder(false).metadata.systemPromptSegment)
         assertTrue(guidance.contains("## Knowledge Base"), guidance)
         assertTrue(guidance.contains("knowledge_search"), guidance)
         assertTrue(guidance.contains("SAME response"), guidance)
@@ -72,7 +72,7 @@ class ToolPromptSegmentsTest {
     fun `segments sort into the declared order regardless of registration order`() {
         val registered = listOf(
             RenderVisualToolBuilder(),
-            KnowledgeSearchToolBuilder(),
+            KnowledgeSearchToolBuilder(false),
             RunBackgroundToolBuilder(mockk<BackgroundTaskManagerRegistry>(relaxed = true)),
             ScriptCalcToolBuilder(),
             MemorySearchToolBuilder()

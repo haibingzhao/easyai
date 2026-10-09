@@ -442,7 +442,10 @@ internal class AgentLoop(
             appendAndNotify(
                 UserMessage(
                     content = listOf(TextContent(steeringText)),
-                    metadata = mapOf(UserMessage.SOURCE_KEY to UserMessage.SOURCE_STEERING)
+                    metadata = mapOf(
+                        UserMessage.SOURCE_KEY to UserMessage.SOURCE_STEERING,
+                        UserMessage.SYSTEM_ORIGIN_KEY to UserMessage.ORIGIN_REPETITION_GUARD,
+                    )
                 ),
                 transcript
             )
@@ -536,7 +539,10 @@ internal class AgentLoop(
                             val msg = UserMessage(
                                 id = generateMessageId(),
                                 content = listOf(TextContent(promptText)),
-                                metadata = mapOf(UserMessage.SOURCE_KEY to UserMessage.SOURCE_COMPLETION_CHECK)
+                                metadata = mapOf(
+                                    UserMessage.SOURCE_KEY to UserMessage.SOURCE_COMPLETION_CHECK,
+                                    UserMessage.SYSTEM_ORIGIN_KEY to UserMessage.ORIGIN_COMPLETION_CHECK,
+                                )
                             )
                             appendAndNotify(msg, transcript)
                         }
@@ -615,7 +621,10 @@ internal class AgentLoop(
                 UserMessage(
                     id = generateMessageId(),
                     content = listOf(TextContent(notice)),
-                    metadata = mapOf(UserMessage.SOURCE_KEY to UserMessage.SOURCE_COMPLETION_CHECK)
+                    metadata = mapOf(
+                        UserMessage.SOURCE_KEY to UserMessage.SOURCE_COMPLETION_CHECK,
+                        UserMessage.SYSTEM_ORIGIN_KEY to UserMessage.ORIGIN_COMPLETION_CHECK,
+                    )
                 ),
                 transcript
             )

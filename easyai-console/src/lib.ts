@@ -60,6 +60,11 @@ export { AgentService, agentService } from './services/agent-service';
 
 export { storageService } from './services/storage-service';
 
+// Group-sharing capability probe (`GET /api/capabilities`): warmed by auth-store on every auth
+// transition, read by host apps to gate their group-configuration screens.
+export { capabilityService } from './services/capability-service';
+export type { AssetKind, AssetCapability, Capabilities } from './services/capability-service';
+
 // === Stores ===
 export { useChatStore, type SwarmRunTracking } from './services/stores/chat-store';
 export { useAuthStore } from './services/stores/auth-store';
@@ -67,6 +72,7 @@ export { useSettingsStore } from './services/stores/settings-store';
 export { useSessionStore } from './services/stores/session-store';
 export { useAgentStore } from './services/stores/agent-store';
 export { useCategoryStore } from './services/stores/category-store';
+export { useCapabilityStore, selectCanManage } from './services/stores/capability-store';
 export { convertSnapshot } from './services/stores/chat/message-converter';
 export { mergeToolResults } from './services/stores/chat/session-loader';
 
@@ -76,6 +82,7 @@ export { MessageList } from './components/chat/MessageList';
 export { RenderVisualToolMessage } from './components/chat/tools/RenderVisualToolMessage';
 export { AppLayout, SIDEBAR_COLLAPSED_WIDTH } from './components/layout/AppLayout';
 export { Sidebar } from './components/layout/Sidebar';
+export { ReadOnlyBanner } from './components/ui/ReadOnlyBanner';
 
 // === Types ===
 export type { ToolCallStatus, SocketEvent } from './types/socket-event';

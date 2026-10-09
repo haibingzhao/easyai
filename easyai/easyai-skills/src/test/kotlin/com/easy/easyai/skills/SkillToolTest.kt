@@ -38,8 +38,8 @@ class SkillToolTest {
         fun `empty whitelist and unknown names are rejected before registry or catalog reads`() = runTest {
             assertTrue(load(this, tool(emptyList())).isError)
             assertTrue(load(this, name = "secret").isError)
-            verify(exactly = 0) { f.registry.visibleFor(any()) }
-            coVerify(exactly = 0) { f.catalog.listByUser(any()) }
+            verify(exactly = 0) { f.registry.visibleForOwners(any()) }
+            coVerify(exactly = 0) { f.catalog.listByOwners(any()) }
         }
 
         @Test
@@ -79,7 +79,9 @@ class SkillToolTest {
             assertTrue(load(this).isError)
             f.rows = listOf(f.row(shared).copy(installPath = "/.easyai-fixture-skills/system/other"))
             assertTrue(load(this).isError)
-            coVerify(exactly = 0) { f.catalog.listByUser("bob") }
+            val queried = mutableListOf<List<String>>()
+            coVerify(atLeast = 1) { f.catalog.listByOwners(capture(queried)) }
+            assertTrue(queried.none { "bob" in it }, "another tenant's bucket must never be queried: $queried")
         }
 
         @Test
@@ -104,7 +106,7 @@ class SkillToolTest {
             f.rows = listOf(f.row(own))
             val tool = tool()
             assertFalse(load(this, tool).isError)
-            coEvery { f.catalog.listByUser("alice") } throws IllegalStateException("db down")
+            coEvery { f.catalog.listByOwners(any()) } throws IllegalStateException("db down")
             val failure = load(this, tool)
             assertTrue(failure.isError)
             assertTrue(text(failure).contains("catalog is unavailable"))
@@ -114,7 +116,7 @@ class SkillToolTest {
         @Test
         fun `catalog cancellation propagates`() = runTest {
             f.register("review")
-            coEvery { f.catalog.listByUser(any()) } throws CancellationException("cancelled")
+            coEvery { f.catalog.listByOwners(any()) } throws CancellationException("cancelled")
             assertFailsWith<CancellationException> { load(this) }
         }
     }

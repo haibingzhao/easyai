@@ -78,22 +78,22 @@ class R2dbcRepositoryAutoConfiguration(
     private fun skillsForPrompt(
         promptSource: SkillPromptSource?,
         skillRegistry: SkillRegistry?
-    ): suspend (String?, List<String>) -> List<Map<String, Any?>> =
-        { userId, allowedSkillNames ->
+    ): suspend (Collection<String>, List<String>) -> List<Map<String, Any?>> =
+        { owners, allowedSkillNames ->
             // Mirrors SkillSearchToolBuilder.build: the tool exists per agent only when a registry
             // is present, RAG is on and the agent has a non-empty skill whitelist.
             val searchAvailable = skillRegistry != null && easyAiProperties.skills.rag.enabled &&
                 allowedSkillNames.isNotEmpty()
-            promptSource?.skillsForPrompt(userId, allowedSkillNames, searchAvailable)
+            promptSource?.skillsForPromptOwners(owners, allowedSkillNames, searchAvailable)
                 ?: emptyList()
         }
 
     /** Effective-view names for the default local agent; independent of the prompt-injection switch. */
     private fun skillNamesForDefaultAgent(
         promptSource: SkillPromptSource?
-    ): suspend (String?) -> List<String> =
-        { userId ->
-            promptSource?.effectiveNames(userId) ?: emptyList()
+    ): suspend (Collection<String>) -> List<String> =
+        { owners ->
+            promptSource?.effectiveNamesForOwners(owners) ?: emptyList()
         }
 
     @Bean
@@ -189,7 +189,7 @@ class R2dbcRepositoryAutoConfiguration(
                 val effectiveSkillNames: List<String> = if (agentDef.id.startsWith("inline:") && parentContext.allowedSkillNames.isNotEmpty()) {
                     parentContext.allowedSkillNames
                 } else {
-                    val allowedSkillConfigs = agentStore.getAgentToolConfigs(agentDef.id, TargetType.SKILL)
+                    val allowedSkillConfigs = agentStore.getAgentToolConfigs(agentDef.id, TargetType.SKILL, agentDef.userId)
                     allowedSkillConfigs.map { it.targetName }
                 }
                 val (agentSkills, allowedSkillNames) = if (effectiveSkillNames.isEmpty()) {
@@ -197,7 +197,7 @@ class R2dbcRepositoryAutoConfiguration(
                 } else {
                     val allowedSet = effectiveSkillNames.toSet()
                     // Re-read per call: disablement must take effect without restarting the session pool.
-                    skillsForPrompt(parentContext.userId, effectiveSkillNames)
+                    skillsForPrompt(parentContext.effectiveOwners, effectiveSkillNames)
                         .filter { (it["name"] as? String) in allowedSet } to effectiveSkillNames
                 }
                 // Resolve instructions based on sub-agent's own instructionsEnabled flag
@@ -237,8 +237,10 @@ class R2dbcRepositoryAutoConfiguration(
         @Autowired(required = false) todoStore: AsyncTodoStore? = null,
         @Autowired(required = false) teamExecutionStore: TeamExecutionStore? = null,
     ): SessionManager {
-        // Agent lookup function
-        val agentLookup: suspend (String, String) -> AgentDefinition? = { id, userId -> agentStore.findById(id, userId) }
+        // Agent lookup across the caller's read-visibility set (self → group → system), so a member
+        // resolves a shared agent instead of falling back to a config-based session.
+        val agentLookup: suspend (String, Collection<String>) -> AgentDefinition? =
+            { id, owners -> agentStore.findById(id, owners) }
 
         // Skills for prompt rendering (list of {name, description} maps), read per request
         val skillsForPrompt = skillsForPrompt(skillPromptSource, skillRegistry)

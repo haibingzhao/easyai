@@ -11,6 +11,7 @@ import com.easy.easyai.core.prompt.InstructionsLoader
 import com.easy.easyai.core.team.TeamExecutionStore
 import com.easy.easyai.core.team.TeamMemberStatus
 import com.easy.easyai.core.tool.ToolDefinition
+import com.easy.easyai.repository.database.UserScope
 import com.easy.easyai.repository.todo.AsyncTodoStore
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -34,21 +35,24 @@ class DatabaseSessionManager(
     private val toolResolver: SessionToolResolver,
     /** Optional: config store to load ModelProviderConfig for session restoration */
     private val configStore: ModelProviderConfigStore? = null,
-    /** Optional: suspend function to look up AgentDefinition by ID and userId */
-    private val agentLookup: (suspend (String, String) -> AgentDefinition?)? = null,
+    /**
+     * Optional: look up an AgentDefinition by id across a read-visibility set (self → group →
+     * system), so a member resolves the same shared agent a fresh chat would.
+     */
+    private val agentLookup: (suspend (String, Collection<String>) -> AgentDefinition?)? = null,
     /** Optional: todo store for deleting session todos on session close */
     private val todoStore: AsyncTodoStore? = null,
     /** Optional: agent store for dynamic sub-agents resolution */
     private val agentStore: AsyncAgentStore? = null,
     /** Optional: team execution store for TEAM session status recovery */
     private val teamExecutionStore: TeamExecutionStore? = null,
-    /** Re-read the catalog per request; missing wiring exposes no skills. */
-    private val skillsSupplier: (suspend (String?, List<String>) -> List<Map<String, Any?>>)? = null,
+    /** Re-read the catalog per request; missing wiring exposes no skills. Owners are priority-ordered (self → group → system). */
+    private val skillsSupplier: (suspend (Collection<String>, List<String>) -> List<Map<String, Any?>>)? = null,
     /**
      * Default local agents authorize every skill in the effective model view (independent of the
      * prompt-injection switch and of RAG suppression); configured DB agents never consult it.
      */
-    private val skillNamesSupplier: (suspend (String?) -> List<String>)? = null
+    private val skillNamesSupplier: (suspend (Collection<String>) -> List<String>)? = null
 ) : SessionManager {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val saveMutex = Mutex()
@@ -62,7 +66,8 @@ class DatabaseSessionManager(
         baseContext: AgentContext,
         projectPath: Path?
     ): Pair<AgentContext, List<ToolDefinition>> {
-        val (agentSkills, allowedSkillNames) = resolveSkillsForAgent(agentDef.id, baseContext.userId)
+        val (agentSkills, allowedSkillNames) =
+            resolveSkillsForAgent(agentDef.id, agentDef.userId, baseContext.effectiveOwners)
         val enrichedContext = baseContext.copy(
             skills = agentSkills,
             allowedSkillNames = allowedSkillNames,
@@ -79,18 +84,25 @@ class DatabaseSessionManager(
      * Applies whitelist filtering based on the parent agent's SUBAGENT tool configs.
      * Also includes inline custom sub-agents (targetName starts with "inline:").
      * No configured sub-agents = empty list (consistent with Skill/Tool semantics).
+     *
+     * Two different owners are in play: [agentOwnerId] owns the parent agent's whitelist rows, while
+     * [callerOwners] is the read-visibility set the referenced sub-agent ids resolve against.
      */
-    private suspend fun resolveSubAgentsData(agentId: String?, userId: String): List<Map<String, Any?>> {
+    private suspend fun resolveSubAgentsData(
+        agentId: String?,
+        agentOwnerId: String,
+        callerOwners: Collection<String>
+    ): List<Map<String, Any?>> {
         val store = agentStore ?: return emptyList()
         if (agentId == null) return emptyList()
-        val allowedConfigs = store.getAgentToolConfigs(agentId, TargetType.SUBAGENT)
+        val allowedConfigs = store.getAgentToolConfigs(agentId, TargetType.SUBAGENT, agentOwnerId)
         if (allowedConfigs.isEmpty()) return emptyList()  // No whitelist = no sub-agents
 
         // Separate global references from inline custom specs
         val globalConfigs = allowedConfigs.filter { !it.targetName.startsWith("inline:") }
         val inlineConfigs = allowedConfigs.filter { it.targetName.startsWith("inline:") }
 
-        val allSubAgents = store.findSubAgents(userId)
+        val allSubAgents = store.findSubAgents(callerOwners)
         val allowedSet = globalConfigs.map { it.targetName }.toSet()
         val globalEntries = allSubAgents.filter { it.id in allowedSet }.map { it.toSubAgentMap() }
         val inlineEntries = inlineConfigs.mapNotNull { config -> config.toInlineSubAgentMap() }
@@ -137,10 +149,17 @@ class DatabaseSessionManager(
      * Resolve team member data for TEAM agents (prompt rendering + team tool registration).
      * Loads each configured member's AgentDefinition and maps to a prompt-friendly map.
      * Also includes inline custom members (targetName starts with "inline:").
+     *
+     * [agentOwnerId] owns the leader's MEMBER whitelist rows; [callerOwners] is the read-visibility
+     * set the referenced member ids resolve against.
      */
-    private suspend fun resolveTeamMembersData(agentId: String, userId: String): List<Map<String, Any?>> {
+    private suspend fun resolveTeamMembersData(
+        agentId: String,
+        agentOwnerId: String,
+        callerOwners: Collection<String>
+    ): List<Map<String, Any?>> {
         val store = agentStore ?: return emptyList()
-        val memberConfigs = store.getAgentToolConfigs(agentId, TargetType.MEMBER)
+        val memberConfigs = store.getAgentToolConfigs(agentId, TargetType.MEMBER, agentOwnerId)
         if (memberConfigs.isEmpty()) return emptyList()
 
         // Separate global references from inline custom specs
@@ -148,7 +167,7 @@ class DatabaseSessionManager(
         val inlineConfigs = memberConfigs.filter { it.targetName.startsWith("inline:") }
 
         val globalEntries = globalConfigs.mapNotNull { config ->
-            store.findById(config.targetName, userId)?.let { member ->
+            store.findById(config.targetName, callerOwners)?.let { member ->
                 mapOf(
                     "id" to member.id,
                     "name" to member.name,
@@ -201,26 +220,30 @@ class DatabaseSessionManager(
      * Returns (filtered skills data, allowed skill names list).
      * Empty allowedSkillNames means no skills are allowed (consistent with toolNames semantics).
      */
-    private suspend fun resolveSkillsForAgent(agentId: String, userId: String?): Pair<List<Map<String, Any?>>, List<String>> {
+    private suspend fun resolveSkillsForAgent(
+        agentId: String,
+        agentOwnerId: String,
+        owners: Collection<String>
+    ): Pair<List<Map<String, Any?>>, List<String>> {
         val store = agentStore ?: return emptyList<Map<String, Any?>>() to emptyList()
-        val allowedConfigs = store.getAgentToolConfigs(agentId, TargetType.SKILL)
+        val allowedConfigs = store.getAgentToolConfigs(agentId, TargetType.SKILL, agentOwnerId)
         if (allowedConfigs.isEmpty()) return emptyList<Map<String, Any?>>() to emptyList()  // No whitelist = no skills
         val allowedNames = allowedConfigs.map { it.targetName }
-        return skillsFor(userId, allowedNames) to allowedNames
+        return skillsFor(owners, allowedNames) to allowedNames
     }
 
     /** Live, whitelist-filtered view; missing supplier exposes no skills. */
-    private suspend fun skillsFor(userId: String?, allowedSkillNames: List<String>): List<Map<String, Any?>> =
-        (skillsSupplier?.invoke(userId, allowedSkillNames) ?: emptyList())
+    private suspend fun skillsFor(owners: Collection<String>, allowedSkillNames: List<String>): List<Map<String, Any?>> =
+        (skillsSupplier?.invoke(owners, allowedSkillNames) ?: emptyList())
             .filter { (it["name"] as? String) in allowedSkillNames.toSet() }
 
     /** Fail-closed: an unavailable effective view leaves the default agent with no authorized skills. */
-    private suspend fun effectiveSkillNames(userId: String?): List<String> = try {
-        skillNamesSupplier?.invoke(userId) ?: emptyList()
+    private suspend fun effectiveSkillNames(owners: Collection<String>): List<String> = try {
+        skillNamesSupplier?.invoke(owners) ?: emptyList()
     } catch (e: kotlinx.coroutines.CancellationException) {
         throw e
     } catch (e: Exception) {
-        logger.warn("Failed to resolve effective skill view for user {}: {}", userId, e.message)
+        logger.warn("Failed to resolve effective skill view for owners {}: {}", owners, e.message)
         emptyList()
     }
 
@@ -250,13 +273,22 @@ class DatabaseSessionManager(
         val id = agentContext.sessionId ?: UUID.randomUUID().toString()
         val agentId = agentContext.agentId
         val projectId = agentContext.projectId
-        val projectPath = agentContext.projectPath ?: toolResolver.resolveProjectPath(projectId, agentContext.userId ?: "system")
+        val callerId = agentContext.userId ?: "system"
+        // Agent definitions resolve across the caller's whole visibility set (self → group →
+        // system); session rows below stay keyed by the caller's own id.
+        val callerOwners = agentContext.effectiveOwners
+        val projectPath = agentContext.projectPath ?: toolResolver.resolveProjectPath(projectId, callerId)
         val explicitTools = agentContext.tools.takeIf { it.isNotEmpty() }
+        // Look the agent up before touching any whitelist: the rows belong to the bucket the agent
+        // itself lives in, which for a built-in or shared agent is not the caller's. An id with no
+        // row falls back to the seeded system bucket, whose whitelist is the one that applies.
+        val agentDef = agentLookup?.invoke(agentId, callerOwners)
+        val agentOwnerId = agentDef?.userId ?: UserScope.SYSTEM_USER_ID
         // Build resolved context with actual projectPath for downstream tool creation
         // Also fill skills/subAgents from session-level defaults if not already set by caller.
         // The default-agent skill view is only filled on the no-agent-definition fallback path below;
         // a DB agent re-resolves skills and whitelist in resolveAgentContextAndTools.
-        val resolvedSubAgents = resolveSubAgentsData(agentId, agentContext.userId ?: "system")
+        val resolvedSubAgents = resolveSubAgentsData(agentId, agentOwnerId, callerOwners)
         val resolvedContext = agentContext.copy(
             sessionId = id,
             projectPath = projectPath,
@@ -265,23 +297,21 @@ class DatabaseSessionManager(
         )
 
         // Load persisted session variables BEFORE tool creation (tools get the same reference)
-        restoreSessionVariables(resolvedContext, id, agentContext.userId ?: "system")
+        restoreSessionVariables(resolvedContext, id, callerId)
 
-        // Agent-based path: look up agent definition and resolve tools
-        val agentDef = agentLookup?.invoke(agentId, agentContext.userId ?: "system")
+        // Agent-based path: resolve tools from the definition looked up above
         if (agentDef != null) {
-            val userId = agentContext.userId ?: "system"
             val isTeamAgent = agentDef.agentType == AgentType.TEAM
             // TEAM agents: inject member definitions for prompt rendering and team tools
             val contextWithMembers = if (isTeamAgent) {
                 resolvedContext.copy(
-                    teamMembers = resolveTeamMembersData(agentDef.id, userId)
+                    teamMembers = resolveTeamMembersData(agentDef.id, agentDef.userId, callerOwners)
                 )
             } else resolvedContext
             val (contextWithSkills, resolvedTools) = resolveAgentContextAndTools(agentDef, contextWithMembers, projectPath)
 
             // Check database for existing session (to restore endReason)
-            val persistedSession = sessionStore.findById(id, userId)
+            val persistedSession = sessionStore.findById(id, callerId)
             // TEAM + existing session: inject recovered execution status so the leader
             // can decide precisely (resume BLOCKED members, re-delegate interrupted ones)
             val finalContext = if (isTeamAgent && persistedSession != null) {
@@ -291,10 +321,10 @@ class DatabaseSessionManager(
             val chatSession = ChatSession(id, agent)
             if (persistedSession != null) {
                 logger.info("Restoring session from database with agent {}: {}", agentId, id)
-                restoreEndReason(chatSession, id, agentContext.userId ?: "system")
+                restoreEndReason(chatSession, id, callerId)
             } else {
                 logger.info("Creating new session with agent {}: {}", agentDef.id, id)
-                persistNewSession(id, agentContext.userId ?: "system", projectId)
+                persistNewSession(id, callerId, projectId)
             }
             return chatSession
         }
@@ -305,11 +335,11 @@ class DatabaseSessionManager(
         }
         // Default local agent: whitelist from the effective view, built before the tools.
         val defaultSkillNames = agentContext.allowedSkillNames.ifEmpty {
-            effectiveSkillNames(agentContext.userId)
+            effectiveSkillNames(agentContext.effectiveOwners)
         }
         val defaultContext = resolvedContext.copy(
             allowedSkillNames = defaultSkillNames,
-            skills = resolvedContext.skills.ifEmpty { skillsFor(agentContext.userId, defaultSkillNames) }
+            skills = resolvedContext.skills.ifEmpty { skillsFor(agentContext.effectiveOwners, defaultSkillNames) }
         )
         val resolvedTools = explicitTools ?: toolResolver.createSessionTools(defaultContext)
 
@@ -372,10 +402,10 @@ class DatabaseSessionManager(
      * Recovers configuration from the last message to ensure chatModel and availableTools
      * match the original session.
      */
-    override suspend fun getSession(sessionId: String, userId: String): ChatSession? {
+    override suspend fun getSession(sessionId: String, userId: String, owners: Collection<String>): ChatSession? {
         val persistedSession = sessionStore.findById(sessionId, userId) ?: return null
         logger.debug("Restoring session from database: {}", sessionId)
-        return restoreSessionFromDatabase(persistedSession, sessionId, userId)
+        return restoreSessionFromDatabase(persistedSession, sessionId, userId, owners)
     }
 
     /**
@@ -384,7 +414,8 @@ class DatabaseSessionManager(
     private suspend fun restoreSessionFromDatabase(
         persistedSession: PersistedSession,
         sessionId: String,
-        userId: String = "system"
+        userId: String = "system",
+        owners: Collection<String> = emptyList()
     ): ChatSession {
         // Get config from last message (highest priority - reflects latest state)
         val lastConfig = (sessionStore as? R2dbcAsyncSessionStore)?.getLastMessageConfig(sessionId)
@@ -406,9 +437,9 @@ class DatabaseSessionManager(
         // Restore session with correct agent configuration
         val restoredKind = project?.kind ?: ProjectKind.USER
         val chatSession = if (agentId != null) {
-            restoreSessionWithAgent(agentId, sessionId, config, projectPath, persistedSession.projectId, userId, restoredKind)
+            restoreSessionWithAgent(agentId, sessionId, config, projectPath, persistedSession.projectId, userId, restoredKind, owners)
         } else {
-            restoreSessionWithConfig(sessionId, config, projectPath, persistedSession.projectId, userId, restoredKind)
+            restoreSessionWithConfig(sessionId, config, projectPath, persistedSession.projectId, userId, restoredKind, owners)
         }
 
         // Restore endReason from DB so resume() can inject the correct continuation guidance
@@ -427,21 +458,26 @@ class DatabaseSessionManager(
         projectPath: Path?,
         projectId: String?,
         userId: String = "system",
-        projectKind: ProjectKind = ProjectKind.USER
+        projectKind: ProjectKind = ProjectKind.USER,
+        owners: Collection<String> = emptyList()
     ): ChatSession {
-        val agentDef = agentLookup?.invoke(agentId, userId)
+        // A resumed session carries the caller's visibility set, so a shared agent — and the
+        // sub-agents it references — resolve exactly as they do on the fresh-chat path.
+        val lookupOwners = owners.ifEmpty { listOf(userId) }
+        val agentDef = agentLookup?.invoke(agentId, lookupOwners)
         if (agentDef == null) {
             logger.warn("AgentDefinition not found for agentId {}, falling back to config-based session", agentId)
-            return restoreSessionWithConfig(sessionId, config, projectPath, projectId, userId, projectKind)
+            return restoreSessionWithConfig(sessionId, config, projectPath, projectId, userId, projectKind, owners)
         }
 
         // Apply skill filtering for this agent
-        val subAgentsData = resolveSubAgentsData(agentId, userId)
+        val subAgentsData = resolveSubAgentsData(agentId, agentDef.userId, lookupOwners)
         val baseContext = AgentContext(
             agentId = agentId,
             modelConfig = config,
             sessionId = sessionId,
             userId = userId,
+            owners = owners.toSet(),
             projectId = projectId,
             projectPath = projectPath,
             projectKind = projectKind,
@@ -464,20 +500,28 @@ class DatabaseSessionManager(
         projectPath: Path?,
         projectId: String?,
         userId: String = "system",
-        projectKind: ProjectKind = ProjectKind.USER
+        projectKind: ProjectKind = ProjectKind.USER,
+        owners: Collection<String> = emptyList()
     ): ChatSession {
-        val subAgentsData = resolveSubAgentsData(DEFAULT_AGENT_ID, userId)
+        // A resumed session carries the caller's full visibility set, so group-shared skills and
+        // sub-agents resolve exactly as they do on the fresh-chat path; empty owners degrade to
+        // self + system.
+        val restoreOwners = owners.ifEmpty { listOf(userId) }
+        // The default agent is a seeded system agent, so its whitelist lives in the system bucket —
+        // reading it under the caller's id would return empty and drop every built-in sub-agent.
+        val subAgentsData = resolveSubAgentsData(DEFAULT_AGENT_ID, UserScope.SYSTEM_USER_ID, restoreOwners)
         // Default local agent: explicit whitelist from the effective view, built before tools.
-        val defaultSkillNames = effectiveSkillNames(userId)
+        val defaultSkillNames = effectiveSkillNames(restoreOwners)
         val agentContext = AgentContext(
             agentId = DEFAULT_AGENT_ID,
             modelConfig = config,
             sessionId = sessionId,
             userId = userId,
+            owners = owners.toSet(),
             projectId = projectId,
             projectPath = projectPath,
             projectKind = projectKind,
-            skills = skillsFor(userId, defaultSkillNames),
+            skills = skillsFor(restoreOwners, defaultSkillNames),
             allowedSkillNames = defaultSkillNames,
             subAgents = subAgentsData,
             instructions = emptyList(),

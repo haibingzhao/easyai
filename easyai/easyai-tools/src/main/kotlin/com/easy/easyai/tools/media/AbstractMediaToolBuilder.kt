@@ -43,8 +43,8 @@ abstract class AbstractMediaToolBuilder(
         val resolver = agentService.mediaProviderResolver ?: return null
         val storageResolver = agentService.objectStorageResolver ?: return null
         val userId = context.userId ?: SYSTEM_USER_ID
-        val storage = runBlocking { storageResolver.resolve(userId) } ?: return null
-        val entries = runBlocking { resolver.resolveEntries(userId, serviceKind) }
+        val storage = runBlocking { storageResolver.resolve(context.effectiveOwners) } ?: return null
+        val entries = runBlocking { resolver.resolveEntries(context.effectiveOwners, serviceKind) }
         if (entries.isEmpty()) return null
         return createTool(resolver, storage, userId)
     }

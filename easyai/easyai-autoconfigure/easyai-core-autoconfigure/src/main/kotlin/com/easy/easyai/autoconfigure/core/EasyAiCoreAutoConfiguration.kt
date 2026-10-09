@@ -37,10 +37,12 @@ import com.easy.easyai.skills.selection.SkillSelectionClient
 import com.easy.easyai.skills.selection.SkillTurnRouter
 import com.easy.easyai.storage.local.LocalDirObjectStorage
 import com.easy.easyai.tools.SpringToolFactory
+import com.easy.easyai.tools.web.IntegrationConfig
 import io.micrometer.observation.ObservationRegistry
 import jakarta.annotation.PostConstruct
 import java.nio.file.Path
 import org.springframework.ai.chat.model.ChatModel
+import org.springframework.beans.factory.InitializingBean
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
@@ -56,7 +58,7 @@ import org.slf4j.LoggerFactory
 
 @AutoConfiguration
 @ComponentScan(basePackages = ["com.easy.easyai.core", "com.easy.easyai.agent", "com.easy.easyai.tools", "com.easy.easyai.skills", "com.easy.easyai.repository"])
-@EnableConfigurationProperties(EasyAiProperties::class)
+@EnableConfigurationProperties(EasyAiProperties::class, IntegrationProperties::class)
 open class EasyAiCoreAutoConfiguration(
     private val properties: EasyAiProperties
 ) {
@@ -71,6 +73,26 @@ open class EasyAiCoreAutoConfiguration(
     @PostConstruct
     open fun configureDomain() {
         DomainCatalog.activeDomain = properties.domain
+    }
+
+    /**
+     * Installs the deployment-wide STATIC integration config from `easyai.integrations.*` before any
+     * request or tool build reads it. A no-op when nothing is pinned, which leaves the file /
+     * environment-variable resolution in charge (desktop / single-tenant).
+     */
+    @Bean
+    open fun integrationStaticOverrideInitializer(
+        integrationProperties: IntegrationProperties
+    ): InitializingBean = InitializingBean {
+        if (integrationProperties.isStatic()) {
+            IntegrationConfig.setStaticOverride(
+                IntegrationConfig(
+                    exaApiKey = integrationProperties.exaApiKey.ifBlank { null },
+                    parallelApiKey = integrationProperties.parallelApiKey.ifBlank { null },
+                    websearchProvider = integrationProperties.websearchProvider.ifBlank { null }
+                )
+            )
+        }
     }
 
     @Bean
@@ -241,7 +263,7 @@ open class EasyAiCoreAutoConfiguration(
         // store to have been built from. Without this conjunction, `rag on + r2dbc off` would
         // suppress the listing while skill_search returns empty forever — the worst of both worlds.
         ragDiscoveryReady = skillStore != null && catalog != null,
-        firstAccessSync = { userId -> refreshService.ifAvailable?.ensureSynced(userId) },
+        firstAccessSync = { owners -> refreshService.ifAvailable?.ensureSyncedOwners(owners) },
         directInjectMaxSkills = properties.skills.directInjectMaxCount
     )
 

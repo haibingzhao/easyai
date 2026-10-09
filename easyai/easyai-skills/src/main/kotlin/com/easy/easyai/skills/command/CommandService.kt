@@ -26,8 +26,8 @@ class CommandService(
     }
 
     /** Skill-derived slash commands, addressed by name; the access resolver already shadowed owners. */
-    suspend fun listSkillCommands(userId: String): List<CommandInfo> =
-        enabledSkills(userId).map { candidate ->
+    suspend fun listSkillCommands(userId: String, owners: Collection<String> = listOf(userId)): List<CommandInfo> =
+        enabledSkills(owners).map { candidate ->
             val skill = candidate.skill
             CommandInfo(
                 name = skill.name, description = skill.description, category = CommandCategory.SKILL,
@@ -39,11 +39,12 @@ class CommandService(
         message: String?,
         userId: String = "system",
         sessionId: String = "",
-        allowSideEffects: Boolean = true
+        allowSideEffects: Boolean = true,
+        owners: Collection<String> = listOf(userId)
     ): CommandExpansion? {
         val parsed = message?.let(CommandUtils::parse) ?: return null
         if (parsed.source != null) {
-            val skill = resolveByName(parsed.source, userId)
+            val skill = resolveByName(parsed.source, owners)
             return expandSkill(skill, parsed.arguments)
         }
         builtinHandlers.find { it.name == parsed.name }?.let { handler ->
@@ -56,23 +57,24 @@ class CommandService(
         if (userCmd != null) {
             return CommandExpansion(userCmd.name, renderTemplate(userCmd.template, parsed.arguments), CommandCategory.USER, "db:${userCmd.id}")
         }
-        enabledSkills(userId)
+        enabledSkills(owners)
             .firstOrNull { it.skill.name == parsed.name }?.let { return expandSkill(it.skill, parsed.arguments) }
-        val cmd = registry.resolve(parsed.name)?.takeIf { it.category == CommandCategory.MCP } ?: return null
-        return CommandExpansion(cmd.name, fetchMcpTemplate(cmd, parsed.arguments), cmd.category, cmd.source)
+        val cmd = registry.resolve(parsed.name, owners)?.takeIf { it.category == CommandCategory.MCP } ?: return null
+        return CommandExpansion(cmd.name, fetchMcpTemplate(cmd, parsed.arguments, owners), cmd.category, cmd.source)
     }
 
-    private suspend fun resolveByName(name: String, userId: String): SkillInfo =
-        enabledSkills(userId).firstOrNull { it.skill.name == name }?.skill
+    private suspend fun resolveByName(name: String, owners: Collection<String>): SkillInfo =
+        enabledSkills(owners).firstOrNull { it.skill.name == name }?.skill
             ?: throw CommandReferenceException("Skill '$name' is not available for the current user")
 
     /**
      * Skills the menu may offer and an expansion may run: shadowing is the resolver's job, but a
      * disabled row is off for every entry point, not just the model's. Replay validation stays on
      * the unfiltered list — a saved message must not fail to load because its skill was disabled.
+     * Resolved over the caller's full owner set so a member can run their group's skills.
      */
-    private suspend fun enabledSkills(userId: String): List<ScopedSkill> =
-        skillAccessResolver?.listScopedSkills(userId).orEmpty().filter { it.catalogEntry?.enabled != false }
+    private suspend fun enabledSkills(owners: Collection<String>): List<ScopedSkill> =
+        skillAccessResolver?.listScopedSkillsForOwners(owners).orEmpty().filter { it.catalogEntry?.enabled != false }
 
     private suspend fun expandSkill(skill: SkillInfo, arguments: String): CommandExpansion {
         val current = try {
@@ -101,14 +103,14 @@ class CommandService(
      * Replays must still resolve the referenced skill for the same user. Skill commands pin only
      * the user and the skill name — content is re-read from the owner's installed directory.
      */
-    suspend fun validateReplay(messages: List<EasyAiMessage>, userId: String) {
+    suspend fun validateReplay(messages: List<EasyAiMessage>, userId: String, owners: Collection<String> = listOf(userId)) {
         val snapshots = messages.filterIsInstance<UserMessage>().filter {
             it.metadata[UserMessage.COMMAND_CATEGORY] == CommandCategory.SKILL.name &&
                 !it.metadata[UserMessage.COMMAND_EXPANSION].isNullOrBlank() &&
                 it.metadata["isCompactionSummary"] != "true"
         }
         if (snapshots.isEmpty()) return
-        val available = skillAccessResolver?.listScopedSkills(userId).orEmpty()
+        val available = skillAccessResolver?.listScopedSkillsForOwners(owners).orEmpty()
             .associateBy { it.skill.name }
         for (message in snapshots) {
             val metadata = message.metadata
@@ -119,7 +121,12 @@ class CommandService(
         }
     }
 
-    private suspend fun fetchMcpTemplate(cmd: CommandInfo, args: String): String {
+    /**
+     * Renders an MCP prompt through whichever bucket in [owners] actually serves the server. Passing
+     * the visibility set (rather than a bare user id) is what lets a member expand a group-shared
+     * server's prompt; the provider still refuses a server nobody in the set is connected to.
+     */
+    private suspend fun fetchMcpTemplate(cmd: CommandInfo, args: String, owners: Collection<String>): String {
         val serverName = cmd.mcpServer ?: return ""
         val promptName = cmd.mcpPromptName ?: return ""
         val provider = promptProvider
@@ -129,7 +136,7 @@ class CommandService(
         }
         val mcpArgs = buildMcpArgs(cmd, args)
         return try {
-            provider.getPrompt(serverName, promptName, mcpArgs)
+            provider.getPrompt(serverName, promptName, mcpArgs, owners)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

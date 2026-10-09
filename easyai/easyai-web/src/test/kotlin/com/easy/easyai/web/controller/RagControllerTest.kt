@@ -5,8 +5,10 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.springframework.web.server.ResponseStatusException
 import java.nio.file.Files
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -32,6 +34,8 @@ class RagControllerTest {
 
     @AfterEach
     fun tearDown() {
+        // The STATIC override is process-global; always clear it so it cannot leak into other tests.
+        RagConfig.setStaticOverride(null)
         System.setProperty("user.home", previousHome)
         tempHome.toFile().deleteRecursively()
     }
@@ -127,5 +131,52 @@ class RagControllerTest {
         controller.updateSettings(RagUpdateRequest(enabled = false)).block()
 
         assertFalse(runBlocking { RagConfig.load() }.enabled)
+    }
+
+    @Test
+    fun `file-driven status reports source file`() {
+        saveConfig(RagConfig(enabled = false))
+
+        val status = controller.getStatus().block()!!
+
+        assertEquals("file", status["source"])
+    }
+
+    @Test
+    fun `static layer reports source static and never echoes credentials`() {
+        // enabled=false so getStatus skips the live health probe (no network in tests)
+        RagConfig.setStaticOverride(
+            RagConfig(enabled = false, baseUrl = "http://rag.internal:9000", username = "svc", password = "supersecretpw")
+        )
+
+        val status = controller.getStatus().block()!!
+
+        assertEquals("static", status["source"])
+        assertEquals("http://rag.internal:9000", status["baseUrl"])
+        // Neither a raw value nor a mask of a deployment-pinned credential may reach the console.
+        assertNull(status["password"])
+        assertNull(status["username"])
+    }
+
+    @Test
+    fun `static layer refuses writes with 403`() {
+        RagConfig.setStaticOverride(RagConfig(enabled = false, baseUrl = "http://rag.internal:9000"))
+
+        val ex = assertFailsWith<ResponseStatusException> {
+            controller.updateSettings(RagUpdateRequest(topK = 7)).block()
+        }
+
+        assertEquals(403, ex.statusCode.value())
+    }
+
+    @Test
+    fun `static layer refuses workspace-config writes with 403`() {
+        RagConfig.setStaticOverride(RagConfig(enabled = true, baseUrl = "http://rag.internal:9000"))
+
+        val ex = assertFailsWith<ResponseStatusException> {
+            controller.deleteWorkspaceConfig("ws-1").block()
+        }
+
+        assertEquals(403, ex.statusCode.value())
     }
 }

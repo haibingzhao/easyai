@@ -95,16 +95,19 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
         switch (message.role) {
           case 'user':
           case 'user-with-attachments': {
-            // If this message is being edited, replace with InlineEditMessage
+            // If this message is being edited, replace with InlineEditMessage.
+            // data-msg-index stays on the wrapper so the question navigator can still scroll to a
+            // question that happens to be open in the editor.
             if (editingMessageIndex === index) {
               return (
-                <InlineEditMessage
-                  key={index}
-                  message={message as Message & { role: 'user' | 'user-with-attachments' }}
-                  messageIndex={index}
-                  onCancel={handleEditCancel}
-                  onSubmit={handleEditSubmit}
-                />
+                <div key={index} data-msg-index={index}>
+                  <InlineEditMessage
+                    message={message as Message & { role: 'user' | 'user-with-attachments' }}
+                    messageIndex={index}
+                    onCancel={handleEditCancel}
+                    onSubmit={handleEditSubmit}
+                  />
+                </div>
               );
             }
             // Determine if message is editable: has messageId, not streaming, not system message
@@ -112,7 +115,7 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
             const isSystemMsg = message.metadata?.source === 'completion_check' || !!message.metadata?.systemOrigin;
             const isEditable = !disableEdit && !isStreaming && !!msgId && !isSystemMsg;
             return (
-              <div key={index} className="group relative">
+              <div key={index} className="group relative" data-msg-index={index}>
                 <UserMessage
                   message={message as Message & { role: 'user' | 'user-with-attachments' }}
                   isEditable={isEditable}

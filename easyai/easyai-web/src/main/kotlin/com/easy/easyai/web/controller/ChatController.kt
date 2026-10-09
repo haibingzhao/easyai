@@ -10,6 +10,7 @@ import com.easy.easyai.skills.command.CommandReferenceException
 import com.easy.easyai.snapshot.RevertService
 import com.easy.easyai.snapshot.SnapshotService
 import com.easy.easyai.web.model.*
+import com.easy.easyai.web.security.currentOwners
 import com.easy.easyai.web.security.getCurrentUserId
 import com.easy.easyai.web.service.ChatStreamService
 import com.easy.easyai.web.service.QuickAskStreamService
@@ -85,7 +86,7 @@ class ChatController(
             val userId = getCurrentUserId()
             // Verify ownership when targeting an existing session
             request.sessionId?.let { verifyOwnership(it) }
-            chatStreamService.streamChat(request, userId)
+            chatStreamService.streamChat(request, userId, currentOwners())
         }.flatMapMany { it.asFlux() }
     }
 
@@ -345,7 +346,7 @@ class ChatController(
     ): Flux<ServerSentEvent<ChatStreamEvent>> {
         return mono {
             val userId = verifyOwnership(request.sessionId)
-            chatStreamService.resumeChat(request.sessionId, userId, request.message)
+            chatStreamService.resumeChat(request.sessionId, userId, request.message, currentOwners())
         }.flatMapMany { it.asFlux() }
     }
 
@@ -494,7 +495,7 @@ class ChatController(
     ): Flux<ServerSentEvent<ChatStreamEvent>> {
         return mono {
             val userId = verifyOwnership(sessionId)
-            chatStreamService.resumeAfterAnswer(sessionId, userId, toolCallId, request.answers)
+            chatStreamService.resumeAfterAnswer(sessionId, userId, toolCallId, request.answers, currentOwners())
         }.flatMapMany { it.asFlux() }
     }
 
@@ -512,7 +513,7 @@ class ChatController(
     ): Flux<ServerSentEvent<ChatStreamEvent>> {
         return mono {
             val userId = verifyOwnership(sessionId)
-            chatStreamService.rejectAndResume(sessionId, userId, toolCallId)
+            chatStreamService.rejectAndResume(sessionId, userId, toolCallId, currentOwners())
         }.flatMapMany { it.asFlux() }
     }
 
@@ -529,7 +530,7 @@ class ChatController(
     ): Flux<ServerSentEvent<ChatStreamEvent>> {
         return mono {
             val userId = verifyOwnership(sessionId)
-            chatStreamService.compactChat(sessionId, userId)
+            chatStreamService.compactChat(sessionId, userId, currentOwners())
         }.flatMapMany { it.asFlux() }
     }
 
@@ -551,7 +552,7 @@ class ChatController(
         return mono {
             val userId = verifyOwnership(sessionId)
             chatStreamService.allowPermissionAndResume(sessionId, userId, toolCallId, request.remember,
-                request.permission, request.pattern)
+                request.permission, request.pattern, currentOwners())
         }.flatMapMany { it.asFlux() }
     }
 
@@ -571,7 +572,7 @@ class ChatController(
         return mono {
             val userId = verifyOwnership(sessionId)
             chatStreamService.denyPermissionAndResume(sessionId, userId, toolCallId, request.remember,
-                request.reason, request.permission, request.pattern)
+                request.reason, request.permission, request.pattern, currentOwners())
         }.flatMapMany { it.asFlux() }
     }
     // ==================== Snapshot / Revert endpoints ====================

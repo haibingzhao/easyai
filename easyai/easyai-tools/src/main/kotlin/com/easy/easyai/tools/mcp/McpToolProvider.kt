@@ -28,11 +28,15 @@ class McpToolProvider(
      * Includes both user-owned and system-level servers (UserScope semantics).
      * Lazily connects user-specific MCP servers on first access.
      * Called from SessionToolResolver.createSessionTools().
+     *
+     * Servers are shadowed by name across the owner set (self → group → system): a tool is named
+     * `{server}__{tool}` with no owner component, so two buckets holding a same-named server would
+     * otherwise produce two identical tool names and route a call to an arbitrary one.
      */
     suspend fun getTools(agentContext: AgentContext): List<ToolDefinition> {
-        val userId = agentContext.userId ?: McpClientManager.SYSTEM_USER_ID
-        manager.ensureUserConnected(userId)
-        return manager.getConnectedServers(userId).flatMap { server ->
+        val owners = agentContext.effectiveOwners
+        manager.ensureOwnersConnected(owners)
+        return manager.getVisibleServers(owners).flatMap { server ->
             server.tools.map { tool ->
                 McpToolDefinition(server.serverName, tool, manager, server.userId)
             }
@@ -50,10 +54,10 @@ class McpToolProvider(
             return emptyList()
         }
 
-        val userId = agentContext.userId ?: McpClientManager.SYSTEM_USER_ID
-        manager.ensureUserConnected(userId)
+        val owners = agentContext.effectiveOwners
+        manager.ensureOwnersConnected(owners)
         val configByServer = mcpConfigs.associateBy { it.targetName }
-        return manager.getConnectedServers(userId).flatMap { server ->
+        return manager.getVisibleServers(owners).flatMap { server ->
             val config = configByServer[server.serverName] ?: return@flatMap emptyList()
             val allowedTools = parseToolNames(config.metadata)
             server.tools

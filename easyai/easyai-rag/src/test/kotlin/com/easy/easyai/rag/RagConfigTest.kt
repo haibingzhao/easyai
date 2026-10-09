@@ -1,11 +1,13 @@
 package com.easy.easyai.rag
 
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -14,6 +16,12 @@ import kotlin.test.assertTrue
  * while repeated loads of an unchanged file stop hitting the disk and re-parsing.
  */
 class RagConfigTest {
+
+    @AfterEach
+    fun tearDown() {
+        // The STATIC override is process-global; always clear it so it cannot leak into other tests.
+        RagConfig.setStaticOverride(null)
+    }
 
     @Test
     fun `missing config file yields the default config`(@TempDir dir: Path) = runTest {
@@ -54,5 +62,20 @@ class RagConfigTest {
         Files.writeString(file, "this is not json")
 
         assertEquals(RagConfig(), RagConfig.load(file))
+    }
+
+    @Test
+    fun `a static override wins over the file for every path`(@TempDir dir: Path) = runTest {
+        val file = dir.resolve("rag.json")
+        RagConfig.save(RagConfig(baseUrl = "http://from-file:1234"), file)
+
+        RagConfig.setStaticOverride(RagConfig(baseUrl = "http://pinned:9000"))
+        assertTrue(RagConfig.isStaticOverridden())
+        assertEquals("http://pinned:9000", RagConfig.load(file).baseUrl)
+
+        // Clearing the override hands control back to the file.
+        RagConfig.setStaticOverride(null)
+        assertFalse(RagConfig.isStaticOverridden())
+        assertEquals("http://from-file:1234", RagConfig.load(file).baseUrl)
     }
 }

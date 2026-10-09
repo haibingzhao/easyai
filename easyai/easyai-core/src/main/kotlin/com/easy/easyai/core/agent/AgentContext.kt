@@ -43,6 +43,19 @@ data class AgentContext(
     val modelConfig: ModelProviderConfig? = null,
     val sessionId: String? = null,
     val userId: String? = null,
+    /**
+     * Read-visibility owner set for shared-asset resolution at runtime: the caller, their group
+     * bucket, and `system` (`SecurityUtils.currentOwners()`, resolved at the chat boundary and
+     * threaded here). Runtime resolvers (model, aux, media, MCP, skills) consult this instead of
+     * [userId] alone so a group member actually *uses* the group's assets in chat, not just sees them
+     * in Settings. Empty means "no group context" — resolvers fall back to `{userId, system}`, the
+     * pre-group behaviour, so sub-agents and ephemeral contexts that never set it stay correct.
+     *
+     * **Iteration order is the priority order** (self → group → system): every resolver takes the
+     * first owner that has the asset and caches under the ordered list, so a caller must pass an
+     * insertion-ordered set. A hash-ordered one would silently reshuffle which bucket wins.
+     */
+    val owners: Set<String> = emptySet(),
     val projectId: String? = null,
     val projectPath: Path? = null,
     /** Kind of the bound project. [ProjectKind.TEMP] marks a per-session scratch workspace, which disables project-scoped memory. */
@@ -144,4 +157,23 @@ data class AgentContext(
 
     /** Protocol name derived from modelConfig, or null if not configured. */
     val protocol: String? get() = modelConfig?.protocol?.name
+
+    /**
+     * The owner set runtime resolvers should read against: [owners] when the chat boundary supplied
+     * it, otherwise the pre-group fallback `{userId, system}`. Centralising the fallback here means a
+     * sub-agent, swarm worker or ephemeral context that never set [owners] still resolves exactly as
+     * it did before group sharing, and no resolver has to repeat the empty-check.
+     */
+    val effectiveOwners: Set<String>
+        get() = owners.ifEmpty {
+            buildSet {
+                userId?.let { add(it) }
+                add(SYSTEM_OWNER)
+            }
+        }
+
+    private companion object {
+        /** The shared read-only layer, matching `UserScope.SYSTEM_USER_ID` / the `user_id` default. */
+        const val SYSTEM_OWNER = "system"
+    }
 }

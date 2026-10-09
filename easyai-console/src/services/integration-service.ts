@@ -11,6 +11,8 @@ export interface WebSearchStatus {
 
 export interface IntegrationStatus {
   webSearch: WebSearchStatus;
+  /** `static` when pinned by a deployment-wide `easyai.integrations.*` config (form read-only), else `file`. */
+  source?: 'file' | 'static';
 }
 
 export interface IntegrationUpdateRequest {

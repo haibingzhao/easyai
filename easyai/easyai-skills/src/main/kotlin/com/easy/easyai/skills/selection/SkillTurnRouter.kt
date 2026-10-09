@@ -30,21 +30,32 @@ class SkillTurnRouter(
         userId: String?,
         allowedSkillNames: List<String>,
         query: String
+    ): List<Map<String, Any?>>? = routeOwners(listOfNotNull(userId), allowedSkillNames, query)
+
+    /**
+     * Group-aware [route] over an ordered owner set (self → group → system): the selection model and
+     * the candidate catalog both resolve through the caller's full visibility set, so a member can be
+     * routed to a skill their group owns.
+     */
+    suspend fun routeOwners(
+        owners: Collection<String>,
+        allowedSkillNames: List<String>,
+        query: String
     ): List<Map<String, Any?>>? {
         if (query.isBlank() || allowedSkillNames.isEmpty()) return null
-        val config = auxResolver.resolveConfig(userId, AuxModelTask.SKILL_SELECTION) ?: return null
+        val config = auxResolver.resolveConfig(owners, AuxModelTask.SKILL_SELECTION) ?: return null
         val apiKey = config.apiKey?.takeIf { it.isNotBlank() }
         val baseUrl = config.baseUrl?.takeIf { it.isNotBlank() }
         if (apiKey == null || baseUrl == null) {
             logger.warn("Skill selection model '{}' has no apiKey/baseUrl; skipping routing", config.id)
             return null
         }
-        val candidates = promptSource.candidatesForSelection(userId, allowedSkillNames)
+        val candidates = promptSource.candidatesForSelectionOwners(owners, allowedSkillNames)
         if (candidates.isEmpty()) return null
         if (candidates.size > MAX_SKILL_CRITERIA) {
             logger.warn(
                 "Skill catalog for '{}' has {} candidates above the System One choice cap {}; keeping baseline",
-                userId, candidates.size, MAX_SKILL_CRITERIA
+                owners, candidates.size, MAX_SKILL_CRITERIA
             )
             return null
         }

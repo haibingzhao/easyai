@@ -41,6 +41,22 @@ class RagController {
     fun getStatus(): Mono<Map<String, Any?>> = mono {
         val config = RagConfig.load()
         val connected = if (config.enabled) client.healthCheck() else false
+        if (RagConfig.isStaticOverridden()) {
+            // Deployment-pinned: report connectivity and non-secret shape, but never echo credentials —
+            // not even a mask — mirroring the object-storage STATIC layer.
+            return@mono mapOf(
+                "enabled" to config.enabled,
+                "baseUrl" to config.baseUrl,
+                "username" to null,
+                "password" to null,
+                "workspace" to config.workspace,
+                "topK" to config.topK,
+                "readTimeoutMs" to config.readTimeoutMs,
+                "indexTimeoutMs" to config.indexTimeoutMs,
+                "connected" to connected,
+                "source" to "static"
+            )
+        }
         mapOf(
             "enabled" to config.enabled,
             "baseUrl" to config.baseUrl,
@@ -50,12 +66,14 @@ class RagController {
             "topK" to config.topK,
             "readTimeoutMs" to config.readTimeoutMs,
             "indexTimeoutMs" to config.indexTimeoutMs,
-            "connected" to connected
+            "connected" to connected,
+            "source" to "file"
         )
     }
 
     @PutMapping
     fun updateSettings(@RequestBody request: RagUpdateRequest): Mono<Map<String, Any?>> = mono {
+        if (RagConfig.isStaticOverridden()) throw staticReadOnly()
         try {
             val existing = RagConfig.load()
 
@@ -123,6 +141,7 @@ class RagController {
     fun updateWorkspaceConfig(
         @RequestBody request: RagWorkspaceConfigUpdate
     ): Mono<Any> = mono {
+        if (RagConfig.isStaticOverridden()) throw staticReadOnly()
         val config = RagConfig.load()
         if (!config.enabled) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "RAG integration is not enabled")
@@ -136,6 +155,7 @@ class RagController {
     fun deleteWorkspaceConfig(
         @RequestParam workspace: String
     ): Mono<Any> = mono {
+        if (RagConfig.isStaticOverridden()) throw staticReadOnly()
         val config = RagConfig.load()
         if (!config.enabled) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "RAG integration is not enabled")
@@ -151,6 +171,12 @@ class RagController {
             if (secret.length <= 8) return "****"
             return secret.take(4) + "****" + secret.takeLast(4)
         }
+
+        /** RAG is pinned by `easyai.rag.*`; writes are refused so a member cannot edit deployment config. */
+        fun staticReadOnly(): ResponseStatusException = ResponseStatusException(
+            HttpStatus.FORBIDDEN,
+            "RAG integration is pinned by a deployment-wide easyai.rag.* configuration and cannot be changed here"
+        )
     }
 }
 

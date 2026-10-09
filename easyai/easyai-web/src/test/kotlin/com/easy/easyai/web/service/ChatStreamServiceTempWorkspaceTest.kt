@@ -69,7 +69,7 @@ internal class ChatStreamServiceTempWorkspaceTest {
 
     @BeforeEach
     fun setup() {
-        coEvery { configStore.getConfig(config.id, "alice") } returns config
+        coEvery { configStore.getConfig(config.id, any<Collection<String>>()) } returns config
         every { factory.supports(config.protocol) } returns true
         coEvery { manager.getOrCreateSession(capture(contextSlot), config, factory) } returns session
         coEvery { manager.loadMessages(any()) } returns emptyList()

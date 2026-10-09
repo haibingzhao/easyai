@@ -72,6 +72,7 @@ const SHELL_SCRIPT_BODY = [
   '  var root = document.getElementById("root");',
   '  function send(msg) { parent.postMessage(msg, "*"); }',
   '  new ResizeObserver(function (entries) {',
+  '    fitSvgs();',
   '    send({ type: "' + RV_MSG.HEIGHT + '", id: ID_PLACEHOLDER, height: entries[0].contentRect.height });',
   '  }).observe(root);',
   '  window.onerror = function (message) {',
@@ -100,6 +101,24 @@ const SHELL_SCRIPT_BODY = [
   '      live.textContent = old.textContent;',
   '      old.parentNode.replaceChild(live, old);',
   '    });',
+  '    fitSvgs();',
+  '  }',
+  // A viewBox narrower than its drawn content clips at the SVG viewport at any
+  // render size (the overflow scales proportionally), so expand it to the bbox.
+  '  function fitSvgs() {',
+  '    var svgs = root.querySelectorAll("svg");',
+  '    for (var i = 0; i < svgs.length; i++) {',
+  '      var vb = svgs[i].viewBox && svgs[i].viewBox.baseVal;',
+  '      if (!vb || !vb.width || !vb.height) continue;',
+  '      var bb;',
+  '      try { bb = svgs[i].getBBox(); } catch (e) { continue; }',
+  '      if (!bb.width && !bb.height) continue;',
+  '      var x = Math.min(vb.x, bb.x);',
+  '      var y = Math.min(vb.y, bb.y);',
+  '      var w = Math.max(vb.x + vb.width, bb.x + bb.width) - x;',
+  '      var h = Math.max(vb.y + vb.height, bb.y + bb.height) - y;',
+  '      vb.x = x; vb.y = y; vb.width = w; vb.height = h;',
+  '    }',
   '  }',
   '  function exportImage() {',
   '    try {',
@@ -175,7 +194,9 @@ export function buildShellSrcdoc(id: string, tokensCss: string): string {
     '<style>\n' +
     'html, body { margin: 0; padding: 0; background: transparent; }\n' +
     'body { font-family: var(--font-sans); color: var(--color-text-primary); font-size: 13px; }\n' +
-    'body { overflow-x: hidden; overflow-y: auto; }\n' +
+    // Fragments wider than the chat column scroll horizontally in the sandbox
+    // viewport instead of being clipped at the iframe edge.
+    'html { overflow-x: auto; }\n' +
     '</style>\n' +
     '</head><body>\n' +
     '<div id="root"></div>\n' +

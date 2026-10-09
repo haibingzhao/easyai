@@ -313,7 +313,7 @@ class FetchMediaToolTest {
         @Test
         fun `per-user object storage keeps the tool available`() {
             val resolver = mockk<ObjectStorageResolver> {
-                coEvery { resolve("alice") } returns InMemoryStorage()
+                coEvery { resolve(any<Collection<String>>()) } returns InMemoryStorage()
             }
             val tool = FetchMediaToolBuilder(localStorage = null).build(context, agentServiceWith(resolver))
             assertNotNull(tool)
@@ -322,7 +322,7 @@ class FetchMediaToolTest {
         @Test
         fun `local fallback keeps the tool alive without user storage`() {
             val resolver = mockk<ObjectStorageResolver> {
-                coEvery { resolve(any()) } returns null
+                coEvery { resolve(any<Collection<String>>()) } returns null
             }
             val tool = FetchMediaToolBuilder(localStorage = InMemoryStorage()).build(context, agentServiceWith(resolver))
             assertNotNull(tool)

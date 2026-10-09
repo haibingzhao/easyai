@@ -90,11 +90,11 @@ class AgentSeedInitializer(
             toolNames = defaultToolNames
         )
         agentStore.save(defaultAgent, AuthConstants.SYSTEM_USER_ID)
-        agentStore.saveAgentTools(DEFAULT_AGENT_ID, defaultToolNames)
+        agentStore.saveAgentTools(DEFAULT_AGENT_ID, defaultToolNames, AuthConstants.SYSTEM_USER_ID)
 
         val builtinCommandNames = builtinCommandHandlers.map { it.name }
         if (builtinCommandNames.isNotEmpty()) {
-            agentStore.saveAgentCommands(DEFAULT_AGENT_ID, builtinCommandNames)
+            agentStore.saveAgentCommands(DEFAULT_AGENT_ID, builtinCommandNames, AuthConstants.SYSTEM_USER_ID)
         }
         logger.info("Created default agent: {} with tools: {} and commands: {}", DEFAULT_AGENT_ID, defaultToolNames, builtinCommandNames)
     }
@@ -124,7 +124,7 @@ class AgentSeedInitializer(
             toolNames = readOnlyToolNames
         )
         agentStore.save(askAgent, AuthConstants.SYSTEM_USER_ID)
-        agentStore.saveAgentTools(ASK_AGENT_ID, readOnlyToolNames)
+        agentStore.saveAgentTools(ASK_AGENT_ID, readOnlyToolNames, AuthConstants.SYSTEM_USER_ID)
         logger.info("Created Ask agent: {} with tools: {}", ASK_AGENT_ID, readOnlyToolNames)
     }
 
@@ -144,9 +144,9 @@ class AgentSeedInitializer(
         // Seed tool configs
         var toolConfigsInserted = 0
         for ((agentId, toolNames) in AgentSeedData.toolConfigs) {
-            val existing = agentStore.getAgentToolConfigs(agentId, TargetType.TOOL)
+            val existing = agentStore.getAgentToolConfigs(agentId, TargetType.TOOL, AuthConstants.SYSTEM_USER_ID)
             if (existing.isEmpty()) {
-                agentStore.saveAgentToolConfigs(agentId, TargetType.TOOL, toolNames)
+                agentStore.saveAgentToolConfigs(agentId, TargetType.TOOL, toolNames, AuthConstants.SYSTEM_USER_ID)
                 toolConfigsInserted += toolNames.size
             }
         }

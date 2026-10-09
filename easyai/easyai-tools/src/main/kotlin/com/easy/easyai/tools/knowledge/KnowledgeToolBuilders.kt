@@ -3,6 +3,7 @@ package com.easy.easyai.tools.knowledge
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 
 /** Static guidance for on-demand knowledge retrieval via knowledge_* tools (cache-stable). */
@@ -19,7 +20,9 @@ Use `knowledge_read` to load the full content of a specific entry by its key.
 """
 
 @Component
-class KnowledgeSearchToolBuilder : AbstractKnowledgeToolBuilder() {
+class KnowledgeSearchToolBuilder(
+    @Value("\${easyai.knowledge.shared-within-group:false}") sharedWithinGroup: Boolean
+) : AbstractKnowledgeToolBuilder(sharedWithinGroup) {
     override val metadata = ToolMetadata(
         name = "knowledge_search",
         description = "Semantic retrieval over the knowledge base: call this at the start of a task with " +
@@ -31,11 +34,14 @@ class KnowledgeSearchToolBuilder : AbstractKnowledgeToolBuilder() {
         promptSegmentOrder = 30
     )
 
-    override fun createTool(store: KnowledgeStore): ToolDefinition = KnowledgeSearchTool(metadata, store)
+    override fun createTool(store: KnowledgeStore, knowledgeOwnerId: String): ToolDefinition =
+        KnowledgeSearchTool(metadata, store, knowledgeOwnerId)
 }
 
 @Component
-class KnowledgeReadToolBuilder : AbstractKnowledgeToolBuilder() {
+class KnowledgeReadToolBuilder(
+    @Value($$"${easyai.knowledge.shared-within-group:false}") sharedWithinGroup: Boolean
+) : AbstractKnowledgeToolBuilder(sharedWithinGroup) {
     override val metadata = ToolMetadata(
         name = "knowledge_read",
         description = "Read the full content of a specific knowledge entry by its key " +
@@ -43,5 +49,6 @@ class KnowledgeReadToolBuilder : AbstractKnowledgeToolBuilder() {
         permissionCategory = "knowledge"
     )
 
-    override fun createTool(store: KnowledgeStore): ToolDefinition = KnowledgeReadTool(metadata, store)
+    override fun createTool(store: KnowledgeStore, knowledgeOwnerId: String): ToolDefinition =
+        KnowledgeReadTool(metadata, store, knowledgeOwnerId)
 }

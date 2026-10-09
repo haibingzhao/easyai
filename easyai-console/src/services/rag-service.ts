@@ -10,6 +10,8 @@ export interface RagStatus {
   readTimeoutMs: number;
   indexTimeoutMs: number;
   connected: boolean;
+  /** `static` when pinned by a deployment-wide `easyai.rag.*` config (form read-only), else `file`. */
+  source?: 'file' | 'static';
 }
 
 export interface RagUpdateRequest {

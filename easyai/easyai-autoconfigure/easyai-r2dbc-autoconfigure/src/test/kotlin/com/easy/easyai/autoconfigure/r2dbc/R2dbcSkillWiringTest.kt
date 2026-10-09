@@ -57,7 +57,10 @@ internal class R2dbcSkillWiringTest {
             val sessionStore = mockk<AsyncSessionStore>(relaxed = true)
             coEvery { sessionStore.findById(any(), any()) } returns null
             coEvery { sessionStore.loadVariablesFromCompactionSummary(any(), any()) } returns null
-            coEvery { agentStore.findById(any(), any()) } returns null
+            // Session creation resolves the agent across the caller's owner set, so the Collection
+            // overload is the one that must answer null — a relaxed mock would otherwise hand back a
+            // child mock and steer the session down the agent-definition path.
+            coEvery { agentStore.findById(any(), any<Collection<String>>()) } returns null
             val manager = configuration.sessionManager(
                 sessionStore = sessionStore,
                 agentStore = agentStore,
@@ -85,16 +88,16 @@ internal class R2dbcSkillWiringTest {
             properties.skills.rag.enabled = true
             val source = mockk<SkillPromptSource>()
             val skills = listOf(mapOf<String, Any?>("name" to "pdf", "description" to "Read PDF"))
-            coEvery { source.skillsForPrompt("alice", listOf("pdf"), true) } returns skills
-            coEvery { source.skillsForPrompt("alice", listOf("pdf"), false) } returns skills
+            coEvery { source.skillsForPromptOwners(any(), listOf("pdf"), true) } returns skills
+            coEvery { source.skillsForPromptOwners(any(), listOf("pdf"), false) } returns skills
             val parent = context.copy(allowedSkillNames = listOf("pdf"))
             val withRegistry = configuration.subAgentContextResolver(toolResolver, agentStore, registry, source)
             val withoutRegistry = configuration.subAgentContextResolver(toolResolver, agentStore, skillPromptSource = source)
 
             assertEquals(skills, withRegistry.resolve(inlineAgent, parent).first.skills)
             assertEquals(skills, withoutRegistry.resolve(inlineAgent, parent).first.skills)
-            coVerify(exactly = 1) { source.skillsForPrompt("alice", listOf("pdf"), true) }
-            coVerify(exactly = 1) { source.skillsForPrompt("alice", listOf("pdf"), false) }
+            coVerify(exactly = 1) { source.skillsForPromptOwners(any(), listOf("pdf"), true) }
+            coVerify(exactly = 1) { source.skillsForPromptOwners(any(), listOf("pdf"), false) }
             verify { registry wasNot Called }
         }
     }

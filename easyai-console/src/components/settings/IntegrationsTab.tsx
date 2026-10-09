@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { integrationService } from '@/services/integration-service';
 import type { WebSearchStatus } from '@/services/integration-service';
+import { ReadOnlyBanner } from '@/components/ui/ReadOnlyBanner';
 import { i18n } from '@/utils/i18n';
 import { Loader2, CheckCircle2, AlertCircle, Eye, EyeOff, Globe } from 'lucide-react';
 
@@ -8,6 +9,7 @@ export const IntegrationsTab: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<WebSearchStatus | null>(null);
+  const [source, setSource] = useState<'file' | 'static' | undefined>(undefined);
   const [exaKey, setExaKey] = useState('');
   const [parallelKey, setParallelKey] = useState('');
   const [provider, setProvider] = useState('exa');
@@ -19,6 +21,7 @@ export const IntegrationsTab: React.FC = () => {
     try {
       const data = await integrationService.getStatus();
       setStatus(data.webSearch);
+      setSource(data.source);
       setProvider(data.webSearch.provider);
     } catch {
       // ignore load errors
@@ -64,6 +67,10 @@ export const IntegrationsTab: React.FC = () => {
     );
   }
 
+  // Deployment-pinned (`easyai.integrations.*`): show configured state but hide the key form — the
+  // backend refuses the write with 403 and never echoes the raw keys.
+  const isStatic = source === 'static';
+
   return (
     <div className="space-y-6 max-w-lg">
       {/* Web Search Section */}
@@ -88,6 +95,11 @@ export const IntegrationsTab: React.FC = () => {
           {i18n('Configure API keys for web search providers. At least one key is required for the websearch tool to function.')}
         </p>
 
+        {isStatic ? (
+          <ReadOnlyBanner
+            message={i18n('Web search integrations are managed by a deployment-wide configuration and cannot be changed here.')}
+          />
+        ) : (
         <div className="space-y-4">
           {/* Provider Selection */}
           <div>
@@ -187,6 +199,7 @@ export const IntegrationsTab: React.FC = () => {
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   );

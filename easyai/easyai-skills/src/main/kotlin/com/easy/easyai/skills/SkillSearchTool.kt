@@ -43,9 +43,9 @@ internal class SkillSearchTool(
         if (query.isNullOrBlank()) return result("Error: 'query' parameter is required. Describe the task you need help with.", true)
         if (allowedSkillNames.isEmpty()) return result("Error: No skills are authorized for this agent.", true)
         val topK = ((args["topK"] as? Number)?.toInt()?.takeIf { it > 0 } ?: searchTopK).coerceIn(1, MAX_TOP_K)
-        refresher?.ensureSynced(agentContext.userId)
+        refresher?.ensureSyncedOwners(agentContext.effectiveOwners, agentContext.userId)
         val visible = try {
-            modelView.list(agentContext.userId, allowedSkillNames)
+            modelView.listForOwners(agentContext.effectiveOwners, allowedSkillNames)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

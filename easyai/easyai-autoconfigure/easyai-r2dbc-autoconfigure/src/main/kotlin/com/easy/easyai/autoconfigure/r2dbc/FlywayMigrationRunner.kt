@@ -32,6 +32,12 @@ class FlywayMigrationRunner(private val properties: R2dbcProperties) {
      *
      * Strict version ordering: a history row with a version above the local scripts (e.g. left
      * behind by another product sharing this database) fails startup instead of being ignored.
+     *
+     * No `repair()` here on purpose. Flyway's validation is the safety net that catches an
+     * already-applied migration whose file was later edited or deleted; running repair on every
+     * boot would silently realign checksums and mark missing migrations deleted, hiding exactly
+     * the mistake it should surface. An applied migration is frozen — evolve the schema with a new
+     * versioned script (see V17, which drops the columns the retired V6/V7 left behind).
      */
     fun migrate() {
         val jdbcUrl = toJdbcUrl(properties.url)
@@ -44,7 +50,6 @@ class FlywayMigrationRunner(private val properties: R2dbcProperties) {
             .baselineVersion("0")
             .load()
 
-        flyway.repair()
         val result = flyway.migrate()
         logger.info(
             "Flyway migration completed: {} migration(s) applied, schema at version {}",

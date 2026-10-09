@@ -33,11 +33,11 @@ class SkillTurnRouterTest {
         )
 
     private fun stubConfig() {
-        coEvery { auxResolver.resolveConfig("alice", AuxModelTask.SKILL_SELECTION) } returns config()
+        coEvery { auxResolver.resolveConfig(listOf("alice"), AuxModelTask.SKILL_SELECTION) } returns config()
     }
 
     private fun stubCandidates(vararg skills: Map<String, Any?>) {
-        coEvery { promptSource.candidatesForSelection("alice", listOf("poster")) } returns skills.toList()
+        coEvery { promptSource.candidatesForSelectionOwners(listOf("alice"), listOf("poster")) } returns skills.toList()
     }
 
     @Nested
@@ -46,7 +46,7 @@ class SkillTurnRouterTest {
         @Test
         fun `unconfigured aux model means zero HTTP calls`() = runTest {
             stubCandidates(poster)
-            coEvery { auxResolver.resolveConfig("alice", AuxModelTask.SKILL_SELECTION) } returns null
+            coEvery { auxResolver.resolveConfig(listOf("alice"), AuxModelTask.SKILL_SELECTION) } returns null
             assertNull(router().route("alice", listOf("poster"), "做一张海报"))
             coVerify(exactly = 0) { client.decide(any()) }
         }
@@ -55,16 +55,16 @@ class SkillTurnRouterTest {
         fun `blank query and empty whitelist short-circuit before the resolver`() = runTest {
             assertNull(router().route("alice", listOf("poster"), "  "))
             assertNull(router().route("alice", emptyList(), "做一张海报"))
-            coVerify(exactly = 0) { auxResolver.resolveConfig(any(), any()) }
+            coVerify(exactly = 0) { auxResolver.resolveConfig(any<List<String>>(), any()) }
             coVerify(exactly = 0) { client.decide(any()) }
         }
 
         @Test
         fun `config without apiKey or baseUrl degrades`() = runTest {
             stubCandidates(poster)
-            coEvery { auxResolver.resolveConfig("alice", AuxModelTask.SKILL_SELECTION) } returns config(apiKey = null)
+            coEvery { auxResolver.resolveConfig(listOf("alice"), AuxModelTask.SKILL_SELECTION) } returns config(apiKey = null)
             assertNull(router().route("alice", listOf("poster"), "做一张海报"))
-            coEvery { auxResolver.resolveConfig("alice", AuxModelTask.SKILL_SELECTION) } returns config(baseUrl = "")
+            coEvery { auxResolver.resolveConfig(listOf("alice"), AuxModelTask.SKILL_SELECTION) } returns config(baseUrl = "")
             assertNull(router().route("alice", listOf("poster"), "做一张海报"))
             coVerify(exactly = 0) { client.decide(any()) }
         }
@@ -81,7 +81,7 @@ class SkillTurnRouterTest {
         fun `catalog above the choice cap keeps the baseline`() = runTest {
             stubConfig()
             val many = (1..255).map { mapOf("name" to "s$it", "description" to "d") }
-            coEvery { promptSource.candidatesForSelection("alice", listOf("poster")) } returns many
+            coEvery { promptSource.candidatesForSelectionOwners(listOf("alice"), listOf("poster")) } returns many
             assertNull(router().route("alice", listOf("poster"), "做一张海报"))
             coVerify(exactly = 0) { client.decide(any()) }
         }

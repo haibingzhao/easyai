@@ -36,6 +36,40 @@ class McpClientManager(
     companion object {
         /** System user ID for default/shared MCP servers visible to all users. */
         const val SYSTEM_USER_ID = "system"
+
+        /**
+         * Keeps only the highest-priority bucket's server per name, ordered by [owners] priority.
+         * A tool is exposed as `{server}__{tool}` with no owner component, so a name shared by two
+         * visible buckets would otherwise reach the model twice and a call would resolve to
+         * whichever copy came first in a concurrent map's iteration order. An owner missing from
+         * [owners] sorts last instead of winning by luck.
+         */
+        @JvmStatic
+        internal fun shadowByName(servers: List<McpServerTools>, owners: Collection<String>): List<McpServerTools> {
+            val priority = owners.filter { it.isNotBlank() }.distinct()
+            val byName = LinkedHashMap<String, McpServerTools>()
+            servers
+                .sortedBy { priority.indexOf(it.userId).takeIf { i -> i >= 0 } ?: Int.MAX_VALUE }
+                .forEach { byName.putIfAbsent(it.serverName, it) }
+            return byName.values.toList()
+        }
+
+        /**
+         * The prompt-cache counterpart of [shadowByName]: collapses `owner:server` keys to server
+         * names, keeping the highest-priority owner's prompts when two visible buckets share a name.
+         */
+        @JvmStatic
+        internal fun shadowPrompts(
+            entries: Map<String, List<McpPromptMeta>>,
+            owners: Collection<String>
+        ): Map<String, List<McpPromptMeta>> {
+            val priority = owners.filter { it.isNotBlank() }.distinct()
+            val byName = LinkedHashMap<String, List<McpPromptMeta>>()
+            entries.entries
+                .sortedBy { priority.indexOf(it.key.substringBefore(":")).takeIf { i -> i >= 0 } ?: Int.MAX_VALUE }
+                .forEach { (k, metas) -> byName.putIfAbsent(k.substringAfter(":"), metas) }
+            return byName
+        }
     }
 
     private val clients = ConcurrentHashMap<String, McpAsyncClient>()
@@ -80,7 +114,21 @@ class McpClientManager(
      * System-level servers are already connected at startup; this only connects user-specific ones.
      * Uses a per-user mutex to prevent concurrent initialization races.
      */
-    suspend fun ensureUserConnected(userId: String) {
+    suspend fun ensureUserConnected(userId: String) = ensureOwnersConnected(listOf(userId))
+
+    /**
+     * Ensures every owner's enabled MCP servers are connected. Owners are the request's visibility set
+     * `{self, group, system}`; a group bucket is connected once and shared by every member (the per-owner
+     * init guard means the first member to touch it pays the connect cost, the rest skip). System servers
+     * are already connected at startup, so the `system` owner is a no-op here.
+     */
+    suspend fun ensureOwnersConnected(owners: Collection<String>) {
+        for (owner in owners) {
+            if (owner.isNotBlank()) ensureOwnerConnected(owner)
+        }
+    }
+
+    private suspend fun ensureOwnerConnected(userId: String) {
         if (userId in initializedUsers) return
         val mutex = userInitLocks.computeIfAbsent(userId) { Mutex() }
         mutex.withLock {
@@ -188,6 +236,9 @@ class McpClientManager(
      * Returns cached tool definitions per server for a given user.
      * Includes both the user's own servers AND system-level servers (UserScope semantics).
      * Only includes servers with Connected status.
+     *
+     * The map is keyed by server name alone, so a name present in both buckets collapses to one
+     * entry. Callers that need a specific row's tools use [getToolDefs] instead.
      */
     fun getAllToolDefs(userId: String): Map<String, List<McpSchema.Tool>> {
         return toolCache
@@ -200,15 +251,26 @@ class McpClientManager(
     }
 
     /**
-     * Returns connected servers with owner info for tool resolution.
-     * Used by McpToolProvider to construct McpToolDefinition with correct ownerUserId.
+     * Returns the tools of one specific `(owner, name)` row, or an empty list when that row is not
+     * connected. The tool cache is keyed `owner:name`, so this is the only lookup that cannot pick
+     * up a same-named server from another bucket.
      */
-    fun getConnectedServers(requestUserId: String): List<McpServerTools> {
+    fun getToolDefs(owner: String, name: String): List<McpSchema.Tool> {
+        val k = key(owner, name)
+        if (statuses[k] != McpServerStatus.Connected) return emptyList()
+        return toolCache[k] ?: emptyList()
+    }
+
+    /**
+     * Returns connected servers with owner info for tool resolution, across the owner set.
+     * Used by McpServerController to render one row per (owner, name) pair.
+     */
+    fun getConnectedServers(owners: Collection<String>): List<McpServerTools> {
+        val ownerSet = owners.toSet()
         return toolCache
             .filter { (k, _) ->
                 val owner = k.substringBefore(":")
-                statuses[k] == McpServerStatus.Connected
-                    && (owner == requestUserId || owner == SYSTEM_USER_ID)
+                statuses[k] == McpServerStatus.Connected && owner in ownerSet
             }
             .map { (k, tools) ->
                 McpServerTools(
@@ -218,6 +280,18 @@ class McpClientManager(
                 )
             }
     }
+
+    /** Single-owner form: the user's own servers plus the shared system ones. */
+    fun getConnectedServers(requestUserId: String): List<McpServerTools> =
+        getConnectedServers(listOf(requestUserId, SYSTEM_USER_ID))
+
+    /**
+     * Returns the connected servers an agent may actually call: [getConnectedServers] across the
+     * whole visibility set, collapsed to one bucket per server name by [shadowByName]. This is what
+     * [McpToolProvider] turns into tool definitions; the management listing keeps every row.
+     */
+    fun getVisibleServers(owners: Collection<String>): List<McpServerTools> =
+        shadowByName(getConnectedServers(owners), owners)
 
     /**
      * Executes an MCP tool call on the named server for the given user.
@@ -264,57 +338,41 @@ class McpClientManager(
             .mapKeys { it.key.substringAfter(":") }
     }
 
-    override fun getAllPrompts(): Map<String, List<McpPromptMeta>> {
-        return promptCache
-            .filter { (k, _) -> statuses[k] == McpServerStatus.Connected }
-            .mapKeys { it.key.substringAfter(":") }
-            .mapValues { (_, prompts) ->
-                prompts.map { p ->
-                    McpPromptMeta(
-                        name = p.name() ?: "",
-                        description = p.description(),
-                        arguments = p.arguments()?.map { arg ->
-                            McpPromptArgument(
-                                name = arg.name() ?: "",
-                                description = arg.description(),
-                                required = arg.required() == true,
-                            )
-                        } ?: emptyList(),
-                    )
-                }
+    /**
+     * Returns prompts of the connected servers visible to [owners], shadowed by name so a server
+     * present in two buckets yields one entry (the highest-priority owner's).
+     */
+    override fun getAllPrompts(owners: Collection<String>): Map<String, List<McpPromptMeta>> {
+        val ownerSet = owners.toSet()
+        val visible = promptCache
+            .filter { (k, _) ->
+                statuses[k] == McpServerStatus.Connected && k.substringBefore(":") in ownerSet
             }
+            .mapValues { (_, prompts) -> toMetas(prompts) }
+        return shadowPrompts(visible, owners)
     }
+
+    /** Single-owner form: the user's own servers plus the shared system ones. */
+    fun getAllPrompts(userId: String): Map<String, List<McpPromptMeta>> =
+        getAllPrompts(listOf(userId, SYSTEM_USER_ID))
 
     /**
-     * Returns prompts for a specific server, scoped by userId.
+     * Renders a prompt from whichever bucket in [owners] actually holds a client for [serverName],
+     * in priority order. Previously this was pinned to `system`, so a user's own or their group's
+     * prompt command always failed to expand.
      */
-    fun getAllPrompts(userId: String): Map<String, List<McpPromptMeta>> {
-        return promptCache
-            .filter { (k, _) ->
-                val owner = k.substringBefore(":")
-                statuses[k] == McpServerStatus.Connected
-                    && (owner == userId || owner == SYSTEM_USER_ID)
-            }
-            .mapKeys { it.key.substringAfter(":") }
-            .mapValues { (_, prompts) ->
-                prompts.map { p ->
-                    McpPromptMeta(
-                        name = p.name() ?: "",
-                        description = p.description(),
-                        arguments = p.arguments()?.map { arg ->
-                            McpPromptArgument(
-                                name = arg.name() ?: "",
-                                description = arg.description(),
-                                required = arg.required() == true,
-                            )
-                        } ?: emptyList(),
-                    )
-                }
-            }
-    }
-
-    override suspend fun getPrompt(serverName: String, promptName: String, args: Map<String, String>?): String {
-        return getPrompt(serverName, promptName, args, "system")
+    override suspend fun getPrompt(
+        serverName: String,
+        promptName: String,
+        args: Map<String, String>?,
+        owners: Collection<String>
+    ): String {
+        val owner = owners.filter { it.isNotBlank() }.distinct()
+            .firstOrNull { clients.containsKey(key(it, serverName)) }
+            ?: throw IllegalStateException(
+                "MCP server '$serverName' is not connected for the caller or any bucket shared with them"
+            )
+        return getPrompt(serverName, promptName, args, owner)
     }
 
     suspend fun getPrompt(serverName: String, promptName: String, args: Map<String, String>?, userId: String): String {
@@ -331,6 +389,21 @@ class McpClientManager(
             (msg.content() as? McpSchema.TextContent)?.text() ?: ""
         } ?: ""
     }
+
+    private fun toMetas(prompts: List<McpSchema.Prompt>): List<McpPromptMeta> =
+        prompts.map { p ->
+            McpPromptMeta(
+                name = p.name() ?: "",
+                description = p.description(),
+                arguments = p.arguments()?.map { arg ->
+                    McpPromptArgument(
+                        name = arg.name() ?: "",
+                        description = arg.description(),
+                        required = arg.required() == true,
+                    )
+                } ?: emptyList(),
+            )
+        }
 
     /**
      * Returns raw MCP Prompt metadata for a specific server (used by REST API).

@@ -139,7 +139,7 @@ class RefreshSkillsToolTest {
             val text = call(tool(withRefresher = false))
 
             verify(exactly = 1) { registry.rescan(setOf(aliceRoot)) }
-            coVerify(exactly = 0) { refresher.refreshFor(any()) }
+            coVerify(exactly = 0) { refresher.refreshForOwners(any(), any()) }
             assertTrue(text.contains("registered=4 added=[pdf]"), "got: $text")
             assertTrue(text.contains("Catalog coordination is unavailable"), "got: $text")
             assertTrue(text.contains("does not establish ownership or search readiness"), "got: $text")
@@ -161,12 +161,12 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `the refresh is asked for the requesting user`() = runTest {
-            coEvery { refresher.ownersFor("alice") } returns listOf("system", "alice")
-            coEvery { refresher.refreshFor("alice") } returns outcome(delta(added = listOf("pdf")))
+            coEvery { refresher.ownersForOwners(any()) } returns listOf("system", "alice")
+            coEvery { refresher.refreshForOwners(any(), any()) } returns outcome(delta(added = listOf("pdf")))
 
             val text = call(tool())
 
-            coVerify(exactly = 1) { refresher.refreshFor("alice") }
+            coVerify(exactly = 1) { refresher.refreshForOwners(any(), any()) }
             verify(exactly = 0) { registry.rescan(any()) }
             assertTrue(text.contains("For owners [system, alice]"), "the tenants the rows landed in must be visible: $text")
             assertTrue(text.contains("claimed=1"), "got: $text")
@@ -175,7 +175,7 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `an index outage is reported, not hidden behind the counts`() = runTest {
-            coEvery { refresher.refreshFor(any()) } returns outcome(delta(added = listOf("pdf")), summaryPresent = false)
+            coEvery { refresher.refreshForOwners(any(), any()) } returns outcome(delta(added = listOf("pdf")), summaryPresent = false)
 
             val text = call(tool())
 
@@ -184,7 +184,7 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `a sync outage still reports the registry delta`() = runTest {
-            coEvery { refresher.refreshFor(any()) } returns outcome(
+            coEvery { refresher.refreshForOwners(any(), any()) } returns outcome(
                 delta(added = listOf("pdf")), syncPresent = false, summaryPresent = false
             )
 
@@ -197,7 +197,7 @@ class RefreshSkillsToolTest {
         @Test
         fun `a submitted document is not claimed as already searchable`() = runTest {
             // The refresh never waits on the backend, so the answer must not imply the embedding finished.
-            coEvery { refresher.refreshFor(any()) } returns outcome(
+            coEvery { refresher.refreshForOwners(any(), any()) } returns outcome(
                 delta(added = listOf("pdf", "csv", "docx")), submitted = 3
             )
 
@@ -210,7 +210,7 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `a clean refresh points at the verification step`() = runTest {
-            coEvery { refresher.refreshFor(any()) } returns outcome(delta(added = listOf("pdf")))
+            coEvery { refresher.refreshForOwners(any(), any()) } returns outcome(delta(added = listOf("pdf")))
 
             val text = call(tool(allowed = listOf("pdf")))
 
@@ -225,7 +225,7 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `a file that was not parsed is said plainly`() = runTest {
-            coEvery { refresher.refreshFor(any()) } returns outcome(
+            coEvery { refresher.refreshForOwners(any(), any()) } returns outcome(
                 delta(total = 0), claimed = 0, submitted = 0
             )
 
@@ -237,7 +237,7 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `a body update is reported apart from new sources`() = runTest {
-            coEvery { refresher.refreshFor(any()) } returns outcome(
+            coEvery { refresher.refreshForOwners(any(), any()) } returns outcome(
                 delta(updated = listOf("pdf"), total = 2),
                 claimed = 0, submitted = 1, updated = 1, confirmed = 0
             )
@@ -251,7 +251,7 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `a pushed local edit says the package store was re-uploaded`() = runTest {
-            coEvery { refresher.refreshFor(any()) } returns outcome(
+            coEvery { refresher.refreshForOwners(any(), any()) } returns outcome(
                 delta(updated = listOf("pdf")), pushed = 1, claimed = 0
             )
 
@@ -263,7 +263,7 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `a skill this agent has not been given is called out by name`() = runTest {
-            coEvery { refresher.refreshFor(any()) } returns outcome(delta(added = listOf("pdf")))
+            coEvery { refresher.refreshForOwners(any(), any()) } returns outcome(delta(added = listOf("pdf")))
 
             val text = call(tool(allowed = listOf("review")))
 
@@ -273,7 +273,7 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `skills that vanished from disk are listed so the user hears about them`() = runTest {
-            coEvery { refresher.refreshFor(any()) } returns outcome(delta(added = listOf("pdf")), delisted = 2)
+            coEvery { refresher.refreshForOwners(any(), any()) } returns outcome(delta(added = listOf("pdf")), delisted = 2)
 
             val text = call(tool(allowed = listOf("pdf")))
 
@@ -283,7 +283,7 @@ class RefreshSkillsToolTest {
 
         @Test
         fun `a pass that only removed skills still says what moved`() = runTest {
-            coEvery { refresher.refreshFor(any()) } returns outcome(
+            coEvery { refresher.refreshForOwners(any(), any()) } returns outcome(
                 delta(removed = listOf("stale")), claimed = 0, submitted = 0, confirmed = 0
             )
 

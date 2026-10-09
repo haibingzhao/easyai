@@ -41,6 +41,37 @@ class R2dbcMcpServerStore(
             ?.toConfig()
     }
 
+    override suspend fun findAll(owners: Collection<String>): List<McpServerConfig> {
+        val ordered = owners.filter { it.isNotBlank() }.distinct()
+        if (ordered.isEmpty()) return emptyList()
+        return suspendTransaction(db) {
+            Tables.McpServerConfigTable.selectAll()
+                // MCP never shares the system layer, so the owner set is used verbatim (self + group bucket).
+                .where(UserScope.filterOwners(Tables.McpServerConfigTable.userId, ordered))
+                .orderBy(Tables.McpServerConfigTable.createdAt to SortOrder.ASC)
+                .toList()
+                .map { it.toConfig() }
+        }
+    }
+
+    override suspend fun findByName(name: String, owners: Collection<String>): McpServerConfig? {
+        val ordered = owners.filter { it.isNotBlank() }.distinct()
+        if (ordered.isEmpty()) return null
+        return suspendTransaction(db) {
+            // `name` is not unique (the PK is `id`), so the same server name can sit in the caller's
+            // own bucket and in their group's. Pick by owner priority — self over group — rather than
+            // letting the database choose a row, so a member's own server always shadows the group's.
+            Tables.McpServerConfigTable.selectAll()
+                .where {
+                    (Tables.McpServerConfigTable.name eq name) and
+                        UserScope.filterOwners(Tables.McpServerConfigTable.userId, ordered)
+                }
+                .toList()
+                .map { it.toConfig() }
+                .minByOrNull { ordered.indexOf(it.userId) }
+        }
+    }
+
     override suspend fun save(config: McpServerConfig, userId: String): Unit = suspendTransaction(db) {
         Tables.McpServerConfigTable.insert {
             it[id] = config.id

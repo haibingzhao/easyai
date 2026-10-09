@@ -3,11 +3,13 @@ import { storageConfigService } from '@/services/storage-config-service';
 import type { StorageConfig, StorageBackendType, SaveStorageConfigRequest } from '@/types/settings';
 import { i18n } from '@/utils/i18n';
 import { HardDrive, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { ReadOnlyBanner } from '@/components/ui/ReadOnlyBanner';
 
 /** Which layer is in force, rendered as the top status badge. */
 const SOURCE_BADGE: Record<StorageConfig['effectiveSource'], { label: string; tone: string }> = {
   user: { label: 'User settings', tone: 'text-green-500 bg-green-500/10' },
   system: { label: 'Shared system settings', tone: 'text-blue-500 bg-blue-500/10' },
+  static: { label: 'Managed by deployment', tone: 'text-purple-500 bg-purple-500/10' },
   none: { label: 'Not configured', tone: 'text-muted-foreground bg-muted' },
 };
 
@@ -111,6 +113,7 @@ export const StorageTab: React.FC = () => {
   }
 
   const badge = SOURCE_BADGE[config?.effectiveSource ?? 'none'];
+  const isStatic = config?.effectiveSource === 'static';
 
   return (
     <div className="space-y-6 max-w-lg">
@@ -127,7 +130,12 @@ export const StorageTab: React.FC = () => {
           {i18n('Configure object storage for resources such as skill packages, chat images, and generated media. Settings are stored per account and take effect immediately after saving. Choose Local Directory to store resources on the server.')}
         </p>
 
-        <div className="space-y-4">
+        {isStatic ? (
+          <ReadOnlyBanner
+            message={i18n('Object storage is managed by a deployment-wide configuration and cannot be changed here.')}
+          />
+        ) : (
+          <div className="space-y-4">
           {/* Enabled toggle */}
           <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
             <input
@@ -253,7 +261,8 @@ export const StorageTab: React.FC = () => {
               {message.text}
             </div>
           )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

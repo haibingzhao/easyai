@@ -710,7 +710,7 @@ class SwarmController(
                     val agentDef = agentStore?.findById(spec.agentDefinitionId, userId)
                     if (agentDef != null) {
                         // Query MCP configs from DB and convert to SwarmMcpBinding
-                        val mcpBindings = agentStore.getAgentMcpConfigs(spec.agentDefinitionId)
+                        val mcpBindings = agentStore.getAgentMcpConfigs(spec.agentDefinitionId, agentDef.userId)
                             .map { config -> config.toSwarmMcpBinding() }
                         spec.copy(
                             agentDefinitionId = "",

@@ -42,6 +42,7 @@ class DatabaseConfigEnvironmentPostProcessor : EnvironmentPostProcessor, Ordered
             props["easyai.r2dbc.password"] = r2dbc.password
             props["easyai.database.configured"] = "true"
             props["easyai.database.type"] = fileConfig.dbType
+            props["easyai.database.source"] = "file"
             addPropertySource(environment, props)
             return
         }
@@ -52,6 +53,10 @@ class DatabaseConfigEnvironmentPostProcessor : EnvironmentPostProcessor, Ordered
         if (!explicitUrl.isNullOrBlank()) {
             logger.info("Using database configuration from Spring properties (url={})", explicitUrl)
             props["easyai.database.configured"] = "true"
+            // Deployment-pinned: the database comes from configuration, so the runtime Database tab is
+            // read-only and /api/system/database/apply is refused — a member must not be able to write a
+            // db-config.json that would override these properties on the next restart.
+            props["easyai.database.source"] = "spring"
             // Infer database type from URL
             val dbType = when {
                 explicitUrl.contains("postgresql") -> "postgres"

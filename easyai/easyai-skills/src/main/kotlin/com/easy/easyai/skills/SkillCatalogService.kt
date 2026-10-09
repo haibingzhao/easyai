@@ -56,18 +56,27 @@ class SkillCatalogService(
     private val logger = LoggerFactory.getLogger(javaClass)
 
     /** The requester's own rows plus the shared `system` rows; same names appear once, own first. */
-    suspend fun list(owner: SkillOwnerContext): List<SkillCatalogView> {
+    suspend fun list(owner: SkillOwnerContext): List<SkillCatalogView> =
+        listForOwners(listOfNotNull(owner.userId))
+
+    /**
+     * Group-aware [list] over an ordered owner set (self → group → system): every row whose name is
+     * not shadowed by a higher-priority owner, own rows first. A member thus sees their group's skills
+     * alongside their own, with the shared layer last.
+     */
+    suspend fun listForOwners(owners: Collection<String>): List<SkillCatalogView> {
         val store = catalog ?: return emptyList()
-        val userId = owner.userId?.takeIf { it.isNotBlank() } ?: SkillCatalogEntry.DEFAULT_USER_ID
-        val owners = if (userId == SkillCatalogEntry.DEFAULT_USER_ID) listOf(userId)
-        else listOf(userId, SkillCatalogEntry.DEFAULT_USER_ID)
-        val rows = store.listByOwners(owners)
+        val ordered = normalizeOwners(owners)
+        val rows = store.listByOwners(ordered)
         if (rows.isEmpty()) return emptyList()
-        val ownNames = rows.filter { it.userId == userId }.map { it.name }.toSet()
-        val visible = rows.filter { it.userId == userId || it.name !in ownNames }
+        // First owner in priority order claims each name; lower layers only fill the gaps.
+        val winners = LinkedHashMap<String, SkillCatalogEntry>()
+        for (o in ordered) {
+            rows.filter { it.userId == o }.forEach { winners.putIfAbsent(it.name, it) }
+        }
         // One IO-dispatcher hop for the whole page instead of one per row: `installedOnDisk` is a
         // stat call and this method is called from event-loop threads via the REST controller.
-        return withContext(Dispatchers.IO) { visible.map { viewOf(it) } }
+        return withContext(Dispatchers.IO) { winners.values.map { viewOf(it) } }
     }
 
     /** One row from this owner's point of view: their own first, then the shared layer. */
@@ -117,6 +126,14 @@ class SkillCatalogService(
             latest.syncState == (if (enabled) SkillSyncState.SYNCED else SkillSyncState.ABSENT)
         logger.info("Skill '{}' of user '{}' enabled={} (indexSynced={})", name, userId, enabled, synced)
         return SkillToggleResult.Applied(name = name, enabled = enabled, indexSynced = synced)
+    }
+
+    /** Distinct non-blank owners in priority order, with `system` appended as the final fallback. */
+    private fun normalizeOwners(owners: Collection<String>): List<String> {
+        val system = SkillCatalogEntry.DEFAULT_USER_ID
+        val cleaned = owners.filter { it.isNotBlank() }.distinct()
+        val base = if (cleaned.isEmpty()) listOf(system) else cleaned
+        return if (system in base) base else base + system
     }
 
     private fun viewOf(entry: SkillCatalogEntry): SkillCatalogView {

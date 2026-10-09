@@ -118,7 +118,7 @@ class FileControllerTest {
             controller.serveFile(reference).contextWrite(auth).awaitSingle()
         }
         assertEquals(HttpStatus.NOT_FOUND, error.statusCode)
-        coVerify(exactly = 0) { resolver.resolve(any()) }
+        coVerify(exactly = 0) { resolver.resolve(any<String>()) }
     }
 
     @Test
@@ -135,7 +135,7 @@ class FileControllerTest {
                 .contextWrite(auth).awaitSingle()
         }
         assertEquals(HttpStatus.BAD_REQUEST, unsupported.statusCode)
-        coVerify(exactly = 0) { resolver.resolve(any()) }
+        coVerify(exactly = 0) { resolver.resolve(any<String>()) }
     }
 
     @Test

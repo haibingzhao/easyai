@@ -10,6 +10,7 @@ import com.easy.easyai.api.model.SaveModelConfigGroupRequest
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.repository.database.Tables
 import com.easy.easyai.repository.database.UserScope
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.toList
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
@@ -73,6 +74,64 @@ class R2dbcModelConfigGroupStore(
                 val gid = row[Tables.ModelConfigGroupTable.id]
                 toGroup(row, membersByGroup[gid] ?: emptyList())
             }
+        }
+    }
+
+    override suspend fun getAllGroups(owners: Collection<String>): List<ModelConfigGroup> {
+        val ordered = owners.filter { it.isNotBlank() }.distinct()
+        if (ordered.isEmpty()) return emptyList()
+        return suspendTransaction(db) {
+            val groupRows = Tables.ModelConfigGroupTable
+                .selectAll()
+                .where(UserScope.filterOwners(Tables.ModelConfigGroupTable.userId, ordered))
+                .toList()
+
+            if (groupRows.isEmpty()) return@suspendTransaction emptyList()
+
+            val groupIds = groupRows.map { it[Tables.ModelConfigGroupTable.id] }
+            val memberRows = Tables.ModelProviderConfigTable
+                .selectAll()
+                .where {
+                    (Tables.ModelProviderConfigTable.groupId inList groupIds) and
+                        UserScope.filterOwners(Tables.ModelProviderConfigTable.userId, ordered)
+                }
+                .toList()
+
+            val membersByGroup = memberRows.groupBy { it[Tables.ModelProviderConfigTable.groupId] }
+            groupRows.map { row ->
+                val gid = row[Tables.ModelConfigGroupTable.id]
+                toGroup(row, membersByGroup[gid] ?: emptyList())
+            }
+        }
+    }
+
+    override suspend fun getGroup(id: String, owners: Collection<String>): ModelConfigGroup? {
+        val ordered = owners.filter { it.isNotBlank() }.distinct()
+        if (ordered.isEmpty()) return null
+        return suspendTransaction(db) {
+            // The group id is the table's whole primary key, so at most one row can match; `limit(1)`
+            // only keeps the query from materializing a list to take the head of.
+            val groupRow = Tables.ModelConfigGroupTable
+                .selectAll()
+                .where {
+                    (Tables.ModelConfigGroupTable.id eq id) and
+                        UserScope.filterOwners(Tables.ModelConfigGroupTable.userId, ordered)
+                }
+                .limit(1)
+                .firstOrNull() ?: return@suspendTransaction null
+
+            // Members are matched across the whole visibility set, not the group's own bucket: a
+            // config may join a group owned by another visible bucket (a user's row joining a
+            // shared `system` group), and narrowing this would drop it from the group view.
+            val memberRows = Tables.ModelProviderConfigTable
+                .selectAll()
+                .where {
+                    (Tables.ModelProviderConfigTable.groupId eq id) and
+                        UserScope.filterOwners(Tables.ModelProviderConfigTable.userId, ordered)
+                }
+                .toList()
+
+            toGroup(groupRow, memberRows)
         }
     }
 

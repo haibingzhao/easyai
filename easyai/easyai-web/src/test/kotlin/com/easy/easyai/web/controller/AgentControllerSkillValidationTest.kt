@@ -30,22 +30,22 @@ class AgentControllerSkillValidationTest {
     private val existing = AgentDefinition.create(id = "agent", name = "Agent").copy(userId = "alice")
 
     private fun prepareExisting() {
-        coEvery { store.findById("agent", any()) } returns existing
+        coEvery { store.findById("agent", any<String>()) } returns existing
     }
 
     private fun verifyNoWrites() {
         coVerify(exactly = 0) { store.save(any(), any()) }
         coVerify(exactly = 0) { store.update(any(), any()) }
-        coVerify(exactly = 0) { store.saveAgentTools(any(), any()) }
-        coVerify(exactly = 0) { store.saveAgentToolConfigs(any(), any(), any()) }
-        coVerify(exactly = 0) { store.saveAgentInlineSpecs(any(), any(), any()) }
+        coVerify(exactly = 0) { store.saveAgentTools(any(), any(), any()) }
+        coVerify(exactly = 0) { store.saveAgentToolConfigs(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { store.saveAgentInlineSpecs(any(), any(), any(), any()) }
     }
 
     @Nested
     inner class FullSave {
         @Test
         fun `create rejects missing load tool before persistence`() = runTest {
-            coEvery { store.findById(any(), any()) } returns null
+            coEvery { store.findById(any(), any<String>()) } returns null
             val error = assertFailsWith<ResponseStatusException> { controller.create(invalid).awaitSingle() }
             assertEquals(HttpStatus.BAD_REQUEST, error.statusCode)
             assertTrue(error.reason.orEmpty().contains("load_skill"))
@@ -64,7 +64,7 @@ class AgentControllerSkillValidationTest {
         fun `create and update reject invalid inline agents even when parent has load tool`() = runTest {
             val inline = InlineAgentSpec("child", skillNames = listOf("review"))
             val request = invalid.copy(toolNames = listOf("load_skill"), customSubAgents = listOf(inline), customMembers = listOf(inline))
-            coEvery { store.findById(any(), any()) } returns null
+            coEvery { store.findById(any(), any<String>()) } returns null
             assertEquals(HttpStatus.BAD_REQUEST, assertFailsWith<ResponseStatusException> {
                 controller.create(request).awaitSingle()
             }.statusCode)
@@ -77,7 +77,7 @@ class AgentControllerSkillValidationTest {
 
         @Test
         fun `slash command alone is still savable without load tool`() = runTest {
-            coEvery { store.findById(any(), any()) } returns null
+            coEvery { store.findById(any(), any<String>()) } returns null
             val dto = controller.create(invalid.copy(skillNames = emptyList(), commandNames = listOf("review"))).awaitSingle()
             assertEquals(listOf("review"), dto.commandNames)
             coVerify(exactly = 1) { store.save(any(), AuthConstants.SYSTEM_USER_ID) }
@@ -89,7 +89,7 @@ class AgentControllerSkillValidationTest {
         @Test
         fun `tools endpoint cannot remove load tool while skills remain`() = runTest {
             prepareExisting()
-            coEvery { store.getAgentSkillNames("agent") } returns listOf("review")
+            coEvery { store.getAgentSkillNames("agent", any()) } returns listOf("review")
             assertEquals(HttpStatus.BAD_REQUEST, assertFailsWith<ResponseStatusException> {
                 controller.updateTools("agent", AgentToolsRequest(emptyList())).awaitSingle()
             }.statusCode)
@@ -99,7 +99,7 @@ class AgentControllerSkillValidationTest {
         @Test
         fun `configs tool endpoint cannot remove required load tool`() = runTest {
             prepareExisting()
-            coEvery { store.getAgentSkillNames("agent") } returns listOf("review")
+            coEvery { store.getAgentSkillNames("agent", any()) } returns listOf("review")
             assertEquals(HttpStatus.BAD_REQUEST, assertFailsWith<ResponseStatusException> {
                 controller.saveConfigs("agent", AgentConfigsRequest("TOOL", emptyList())).awaitSingle()
             }.statusCode)
@@ -109,7 +109,7 @@ class AgentControllerSkillValidationTest {
         @Test
         fun `configs skill endpoint requires existing load tool`() = runTest {
             prepareExisting()
-            coEvery { store.getAgentToolNames("agent") } returns emptyList()
+            coEvery { store.getAgentToolNames("agent", any()) } returns emptyList()
             assertEquals(HttpStatus.BAD_REQUEST, assertFailsWith<ResponseStatusException> {
                 controller.saveConfigs("agent", AgentConfigsRequest("SKILL", listOf("review"))).awaitSingle()
             }.statusCode)
@@ -120,8 +120,8 @@ class AgentControllerSkillValidationTest {
         fun `skills can be cleared and valid tools can be saved`() = runTest {
             prepareExisting()
             controller.saveConfigs("agent", AgentConfigsRequest("SKILL", emptyList())).awaitSingle()
-            coVerify(exactly = 1) { store.saveAgentToolConfigs("agent", TargetType.SKILL, emptyList()) }
-            coEvery { store.getAgentSkillNames("agent") } returns listOf("review")
+            coVerify(exactly = 1) { store.saveAgentToolConfigs("agent", TargetType.SKILL, emptyList(), any()) }
+            coEvery { store.getAgentSkillNames("agent", any()) } returns listOf("review")
             assertEquals(listOf("load_skill"), controller.updateTools("agent", AgentToolsRequest(listOf("load_skill"))).awaitSingle())
         }
     }

@@ -37,14 +37,17 @@ object UserScope {
      * Build a filter condition matching rows owned by any id in [owners] — the N-value form used for
      * group sharing, where a request sees its own rows, its group bucket's rows, and the system rows.
      *
-     * Unlike [filter] this does NOT add [SYSTEM_USER_ID] implicitly: the caller supplies the complete
-     * visibility set (`SecurityUtils.currentOwners()` already unions in self and system). Duplicates
-     * are collapsed so a caller passing `{self, self, system}` yields a clean `IN (...)`.
+     * Named apart from [filter] because the two differ in a way that is easy to miss and hard to
+     * debug: unlike [filter] this does NOT add [SYSTEM_USER_ID] implicitly. The caller supplies the
+     * complete visibility set (`SecurityUtils.currentOwners()` already unions in self and system;
+     * `currentGroupOwners()` deliberately does not). Duplicates are collapsed so a caller passing
+     * `{self, self, system}` yields a clean `IN (...)`.
      *
-     * [owners] must be non-empty — `currentOwners()` always is. An empty set is not a supported input:
-     * it renders an `IN ()` predicate that matches nothing, which is never what a caller means here.
+     * [owners] must be non-empty — every `current*Owners()` helper is. An empty set is not a
+     * supported input: it renders an `IN ()` predicate that matches nothing, which is never what a
+     * caller means here.
      */
-    fun filter(column: Column<String>, owners: Collection<String>): Op<Boolean> =
+    fun filterOwners(column: Column<String>, owners: Collection<String>): Op<Boolean> =
         column inList owners.distinct()
 
     /**
@@ -62,14 +65,7 @@ object UserScope {
         dataOwnerId == userId || dataOwnerId == SYSTEM_USER_ID
 
     /**
-     * In-memory equivalent of the N-value [filter]: true if [dataOwnerId] is any of [owners].
-     * The caller supplies the full visibility set (system included when it should match).
-     */
-    fun matches(dataOwnerId: String, owners: Collection<String>): Boolean =
-        dataOwnerId in owners
-
-    /**
-     * In-memory equivalent of [filter] for checking ownership after loading a row.
+     * In-memory equivalent of [filterStrict] for checking ownership after loading a row.
      * Returns true if the data is owned by the given user.
      * (excludes system user data).
      */

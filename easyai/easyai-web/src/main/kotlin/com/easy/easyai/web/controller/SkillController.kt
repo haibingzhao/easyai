@@ -17,7 +17,10 @@ import com.easy.easyai.skills.SkillRefreshService
 import com.easy.easyai.skills.SkillToggleResult
 import com.easy.easyai.skills.SkillUpload
 import com.easy.easyai.skills.SkillUploadFile
+import com.easy.easyai.web.security.currentOwners
 import com.easy.easyai.web.security.getCurrentUserId
+import com.easy.easyai.web.security.parseAssetScope
+import com.easy.easyai.web.security.resolveWriteOwner
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.coroutines.reactor.mono
 import org.slf4j.LoggerFactory
@@ -38,6 +41,7 @@ import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.server.ResponseStatusException
 import org.springframework.web.server.ServerWebExchange
@@ -80,7 +84,7 @@ class SkillController(
      */
     @GetMapping
     fun listSkills(): Mono<List<SkillDto>> = mono {
-        visibleSkills(getCurrentUserId())
+        visibleSkills(currentOwners())
     }
 
     /**
@@ -89,14 +93,16 @@ class SkillController(
      * refused package leaves no row and no directory behind.
      */
     @PostMapping
-    fun addFromDirectory(@RequestBody request: SkillAddRequest): Mono<ResponseEntity<SkillAddResultDto>> = mono {
+    fun addFromDirectory(
+        @RequestBody request: SkillAddRequest,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<ResponseEntity<SkillAddResultDto>> = mono {
         val service = skillRefreshService ?: throw skillSystemNotEnabled()
-        val userId = getCurrentUserId()
-        val owner = ownerFor(userId, request.shared)
+        val owner = resolveOwner(request.shared, scope)
         val name = request.name.trim()
         val source = request.sourcePath.trim().takeIf { it.isNotBlank() }?.let { sourceDirectory(it, owner) }
             ?: return@mono badRequest("sourcePath must be an absolute path of a directory that exists on this server")
-        respond(userId, owner, name, service.addSkill(owner, name, source))
+        respond(owner, name, service.addSkill(owner, name, source))
     }
 
     /**
@@ -109,27 +115,32 @@ class SkillController(
         exchange.multipartData.flatMap { parts ->
             mono {
                 val service = skillRefreshService ?: throw skillSystemNotEnabled()
-                val userId = getCurrentUserId()
                 val name = textOf(parts, "name").trim()
-                val owner = ownerFor(userId, textOf(parts, "shared").equals("true", ignoreCase = true))
+                val owner = resolveOwner(
+                    textOf(parts, "shared").equals("true", ignoreCase = true),
+                    textOf(parts, "scope")
+                )
                 val upload = uploadOf(parts)
                     ?: return@mono badRequest("Upload needs an archive part, or files together with a paths array")
-                respond(userId, owner, name, service.addUploaded(owner, name, upload))
+                respond(owner, name, service.addUploaded(owner, name, upload))
             }
         }
 
     /** Enable or disable one skill: the catalog row flips first, the index follows asynchronously. */
     @PatchMapping("/enabled")
-    fun setEnabled(@RequestBody request: SkillEnabledRequest): Mono<SkillEnabledDto> = mono {
+    fun setEnabled(
+        @RequestBody request: SkillEnabledRequest,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<SkillEnabledDto> = mono {
         val service = skillCatalogService ?: throw skillSystemNotEnabled()
-        val userId = getCurrentUserId()
-        val owner = SkillOwnerContext(userId)
+        val actor = getCurrentUserId()
+        val owner = SkillOwnerContext(resolveWriteOwner(parseAssetScope(scope)))
         requireWritable(request.name, owner, service)
         when (val result = service.setEnabled(request.name, owner, request.enabled)) {
             is SkillToggleResult.Applied -> {
                 logger.info(
-                    "Skill '{}' of user '{}' set enabled={} (indexSynced={})",
-                    result.name, userId, result.enabled, result.indexSynced
+                    "Skill '{}' of owner '{}' set enabled={} by '{}' (indexSynced={})",
+                    result.name, owner.userId, result.enabled, actor, result.indexSynced
                 )
                 SkillEnabledDto(result.name, result.enabled, result.indexSynced)
             }
@@ -140,11 +151,13 @@ class SkillController(
 
     /** Delete one skill: catalog row, package, local directory, registry entry and index document. */
     @DeleteMapping("/{name}")
-    fun delete(@PathVariable name: String): Mono<ResponseEntity<Unit>> = mono {
+    fun delete(
+        @PathVariable name: String,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<ResponseEntity<Unit>> = mono {
         val service = skillCatalogService ?: throw skillSystemNotEnabled()
         val removal = skillRefreshService ?: throw skillSystemNotEnabled()
-        val userId = getCurrentUserId()
-        val owner = requireWritable(name, SkillOwnerContext(userId), service).entry.userId
+        val owner = requireWritable(name, SkillOwnerContext(resolveWriteOwner(parseAssetScope(scope))), service).entry.userId
         val deleted = removal.deleteSkill(owner, name)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Skill '$name' disappeared concurrently")
         logger.info("Deleted skill '{}' of owner '{}'", deleted.name, owner)
@@ -154,7 +167,6 @@ class SkillController(
     // ── Outcome mapping ────────────────────────────────────────────────────────
 
     private suspend fun respond(
-        userId: String,
         owner: String,
         name: String,
         result: SkillAddResult
@@ -162,7 +174,7 @@ class SkillController(
         is SkillAddResult.Added -> {
             logger.info("Installed skill '{}' for owner '{}' through the API", name, owner)
             val sharedInstall = owner == SkillCatalogEntry.DEFAULT_USER_ID
-            val dto = visibleSkills(userId).firstOrNull { it.name == name && it.shared == sharedInstall }
+            val dto = visibleSkills(currentOwners()).firstOrNull { it.name == name && it.shared == sharedInstall }
                 ?: result.row.toDto()
             ResponseEntity.ok(SkillAddResultDto(skill = dto, warning = shadowWarning(owner, name)))
         }
@@ -183,16 +195,24 @@ class SkillController(
 
     // ── Ownership and payload guards ───────────────────────────────────────────
 
-    /** The owner a request writes to: self, or the shared layer only for the system identity itself. */
-    private fun ownerFor(userId: String, shared: Boolean): String {
-        if (!shared) return userId
-        if (userId != SkillCatalogEntry.DEFAULT_USER_ID) {
-            throw ResponseStatusException(
-                HttpStatus.FORBIDDEN,
-                "Only the shared system owner can publish shared skills"
-            )
+    /**
+     * The owner a request writes to. A `shared` install targets the read-only `system` layer and is
+     * only permitted for the system identity itself (the auth-disabled single-machine case). Otherwise
+     * the write owner comes from the request [scope]: `personal` → the caller, `group` → the group
+     * bucket, gated by [resolveWriteOwner] so only the group owner may publish group skills.
+     */
+    private suspend fun resolveOwner(shared: Boolean, scope: String?): String {
+        if (shared) {
+            val userId = getCurrentUserId()
+            if (userId != SkillCatalogEntry.DEFAULT_USER_ID) {
+                throw ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Only the shared system owner can publish shared skills"
+                )
+            }
+            return userId
         }
-        return userId
+        return resolveWriteOwner(parseAssetScope(scope))
     }
 
     /** The row the caller may mutate: their own, or a shared one only when they are the system owner. */
@@ -297,9 +317,9 @@ class SkillController(
 
     // ── View assembly ──────────────────────────────────────────────────────────
 
-    private suspend fun visibleSkills(userId: String): List<SkillDto> {
-        val candidates = skillAccessResolver?.listScopedSkills(userId).orEmpty()
-        val rows = skillCatalogService?.list(SkillOwnerContext(userId))
+    private suspend fun visibleSkills(owners: Collection<String>): List<SkillDto> {
+        val candidates = skillAccessResolver?.listScopedSkillsForOwners(owners).orEmpty()
+        val rows = skillCatalogService?.listForOwners(owners)
         // No catalog behind the service (single-machine/dev): the on-disk registry snapshot is all there is.
         if (rows.isNullOrEmpty()) return candidates.map { it.toDto() }
         val installed = candidates.associate { it.skill.name to it.skill }

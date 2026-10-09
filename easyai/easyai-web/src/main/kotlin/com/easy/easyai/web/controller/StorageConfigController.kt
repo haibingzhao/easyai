@@ -3,7 +3,13 @@ package com.easy.easyai.web.controller
 import com.easy.easyai.core.storage.StorageSettings
 import com.easy.easyai.core.storage.StorageSettingsResult
 import com.easy.easyai.core.storage.StorageSettingsService
+import com.easy.easyai.core.storage.StorageSource
+import com.easy.easyai.web.security.AssetScope
+import com.easy.easyai.web.security.currentGroupUserId
+import com.easy.easyai.web.security.currentOwners
 import com.easy.easyai.web.security.getCurrentUserId
+import com.easy.easyai.web.security.parseAssetScope
+import com.easy.easyai.web.security.resolveWriteOwner
 import kotlinx.coroutines.reactor.mono
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpStatus
@@ -11,6 +17,7 @@ import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.server.ResponseStatusException
 import reactor.core.publisher.Mono
@@ -39,19 +46,43 @@ class StorageConfigController(
 ) {
 
     @GetMapping("/config")
-    fun getConfig(): Mono<StorageConfigDto> = mono {
+    fun getConfig(@RequestParam(required = false) scope: String? = null): Mono<StorageConfigDto> = mono {
         val service = settingsService ?: throw databaseDisabled()
-        val userId = getCurrentUserId()
-        toDto(service.current(userId), service.effectiveSource(userId).name)
+        val owners = currentOwners()
+        if (service.effectiveSource(owners) == StorageSource.STATIC) {
+            return@mono staticDto()
+        }
+        // A group-scoped read must answer with the group's row. Falling back to the caller's own row
+        // when the login has no active group would silently report a personal config as the shared one.
+        val readOwner = if (parseAssetScope(scope) == AssetScope.GROUP) {
+            currentGroupUserId()
+                ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "No active group for a group-scoped read")
+        } else {
+            getCurrentUserId()
+        }
+        // Report the layer in force for the owner being read, not the caller's whole visibility set:
+        // a member viewing the group config must see the group's source, not their own row shadowing it.
+        toDto(service.current(readOwner), service.effectiveSource(listOf(readOwner)).name)
     }
 
     /** Save a configuration; a valid one takes effect for the next storage operation, no restart. */
     @PostMapping("/config")
-    fun saveConfig(@RequestBody request: SaveStorageConfigRequest): Mono<StorageConfigDto> = mono {
+    fun saveConfig(
+        @RequestBody request: SaveStorageConfigRequest,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<StorageConfigDto> = mono {
         val service = settingsService ?: throw databaseDisabled()
-        val userId = getCurrentUserId()
-        when (val outcome = service.save(userId, request.toSettings())) {
-            is StorageSettingsResult.Saved -> toDto(outcome.settings, service.effectiveSource(userId).name)
+        if (service.effectiveSource(currentOwners()) == StorageSource.STATIC) {
+            throw ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Storage is pinned by a deployment-wide easyai.storage.* configuration and cannot be overridden per user"
+            )
+        }
+        val owner = resolveWriteOwner(parseAssetScope(scope))
+        when (val outcome = service.save(owner, request.toSettings())) {
+            // Report the layer in force for the bucket just written, matching getConfig: a group owner
+            // saving the shared config must not be told their own personal row is the one in force.
+            is StorageSettingsResult.Saved -> toDto(outcome.settings, service.effectiveSource(listOf(owner)).name)
 
             is StorageSettingsResult.Invalid -> throw ResponseStatusException(HttpStatus.BAD_REQUEST, outcome.reason)
 
@@ -99,6 +130,21 @@ class StorageConfigController(
         effectiveSource = effectiveSource.lowercase()
     )
 
+    /**
+     * The STATIC (`easyai.storage.*`) layer is deployment-pinned: report it as in force so the
+     * frontend hides the form, but never echo any credential — not even a mask of one.
+     */
+    private fun staticDto(): StorageConfigDto = StorageConfigDto(
+        enabled = true,
+        type = "",
+        endpoint = "",
+        bucket = "",
+        accessKeyId = "",
+        accessKeySecret = null,
+        localDir = "",
+        effectiveSource = StorageSource.STATIC.name.lowercase()
+    )
+
     private fun maskSecret(apiKey: String?): String? {
         if (apiKey.isNullOrBlank()) return null
         if (apiKey.length <= 8) return "****"
@@ -115,7 +161,8 @@ data class StorageConfigDto(
     val accessKeyId: String,
     val accessKeySecret: String?,
     val localDir: String,
-    /** Which layer is in force right now: user | system | static | none. */
+    /** Which layer is in force right now: user | system | static | none. `static` means a
+     *  deployment-wide `easyai.storage.*` layer is pinned — the form is hidden and saves refused. */
     val effectiveSource: String
 )
 

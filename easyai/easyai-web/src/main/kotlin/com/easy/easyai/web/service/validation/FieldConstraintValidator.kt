@@ -8,7 +8,7 @@ import com.easy.easyai.web.model.ConfigValidationError
  */
 class FieldConstraintValidator : AgentConfigValidator {
 
-    override suspend fun validate(request: AgentCreateRequest, userId: String): List<ConfigValidationError> {
+    override suspend fun validate(request: AgentCreateRequest, userId: String, owners: Collection<String>): List<ConfigValidationError> {
         val errors = mutableListOf<ConfigValidationError>()
 
         if (request.id.isBlank() || request.id.length > MAX_CALLSIGN_LENGTH) {

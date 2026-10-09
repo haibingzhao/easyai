@@ -20,6 +20,27 @@ data class IntegrationConfig(
     companion object {
         private val logger = LoggerFactory.getLogger(IntegrationConfig::class.java)
 
+        /**
+         * Deployment-wide STATIC override, the analogue of the object-storage STATIC layer. Set once at
+         * startup from Spring properties (`easyai.integrations.*`); when present it wins over every other
+         * source and the Settings → Integrations form is rendered read-only (writes refused). This is the
+         * B/S multi-tenant mode — API keys then live in config, never in the file a member could edit.
+         * Left null for file-driven deployments (desktop / single-tenant).
+         */
+        @Volatile
+        private var staticOverride: IntegrationConfig? = null
+
+        /** Install (or clear, with null) the deployment-wide STATIC configuration. */
+        @JvmStatic
+        fun setStaticOverride(config: IntegrationConfig?) {
+            staticOverride = config
+            if (config != null) logger.info("Integration config pinned by deployment-wide easyai.integrations.* properties")
+        }
+
+        /** Whether a deployment-wide STATIC layer is in force (file config and UI writes are bypassed). */
+        @JvmStatic
+        fun isStaticOverridden(): Boolean = staticOverride != null
+
         /** Default config file location: `~/.easyai/integrations.json` */
         fun defaultConfigPath(): Path {
             return Path.of(System.getProperty("user.home"), ".easyai", "integrations.json")
@@ -28,8 +49,10 @@ data class IntegrationConfig(
         /**
          * Load integration config from the given path.
          * Returns null if the file does not exist or cannot be parsed.
+         * A deployment-wide STATIC override, when installed, always wins over the file.
          */
         fun load(path: Path = defaultConfigPath()): IntegrationConfig? {
+            staticOverride?.let { return it }
             if (!Files.exists(path)) return null
             return try {
                 val content = Files.readString(path)

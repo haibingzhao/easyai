@@ -16,6 +16,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -30,7 +31,7 @@ class CommandServiceTest {
     lateinit var root: Path
 
     private val registry = mockk<CommandRegistry> {
-        every { resolve(any()) } returns null
+        every { resolve(any(), any()) } returns null
     }
     private val access = mockk<SkillAccessResolver>()
     private val service = CommandService(registry, null, skillAccessResolver = access)
@@ -45,7 +46,7 @@ class CommandServiceTest {
     @Test
     fun `skill references round trip the name token exactly once`() = runTest {
         val skill = skill("project space+(x)")
-        coEvery { access.listScopedSkills("alice") } returns listOf(ScopedSkill(skill, null))
+        coEvery { access.listScopedSkillsForOwners(any()) } returns listOf(ScopedSkill(skill, null))
         val reference = CommandUtils.skillReference("display-name", skill.name)
         val result = service.resolveAndExpand("$reference inspect", "alice", "session")
         assertEquals(skill.name, result?.commandSource)
@@ -54,11 +55,23 @@ class CommandServiceTest {
     }
 
     @Test
+    fun `an explicit group owner set is forwarded to the access resolver verbatim`() = runTest {
+        val skill = skill("project")
+        val captured = slot<Collection<String>>()
+        coEvery { access.listScopedSkillsForOwners(capture(captured)) } returns listOf(ScopedSkill(skill, null))
+
+        val owners = listOf("alice", "grp-1", "system")
+        service.listSkillCommands("alice", owners)
+
+        assertEquals(owners, captured.captured.toList())
+    }
+
+    @Test
     fun `bare full skill name keeps hyphens and an unknown name is not a command`() = runTest {
         val first = skill("project")
-        coEvery { access.listScopedSkills("alice") } returns listOf(ScopedSkill(first, null))
+        coEvery { access.listScopedSkillsForOwners(any()) } returns listOf(ScopedSkill(first, null))
         assertEquals("fresh body\n\ncheck", service.resolveAndExpand("/code-review check", "alice", "s")?.expandedPrompt)
-        coEvery { access.listScopedSkills("alice") } returns emptyList()
+        coEvery { access.listScopedSkillsForOwners(any()) } returns emptyList()
         assertNull(service.resolveAndExpand("/code-review", "alice", "s"), "a name nobody installed is ordinary text")
     }
 
@@ -69,7 +82,7 @@ class CommandServiceTest {
             id = "row-1", name = skill.name, checksum = "c", enabled = false,
             rootPath = root.toString(), installPath = skill.location.parent.toString(), userId = "alice"
         )
-        coEvery { access.listScopedSkills("alice") } returns listOf(ScopedSkill(skill, row))
+        coEvery { access.listScopedSkillsForOwners(any()) } returns listOf(ScopedSkill(skill, row))
 
         assertEquals(emptyList<CommandInfo>(), service.listSkillCommands("alice"))
         assertFailsWith<CommandReferenceException> {
@@ -92,7 +105,7 @@ class CommandServiceTest {
     @Test
     fun `explicit name outside the visible view is refused even when the file exists`() = runTest {
         val other = skill("other-user")
-        coEvery { access.listScopedSkills("alice") } returns emptyList()
+        coEvery { access.listScopedSkillsForOwners(any()) } returns emptyList()
         assertFailsWith<CommandReferenceException> {
             service.resolveAndExpand(CommandUtils.skillReference(other.name, other.name), "alice", "s")
         }
@@ -102,7 +115,7 @@ class CommandServiceTest {
     fun `unreadable source never falls back to the registry body`() = runTest {
         val missing = skill("missing")
         Files.delete(missing.location)
-        coEvery { access.listScopedSkills("alice") } returns listOf(ScopedSkill(missing, null))
+        coEvery { access.listScopedSkillsForOwners(any()) } returns listOf(ScopedSkill(missing, null))
         assertFailsWith<CommandReferenceException> {
             service.resolveAndExpand(CommandUtils.skillReference(missing.name, missing.name), "alice", "s")
         }
@@ -110,7 +123,7 @@ class CommandServiceTest {
 
     @Test
     fun `legacy path tokens and malformed references are rejected`() = runTest {
-        coEvery { access.listScopedSkills(any()) } returns emptyList()
+        coEvery { access.listScopedSkillsForOwners(any()) } returns emptyList()
         val legacyPathToken = CommandUtils.skillReference("x", root.resolve("SKILL.md").toString())
         for (text in listOf(legacyPathToken, "[/x](skill:%ZZ)", "[/x](skill:relative)")) {
             assertFailsWith<CommandReferenceException> { service.resolveAndExpand(text, "alice", "s") }
@@ -127,7 +140,7 @@ class CommandServiceTest {
         val commands = CommandService(registry, null, builtinHandlers = listOf(builtin), skillAccessResolver = access)
         assertNull(commands.resolveAndExpand("/goal中文目标", "alice", "s"))
         coVerify(exactly = 1) { builtin.execute("s", "中文目标", "alice") }
-        coVerify(exactly = 0) { access.listScopedSkills(any()) }
+        coVerify(exactly = 0) { access.listScopedSkillsForOwners(any()) }
     }
 
     @Test
@@ -135,7 +148,7 @@ class CommandServiceTest {
         val selected = skill("selected", "goal")
         val builtin = mockk<BuiltinCommandHandler> { every { name } returns "goal" }
         val commands = CommandService(registry, null, builtinHandlers = listOf(builtin), skillAccessResolver = access)
-        coEvery { access.listScopedSkills("alice") } returns listOf(ScopedSkill(selected, null))
+        coEvery { access.listScopedSkillsForOwners(any()) } returns listOf(ScopedSkill(selected, null))
         assertEquals(
             CommandCategory.SKILL,
             commands.resolveAndExpand(CommandUtils.skillReference("goal", "goal"), "alice", "s")?.commandCategory
@@ -147,18 +160,36 @@ class CommandServiceTest {
     fun `MCP full token including colon reaches prompt provider`() = runTest {
         val provider = mockk<McpPromptProvider>()
         val command = CommandInfo(name = "server:prompt-name", category = CommandCategory.MCP, mcpServer = "server", mcpPromptName = "prompt-name")
-        every { registry.resolve("server:prompt-name") } returns command
-        coEvery { access.listScopedSkills("alice") } returns emptyList()
-        coEvery { provider.getPrompt("server", "prompt-name", emptyMap()) } returns "MCP body"
+        every { registry.resolve("server:prompt-name", any()) } returns command
+        coEvery { access.listScopedSkillsForOwners(any()) } returns emptyList()
+        coEvery { provider.getPrompt("server", "prompt-name", emptyMap(), listOf("alice")) } returns "MCP body"
         val commands = CommandService(registry, provider, skillAccessResolver = access)
         assertEquals("MCP body", commands.resolveAndExpand("/server:prompt-name", "alice", "s")?.expandedPrompt)
+    }
+
+    @Test
+    fun `an explicit group owner set reaches both the registry lookup and the prompt provider`() = runTest {
+        val provider = mockk<McpPromptProvider>()
+        val command = CommandInfo(name = "server:prompt-name", category = CommandCategory.MCP, mcpServer = "server", mcpPromptName = "prompt-name")
+        val owners = listOf("alice", "grp-1", "system")
+        val resolveOwners = slot<Collection<String>>()
+        val promptOwners = slot<Collection<String>>()
+        every { registry.resolve("server:prompt-name", capture(resolveOwners)) } returns command
+        coEvery { access.listScopedSkillsForOwners(any()) } returns emptyList()
+        coEvery { provider.getPrompt("server", "prompt-name", emptyMap(), capture(promptOwners)) } returns "MCP body"
+
+        val commands = CommandService(registry, provider, skillAccessResolver = access)
+        commands.resolveAndExpand("/server:prompt-name", "alice", "s", owners = owners)
+
+        assertEquals(owners, resolveOwners.captured.toList())
+        assertEquals(owners, promptOwners.captured.toList())
     }
 
     @Test
     fun `skill command list carries the shared marker and name source`() = runTest {
         val shared = skill("shared-dir", "pdf")
         val own = skill("own-dir", "notes")
-        coEvery { access.listScopedSkills("alice") } returns listOf(
+        coEvery { access.listScopedSkillsForOwners(any()) } returns listOf(
             ScopedSkill(shared, row(shared, SkillCatalogEntry.DEFAULT_USER_ID)),
             ScopedSkill(own, row(own, "alice")),
         )
@@ -178,12 +209,12 @@ class CommandServiceTest {
     @Test
     fun `replay checks identity but reuses saved body without rereading disk`() = runTest {
         val selected = skill("selected")
-        coEvery { access.listScopedSkills("alice") } returns listOf(ScopedSkill(selected, null))
+        coEvery { access.listScopedSkillsForOwners(any()) } returns listOf(ScopedSkill(selected, null))
         val snapshot = CommandExpansion(selected.name, "saved body", CommandCategory.SKILL, selected.name)
         val message = UserMessage(content = listOf(TextContent("/code-review")), metadata = service.metadata(snapshot, "alice"))
         Files.delete(selected.location)
         service.validateReplay(listOf(message), "alice")
-        coEvery { access.listScopedSkills("alice") } returns emptyList()
+        coEvery { access.listScopedSkillsForOwners(any()) } returns emptyList()
         assertFailsWith<CommandReferenceException> { service.validateReplay(listOf(message), "alice") }
     }
 }

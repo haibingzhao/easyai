@@ -11,7 +11,8 @@ import kotlinx.coroutines.CoroutineScope
 
 internal class KnowledgeReadTool(
     metadata: ToolMetadata,
-    private val store: KnowledgeStore
+    private val store: KnowledgeStore,
+    private val knowledgeOwnerId: String
 ) : BaseToolDefinition(metadata) {
 
     data class Parameters(val key: String)
@@ -29,15 +30,9 @@ internal class KnowledgeReadTool(
         if (key.isNullOrBlank()) {
             return errorResult("Error: 'key' parameter is required.")
         }
-        val userId = agentContext.userId ?: DEFAULT_USER_ID
 
-        val content = store.read(userId, key)
+        val content = store.read(knowledgeOwnerId, key)
             ?: return errorResult("Knowledge entry not found: $key")
         return ToolResult(content = listOf(TextContent(content)))
-    }
-
-    private companion object {
-        /** Fallback user id when no authenticated user is present (matches KnowledgeController behavior). */
-        const val DEFAULT_USER_ID = "system"
     }
 }

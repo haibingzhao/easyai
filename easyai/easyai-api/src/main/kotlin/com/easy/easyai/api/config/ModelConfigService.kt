@@ -44,21 +44,52 @@ interface ModelConfigService {
 
     /**
      * Save a user's provider configuration.
+     *
+     * [userId] is the *write* owner the row is persisted under. [owners] is the caller's read
+     * visibility set and is only consulted to resolve a referenced config group — a member joining a
+     * group-owned config group inherits its api key, which a write-owner-only read could not see.
      */
-    suspend fun saveUserConfiguration(request: SaveModelProviderConfigRequest, userId: String = "system"): ModelProviderConfig
+    suspend fun saveUserConfiguration(
+        request: SaveModelProviderConfigRequest,
+        userId: String = "system",
+        owners: Collection<String> = listOf(userId)
+    ): ModelProviderConfig
 
     /**
      * Structural probe of a generation-type draft without persisting it.
      *
+     * [owners] is the caller's read visibility set, consulted for the referenced config group exactly
+     * as [saveUserConfiguration] does, so a draft that probes clean also saves.
+     *
      * @return null when the draft is usable, otherwise the failure reason; [request] must not be CHAT.
      */
-    suspend fun testGenerationConfiguration(request: SaveModelProviderConfigRequest, userId: String = "system"): String?
+    suspend fun testGenerationConfiguration(
+        request: SaveModelProviderConfigRequest,
+        userId: String = "system",
+        owners: Collection<String> = listOf(userId)
+    ): String?
 
     /**
      * Delete a user's provider configuration by ID.
      * @return true if the configuration was found and deleted
      */
     suspend fun deleteUserConfiguration(id: String, userId: String = "system"): Boolean
+
+    // ─── Group-aware reads ───────────────────────────────────────────────────────
+    // Custom configs and groups are shared across a group: a member reads the group bucket's rows
+    // too. [owners] is the caller's full visibility set (self + group bucket + system). A write still
+    // targets exactly one bucket — the controller resolves the write owner (self or, for a gated
+    // group write, the group bucket) and passes it as `userId` — but it may need [owners] to resolve
+    // what the written row *references*; see [saveUserConfiguration].
+
+    /** Saved custom configurations of [modelType] visible to any of [owners]. */
+    suspend fun getUserConfigurations(modelType: ModelType, owners: Collection<String>): List<ModelProviderConfig>
+
+    /** A saved custom configuration by ID, visible to any of [owners]. */
+    suspend fun getUserConfiguration(id: String, owners: Collection<String>): ModelProviderConfig?
+
+    /** Model config groups visible to any of [owners]. */
+    suspend fun getGroups(owners: Collection<String>): List<ModelConfigGroup>
 
     // ─── Group operations ────────────────────────────────────────────────────────
 

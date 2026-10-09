@@ -66,9 +66,9 @@ class SkillTool(
             )
         }
 
-        refresher?.ensureSynced(agentContext.userId)
+        refresher?.ensureSyncedOwners(agentContext.effectiveOwners, agentContext.userId)
         val visible = try {
-            modelView.list(agentContext.userId, allowedSkillNames)
+            modelView.listForOwners(agentContext.effectiveOwners, allowedSkillNames)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

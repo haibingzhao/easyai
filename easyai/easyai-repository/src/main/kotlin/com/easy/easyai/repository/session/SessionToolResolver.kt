@@ -68,7 +68,7 @@ class SessionToolResolver(
     suspend fun createSessionTools(agentContext: AgentContext): List<ToolDefinition> {
         val service = agentService ?: return emptyList()
         val staticTools = toolFactory.createTools(agentContext, service)
-        val mcpTools = resolveMcpTools(agentContext)
+        val mcpTools = resolveMcpTools(agentContext, null)
         return staticTools + mcpTools
     }
 
@@ -87,7 +87,7 @@ class SessionToolResolver(
         else
             staticTools.filter { it.name in agentDef.toolNames || it.alwaysInclude }
         // MCP tools have their own filtering via getAgentMcpConfigs, not subject to toolNames
-        val mcpTools = resolveMcpTools(agentContext)
+        val mcpTools = resolveMcpTools(agentContext, agentDef.userId)
         return filteredStatic + mcpTools
     }
 
@@ -96,14 +96,20 @@ class SessionToolResolver(
      * Prefers explicit [AgentContext.mcpConfigs] when present (inline agents without a DB row);
      * otherwise, if agentStore is available, queries MCP configs for per-agent filtering.
      * Falls back to all MCP tools when no store is available.
+     *
+     * [ownerHint] is the bucket the agent row itself lives in — the MCP whitelist is stored under
+     * that owner, not under the calling user's, so a member running a shared agent reads the shared
+     * bucket's bindings. Null (the no-definition path) resolves it from the agent row.
      */
-    private suspend fun resolveMcpTools(agentContext: AgentContext): List<ToolDefinition> {
+    private suspend fun resolveMcpTools(agentContext: AgentContext, ownerHint: String?): List<ToolDefinition> {
         val provider = mcpToolProvider ?: return emptyList()
         if (agentContext.mcpConfigs.isNotEmpty()) {
             return provider.getTools(agentContext, agentContext.mcpConfigs)
         }
         val store = agentStore ?: return provider.getTools(agentContext)
-        val mcpConfigs = store.getAgentMcpConfigs(agentContext.agentId)
+        val owner = ownerHint
+            ?: store.findById(agentContext.agentId, agentContext.effectiveOwners)?.userId
+        val mcpConfigs = if (owner == null) emptyList() else store.getAgentMcpConfigs(agentContext.agentId, owner)
         return provider.getTools(agentContext, mcpConfigs)
     }
 }

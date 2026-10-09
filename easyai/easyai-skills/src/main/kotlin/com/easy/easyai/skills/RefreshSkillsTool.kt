@@ -43,8 +43,8 @@ internal class RefreshSkillsTool(
         coroutineScope: CoroutineScope,
         onUpdate: suspend (ToolUpdate) -> Unit
     ): ToolResult {
-        val owner = refresher?.ownersFor(agentContext.userId) ?: emptyList()
-        val outcome = refresher?.refreshFor(agentContext.userId)
+        val owner = refresher?.ownersForOwners(agentContext.effectiveOwners) ?: emptyList()
+        val outcome = refresher?.refreshForOwners(agentContext.effectiveOwners, agentContext.userId)
         val delta = outcome?.delta ?: run {
             val viewer = agentContext.userId?.takeIf { it.isNotBlank() } ?: SkillCatalogEntry.DEFAULT_USER_ID
             registry.rescan(setOf(SkillPaths.ownerRoot(config, viewer)))

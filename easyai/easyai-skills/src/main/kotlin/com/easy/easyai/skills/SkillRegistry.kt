@@ -32,7 +32,16 @@ interface SkillRegistry {
     fun get(owner: String, name: String): SkillInfo?
 
     /** The owner's own skills plus the shared `system` skills, the owner's winning by name. */
-    fun visibleFor(owner: String): List<SkillInfo>
+    fun visibleFor(owner: String): List<SkillInfo> = visibleForOwners(listOf(owner))
+
+    /**
+     * Skills visible to an ordered owner set — the caller's own, its group bucket's, and the shared
+     * `system` layer — merged by name in priority order (the first owner that has a name wins, and
+     * `system` is the final fallback even when absent from [owners]). Group sharing generalizes the
+     * single-owner [visibleFor]: pass `{self, groupUserId, system}` so a member sees the group's
+     * skills shadowed by their own.
+     */
+    fun visibleForOwners(owners: Collection<String>): List<SkillInfo>
 
     /** Drop one skill from the in-memory snapshot, returning what was removed. */
     fun remove(owner: String, name: String): SkillInfo?
@@ -192,15 +201,19 @@ class DefaultSkillRegistry(
         return skills[SkillKey(owner, name)] ?: skills[SkillKey(SkillCatalogEntry.DEFAULT_USER_ID, name)]
     }
 
-    override fun visibleFor(owner: String): List<SkillInfo> {
+    override fun visibleForOwners(owners: Collection<String>): List<SkillInfo> {
         ensureInitialScan()
         val system = SkillCatalogEntry.DEFAULT_USER_ID
-        val best = LinkedHashMap<String, SkillInfo>()
-        if (owner != system) {
-            skills.filterKeys { it.owner == owner }.forEach { (key, skill) -> best[key.name] = skill }
+        // Priority order: the first owner that has a name wins; `system` is always the final
+        // fallback even when the caller did not list it. Blank ids are ignored.
+        val ordered = owners.filter { it.isNotBlank() }.distinct().let {
+            if (system in it) it else it + system
         }
-        skills.filterKeys { it.owner == system }.forEach { (key, skill) ->
-            best.putIfAbsent(key.name, skill)
+        val best = LinkedHashMap<String, SkillInfo>()
+        for (owner in ordered) {
+            skills.filterKeys { it.owner == owner }.forEach { (key, skill) ->
+                best.putIfAbsent(key.name, skill)
+            }
         }
         return best.values.sortedBy { it.name }
     }

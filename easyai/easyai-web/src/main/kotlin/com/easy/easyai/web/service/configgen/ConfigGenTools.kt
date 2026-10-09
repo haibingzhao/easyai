@@ -80,7 +80,7 @@ class ValidateConfigTool(
             val configNode: JsonNode = objectMapper.valueToTree(configObj)
 
             val result = when (configType) {
-                "agent" -> configValidator.validateAgentConfig(configNode, userId)
+                "agent" -> configValidator.validateAgentConfig(configNode, userId, agentContext.effectiveOwners)
                 "swarm" -> configValidator.validateSwarmConfig(configNode, userId)
                 else -> return errorResult("Unknown configType: $configType")
             }
@@ -166,10 +166,10 @@ class ListResourcesTool(
             ?: return errorResult("Missing 'type' parameter. Valid types: agents, tools, skills, mcp_servers, models, spec")
 
         val output = when (type) {
-            "agents" -> listAgents()
+            "agents" -> listAgents(agentContext.effectiveOwners)
             "tools" -> listTools()
-            "skills" -> listSkills()
-            "mcp_servers" -> listMcpServers()
+            "skills" -> listSkills(agentContext.effectiveOwners)
+            "mcp_servers" -> listMcpServers(agentContext.effectiveOwners)
             "models" -> listModels()
             "spec" -> loadSpec()
             else -> return errorResult("Unknown type: '$type'. Valid types: agents, tools, skills, mcp_servers, models, spec")
@@ -178,8 +178,8 @@ class ListResourcesTool(
         return ToolResult(content = listOf(TextContent(output)))
     }
 
-    private suspend fun listAgents(): String {
-        val agents = agentStore.findAll(userId)
+    private suspend fun listAgents(owners: Collection<String>): String {
+        val agents = agentStore.findAll(owners)
         if (agents.isEmpty()) return "No agents available."
         return buildString {
             appendLine("Available Agents (use these IDs for agentDefinitionId):")
@@ -225,9 +225,9 @@ class ListResourcesTool(
         }
     }
 
-    private suspend fun listSkills(): String {
+    private suspend fun listSkills(owners: Collection<String>): String {
         if (swarmContext) return "Skills are NOT available in swarm runtime. Do not use skillNames or load_skill."
-        val skills = skillAccessResolver?.listScopedSkills(userId).orEmpty()
+        val skills = skillAccessResolver?.listScopedSkillsForOwners(owners).orEmpty()
             .filter { it.catalogEntry?.enabled != false }
             .map { it.skill }
         if (skills.isEmpty()) return "No skills available."
@@ -239,8 +239,9 @@ class ListResourcesTool(
         }
     }
 
-    private fun listMcpServers(): String {
-        val servers = mcpClientManager?.getConnectedServers(userId) ?: emptyList()
+    private fun listMcpServers(owners: Collection<String>): String {
+        // Shadowed by name, matching what the agent will actually be given at run time.
+        val servers = mcpClientManager?.getVisibleServers(owners) ?: emptyList()
         if (servers.isEmpty()) return "No MCP servers connected."
         return buildString {
             appendLine("MCP Servers (use via mcpConfigs field, NOT toolNames):")

@@ -15,6 +15,7 @@ import java.nio.file.Path
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.io.path.createDirectories
+import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -180,7 +181,7 @@ class SkillSyncServiceTest {
         /** A sync service reading the same catalog + registry but resolving a different storage. */
         private fun storageOf(chain: SkillSyncFixture, target: TestObjectStorage): SkillSyncService {
             val resolver = mockk<ObjectStorageResolver>()
-            coEvery { resolver.resolve(any()) } returns target
+            coEvery { resolver.resolve(any<String>()) } returns target
             return SkillSyncService(
                 chain.catalog, chain.registry, DefaultSkillDiscovery(),
                 SkillPackageStore(resolver, chain.storage), chain.config
@@ -262,7 +263,7 @@ class SkillSyncServiceTest {
             chain.sync.syncFor("alice")
             val before = chain.catalog.allRows().single()
             val resolver = mockk<ObjectStorageResolver>()
-            coEvery { resolver.resolve(any()) } throws IllegalStateException("bucket unreachable")
+            coEvery { resolver.resolve(any<String>()) } throws IllegalStateException("bucket unreachable")
             val mirror = SkillSyncService(
                 chain.catalog, chain.registry, DefaultSkillDiscovery(),
                 SkillPackageStore(resolver, chain.storage), chain.config
@@ -339,6 +340,56 @@ class SkillSyncServiceTest {
             assertEquals(1, outcome.claimed)
             assertEquals(0, outcome.unclaimed)
             assertEquals("alice", chain.catalog.allRows().single().userId)
+        }
+    }
+
+    @Nested
+    inner class GroupBucket {
+        /**
+         * A group bucket (`{self, groupUserId, system}` minus self/system) is a read-only mirror: any
+         * member who can drop a file into `{root}/{groupUserId}` with a `write`/`bash` tool must not be
+         * able to claim or publish it through their own sync pass — the same exposure the shared
+         * `system` root is protected from. Only the acting caller's own bucket and `system` are writable.
+         */
+        @Test
+        fun `an orphan directory under the group bucket is never claimed by a member`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            val file = chain.write("shared", owner = "grp-1")
+
+            val outcome = chain.sync.syncForOwners(listOf("alice", "grp-1"), self = "alice")
+
+            assertEquals(0, outcome.claimed)
+            assertEquals(1, outcome.unclaimed)
+            assertTrue(Files.isRegularFile(file))
+            assertTrue(chain.catalog.allRows().none { it.userId == "grp-1" }, "the group root creates no rows from disk")
+            assertTrue(chain.storage.objects.isEmpty(), "an ignored group directory must never be packed")
+        }
+
+        @Test
+        fun `drifted group content is re-mirrored from its package, not pushed`() = runTest {
+            val chain = SkillSyncFixture(temp)
+            val source = chain.staging("shared")
+            source.resolve(SkillPaths.SKILL_FILE_NAME)
+                .writeText("---\nname: shared\ndescription: d\n---\ngroup built-in")
+            val added = chain.sync.addSkill("grp-1", "shared", source)
+            assertTrue(added is SkillAddResult.Added, "got: $added")
+            val row = chain.catalog.allRows().single { it.userId == "grp-1" }
+            val bytesBefore = chain.storage.objects.getValue(row.objectKey).bytes.copyOf()
+            val file = SkillPaths.installDir(SkillPaths.ownerRoot(chain.config, "grp-1"), "shared")
+                .resolve(SkillPaths.SKILL_FILE_NAME)
+
+            // A member tampers with the group's working copy, then runs their own refresh.
+            file.writeText("---\nname: shared\ndescription: d\n---\nhijacked by a member")
+            val outcome = chain.sync.syncForOwners(listOf("alice", "grp-1"), self = "alice")
+
+            assertEquals(0, outcome.pushed)
+            assertEquals(1, outcome.restored)
+            assertEquals(row.checksum, chain.catalog.allRows().single { it.userId == "grp-1" }.checksum)
+            assertTrue(chain.storage.objects.getValue(row.objectKey).bytes.contentEquals(bytesBefore),
+                "the group package must not be overwritten by a member")
+            assertTrue(file.readText().contains("group built-in"),
+                "the working copy must be re-mirrored from the authoritative package")
+            assertTrue(!file.readText().contains("hijacked"))
         }
     }
 

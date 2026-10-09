@@ -56,7 +56,7 @@ class MusicGenTool(
         val explicitTaskId = (args["taskId"] as? String)?.takeIf { it.isNotBlank() }
         val prompt = (args["prompt"] as? String)?.takeIf { it.isNotBlank() }
 
-        val settings = resolver.resolveEntry(userId, MediaProviderSettings.SERVICE_KIND_MUSIC, model)
+        val settings = resolver.resolveEntry(agentContext.effectiveOwners, MediaProviderSettings.SERVICE_KIND_MUSIC, model)
             ?: return errorResult(toolCallId, name, "no enabled music model is configured${model?.let { " for '$it'" } ?: ""}")
         val client = AsyncGenerationClient(
             settings,

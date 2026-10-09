@@ -48,13 +48,11 @@ class ObjectStorageAutoConfigurationTest {
         override suspend fun delete(userId: String): Boolean = rows.remove(userId) != null
     }
 
-    private fun configuration(): ObjectStorageAutoConfiguration = ObjectStorageAutoConfiguration()
-
     private fun localRow(dir: String) =
         StorageSettings(enabled = true, type = "local", localDir = dir)
 
-    private fun resolverWith(store: StorageSettingsStore?): ObjectStorageResolver =
-        configuration().objectStorageResolver(store)
+    private fun resolverWith(store: StorageSettingsStore?, staticProps: StorageProperties? = null): ObjectStorageResolver =
+        DefaultObjectStorageResolver(store, staticProps)
 
     @Nested
     inner class `the resolver bean` {
@@ -145,6 +143,77 @@ class ObjectStorageAutoConfigurationTest {
 
             val error = assertFailsWith<ObjectStorageException> { resolver.resolve("alice") }
             assertTrue("invalid" in error.message!!, "got: ${error.message}")
+        }
+    }
+
+    @Nested
+    inner class `the group and static chain` {
+
+        @Test
+        fun `owners resolve in priority order self then group then system`() = runBlocking {
+            val store = InMemorySettingsStore()
+            store.rows["grp-1"] = localRow(root.resolve("group").toString())
+            store.rows["system"] = localRow(root.resolve("system").toString())
+            val resolver = resolverWith(store)
+
+            // alice has no own row → the group bucket wins over system.
+            val storage = resolver.resolve(listOf("alice", "grp-1", "system")) ?: error("group row is enabled")
+            storage.put("probe.txt", byteArrayOf(7), "text/plain")
+            assertTrue(Files.exists(root.resolve("group/probe.txt")))
+            assertEquals(StorageSource.USER, resolver.sourceOf(listOf("alice", "grp-1", "system")))
+        }
+
+        @Test
+        fun `a personal row shadows the group bucket`() = runBlocking {
+            val store = InMemorySettingsStore()
+            store.rows["alice"] = localRow(root.resolve("alice").toString())
+            store.rows["grp-1"] = localRow(root.resolve("group").toString())
+            val resolver = resolverWith(store)
+
+            val storage = resolver.resolve(listOf("alice", "grp-1")) ?: error("own row is enabled")
+            storage.put("probe.txt", byteArrayOf(7), "text/plain")
+            assertTrue(Files.exists(root.resolve("alice/probe.txt")), "self must win over group")
+        }
+
+        @Test
+        fun `a group-owner save clears every member's cached resolution`() = runBlocking {
+            val store = InMemorySettingsStore()
+            store.rows["grp-1"] = localRow(root.resolve("group-v1").toString())
+            val resolver = resolverWith(store)
+            val owners = listOf("alice", "grp-1")
+
+            val before = resolver.resolve(owners)
+            store.rows["grp-1"] = localRow(root.resolve("group-v2").toString())
+            val stale = resolver.resolve(owners)
+            assertSame(before, stale, "the cache must hold until refresh")
+
+            resolver.refresh("grp-1")
+            val after = resolver.resolve(owners) ?: error("the row is enabled")
+            after.put("probe.txt", byteArrayOf(7), "text/plain")
+            assertTrue(Files.exists(root.resolve("group-v2/probe.txt")))
+        }
+
+        @Test
+        fun `the static layer shadows every database row`() = runBlocking {
+            val store = InMemorySettingsStore()
+            store.rows["alice"] = localRow(root.resolve("alice").toString())
+            val static = StorageProperties(enabled = true, type = "local", localDir = root.resolve("static").toString())
+            val resolver = resolverWith(store, static)
+
+            val storage = resolver.resolve(listOf("alice", "system")) ?: error("static is enabled")
+            storage.put("probe.txt", byteArrayOf(7), "text/plain")
+            assertTrue(Files.exists(root.resolve("static/probe.txt")), "STATIC must win over the own row")
+            assertEquals(StorageSource.STATIC, resolver.sourceOf(listOf("alice")))
+        }
+
+        @Test
+        fun `a disabled static layer falls back to the database chain`() = runBlocking {
+            val store = InMemorySettingsStore()
+            store.rows["alice"] = localRow(root.resolve("alice").toString())
+            val static = StorageProperties(enabled = false, type = "local", localDir = root.resolve("static").toString())
+            val resolver = resolverWith(store, static)
+
+            assertEquals(StorageSource.USER, resolver.sourceOf(listOf("alice")))
         }
     }
 }

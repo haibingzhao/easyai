@@ -12,14 +12,19 @@ import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Resolves media-generation entries per user and kind from `model_provider_config` rows of the
- * matching [ModelType]. The store's user scoping already folds shared `system` rows into every
- * user's view; [sourceOf] reports whether the leading entry is the caller's own.
+ * Resolves media-generation entries per caller and kind from `model_provider_config` rows of the
+ * matching [ModelType]. The caller passes its full visibility set (self → group → system); the
+ * layers are consulted in order and the first one with enabled rows shadows the rest, so a member's
+ * own rows win over the group bucket, which wins over the shared `system` rows. [sourceOf] reports
+ * whether the leading layer is the shared `system` fallback or something caller-specific.
  *
- * Per `(user, kind)` entry lists are cached, and [refresh] (called by the model-config endpoint
- * right after a save or delete) is the whole hot-apply mechanism — no restart. An invalid stored
- * row is *not* fatal: media tools fail loudly at call time, so a corrupt row is dropped from the
- * list and, if nothing valid remains, the tool hides itself.
+ * Per `(owners, kind)` entry lists are cached, and [refresh] (called by the model-config endpoint
+ * right after a save or delete) is the whole hot-apply mechanism — no restart. Refreshing the shared
+ * `system` owner drops the entire cache (its rows fold into every caller's view and cannot be traced
+ * back individually); refreshing any other owner evicts every cached entry whose owner set contains
+ * it, so one group-owner save clears the whole group. An invalid stored row is *not* fatal: media
+ * tools fail loudly at call time, so a corrupt row is dropped from the list and, if nothing valid
+ * remains, the tool hides itself.
  *
  * The check-then-put race of the storage resolver is closed here with a per-key [Mutex]
  * single-flight so only one caller computes a given entry list.
@@ -32,18 +37,25 @@ class DefaultMediaProviderResolver(
 
     private data class Effective(val entries: List<MediaProviderSettings>, val source: MediaProviderSource)
 
-    private val cache = ConcurrentHashMap<String, Effective>()
-    private val locks = ConcurrentHashMap<String, Mutex>()
+    /**
+     * Cache key: the exact owner list a resolution was computed for, plus the generation kind.
+     * Ordered, not a set — [compute] picks the winning layer by position, so two callers passing the
+     * same owners in a different priority order must not share an entry.
+     */
+    private data class Key(val owners: List<String>, val serviceKind: String)
 
-    override suspend fun resolveEntries(userId: String, serviceKind: String): List<MediaProviderSettings> =
-        effective(userId, serviceKind).entries
+    private val cache = ConcurrentHashMap<Key, Effective>()
+    private val locks = ConcurrentHashMap<Key, Mutex>()
+
+    override suspend fun resolveEntries(owners: Collection<String>, serviceKind: String): List<MediaProviderSettings> =
+        effective(owners, serviceKind).entries
 
     override suspend fun resolveEntry(
-        userId: String,
+        owners: Collection<String>,
         serviceKind: String,
         model: String?
     ): MediaProviderSettings? {
-        val entries = resolveEntries(userId, serviceKind)
+        val entries = resolveEntries(owners, serviceKind)
         if (entries.isEmpty()) return null
         val wanted = model?.trim()?.takeIf { it.isNotEmpty() }
             ?: return entries.firstOrNull { it.isDefault } ?: entries.first()
@@ -53,52 +65,55 @@ class DefaultMediaProviderResolver(
             ?: entries.first()
     }
 
-    override suspend fun sourceOf(userId: String, serviceKind: String): MediaProviderSource =
-        effective(userId, serviceKind).source
+    override suspend fun sourceOf(owners: Collection<String>, serviceKind: String): MediaProviderSource =
+        effective(owners, serviceKind).source
 
     override fun refresh(userId: String) {
         if (userId == SYSTEM_USER_ID) {
-            // System rows are cached under every user without their own rows and those entries
-            // cannot be traced back individually — drop the whole cache. Saves are rare enough.
+            // System rows fold into every caller's view and those entries cannot be traced back
+            // individually — drop the whole cache. Saves are rare enough.
             cache.keys.toList().forEach { cache.remove(it) }
             locks.keys.toList().forEach { locks.remove(it) }
         } else {
-            val prefix = "$userId|"
-            cache.keys.toList().filter { it.startsWith(prefix) }.forEach { cache.remove(it) }
+            cache.keys.toList().filter { userId in it.owners }.forEach { cache.remove(it) }
         }
     }
 
-    private suspend fun effective(userId: String, serviceKind: String): Effective {
-        val key = cacheKey(userId, serviceKind)
+    private suspend fun effective(owners: Collection<String>, serviceKind: String): Effective {
+        val key = keyOf(owners, serviceKind) ?: return Effective(emptyList(), MediaProviderSource.NONE)
         cache[key]?.let { return it }
-        // Single-flight: only one caller computes a given (user, kind); others await the lock and
+        // Single-flight: only one caller computes a given (owners, kind); others await the lock and
         // then read the freshly-populated cache instead of racing to rebuild the same entry.
         val mutex = locks.getOrPut(key) { Mutex() }
         return mutex.withLock {
-            cache[key] ?: compute(userId, serviceKind).also { cache[key] = it }
+            cache[key] ?: compute(key.owners, serviceKind).also { cache[key] = it }
         }
     }
 
-    private suspend fun compute(userId: String, serviceKind: String): Effective {
+    private suspend fun compute(owners: List<String>, serviceKind: String): Effective {
         val configStore = store ?: return Effective(emptyList(), MediaProviderSource.NONE)
         val modelType = toModelType(serviceKind)
             ?: return Effective(emptyList(), MediaProviderSource.NONE)
-        val visible = configStore.getModelConfigs(modelType, userId).filter { it.enabled && it.isCustom }
-        // Two layers: the caller's own rows shadow the shared `system` rows entirely.
-        val userRows = visible.filter { it.userId == userId }
-        val rows = userRows.ifEmpty { visible }
+        // The shared `system` layer is always the final fallback, even for single-owner callers.
+        val layered = (owners + SYSTEM_USER_ID).filter { it.isNotBlank() }.distinct()
+        val visible = configStore.getModelConfigs(modelType, layered).filter { it.enabled && it.isCustom }
+        // Priority: the first owner in `layered` order with enabled rows shadows every lower layer.
+        val rows = layered.firstNotNullOfOrNull { owner ->
+            visible.filter { it.userId == owner }.takeIf { it.isNotEmpty() }
+        } ?: emptyList()
         val entries = rows.mapNotNull { row ->
             val settings = row.toMediaSettings(serviceKind)
             val problem = MediaProviderFactory.validate(settings)
             if (problem != null) {
-                logger.warn("Ignoring invalid {} media entry '{}' for user '{}': {}", serviceKind, row.id, userId, problem)
+                logger.warn("Ignoring invalid {} media entry '{}' for owners '{}': {}", serviceKind, row.id, owners, problem)
                 null
             } else settings
         }
+        val matchedOwner = layered.firstOrNull { owner -> rows.any { it.userId == owner } }
         val source = when {
             rows.isEmpty() -> MediaProviderSource.NONE
-            userRows.isNotEmpty() -> MediaProviderSource.USER
-            else -> MediaProviderSource.SYSTEM
+            matchedOwner == SYSTEM_USER_ID -> MediaProviderSource.SYSTEM
+            else -> MediaProviderSource.USER
         }
         return Effective(entries, source)
     }
@@ -117,7 +132,10 @@ class DefaultMediaProviderResolver(
         isDefault = isDefault
     )
 
-    private fun cacheKey(userId: String, serviceKind: String): String = "$userId|$serviceKind"
+    private fun keyOf(owners: Collection<String>, serviceKind: String): Key? {
+        val ordered = owners.filter { it.isNotBlank() }.distinct()
+        return if (ordered.isEmpty()) null else Key(ordered, serviceKind)
+    }
 
     companion object {
         /** Shared fallback owner, matching the `user_id` column default. */

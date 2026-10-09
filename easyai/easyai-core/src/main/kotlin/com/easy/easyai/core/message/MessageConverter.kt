@@ -21,7 +21,11 @@ import org.springframework.ai.chat.messages.SystemMessage as SpringAiSystemMessa
 import org.springframework.ai.chat.messages.UserMessage as SpringAiUserMessage
 
 interface MessageConverter {
-    suspend fun toSpringAiMessages(messages: List<EasyAiMessage>, userId: String = "system"): List<Message>
+    suspend fun toSpringAiMessages(
+        messages: List<EasyAiMessage>,
+        userId: String = "system",
+        owners: Collection<String> = listOf(userId)
+    ): List<Message>
     fun fromSpringAiResponse(response: ChatResponse): AssistantMessage
 }
 
@@ -54,7 +58,11 @@ class DefaultMessageConverter(
 
     private val logger = LoggerFactory.getLogger(javaClass)
 
-    override suspend fun toSpringAiMessages(messages: List<EasyAiMessage>, userId: String): List<Message> =
+    override suspend fun toSpringAiMessages(
+        messages: List<EasyAiMessage>,
+        userId: String,
+        owners: Collection<String>
+    ): List<Message> =
         messages.flatMap { msg ->
             when (msg) {
                 is UserMessage -> {
@@ -94,7 +102,7 @@ class DefaultMessageConverter(
                             // directly. Markers are rebuilt from the persisted refs on every request and
                             // never persisted themselves; stale copies the model echoed into later tool
                             // arguments are re-signed by sanitizePresignedUrls.
-                            val stored = resolveStoredImage(ref, userId)
+                            val stored = resolveStoredImage(ref, userId, owners)
                             mediaList.add(stored.media)
                             anchoredInsertions.add(
                                 AnchoredInsertion(
@@ -237,7 +245,7 @@ class DefaultMessageConverter(
                         )
                     }
 
-                    val text = sanitizePresignedUrls(textParts.joinToString("\n\n"), userId)
+                    val text = sanitizePresignedUrls(textParts.joinToString("\n\n"), owners)
                     if (text.isEmpty() && mediaList.isEmpty()) emptyList()
                     else {
                         if (mediaList.isEmpty()) {
@@ -254,7 +262,7 @@ class DefaultMessageConverter(
                 }
                 is AssistantMessage -> {
                     val text = msg.content.filterIsInstance<TextContent>().joinToString("") { it.text }
-                    val sanitizedText = sanitizePresignedUrls(text, userId)
+                    val sanitizedText = sanitizePresignedUrls(text, owners)
                     val toolCalls = msg.content.filterIsInstance<ToolCallContent>()
                     val springAiToolCalls = toolCalls.map { tc ->
                         // Replayed arguments are a context source too: the model copies image URLs
@@ -262,7 +270,7 @@ class DefaultMessageConverter(
                         // arguments first (e.g. eliding display-only payloads).
                         val args = ToolContextProjector.projectSafely(contextProjectors, tc.name, tc.arguments)
                         SpringAiAssistantMessage.ToolCall(
-                            tc.id, "function", tc.name, sanitizePresignedUrls(args, userId)
+                            tc.id, "function", tc.name, sanitizePresignedUrls(args, owners)
                         )
                     }
                     if (springAiToolCalls.isEmpty()) {
@@ -277,7 +285,7 @@ class DefaultMessageConverter(
                     // oversized results are spilled to the temp dir and replaced with a pointer notice,
                     // so no send-time re-processing is needed here.
                     val responses = msg.toolResults.map { entry ->
-                        ToolResponseMessage.ToolResponse(entry.toolCallId, entry.toolName, sanitizePresignedUrls(entry.result, userId))
+                        ToolResponseMessage.ToolResponse(entry.toolCallId, entry.toolName, sanitizePresignedUrls(entry.result, owners))
                     }
                     listOf(ToolResponseMessage.builder().responses(responses).build())
                 }
@@ -315,11 +323,11 @@ class DefaultMessageConverter(
      * Sanitize text by replacing expired presigned URLs with fresh ones.
      * This prevents the LLM from using expired URLs in tool calls.
      */
-    private suspend fun sanitizePresignedUrls(text: String, userId: String): String {
+    private suspend fun sanitizePresignedUrls(text: String, owners: Collection<String>): String {
         if (objectStorageResolver == null || !text.contains("Signature") && !text.contains("OSSAccessKeyId")) {
             return text
         }
-        val storage = objectStorageResolver.resolve(userId) ?: return text
+        val storage = objectStorageResolver.resolve(owners) ?: return text
 
         // Collect expired presigned URLs first. Matches stop at the first character outside the
         // URL charset so glued punctuation (markdown parens, CJK prose) survives replacement.
@@ -364,10 +372,10 @@ class DefaultMessageConverter(
     /** Media for a stored chat image plus this turn's tool-usable signed URL (null on the byte fallback). */
     private data class StoredImage(val media: Media, val signedUrl: String?)
 
-    private suspend fun resolveStoredImage(ref: FileRefContent, userId: String): StoredImage {
+    private suspend fun resolveStoredImage(ref: FileRefContent, userId: String, owners: Collection<String>): StoredImage {
         val stored = StoredFileReference.parse(ref.filePath, userId)
         require(ref.mimeType in STORED_IMAGE_MIME_TYPES) { "Unsupported stored chat image MIME type" }
-        val storage = objectStorageResolver?.resolve(userId)
+        val storage = objectStorageResolver?.resolve(owners)
             ?: throw ObjectStorageException("Object storage is unavailable for the stored chat image")
         val meta = storage.head(stored.key)
             ?: throw ObjectStorageException("Stored chat image does not exist: ${stored.key}")

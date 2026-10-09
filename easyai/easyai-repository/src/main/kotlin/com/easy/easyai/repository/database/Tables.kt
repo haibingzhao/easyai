@@ -90,10 +90,16 @@ object Tables {
      * - SUBAGENT: which sub-agents a primary agent can invoke
      *
      * An empty result for an agent means "inherit all" (primary) or "inherit parent tools" (sub-agent).
+     *
+     * [userId] is the owner of the agent row the whitelist belongs to — always equal to
+     * `agent.user_id`, never the requesting caller's. `agent.id` is only unique per owner bucket
+     * (the agent PK is `(id, user_id)`), so without this column two agents sharing an id across
+     * buckets would share one whitelist and the last writer would silently overwrite the other's.
      */
     object AgentToolTable : Table("agent_tool") {
         val id = varchar("id", 255)
         val agentId = varchar("agent_id", 255)
+        val userId = varchar("user_id", 255).default("system")
         val targetType = varchar("target_type", 16).default("TOOL")
         val targetName = varchar("target_name", 128).default("")
         val metadata = text("metadata").nullable()
@@ -101,8 +107,8 @@ object Tables {
         override val primaryKey = PrimaryKey(id)
 
         init {
-            // Index for high-frequency agentId lookups
-            index(false, agentId)
+            // Index for high-frequency (agentId, userId) whitelist lookups
+            index(false, agentId, userId)
         }
     }
 

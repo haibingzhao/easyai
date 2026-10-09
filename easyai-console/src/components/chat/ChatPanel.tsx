@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { MessageList } from './MessageList';
 import { MessageEditor } from './MessageEditor';
+import { QuestionNavigator } from './QuestionNavigator';
 import { ArtifactPanel } from '../artifacts/ArtifactPanel';
 import { WelcomeScreen } from './WelcomeScreen';
 import { useChatStore } from '@/services/stores/chat-store';
@@ -426,6 +427,24 @@ export const ChatPanel: React.FC = () => {
     }
   }, [runningSessionId]);
 
+  // Scroll to bottom when switching sessions (history load, fork navigation, startup restore)
+  const prevSessionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevSessionIdRef.current;
+    prevSessionIdRef.current = sessionId;
+    if (!sessionId || sessionId === prev) return;
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    // This jump is ours, not the user's: reset the scroll-up heuristic first, or switching into a
+    // shorter session (a smaller scrollTop than the one we left) would read as "user scrolled up"
+    // in handleMessagesScroll and switch auto-follow off for the whole new session.
+    autoScrollEnabledRef.current = true;
+    prevScrollTopRef.current = 0;
+    requestAnimationFrame(() => {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+    });
+  }, [sessionId]);
+
   // Undo/Redo keyboard shortcuts (Cmd+Z / Cmd+Shift+Z)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -566,28 +585,31 @@ export const ChatPanel: React.FC = () => {
           {selectedExecutionId ? (
             <TeamMemberDetail />
           ) : (
-          <div
-            ref={messagesContainerRef}
-            className="flex-1 overflow-y-auto"
-            onScroll={handleMessagesScroll}
-          >
-            {/* Sticky header: TokenContextBar — aligned with message list */}
-            <div className="sticky top-0 z-10 bg-background border-b border-border max-h-[50vh] overflow-y-auto">
-              <TokenContextBar />
-            </div>
-
-            {showWelcome ? (
-              <WelcomeScreen />
-            ) : (
-              <MessageList messages={messages} isStreaming={isStreaming} />
-            )}
-            {/* Running session indicator */}
-            {runningSessionId && (
-              <div className="px-4 py-2 flex items-center gap-2 text-sm text-muted-foreground">
-                <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                <span>{i18n('Session is running...')}</span>
+          <div className="relative flex-1 min-h-0">
+            <div
+              ref={messagesContainerRef}
+              className="h-full overflow-y-auto"
+              onScroll={handleMessagesScroll}
+            >
+              {/* Sticky header: TokenContextBar — aligned with message list */}
+              <div className="sticky top-0 z-10 bg-background border-b border-border max-h-[50vh] overflow-y-auto">
+                <TokenContextBar />
               </div>
-            )}
+
+              {showWelcome ? (
+                <WelcomeScreen />
+              ) : (
+                <MessageList messages={messages} isStreaming={isStreaming} />
+              )}
+              {/* Running session indicator */}
+              {runningSessionId && (
+                <div className="px-4 py-2 flex items-center gap-2 text-sm text-muted-foreground">
+                  <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                  <span>{i18n('Session is running...')}</span>
+                </div>
+              )}
+            </div>
+            {!isMobile && <QuestionNavigator messages={messages} containerRef={messagesContainerRef} />}
           </div>
           )}
 

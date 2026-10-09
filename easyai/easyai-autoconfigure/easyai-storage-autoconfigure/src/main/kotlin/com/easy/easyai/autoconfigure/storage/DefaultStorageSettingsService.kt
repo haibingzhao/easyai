@@ -24,7 +24,7 @@ class DefaultStorageSettingsService(
 
     override suspend fun current(userId: String): StorageSettings? = store?.get(userId)
 
-    override suspend fun effectiveSource(userId: String): StorageSource = resolver.sourceOf(userId)
+    override suspend fun effectiveSource(owners: Collection<String>): StorageSource = resolver.sourceOf(owners)
 
     override suspend fun save(userId: String, settings: StorageSettings): StorageSettingsResult {
         val settingsStore = store ?: return StorageSettingsResult.Unavailable

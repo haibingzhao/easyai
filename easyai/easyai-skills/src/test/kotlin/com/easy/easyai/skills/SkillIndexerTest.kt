@@ -121,7 +121,7 @@ class SkillIndexerTest {
             Files.setLastModifiedTime(file, stamp)
             // The indexer runs alone here: mtime says nothing moved, so only the content digest can
             // reveal the drift — and the indexer must push the package itself, not wait for a sync.
-            val outcome = chain.indexer.reconcileByDrift(listOf("alice"))
+            val outcome = chain.indexer.reconcileByDrift(listOf("alice"), self = "alice")
             val row = chain.catalog.allRows().single()
             assertEquals(1, outcome.updated)
             assertEquals("new body", chain.registry.get("alice", "draft")?.content)

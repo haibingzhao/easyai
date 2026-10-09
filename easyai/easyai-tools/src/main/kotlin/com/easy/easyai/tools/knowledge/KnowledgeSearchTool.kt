@@ -11,7 +11,8 @@ import kotlinx.coroutines.CoroutineScope
 
 internal class KnowledgeSearchTool(
     metadata: ToolMetadata,
-    private val store: KnowledgeStore
+    private val store: KnowledgeStore,
+    private val knowledgeOwnerId: String
 ) : BaseToolDefinition(metadata) {
 
     data class Parameters(
@@ -35,9 +36,8 @@ internal class KnowledgeSearchTool(
         }
         val source = args["source"] as? String
         val kcategory = args["kcategory"] as? String
-        val userId = agentContext.userId ?: DEFAULT_USER_ID
 
-        val entries = store.list(userId, source = source, kcategory = kcategory, query = query)
+        val entries = store.list(knowledgeOwnerId, source = source, kcategory = kcategory, query = query)
 
         val text = if (entries.isEmpty()) {
             "No knowledge entries found matching '$query'."
@@ -53,8 +53,5 @@ internal class KnowledgeSearchTool(
     private companion object {
         /** Max characters of entry content returned per search hit, reducing follow-up knowledge_read calls. */
         const val CONTENT_PREVIEW_LIMIT = 1500
-
-        /** Fallback user id when no authenticated user is present (matches KnowledgeController behavior). */
-        const val DEFAULT_USER_ID = "system"
     }
 }
