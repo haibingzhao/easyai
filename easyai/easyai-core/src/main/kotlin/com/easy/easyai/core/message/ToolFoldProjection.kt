@@ -59,6 +59,9 @@ data class FoldReport(
  * Invariants (required by downstream consumers):
  * - Message count, order and ids are unchanged — assistant tool_calls and their ToolResultMessage
  *   stay paired, so the Spring AI conversion and provider protocol validation are unaffected.
+ * - A folded tool-call's arguments stay a valid JSON object (never a bare string): providers such as
+ *   Anthropic re-parse the tool-call input into a Map, so a non-JSON placeholder would be rejected
+ *   and silently dropped along with its `recall_tool_result` hint.
  * - Deterministic: the same input always produces byte-identical output, keeping prompt
  *   prefix caching stable across turns within a run.
  * - Never written back to the transcript or persisted; the transcript always holds originals.
@@ -258,7 +261,13 @@ object ToolFoldProjection {
 
     private fun toolCallPlaceholder(ref: String, toolName: String, argumentsJson: String, objectMapper: ObjectMapper): String {
         val summary = summarizeArguments(argumentsJson, objectMapper)
-        return "[tool: $toolName $summary (details folded; recall: recall_tool_result ref=\"$ref\")]"
+        // Must stay a valid JSON object: providers that re-parse tool-call input (e.g. Anthropic's
+        // AnthropicChatModel.buildToolInput → readValue(Map)) reject a bare bracket string, drop the
+        // arguments, and lose the recall hint. A JSON object carries the same summary + ref safely.
+        val placeholder = LinkedHashMap<String, String>()
+        placeholder["_folded"] = "tool: $toolName $summary"
+        placeholder["_recall"] = "recall_tool_result ref=\"$ref\""
+        return objectMapper.writeValueAsString(placeholder)
     }
 
     /**

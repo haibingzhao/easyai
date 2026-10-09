@@ -1,5 +1,6 @@
 import type { McpServerDto, McpServerCreateRequest, McpBulkImportRequest, McpToolInfo, McpPromptInfo } from '@/types/mcp';
-import { fetchJson, fetchVoid, JSON_HEADERS } from '@/services/api-client';
+import { fetchJson, fetchVoid, scopeQuery, JSON_HEADERS } from '@/services/api-client';
+import type { AssetScope } from '@/services/api-client';
 
 const API_BASE = '/api/mcp/servers';
 
@@ -8,32 +9,32 @@ export class McpService {
     return fetchJson<McpServerDto[]>(API_BASE);
   }
 
-  async createServer(request: McpServerCreateRequest): Promise<McpServerDto> {
-    return fetchJson<McpServerDto>(API_BASE, {
+  async createServer(request: McpServerCreateRequest, scope?: AssetScope): Promise<McpServerDto> {
+    return fetchJson<McpServerDto>(`${API_BASE}${scopeQuery(scope)}`, {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(request),
     });
   }
 
-  async bulkImport(request: McpBulkImportRequest): Promise<McpServerDto[]> {
-    return fetchJson<McpServerDto[]>(`${API_BASE}/import`, {
+  async bulkImport(request: McpBulkImportRequest, scope?: AssetScope): Promise<McpServerDto[]> {
+    return fetchJson<McpServerDto[]>(`${API_BASE}/import${scopeQuery(scope)}`, {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(request),
     });
   }
 
-  async updateServer(name: string, request: McpServerCreateRequest): Promise<McpServerDto> {
-    return fetchJson<McpServerDto>(`${API_BASE}/${encodeURIComponent(name)}`, {
+  async updateServer(name: string, request: McpServerCreateRequest, scope?: AssetScope): Promise<McpServerDto> {
+    return fetchJson<McpServerDto>(`${API_BASE}/${encodeURIComponent(name)}${scopeQuery(scope)}`, {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify(request),
     });
   }
 
-  async deleteServer(name: string): Promise<void> {
-    return fetchVoid(`${API_BASE}/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  async deleteServer(name: string, scope?: AssetScope): Promise<void> {
+    return fetchVoid(`${API_BASE}/${encodeURIComponent(name)}${scopeQuery(scope)}`, { method: 'DELETE' });
   }
 
   async connectServer(name: string): Promise<McpServerDto> {

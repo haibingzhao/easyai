@@ -8,13 +8,15 @@ import org.springframework.core.env.ConfigurableEnvironment
 import org.springframework.core.env.MapPropertySource
 
 /**
- * Reads `~/.easyai/db-config.json` and resolves database configuration
- * before Spring context initialization.
+ * Resolves database configuration before Spring context initialization.
  *
- * Resolution order:
- * 1. If `db-config.json` exists → use it to set `easyai.r2dbc.*` properties
- * 2. If `easyai.r2dbc.url` is explicitly set in Spring Environment → use existing config
- * 3. Otherwise → enter Setup Mode (`easyai.database.configured=false`)
+ * Resolution order (properties are authoritative when present):
+ * 1. If `easyai.r2dbc.url` is explicitly set in Spring Environment → use it, `source=spring`, and
+ *    **skip** `db-config.json`. A deployment that pins the database via properties must not be
+ *    silently overridden by a stale file left over from an earlier first-run setup.
+ * 2. Else if `db-config.json` exists → use it, `source=file` (the desktop / first-run flow, which
+ *    sets no `easyai.r2dbc.*` properties).
+ * 3. Otherwise → enter Setup Mode (`easyai.database.configured=false`).
  *
  * In Setup Mode, [R2dbcRepositoryAutoConfiguration] is deactivated and
  * the setup API becomes available for initial database configuration.
@@ -31,24 +33,10 @@ class DatabaseConfigEnvironmentPostProcessor : EnvironmentPostProcessor, Ordered
     override fun postProcessEnvironment(environment: ConfigurableEnvironment, application: SpringApplication) {
         val props = mutableMapOf<String, Any>()
 
-        // Step 1: Try loading db-config.json
-        val fileConfig = DatabaseConfig.load()
-        if (fileConfig != null) {
-            logger.info("Loaded database configuration from db-config.json (dbType={})", fileConfig.dbType)
-            val r2dbc = fileConfig.toR2dbcProperties()
-            props["easyai.r2dbc.enabled"] = "true"
-            props["easyai.r2dbc.url"] = r2dbc.url
-            props["easyai.r2dbc.username"] = r2dbc.username
-            props["easyai.r2dbc.password"] = r2dbc.password
-            props["easyai.database.configured"] = "true"
-            props["easyai.database.type"] = fileConfig.dbType
-            props["easyai.database.source"] = "file"
-            addPropertySource(environment, props)
-            return
-        }
-
-        // Step 2: Check if easyai.r2dbc.url is explicitly set in Spring Environment
-        // (from application.properties, command-line args, or environment variables)
+        // Step 1: Spring properties win when set. Checking this before the file means a deployment
+        // pinned via `easyai.r2dbc.*` is never overridden by a residual db-config.json — the file is
+        // only consulted when no property url exists. `environment.getProperty` here reflects only
+        // Spring config sources (properties, args, env); this processor has not injected the file yet.
         val explicitUrl = environment.getProperty("easyai.r2dbc.url")
         if (!explicitUrl.isNullOrBlank()) {
             logger.info("Using database configuration from Spring properties (url={})", explicitUrl)
@@ -68,7 +56,23 @@ class DatabaseConfigEnvironmentPostProcessor : EnvironmentPostProcessor, Ordered
             return
         }
 
-        // Step 3: No configuration found
+        // Step 2: No property url — fall back to db-config.json (desktop / first-run setup).
+        val fileConfig = DatabaseConfig.load()
+        if (fileConfig != null) {
+            logger.info("Loaded database configuration from db-config.json (dbType={})", fileConfig.dbType)
+            val r2dbc = fileConfig.toR2dbcProperties()
+            props["easyai.r2dbc.enabled"] = "true"
+            props["easyai.r2dbc.url"] = r2dbc.url
+            props["easyai.r2dbc.username"] = r2dbc.username
+            props["easyai.r2dbc.password"] = r2dbc.password
+            props["easyai.database.configured"] = "true"
+            props["easyai.database.type"] = fileConfig.dbType
+            props["easyai.database.source"] = "file"
+            addPropertySource(environment, props)
+            return
+        }
+
+        // Step 3: No configuration found.
         // Only enter Setup Mode for web deployments (webflux on classpath).
         // Non-web apps (tests, shell) fall through to default H2 in-memory.
         val isWebApp = isClassPresent("org.springframework.web.reactive.DispatcherHandler")

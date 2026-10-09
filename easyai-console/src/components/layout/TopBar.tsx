@@ -1,7 +1,7 @@
 import React from 'react';
 import { useLocation } from 'react-router-dom';
 import { Menu } from 'lucide-react';
-import { NAV_ITEMS, EXTRA_NAV_ITEMS, TOPBAR_EXTRA_ITEMS, resolveActiveNavItem } from '@/constants/navigation';
+import { NAV_ITEMS, EXTRA_NAV_ITEMS, TOPBAR_EXTRA_ITEMS, APP_CONFIG, resolveActiveNavItem } from '@/constants/navigation';
 import { useNavStore } from '@/services/stores/nav-store';
 import { useFeatureStore } from '@/services/stores/feature-store';
 import { i18n } from '@/utils/i18n';
@@ -40,7 +40,7 @@ export const TopBar: React.FC = () => {
         {TOPBAR_EXTRA_ITEMS.map((Extra, index) => (
           <Extra key={index} />
         ))}
-        <ProjectSelector selectable={projectSelectionEnabled} />
+        {APP_CONFIG.showProjectSelector && <ProjectSelector selectable={projectSelectionEnabled} />}
         <UserMenu />
         <ThemeToggle />
       </div>

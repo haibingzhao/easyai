@@ -87,7 +87,7 @@ private class RenderVisualContextProjector : ToolContextProjector {
             val code = node.get(CODE_ARG)
             if (node is ObjectNode && code != null && code.isString) {
                 val bytes = code.stringValue().toByteArray(Charsets.UTF_8).size
-                node.put(CODE_ARG, "[fragment elided from context: $bytes bytes, rendered inline in the UI]")
+                node.put(CODE_ARG, RenderVisualTool.elidedPlaceholder(bytes))
                 objectMapper.writeValueAsString(node)
             } else {
                 argumentsJson

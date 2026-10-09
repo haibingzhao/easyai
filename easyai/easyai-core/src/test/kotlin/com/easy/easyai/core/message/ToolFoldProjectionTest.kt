@@ -9,8 +9,10 @@ import com.easy.easyai.core.model.ToolCallContent
 import com.easy.easyai.core.model.ToolResultEntry
 import com.easy.easyai.core.model.ToolResultMessage
 import com.easy.easyai.core.model.UserMessage
+import com.easy.easyai.common.util.SharedObjectMapper
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import tools.jackson.core.type.TypeReference
 import kotlin.test.assertEquals
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -83,7 +85,7 @@ class ToolFoldProjectionTest {
             // Segment 0 (run q1): indices 0..2 folded
             val firstAssistant = result[1] as AssistantMessage
             val foldedCall = firstAssistant.toolCalls().single()
-            assertTrue(foldedCall.arguments.startsWith("[tool: read path=/abs/Foo.kt"))
+            assertTrue(foldedCall.arguments.contains("tool: read path=/abs/Foo.kt"))
             assertTrue(foldedCall.arguments.contains("recall_tool_result"))
             val foldedResult = (result[2] as ToolResultMessage).toolResults.single()
             assertTrue(foldedResult.result.startsWith("[tool result: read ok"))
@@ -98,7 +100,7 @@ class ToolFoldProjectionTest {
             val (result, report) = ToolFoldProjection.project(messages, ToolFoldConfig(keepRecentRuns = 0))
             assertEquals(2, report.foldedRunCount)
             val run2Call = (result[4] as AssistantMessage).toolCalls().single()
-            assertTrue(run2Call.arguments.startsWith("[tool: bash"))
+            assertTrue(run2Call.arguments.contains("tool: bash"))
         }
 
         @Test
@@ -148,7 +150,7 @@ class ToolFoldProjectionTest {
             // Segments: [guidance+q1 run], [q2 run], [q3 run] → first segment folds
             assertTrue(report.foldedToolCallCount > 0)
             val firstAssistant = result[2] as AssistantMessage
-            assertTrue(firstAssistant.toolCalls().single().arguments.startsWith("[tool: read"))
+            assertTrue(firstAssistant.toolCalls().single().arguments.contains("tool: read"))
         }
     }
 
@@ -261,6 +263,16 @@ class ToolFoldProjectionTest {
         fun `bespoke mcp keys surface as key list`() {
             val placeholder = callArgs("""{"subscriptionId":"abc","dateRange":{"from":"2026-01-01"}}""")
             assertTrue(placeholder.contains("keys=[subscriptionId, dateRange]"))
+        }
+
+        @Test
+        fun `folded arguments re-parse as a json object so providers can rebuild the tool input`() {
+            val placeholder = callArgs("""{"path":"/abs/Foo.kt"}""")
+            val map = SharedObjectMapper.instance.readValue(
+                placeholder, object : TypeReference<Map<String, Any?>>() {}
+            )
+            assertTrue((map["_folded"] as String).contains("tool: read path=/abs/Foo.kt"))
+            assertTrue((map["_recall"] as String).contains("recall_tool_result ref="))
         }
     }
 }

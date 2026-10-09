@@ -50,6 +50,12 @@ class RenderVisualTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
         if (code.isNullOrBlank()) {
             return errorResult("Error: 'code' parameter is required and must not be empty")
         }
+        if (ELIDED_PLACEHOLDER.matches(code)) {
+            return errorResult(
+                "Error: 'code' is the context-elision placeholder, not a fragment — the original markup is not in " +
+                    "your context. Author the fragment from scratch and call render_visual again; never copy the placeholder."
+            )
+        }
         val bytes = code.toByteArray(Charsets.UTF_8).size
         if (bytes > MAX_FRAGMENT_BYTES) {
             return errorResult(
@@ -70,5 +76,13 @@ class RenderVisualTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
     companion object {
         /** Max fragment size: 2MB — matches the client-side rendering cap. */
         const val MAX_FRAGMENT_BYTES = 2L * 1024L * 1024L
+
+        /** Placeholder the context projector substitutes for elided fragments; never renderable. */
+        fun elidedPlaceholder(bytes: Int) =
+            "[fragment elided from context: $bytes bytes, rendered inline in the UI; " +
+                "never copy this placeholder into a new call — author the fragment from scratch]"
+
+        /** Matches [elidedPlaceholder] output so a parroted placeholder fails loudly instead of rendering. */
+        val ELIDED_PLACEHOLDER = Regex("""^\[fragment elided from context: \d+ bytes.*]$""")
     }
 }

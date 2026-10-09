@@ -1,5 +1,6 @@
 import type { ModelProviderInfo, ModelProviderConfig, ModelConfigGroup, SaveModelProviderConfigRequest, SaveModelConfigGroupRequest, ModelType, ModelConfigTestResult } from '@/types/settings';
-import { fetchJson, fetchVoid, JSON_HEADERS } from '@/services/api-client';
+import { fetchJson, fetchVoid, scopeQuery, JSON_HEADERS } from '@/services/api-client';
+import type { AssetScope } from '@/services/api-client';
 
 const API_BASE = '/api/chat';
 
@@ -27,10 +28,10 @@ export const modelConfigService = {
   },
 
   /**
-   * Save a new provider configuration.
+   * Save a new provider configuration. A `group` scope writes the shared bucket (group owner only).
    */
-  async saveConfiguration(request: SaveModelProviderConfigRequest): Promise<ModelProviderConfig> {
-    return fetchJson<ModelProviderConfig>(`${API_BASE}/model-configs`, {
+  async saveConfiguration(request: SaveModelProviderConfigRequest, scope?: AssetScope): Promise<ModelProviderConfig> {
+    return fetchJson<ModelProviderConfig>(`${API_BASE}/model-configs${scopeQuery(scope)}`, {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(request),
@@ -38,10 +39,11 @@ export const modelConfigService = {
   },
 
   /**
-   * Structural probe of a generation draft; never persists.
+   * Structural probe of a generation draft; never persists. Pass the same `scope` as the intended
+   * save so the probe resolves against the same bucket.
    */
-  async testGenerationConfig(request: SaveModelProviderConfigRequest): Promise<ModelConfigTestResult> {
-    return fetchJson<ModelConfigTestResult>(`${API_BASE}/model-configs/test`, {
+  async testGenerationConfig(request: SaveModelProviderConfigRequest, scope?: AssetScope): Promise<ModelConfigTestResult> {
+    return fetchJson<ModelConfigTestResult>(`${API_BASE}/model-configs/test${scopeQuery(scope)}`, {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(request),
@@ -51,8 +53,8 @@ export const modelConfigService = {
   /**
    * Delete a provider configuration.
    */
-  async deleteConfiguration(id: string): Promise<void> {
-    return fetchVoid(`${API_BASE}/model-configs/${id}`, { method: 'DELETE' });
+  async deleteConfiguration(id: string, scope?: AssetScope): Promise<void> {
+    return fetchVoid(`${API_BASE}/model-configs/${id}${scopeQuery(scope)}`, { method: 'DELETE' });
   },
 
   // ─── Model Config Groups ─────────────────────────────────────────────────────
@@ -68,8 +70,8 @@ export const modelConfigService = {
   /**
    * Create a new model config group.
    */
-  async saveGroup(request: SaveModelConfigGroupRequest): Promise<ModelConfigGroup> {
-    return fetchJson<ModelConfigGroup>(`${API_BASE}/model-groups`, {
+  async saveGroup(request: SaveModelConfigGroupRequest, scope?: AssetScope): Promise<ModelConfigGroup> {
+    return fetchJson<ModelConfigGroup>(`${API_BASE}/model-groups${scopeQuery(scope)}`, {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(request),
@@ -79,8 +81,8 @@ export const modelConfigService = {
   /**
    * Update a group's connection settings (cascades to member configs).
    */
-  async updateGroup(id: string, request: SaveModelConfigGroupRequest): Promise<ModelConfigGroup> {
-    return fetchJson<ModelConfigGroup>(`${API_BASE}/model-groups/${id}`, {
+  async updateGroup(id: string, request: SaveModelConfigGroupRequest, scope?: AssetScope): Promise<ModelConfigGroup> {
+    return fetchJson<ModelConfigGroup>(`${API_BASE}/model-groups/${id}${scopeQuery(scope)}`, {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: JSON.stringify(request),
@@ -90,7 +92,7 @@ export const modelConfigService = {
   /**
    * Delete a group and all its member model configs.
    */
-  async deleteGroup(id: string): Promise<void> {
-    return fetchVoid(`${API_BASE}/model-groups/${id}`, { method: 'DELETE' });
+  async deleteGroup(id: string, scope?: AssetScope): Promise<void> {
+    return fetchVoid(`${API_BASE}/model-groups/${id}${scopeQuery(scope)}`, { method: 'DELETE' });
   },
 };

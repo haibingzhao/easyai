@@ -20,7 +20,22 @@ export {
   getAccessToken,
   downloadBlob,
   JSON_HEADERS,
+  // Group-sharing write scope: hosts fold group ownership into login, then call
+  // setDefaultAssetScope('group') once so every console write routes to the shared bucket.
+  setDefaultAssetScope,
+  resolveWriteScope,
+  scopeQuery,
+  withScope,
 } from './services/api-client';
+export type { AssetScope } from './services/api-client';
+
+// Scope-aware asset services: exported so hosts can drive model / MCP / skill / storage / task-model
+// writes directly (passing an explicit `scope`) instead of relying on setDefaultAssetScope.
+export { modelConfigService } from './services/model-config-service';
+export { mcpService, McpService } from './services/mcp-service';
+export { SkillService, SHARED_OWNER_ID } from './services/skill-service';
+export { auxModelConfigService } from './services/aux-model-config-service';
+export { storageConfigService } from './services/storage-config-service';
 
 export {
   parseSSEStream,
@@ -57,6 +72,12 @@ export {
 } from './services/session-service';
 
 export { AgentService, agentService } from './services/agent-service';
+
+// Raw auth service: hosts that drive their own group-selection UI call `switchGroup(groupId)` /
+// `login(u, p, groupId)` to re-mint tokens under a group. `useAuthStore` wraps these with token
+// application + capability reload; export the service for hosts that manage that themselves.
+export { authService, AuthService } from './services/auth-service';
+export type { AuthResponse, UserProfile } from './services/auth-service';
 
 export { storageService } from './services/storage-service';
 
@@ -135,6 +156,10 @@ export { KnowledgePage } from './pages/KnowledgePage';
 export { CommandsPage } from './pages/CommandsPage';
 export { SkillsPage } from './pages/SkillsPage';
 export { SettingsPage } from './pages/SettingsPage';
+// Mutable Settings tab list — hosts trim tabs they don't surface (e.g. home-console drops
+// database / rag / integrations) by splicing this array before render.
+export { SETTINGS_MENU_ITEMS } from './pages/SettingsPage';
+export type { SettingsMenuItem } from './pages/SettingsPage';
 export { SwarmPresetEditorPage } from './pages/SwarmPresetEditorPage';
 export { WorkflowRunPage } from './pages/WorkflowRunPage';
 export { LoginPage } from './pages/LoginPage';

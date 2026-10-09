@@ -51,6 +51,13 @@ class RenderVisualToolTest {
             assertTrue(result.isError)
             assertTrue((result.content.first() as TextContent).text.contains("exceeds"))
         }
+
+        @Test
+        fun `parroted context-elision placeholder is rejected`() {
+            val result = execute(mapOf("title" to "diagram", "code" to RenderVisualTool.elidedPlaceholder(6443)))
+            assertTrue(result.isError)
+            assertTrue((result.content.first() as TextContent).text.contains("placeholder"))
+        }
     }
 
     @Nested
@@ -101,7 +108,7 @@ class RenderVisualToolTest {
             val projected = projector.project(arguments)
             assertTrue(projected.contains("\"title\":\"My Chart\""), projected)
             assertTrue(
-                projected.contains("[fragment elided from context: ${bulkyFragment.length} bytes, rendered inline in the UI]"),
+                projected.contains(RenderVisualTool.elidedPlaceholder(bulkyFragment.length)),
                 projected
             )
             assertFalse(projected.contains("<svg>"), projected)

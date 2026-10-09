@@ -64,4 +64,25 @@ class DatabaseConfigEnvironmentPostProcessorTest {
         assertEquals("file", env.getProperty("easyai.database.source"))
         assertEquals("true", env.getProperty("easyai.database.configured"))
     }
+
+    @Test
+    fun `spring properties win over a stale db-config file`() {
+        // A residual file from an earlier first-run setup must not override a deployment pinned via
+        // properties: the url the operator set is the one in force, and the source stays `spring`.
+        val config = DatabaseConfig(dbType = "h2", h2 = DatabaseConfig.H2Config(dir = tempHome.resolve("db").toString()))
+        DatabaseConfig.save(config)
+        val env = StandardEnvironment()
+        env.propertySources.addFirst(
+            MapPropertySource(
+                "test",
+                mapOf("easyai.r2dbc.url" to "r2dbc:postgresql://localhost:5432/easyai")
+            )
+        )
+
+        processor.postProcessEnvironment(env, application)
+
+        assertEquals("spring", env.getProperty("easyai.database.source"))
+        assertEquals("postgres", env.getProperty("easyai.database.type"))
+        assertEquals("r2dbc:postgresql://localhost:5432/easyai", env.getProperty("easyai.r2dbc.url"))
+    }
 }
