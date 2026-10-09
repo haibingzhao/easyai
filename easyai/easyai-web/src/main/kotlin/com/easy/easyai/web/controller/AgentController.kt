@@ -15,7 +15,9 @@ import com.easy.easyai.web.model.ConfigValidationError
 import com.easy.easyai.web.model.ValidateTemplateRequest
 import com.easy.easyai.web.model.ValidateTemplateResponse
 import com.easy.easyai.web.model.TemplateValidationError
-import com.easy.easyai.web.security.getCurrentUserId
+import com.easy.easyai.web.security.currentOwners
+import com.easy.easyai.web.security.parseAssetScope
+import com.easy.easyai.web.security.resolveWriteOwner
 import com.easy.easyai.web.service.validation.ResourceExistenceValidator
 import com.easy.easyai.web.service.validation.ToolAvailability
 import kotlinx.coroutines.async
@@ -65,26 +67,22 @@ class AgentController(
 
     @GetMapping
     fun listAll(): Mono<List<AgentDto>> = mono {
-        val userId = getCurrentUserId()
-        agentStore.findAll(userId).map { it.toLightDto() }
+        agentStore.findAll(currentOwners()).map { it.toLightDto() }
     }
 
     @GetMapping("/subagents")
     fun listSubAgents(): Mono<List<AgentDto>> = mono {
-        val userId = getCurrentUserId()
-        agentStore.findSubAgents(userId).map { it.toLightDto() }
+        agentStore.findSubAgents(currentOwners()).map { it.toLightDto() }
     }
 
     @GetMapping("/chat")
     fun listChatAgents(): Mono<List<AgentDto>> = mono {
-        val userId = getCurrentUserId()
-        agentStore.findChatAgents(userId).map { it.toLightDto() }
+        agentStore.findChatAgents(currentOwners()).map { it.toLightDto() }
     }
 
     @GetMapping("/{id}")
     fun getById(@PathVariable id: String): Mono<AgentDto> = mono {
-        val userId = getCurrentUserId()
-        val agent = agentStore.findById(id, userId)
+        val agent = agentStore.findById(id, currentOwners())
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found: $id")
         loadAgentDto(agent, id)
     }
@@ -96,8 +94,8 @@ class AgentController(
      */
     @GetMapping("/{id}/export")
     fun exportAgent(@PathVariable id: String): Mono<ResponseEntity<String>> = mono {
-        val userId = getCurrentUserId()
-        val agent = agentStore.findById(id, userId)
+        val owners = currentOwners()
+        val agent = agentStore.findById(id, owners)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found: $id")
         val dto = loadAgentDto(agent, id)
 
@@ -106,14 +104,14 @@ class AgentController(
         val expandedSubAgents = mutableListOf<InlineAgentSpec>()
         val unresolvedSubAgentIds = mutableListOf<String>()
         for (subId in dto.subAgentIds) {
-            val spec = expandAgentToInlineSpec(subId, userId)
+            val spec = expandAgentToInlineSpec(subId, owners)
             if (spec != null) expandedSubAgents.add(spec)
             else { unresolvedSubAgentIds.add(subId); logger.warn("Export: sub-agent '{}' not found, keeping ID reference", subId) }
         }
         val expandedMembers = mutableListOf<InlineAgentSpec>()
         val unresolvedMemberIds = mutableListOf<String>()
         for (memberId in dto.memberIds) {
-            val spec = expandAgentToInlineSpec(memberId, userId)
+            val spec = expandAgentToInlineSpec(memberId, owners)
             if (spec != null) expandedMembers.add(spec)
             else { unresolvedMemberIds.add(memberId); logger.warn("Export: member '{}' not found, keeping ID reference", memberId) }
         }
@@ -138,15 +136,17 @@ class AgentController(
      * Loads the agent's definition, tools, skills, and MCP configs.
      * Returns null if the agent is not found (logs a warning).
      */
-    private suspend fun expandAgentToInlineSpec(agentId: String, userId: String): InlineAgentSpec? {
-        val definition = agentStore.findById(agentId, userId)
+    private suspend fun expandAgentToInlineSpec(agentId: String, owners: Collection<String>): InlineAgentSpec? {
+        val definition = agentStore.findById(agentId, owners)
         if (definition == null) {
             logger.warn("Export: agent '{}' not found, skipping expansion", agentId)
             return null
         }
-        val toolNames = agentStore.getAgentToolNames(agentId)
-        val skillNames = agentStore.getAgentSkillNames(agentId)
-        val mcpConfigs = agentStore.getAgentMcpConfigs(agentId).toMcpBindingDtos()
+        // The whitelist rows live in the bucket the resolved agent itself belongs to, which for a
+        // shared or built-in agent is not the caller's.
+        val toolNames = agentStore.getAgentToolNames(agentId, definition.userId)
+        val skillNames = agentStore.getAgentSkillNames(agentId, definition.userId)
+        val mcpConfigs = agentStore.getAgentMcpConfigs(agentId, definition.userId).toMcpBindingDtos()
         return InlineAgentSpec(
             name = definition.name,
             description = definition.description ?: "",
@@ -159,11 +159,14 @@ class AgentController(
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    fun create(@RequestBody request: AgentCreateRequest): Mono<AgentDto> = mono {
+    fun create(
+        @RequestBody request: AgentCreateRequest,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<AgentDto> = mono {
         require((request.description?.length ?: 0) <= MAX_DESCRIPTION_LENGTH) {
             "Description must be $MAX_DESCRIPTION_LENGTH characters or less"
         }
-        val userId = getCurrentUserId()
+        val owner = resolveWriteOwner(parseAssetScope(scope))
         // Check conflict with built-in system agent first (clearer error message)
         val systemAgent = agentStore.findById(request.id, AuthConstants.SYSTEM_USER_ID)
         if (systemAgent != null && systemAgent.userId == AuthConstants.SYSTEM_USER_ID) {
@@ -172,13 +175,13 @@ class AgentController(
                 "Agent ID '${request.id}' is reserved by a built-in system agent. Please choose a different ID."
             )
         }
-        // Check if current user already has an agent with this ID
-        val existing = agentStore.findById(request.id, userId)
-        if (existing != null) {
+        // Check if the target bucket already has an agent with this ID
+        val existing = agentStore.findById(request.id, owner)
+        if (existing != null && existing.userId == owner) {
             throw ResponseStatusException(HttpStatus.CONFLICT, "Agent already exists: ${request.id}")
         }
         rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(request, skillLoaderNames()))
-        validateTeamMembers(request.agentType, request.memberIds, request.customMembers, userId)
+        validateTeamMembers(request.agentType, request.memberIds, request.customMembers, currentOwners())
         val agent = AgentDefinition.create(
             id = request.id,
             name = request.name,
@@ -200,20 +203,21 @@ class AgentController(
             outputSchema = request.outputSchema,
             outputSchemaMultiTurn = request.outputSchemaMultiTurn ?: false
         )
-        agentStore.save(agent, userId)
-        // Persist tool whitelist and sub-agent associations (always, even if empty)
-        agentStore.saveAgentToolConfigs(request.id, TargetType.TOOL, request.toolNames)
-        agentStore.saveAgentToolConfigs(request.id, TargetType.SUBAGENT, request.subAgentIds)
-        agentStore.saveAgentToolConfigs(request.id, TargetType.SKILL, request.skillNames)
-        agentStore.saveAgentMcpConfigs(request.id, request.mcpConfigs.toAgentToolConfigs(request.id))
-        agentStore.saveAgentCommands(request.id, request.commandNames)
-        agentStore.saveAgentMembers(request.id, request.memberIds)
+        agentStore.save(agent, owner)
+        // Persist tool whitelist and sub-agent associations (always, even if empty).
+        // Scoped to the same bucket the agent row was written to.
+        agentStore.saveAgentToolConfigs(request.id, TargetType.TOOL, request.toolNames, owner)
+        agentStore.saveAgentToolConfigs(request.id, TargetType.SUBAGENT, request.subAgentIds, owner)
+        agentStore.saveAgentToolConfigs(request.id, TargetType.SKILL, request.skillNames, owner)
+        agentStore.saveAgentMcpConfigs(request.id, request.mcpConfigs.toAgentToolConfigs(request.id), owner)
+        agentStore.saveAgentCommands(request.id, request.commandNames, owner)
+        agentStore.saveAgentMembers(request.id, request.memberIds, owner)
         // Save inline custom sub-agents and members
         if (request.customSubAgents.isNotEmpty()) {
-            agentStore.saveAgentInlineSpecs(request.id, TargetType.SUBAGENT, request.customSubAgents.toInlineToolConfigs(request.id, TargetType.SUBAGENT))
+            agentStore.saveAgentInlineSpecs(request.id, TargetType.SUBAGENT, request.customSubAgents.toInlineToolConfigs(request.id, TargetType.SUBAGENT), owner)
         }
         if (request.customMembers.isNotEmpty()) {
-            agentStore.saveAgentInlineSpecs(request.id, TargetType.MEMBER, request.customMembers.toInlineToolConfigs(request.id, TargetType.MEMBER))
+            agentStore.saveAgentInlineSpecs(request.id, TargetType.MEMBER, request.customMembers.toInlineToolConfigs(request.id, TargetType.MEMBER), owner)
         }
         agent.toDto(
             toolNames = request.toolNames,
@@ -228,19 +232,23 @@ class AgentController(
     }
 
     @PutMapping("/{id}")
-    fun update(@PathVariable id: String, @RequestBody request: AgentCreateRequest): Mono<AgentDto> = mono {
+    fun update(
+        @PathVariable id: String,
+        @RequestBody request: AgentCreateRequest,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<AgentDto> = mono {
         require((request.description?.length ?: 0) <= MAX_DESCRIPTION_LENGTH) {
             "Description must be $MAX_DESCRIPTION_LENGTH characters or less"
         }
-        val userId = getCurrentUserId()
-        val existing = agentStore.findById(id, userId)
+        val owner = resolveWriteOwner(parseAssetScope(scope))
+        val existing = agentStore.findById(id, owner)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found: $id")
 
         if (existing.userId == AuthConstants.SYSTEM_USER_ID) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot modify built-in agent: $id")
         }
         rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(request, skillLoaderNames()))
-        validateTeamMembers(request.agentType, request.memberIds, request.customMembers, userId)
+        validateTeamMembers(request.agentType, request.memberIds, request.customMembers, currentOwners())
 
         val updated = existing.copy(
             name = request.name,
@@ -262,49 +270,55 @@ class AgentController(
             outputSchemaMultiTurn = request.outputSchemaMultiTurn ?: existing.outputSchemaMultiTurn,
             updatedAt = java.time.Instant.now().epochSecond
         )
-        agentStore.update(updated, userId)
-        // Persist tool whitelist and sub-agent associations
-        agentStore.saveAgentToolConfigs(id, TargetType.TOOL, request.toolNames)
-        agentStore.saveAgentToolConfigs(id, TargetType.SUBAGENT, request.subAgentIds)
-        agentStore.saveAgentToolConfigs(id, TargetType.SKILL, request.skillNames)
-        agentStore.saveAgentMcpConfigs(id, request.mcpConfigs.toAgentToolConfigs(id))
-        agentStore.saveAgentCommands(id, request.commandNames)
-        agentStore.saveAgentMembers(id, request.memberIds)
+        agentStore.update(updated, owner)
+        // Persist tool whitelist and sub-agent associations, scoped to the bucket just written
+        agentStore.saveAgentToolConfigs(id, TargetType.TOOL, request.toolNames, owner)
+        agentStore.saveAgentToolConfigs(id, TargetType.SUBAGENT, request.subAgentIds, owner)
+        agentStore.saveAgentToolConfigs(id, TargetType.SKILL, request.skillNames, owner)
+        agentStore.saveAgentMcpConfigs(id, request.mcpConfigs.toAgentToolConfigs(id), owner)
+        agentStore.saveAgentCommands(id, request.commandNames, owner)
+        agentStore.saveAgentMembers(id, request.memberIds, owner)
         // Save inline custom sub-agents and members
-        agentStore.saveAgentInlineSpecs(id, TargetType.SUBAGENT, request.customSubAgents.toInlineToolConfigs(id, TargetType.SUBAGENT))
-        agentStore.saveAgentInlineSpecs(id, TargetType.MEMBER, request.customMembers.toInlineToolConfigs(id, TargetType.MEMBER))
+        agentStore.saveAgentInlineSpecs(id, TargetType.SUBAGENT, request.customSubAgents.toInlineToolConfigs(id, TargetType.SUBAGENT), owner)
+        agentStore.saveAgentInlineSpecs(id, TargetType.MEMBER, request.customMembers.toInlineToolConfigs(id, TargetType.MEMBER), owner)
         loadAgentDto(updated, id)
     }
 
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    fun delete(@PathVariable id: String): Mono<Void> = mono {
-        val userId = getCurrentUserId()
-        agentStore.findById(id, userId)
+    fun delete(
+        @PathVariable id: String,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<Void> = mono {
+        val owner = resolveWriteOwner(parseAssetScope(scope))
+        agentStore.findById(id, owner)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found: $id")
-        agentStore.delete(id, userId)
+        agentStore.delete(id, owner)
     }.then()
 
     @GetMapping("/{id}/tools")
     fun getTools(@PathVariable id: String): Mono<List<String>> = mono {
-        val userId = getCurrentUserId()
-        agentStore.findById(id, userId)
+        val agent = agentStore.findById(id, currentOwners())
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found: $id")
-        agentStore.getAgentToolNames(id)
+        agentStore.getAgentToolNames(id, agent.userId)
     }
 
     @PutMapping("/{id}/tools")
-    fun updateTools(@PathVariable id: String, @RequestBody request: AgentToolsRequest): Mono<List<String>> = mono {
-        val userId = getCurrentUserId()
-        val agent = agentStore.findById(id, userId)
+    fun updateTools(
+        @PathVariable id: String,
+        @RequestBody request: AgentToolsRequest,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<List<String>> = mono {
+        val owner = resolveWriteOwner(parseAssetScope(scope))
+        val agent = agentStore.findById(id, owner)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found: $id")
         if (agent.userId == AuthConstants.SYSTEM_USER_ID) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot modify built-in agent: $id")
         }
         rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(
-            request.toolNames, agentStore.getAgentSkillNames(id), skillLoaderNames = skillLoaderNames()
+            request.toolNames, agentStore.getAgentSkillNames(id, owner), skillLoaderNames = skillLoaderNames()
         ))
-        agentStore.saveAgentTools(id, request.toolNames)
+        agentStore.saveAgentTools(id, request.toolNames, owner)
         request.toolNames
     }
 
@@ -313,18 +327,19 @@ class AgentController(
         @PathVariable id: String,
         @RequestParam(required = false) targetType: String?
     ): Mono<List<AgentToolConfigDto>> = mono {
-        val userId = getCurrentUserId()
-        agentStore.findById(id, userId)
+        val agent = agentStore.findById(id, currentOwners())
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found: $id")
+        // Whitelist rows live in the bucket the resolved agent belongs to, not the caller's.
+        val owner = agent.userId
         if (targetType != null) {
             val type = parseTargetType(targetType)
-            agentStore.getAgentToolConfigs(id, type).map { it.toDto() }
+            agentStore.getAgentToolConfigs(id, type, owner).map { it.toDto() }
         } else {
-            val toolConfigs = agentStore.getAgentToolConfigs(id, TargetType.TOOL)
-            val subAgentConfigs = agentStore.getAgentToolConfigs(id, TargetType.SUBAGENT)
-            val skillConfigs = agentStore.getAgentToolConfigs(id, TargetType.SKILL)
-            val mcpConfigs = agentStore.getAgentToolConfigs(id, TargetType.MCP)
-            val commandConfigs = agentStore.getAgentToolConfigs(id, TargetType.COMMAND)
+            val toolConfigs = agentStore.getAgentToolConfigs(id, TargetType.TOOL, owner)
+            val subAgentConfigs = agentStore.getAgentToolConfigs(id, TargetType.SUBAGENT, owner)
+            val skillConfigs = agentStore.getAgentToolConfigs(id, TargetType.SKILL, owner)
+            val mcpConfigs = agentStore.getAgentToolConfigs(id, TargetType.MCP, owner)
+            val commandConfigs = agentStore.getAgentToolConfigs(id, TargetType.COMMAND, owner)
             (toolConfigs + subAgentConfigs + skillConfigs + mcpConfigs + commandConfigs).map { it.toDto() }
         }
     }
@@ -332,10 +347,11 @@ class AgentController(
     @PutMapping("/{id}/configs")
     fun saveConfigs(
         @PathVariable id: String,
-        @RequestBody request: AgentConfigsRequest
+        @RequestBody request: AgentConfigsRequest,
+        @RequestParam(required = false) scope: String? = null
     ): Mono<List<AgentToolConfigDto>> = mono {
-        val userId = getCurrentUserId()
-        val agent = agentStore.findById(id, userId)
+        val owner = resolveWriteOwner(parseAssetScope(scope))
+        val agent = agentStore.findById(id, owner)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found: $id")
         if (agent.userId == AuthConstants.SYSTEM_USER_ID) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot modify built-in agent: $id")
@@ -343,15 +359,15 @@ class AgentController(
         val type = parseTargetType(request.targetType)
         when (type) {
             TargetType.TOOL -> rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(
-                request.targetNames, agentStore.getAgentSkillNames(id), skillLoaderNames = skillLoaderNames()
+                request.targetNames, agentStore.getAgentSkillNames(id, owner), skillLoaderNames = skillLoaderNames()
             ))
             TargetType.SKILL -> rejectInvalidSkillTools(ResourceExistenceValidator.validateSkillTools(
-                agentStore.getAgentToolNames(id), request.targetNames, skillLoaderNames = skillLoaderNames()
+                agentStore.getAgentToolNames(id, owner), request.targetNames, skillLoaderNames = skillLoaderNames()
             ))
             else -> Unit
         }
-        agentStore.saveAgentToolConfigs(id, type, request.targetNames)
-        agentStore.getAgentToolConfigs(id, type).map { it.toDto() }
+        agentStore.saveAgentToolConfigs(id, type, request.targetNames, owner)
+        agentStore.getAgentToolConfigs(id, type, owner).map { it.toDto() }
     }
 
     /**
@@ -359,10 +375,9 @@ class AgentController(
      */
     @GetMapping("/{id}/members")
     fun getMembers(@PathVariable id: String): Mono<List<String>> = mono {
-        val userId = getCurrentUserId()
-        agentStore.findById(id, userId)
+        val agent = agentStore.findById(id, currentOwners())
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found: $id")
-        agentStore.getAgentMemberIds(id)
+        agentStore.getAgentMemberIds(id, agent.userId)
     }
 
     /**
@@ -372,16 +387,17 @@ class AgentController(
     @PutMapping("/{id}/members")
     fun saveMembers(
         @PathVariable id: String,
-        @RequestBody request: AgentMembersRequest
+        @RequestBody request: AgentMembersRequest,
+        @RequestParam(required = false) scope: String? = null
     ): Mono<List<String>> = mono {
-        val userId = getCurrentUserId()
-        val agent = agentStore.findById(id, userId)
+        val owner = resolveWriteOwner(parseAssetScope(scope))
+        val agent = agentStore.findById(id, owner)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found: $id")
         if (agent.userId == AuthConstants.SYSTEM_USER_ID) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Cannot modify built-in agent: $id")
         }
-        validateTeamMembers(agent.agentType, request.memberIds, emptyList(), userId)
-        agentStore.saveAgentMembers(id, request.memberIds)
+        validateTeamMembers(agent.agentType, request.memberIds, emptyList(), currentOwners())
+        agentStore.saveAgentMembers(id, request.memberIds, owner)
         request.memberIds
     }
 
@@ -508,13 +524,23 @@ class AgentController(
      * - All memberIds must reference existing agents (user-owned or built-in).
      * - Members must be ALL or SUBAGENT type (PRIMARY/TEAM not allowed as members).
      */
-    private suspend fun validateTeamMembers(agentType: AgentType, memberIds: List<String>, customMembers: List<InlineAgentSpec>, userId: String) {
+    /**
+     * Members are validated against the caller's whole visibility set, not the write bucket: the
+     * runtime resolves them the same way, so a group team may reference a personal sub-agent and a
+     * personal team may reference a shared one.
+     */
+    private suspend fun validateTeamMembers(
+        agentType: AgentType,
+        memberIds: List<String>,
+        customMembers: List<InlineAgentSpec>,
+        owners: Collection<String>
+    ) {
         if (agentType != AgentType.TEAM) return
         if (memberIds.isEmpty() && customMembers.isEmpty()) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "TEAM agent requires at least one member (memberIds or customMembers)")
         }
         for (memberId in memberIds) {
-            val member = agentStore.findById(memberId, userId)
+            val member = agentStore.findById(memberId, owners)
                 ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Member agent not found: $memberId")
             if (member.agentType != AgentType.ALL && member.agentType != AgentType.SUBAGENT) {
                 throw ResponseStatusException(
@@ -534,12 +560,15 @@ class AgentController(
     }
 
     private suspend fun loadAgentDto(agent: AgentDefinition, id: String): AgentDto = coroutineScope {
-        val toolsDeferred = async { agentStore.getAgentToolNames(id) }
-        val subAgentConfigsDeferred = async { agentStore.getAgentToolConfigs(id, TargetType.SUBAGENT) }
-        val skillNamesDeferred = async { agentStore.getAgentSkillNames(id) }
-        val mcpConfigsDeferred = async { agentStore.getAgentMcpConfigs(id).toMcpBindingDtos() }
-        val commandNamesDeferred = async { agentStore.getAgentCommandNames(id) }
-        val memberConfigsDeferred = async { agentStore.getAgentToolConfigs(id, TargetType.MEMBER) }
+        // Whitelist rows are stored under the bucket the agent itself belongs to, which for a shared
+        // or built-in agent is not the caller's.
+        val owner = agent.userId
+        val toolsDeferred = async { agentStore.getAgentToolNames(id, owner) }
+        val subAgentConfigsDeferred = async { agentStore.getAgentToolConfigs(id, TargetType.SUBAGENT, owner) }
+        val skillNamesDeferred = async { agentStore.getAgentSkillNames(id, owner) }
+        val mcpConfigsDeferred = async { agentStore.getAgentMcpConfigs(id, owner).toMcpBindingDtos() }
+        val commandNamesDeferred = async { agentStore.getAgentCommandNames(id, owner) }
+        val memberConfigsDeferred = async { agentStore.getAgentToolConfigs(id, TargetType.MEMBER, owner) }
 
         val subAgentConfigs = subAgentConfigsDeferred.await()
         val memberConfigs = memberConfigsDeferred.await()

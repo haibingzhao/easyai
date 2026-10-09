@@ -59,7 +59,7 @@ class TranscribeAudioTool(
         val language = args["language"] as? String
         val model = (args["model"] as? String)?.takeIf { it.isNotBlank() }
 
-        val settings = resolver.resolveEntry(userId, MediaProviderSettings.SERVICE_KIND_ASR, model)
+        val settings = resolver.resolveEntry(agentContext.effectiveOwners, MediaProviderSettings.SERVICE_KIND_ASR, model)
             ?: return errorResult(toolCallId, name, "no enabled transcription model is configured${model?.let { " for '$it'" } ?: ""}")
 
         onUpdate(ToolUpdate.Progress("Transcribing audio…"))

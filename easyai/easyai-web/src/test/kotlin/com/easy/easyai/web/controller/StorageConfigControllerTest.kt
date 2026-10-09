@@ -56,7 +56,7 @@ class StorageConfigControllerTest {
         @Test
         fun `the stored secret is only ever shown masked`() {
             coEvery { service.current(any()) } returns stored()
-            coEvery { service.effectiveSource(any()) } returns StorageSource.USER
+            coEvery { service.effectiveSource(any<Collection<String>>()) } returns StorageSource.USER
 
             val dto = controller().getConfig().block()!!
 
@@ -67,7 +67,7 @@ class StorageConfigControllerTest {
         @Test
         fun `nothing saved yet opens on the disabled defaults`() {
             coEvery { service.current(any()) } returns null
-            coEvery { service.effectiveSource(any()) } returns StorageSource.NONE
+            coEvery { service.effectiveSource(any<Collection<String>>()) } returns StorageSource.NONE
 
             val dto = controller().getConfig().block()!!
 
@@ -80,7 +80,7 @@ class StorageConfigControllerTest {
         @Test
         fun `a short secret is fully masked`() {
             coEvery { service.current(any()) } returns stored().copy(accessKeySecret = "tiny")
-            coEvery { service.effectiveSource(any()) } returns StorageSource.NONE
+            coEvery { service.effectiveSource(any<Collection<String>>()) } returns StorageSource.NONE
 
             val dto = controller().getConfig().block()!!
 
@@ -93,6 +93,7 @@ class StorageConfigControllerTest {
 
         @Test
         fun `an invalid draft answers 400 with the factory complaint`() {
+            coEvery { service.effectiveSource(any<Collection<String>>()) } returns StorageSource.NONE
             coEvery { service.save(any(), any()) } returns StorageSettingsResult.Invalid("storage endpoint and bucket are required when type=aliyun")
 
             val error = assertFailsWith<ResponseStatusException> { controller().saveConfig(request()).block() }
@@ -103,6 +104,7 @@ class StorageConfigControllerTest {
 
         @Test
         fun `a missing store answers 503`() {
+            coEvery { service.effectiveSource(any<Collection<String>>()) } returns StorageSource.NONE
             coEvery { service.save(any(), any()) } returns StorageSettingsResult.Unavailable
 
             assertEquals(HttpStatus.SERVICE_UNAVAILABLE, statusOf { controller().saveConfig(request()).block() })
@@ -112,7 +114,7 @@ class StorageConfigControllerTest {
         fun `a blank secret is forwarded as blank so the service can keep the stored one`() {
             val captured = slot<StorageSettings>()
             coEvery { service.save(any(), capture(captured)) } returns StorageSettingsResult.Saved(stored())
-            coEvery { service.effectiveSource(any()) } returns StorageSource.NONE
+            coEvery { service.effectiveSource(any<Collection<String>>()) } returns StorageSource.NONE
 
             controller().saveConfig(request(mapOf("accessKeySecret" to null))).block()
 
@@ -123,7 +125,7 @@ class StorageConfigControllerTest {
         fun `absent fields fall back to the disabled defaults`() {
             val captured = slot<StorageSettings>()
             coEvery { service.save(any(), capture(captured)) } returns StorageSettingsResult.Saved(stored())
-            coEvery { service.effectiveSource(any()) } returns StorageSource.NONE
+            coEvery { service.effectiveSource(any<Collection<String>>()) } returns StorageSource.NONE
 
             controller().saveConfig(SaveStorageConfigRequest()).block()
 
@@ -152,6 +154,32 @@ class StorageConfigControllerTest {
 
             assertFalse(result.success)
             assertEquals("AccessDenied", result.message)
+        }
+    }
+
+    @Nested
+    inner class `static deployment layer` {
+
+        @Test
+        fun `reading reports static in force and never echoes a credential`() {
+            coEvery { service.effectiveSource(any<Collection<String>>()) } returns StorageSource.STATIC
+
+            val dto = controller().getConfig().block()!!
+
+            assertEquals("static", dto.effectiveSource, "the frontend hides the form when a deployment layer is pinned")
+            assertTrue(dto.enabled)
+            assertNull(dto.accessKeySecret)
+            assertEquals("", dto.accessKeyId)
+            assertEquals("", dto.bucket)
+        }
+
+        @Test
+        fun `saving is refused so a per-user row can never shadow the pinned layer`() {
+            coEvery { service.effectiveSource(any<Collection<String>>()) } returns StorageSource.STATIC
+
+            val error = assertFailsWith<ResponseStatusException> { controller().saveConfig(request()).block() }
+
+            assertEquals(HttpStatus.FORBIDDEN, error.statusCode)
         }
     }
 

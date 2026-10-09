@@ -72,10 +72,14 @@ class AgentLoopCommandProjectionTest {
             services = DefaultAgentService(
                 chatModelFactories = emptyList(),
                 messageConverter = object : MessageConverter by converter {
-                    override suspend fun toSpringAiMessages(messages: List<EasyAiMessage>, userId: String): List<Message> {
+                    override suspend fun toSpringAiMessages(
+                        messages: List<EasyAiMessage>,
+                        userId: String,
+                        owners: Collection<String>
+                    ): List<Message> {
                         assertEquals("alice", userId)
                         convertedSnapshots.add(messages)
-                        return converter.toSpringAiMessages(messages, userId)
+                        return converter.toSpringAiMessages(messages, userId, owners)
                     }
                 },
                 toolExecutor = DefaultToolExecutionEngine(),

@@ -71,7 +71,8 @@ class AgentBasedConfigGenerator(
     suspend fun generate(
         request: AiConfigGenerateRequest,
         userId: String,
-        collector: FlowCollector<ServerSentEvent<String>>
+        collector: FlowCollector<ServerSentEvent<String>>,
+        owners: Collection<String> = listOf(userId)
     ) {
         logger.info("Starting agent-based config generation for type={}, user={}", request.configType, userId)
 
@@ -94,7 +95,7 @@ class AgentBasedConfigGenerator(
                 if (request.configType == "swarm") {
                     configValidator.validateSwarmConfig(assembled, userId)
                 } else {
-                    configValidator.validateAgentConfig(assembled, userId)
+                    configValidator.validateAgentConfig(assembled, userId, owners)
                 }
             } catch (e: Exception) {
                 logger.warn("Validation during finalize failed: {}", e.message)
@@ -134,6 +135,7 @@ class AgentBasedConfigGenerator(
             agentId = "config-generator",
             sessionId = null,  // No session persistence
             userId = userId,
+            owners = owners.toSet(),
             tools = tools,
             maxIterations = if (request.configType == "swarm") MAX_ITERATIONS_SWARM else MAX_ITERATIONS,
             modelConfig = modelConfig,
@@ -305,7 +307,7 @@ class AgentBasedConfigGenerator(
                 validationResult = try {
                     when (request.configType) {
                         "swarm" -> configValidator.validateSwarmConfig(submittedConfig!!, userId)
-                        "agent" -> configValidator.validateAgentConfig(submittedConfig!!, userId)
+                        "agent" -> configValidator.validateAgentConfig(submittedConfig!!, userId, owners)
                         else -> null
                     }
                 } catch (e: Exception) {

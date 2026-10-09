@@ -77,7 +77,7 @@ class CompactionTransformContextServiceTest {
     @Test
     fun `configured compaction model overrides session model and config`() = runTest {
         val resolver = mockk<AuxModelResolver>()
-        coEvery { resolver.resolve("u1", AuxModelTask.COMPACTION) } returns
+        coEvery { resolver.resolve(any<Collection<String>>(), AuxModelTask.COMPACTION) } returns
             ResolvedAuxModel(resolvedChatModel, resolvedConfig)
 
         runManual(AgentContext(agentId = "test", userId = "u1", modelConfig = sessionConfig), resolver)
@@ -89,7 +89,7 @@ class CompactionTransformContextServiceTest {
     @Test
     fun `unconfigured falls back to the session model and config`() = runTest {
         val resolver = mockk<AuxModelResolver>()
-        coEvery { resolver.resolve("u1", AuxModelTask.COMPACTION) } returns null
+        coEvery { resolver.resolve(any<Collection<String>>(), AuxModelTask.COMPACTION) } returns null
 
         runManual(AgentContext(agentId = "test", userId = "u1", modelConfig = sessionConfig), resolver)
 

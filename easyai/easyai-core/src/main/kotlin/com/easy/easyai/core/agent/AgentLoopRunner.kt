@@ -424,7 +424,9 @@ internal class AgentLoopRunner(
         tools: List<ToolDefinition>
     ): Prompt {
         val projectedMessages = CommandMessageProjection.project(transformedMessages)
-        val springAiMessages = services.messageConverter.toSpringAiMessages(projectedMessages, context.userId ?: "system")
+        val springAiMessages = services.messageConverter.toSpringAiMessages(
+            projectedMessages, context.userId ?: "system", context.effectiveOwners
+        )
         val toolCallbacks = tools.map { EasyAiToolCallback(it) }
 
         // Timing gate for API-level structured output: multi-turn mode defers enforcement

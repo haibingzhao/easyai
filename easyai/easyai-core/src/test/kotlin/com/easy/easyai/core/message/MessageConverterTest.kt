@@ -433,7 +433,7 @@ class MessageConverterTest {
         private val sanitizer = DefaultMessageConverter(objectStorageResolver = resolver)
 
         init {
-            coEvery { resolver.resolve(userId) } returns storage
+            coEvery { resolver.resolve(listOf(userId)) } returns storage
             coEvery { storage.presignedGetUrl(key, StoredFileReference.URL_TTL_SECONDS) } returns reSignedUrl
         }
 
@@ -517,7 +517,7 @@ class MessageConverterTest {
         )
 
         init {
-            coEvery { resolver.resolve(userId) } returns storage
+            coEvery { resolver.resolve(listOf(userId)) } returns storage
             coEvery { storage.head(key) } returns ObjectMeta(key, bytes.size.toLong())
             coEvery { storage.get(key) } returns ObjectContent(ObjectMeta(key, bytes.size.toLong()), bytes)
             coEvery { storage.presignedGetUrl(key, StoredFileReference.URL_TTL_SECONDS) } returns null
@@ -550,10 +550,10 @@ class MessageConverterTest {
             assertEquals(path, ref.filePath)
             coVerify(exactly = 0) { storage.get(any()) }
             coVerifyOrder {
-                resolver.resolve(userId)
+                resolver.resolve(listOf(userId))
                 storage.head(key)
                 storage.presignedGetUrl(key, 3600L)
-                resolver.resolve(userId)
+                resolver.resolve(listOf(userId))
                 storage.head(key)
                 storage.presignedGetUrl(key, 3600L)
             }
@@ -631,7 +631,7 @@ class MessageConverterTest {
         @Test
         fun `missing resolver and disabled storage both fail explicitly`() = runTest {
             assertFailsWith<ObjectStorageException> { converter.toSpringAiMessages(messages, userId) }
-            coEvery { resolver.resolve(userId) } returns null
+            coEvery { resolver.resolve(listOf(userId)) } returns null
             assertFailsWith<ObjectStorageException> { storedConverter.toSpringAiMessages(messages, userId) }
             coVerify(exactly = 0) { storage.head(any()) }
         }
@@ -641,7 +641,7 @@ class MessageConverterTest {
         fun `storage failures propagate without dropping the image`(operation: String) = runTest {
             val failure = ObjectStorageException("Storage unavailable")
             when (operation) {
-                "resolve" -> coEvery { resolver.resolve(userId) } throws failure
+                "resolve" -> coEvery { resolver.resolve(listOf(userId)) } throws failure
                 "head" -> coEvery { storage.head(key) } throws failure
                 "get" -> coEvery { storage.get(key) } throws failure
             }
@@ -655,7 +655,7 @@ class MessageConverterTest {
         fun `cancellation propagates from every storage operation`(operation: String) = runTest {
             val cancellation = CancellationException("Cancelled")
             when (operation) {
-                "resolve" -> coEvery { resolver.resolve(userId) } throws cancellation
+                "resolve" -> coEvery { resolver.resolve(listOf(userId)) } throws cancellation
                 "head" -> coEvery { storage.head(key) } throws cancellation
                 "sign" -> coEvery { storage.presignedGetUrl(key, 3600L) } throws cancellation
                 "get" -> coEvery { storage.get(key) } throws cancellation
@@ -708,14 +708,14 @@ class MessageConverterTest {
 
         @Test
         fun `rejects other users even for inline refs in a shared bucket before resolving storage`() = runTest {
-            coEvery { resolver.resolve(any()) } returns storage
+            coEvery { resolver.resolve(any<Collection<String>>()) } returns storage
             val foreignRef = ref.copy(
                 filePath = StoredFileReference.create("other-user", "session-1", "png"), source = "inline"
             )
             assertFailsWith<IllegalArgumentException> {
                 storedConverter.toSpringAiMessages(listOf(UserMessage(content = listOf(foreignRef))), userId)
             }
-            coVerify(exactly = 0) { resolver.resolve(any()) }
+            coVerify(exactly = 0) { resolver.resolve(any<Collection<String>>()) }
             coVerify(exactly = 0) { storage.head(any()) }
         }
 
@@ -732,21 +732,21 @@ class MessageConverterTest {
                     storedConverter.toSpringAiMessages(listOf(UserMessage(content = listOf(invalid))), userId)
                 }
             }
-            coVerify(exactly = 0) { resolver.resolve(any()) }
+            coVerify(exactly = 0) { resolver.resolve(any<Collection<String>>()) }
         }
 
         @Test
         fun `omitted user ID resolves the system owner`() = runTest {
             val systemPath = StoredFileReference.create("system", "session-1", "png")
             val systemKey = StoredFileReference.parse(systemPath, "system").key
-            coEvery { resolver.resolve("system") } returns storage
+            coEvery { resolver.resolve(listOf("system")) } returns storage
             coEvery { storage.head(systemKey) } returns ObjectMeta(systemKey, 3)
             coEvery { storage.presignedGetUrl(systemKey, 3600L) } returns "https://objects.example/system.png"
             val result = storedConverter.toSpringAiMessages(
                 listOf(UserMessage(content = listOf(ref.copy(filePath = systemPath))))
             ).single() as SpringAiUserMsg
             assertEquals("https://objects.example/system.png", result.media.single().data)
-            coVerify(exactly = 1) { resolver.resolve("system") }
+            coVerify(exactly = 1) { resolver.resolve(listOf("system")) }
         }
     }
 

@@ -168,9 +168,14 @@ class SkillWiringTest {
                 location = installDir.resolve("SKILL.md"),
                 content = "# pdf-report"
             )
-            every { registry.visibleFor("alice") } returns listOf(skill)
+            every { registry.visibleForOwners(any()) } returns listOf(skill)
             coEvery { catalog.listByUser("alice") } returns listOfNotNull(row)
             coEvery { catalog.listByUser(SkillCatalogEntry.DEFAULT_USER_ID) } returns emptyList()
+            // The access resolver reads the whole visibility set in one batched query; mirror the
+            // per-owner stubs above so the row is only ever reported for alice's bucket.
+            coEvery { catalog.listByOwners(any()) } answers {
+                if ("alice" in firstArg<List<String>>()) listOfNotNull(row) else emptyList()
+            }
         }
 
         private fun promptSource(
@@ -251,13 +256,14 @@ class SkillWiringTest {
 
         @Test
         fun `the first model read syncs the requester's owners`() = runBlocking {
-            every { registry.visibleFor("alice") } returns emptyList()
+            every { registry.visibleForOwners(any()) } returns emptyList()
             coEvery { catalog.listByUser(any()) } returns emptyList()
-            coEvery { refreshService.ensureSynced("alice") } returns Unit
+            coEvery { catalog.listByOwners(any()) } returns emptyList()
+            coEvery { refreshService.ensureSyncedOwners(any()) } returns Unit
 
             promptSource(configuration, store, refreshService).effectiveNames("alice")
 
-            coVerify(exactly = 1) { refreshService.ensureSynced("alice") }
+            coVerify(exactly = 1) { refreshService.ensureSyncedOwners(listOf("alice")) }
         }
 
         @Test

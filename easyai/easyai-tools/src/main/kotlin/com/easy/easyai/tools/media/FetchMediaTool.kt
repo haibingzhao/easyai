@@ -229,7 +229,7 @@ class FetchMediaToolBuilder(
     override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         val userId = context.userId ?: AbstractMediaToolBuilder.SYSTEM_USER_ID
         val storage = agentService.objectStorageResolver
-            ?.let { runBlocking { it.resolve(userId) } }
+            ?.let { runBlocking { it.resolve(context.effectiveOwners) } }
             ?: localStorage
             ?: return null
         return FetchMediaTool(metadata, storage, userId, context.projectPath)

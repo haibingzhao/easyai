@@ -69,7 +69,7 @@ class QuickAskStreamServiceTest {
             assertEquals(1, events.size)
             val error = assertIs<ChatStreamEvent.Error>(events.single().data())
             assertTrue(error.errorMessage!!.contains("blank", ignoreCase = true))
-            coVerify(exactly = 0) { configStore.getConfig(any(), any()) }
+            coVerify(exactly = 0) { configStore.getConfig(any(), any<String>()) }
         }
 
         @Test
@@ -78,7 +78,7 @@ class QuickAskStreamServiceTest {
 
             val error = assertIs<ChatStreamEvent.Error>(events.single().data())
             assertTrue(error.errorMessage!!.contains("20000"))
-            coVerify(exactly = 0) { configStore.getConfig(any(), any()) }
+            coVerify(exactly = 0) { configStore.getConfig(any(), any<String>()) }
         }
 
         @Test
@@ -88,7 +88,7 @@ class QuickAskStreamServiceTest {
             val events = service.stream("u1", request(history = history)).asFlow().toList()
 
             assertIs<ChatStreamEvent.Error>(events.single().data())
-            coVerify(exactly = 0) { configStore.getConfig(any(), any()) }
+            coVerify(exactly = 0) { configStore.getConfig(any(), any<String>()) }
         }
 
         @Test

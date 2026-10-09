@@ -20,7 +20,11 @@ class ResourceExistenceValidator(
     private val mcpClientManager: McpClientManager? = null,
 ) : AgentConfigValidator {
 
-    override suspend fun validate(request: AgentCreateRequest, userId: String): List<ConfigValidationError> {
+    override suspend fun validate(
+        request: AgentCreateRequest,
+        userId: String,
+        owners: Collection<String>
+    ): List<ConfigValidationError> {
         val errors = mutableListOf<ConfigValidationError>()
 
         // Validate tools
@@ -33,10 +37,10 @@ class ResourceExistenceValidator(
             }
         }
 
-        // Validate skills against the owner's visible set (own rows plus the shared layer), never
-        // the global registry: another owner's skill name must not validate this request.
+        // Validate skills against the caller's visible set (own rows, the group bucket, and the shared
+        // layer), never the global registry: another owner's skill name must not validate this request.
         if (request.skillNames.isNotEmpty()) {
-            val visible = skillAccessResolver?.listScopedSkills(userId)?.associateBy { it.skill.name }
+            val visible = skillAccessResolver?.listScopedSkillsForOwners(owners)?.associateBy { it.skill.name }
             for (name in request.skillNames) {
                 val candidate = visible?.get(name)
                 if (candidate == null) {
@@ -55,10 +59,11 @@ class ResourceExistenceValidator(
             }
         }
 
-        // Validate sub-agents
+        // Sub-agents and members resolve against the caller's whole visibility set, same as the
+        // runtime lookup does — otherwise a shared agent could not reference its own bucket's members.
         if (request.subAgentIds.isNotEmpty()) {
             for (id in request.subAgentIds) {
-                val exists = agentStore.findById(id, userId) != null
+                val exists = agentStore.findById(id, owners) != null
                 if (!exists) {
                     errors.add(ConfigValidationError("subAgentIds", "Sub-agent '$id' does not exist"))
                 }
@@ -71,7 +76,7 @@ class ResourceExistenceValidator(
                 errors.add(ConfigValidationError("memberIds", "TEAM agent requires at least one member (memberIds or customMembers)"))
             }
             for (id in request.memberIds) {
-                val member = agentStore.findById(id, userId)
+                val member = agentStore.findById(id, owners)
                 if (member == null) {
                     errors.add(ConfigValidationError("memberIds", "Member agent '$id' does not exist"))
                 } else if (member.agentType != AgentType.ALL && member.agentType != AgentType.SUBAGENT) {
@@ -129,7 +134,7 @@ class ResourceExistenceValidator(
 
         // Validate MCP configs
         if (request.mcpConfigs.isNotEmpty()) {
-            val connectedNames = mcpClientManager?.getConnectedServers(userId)?.map { it.serverName }?.toSet() ?: emptySet()
+            val connectedNames = mcpClientManager?.getConnectedServers(owners)?.map { it.serverName }?.toSet() ?: emptySet()
             for (config in request.mcpConfigs) {
                 if (config.serverName !in connectedNames) {
                     if (mcpClientManager != null) {

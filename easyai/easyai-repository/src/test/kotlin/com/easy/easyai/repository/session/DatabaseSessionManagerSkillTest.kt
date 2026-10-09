@@ -37,7 +37,7 @@ internal class DatabaseSessionManagerSkillTest {
     init {
         coEvery { sessionStore.findById(any(), any()) } returns null
         coEvery { sessionStore.loadVariablesFromCompactionSummary(any(), any()) } returns null
-        coEvery { agentStore.getAgentToolConfigs(agentDef.id, TargetType.SKILL) } returns listOf(
+        coEvery { agentStore.getAgentToolConfigs(agentDef.id, TargetType.SKILL, agentDef.userId) } returns listOf(
             AgentToolConfig("config-1", agentDef.id, TargetType.SKILL, "pdf")
         )
         coEvery {
@@ -88,8 +88,8 @@ internal class DatabaseSessionManagerSkillTest {
                 toolResolver = toolResolver,
                 agentLookup = { _, _ -> agentDef },
                 agentStore = agentStore,
-                skillsSupplier = { userId, names ->
-                    assertEquals("alice", userId)
+                skillsSupplier = { owners, names ->
+                    assertTrue("alice" in owners)
                     assertEquals(listOf("pdf"), names)
                     view
                 }

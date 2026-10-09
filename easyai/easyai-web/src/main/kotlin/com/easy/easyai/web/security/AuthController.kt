@@ -25,6 +25,7 @@ import reactor.core.publisher.Mono
  * - POST /api/auth/register  - Register a new user
  * - POST /api/auth/login     - Login with username/password
  * - POST /api/auth/refresh   - Refresh access token using refresh token cookie
+ * - POST /api/auth/switch-group - Switch the active group and re-mint tokens (no password)
  * - POST /api/auth/logout    - Logout (revoke refresh token)
  * - GET  /api/auth/me        - Get current user profile
  */
@@ -59,7 +60,7 @@ class AuthController(
         @RequestBody request: LoginRequest,
         exchange: ServerWebExchange
     ): Mono<AuthResponseDto> = mono {
-        val response = authService.login(request.username, request.password)
+        val response = authService.login(request.username, request.password, request.groupId)
         setRefreshTokenCookie(exchange, response.refreshToken)
         syncSkillsQuietly(response.user.id)
         response.toDto()
@@ -73,6 +74,24 @@ class AuthController(
             ?: throw AuthException("Refresh token not found in cookie", 401)
         val response = authService.refresh(refreshToken)
         setRefreshTokenCookie(exchange, response.refreshToken)
+        response.toDto()
+    }
+
+    /**
+     * Switch the active group without re-entering credentials. Reads the same httpOnly refresh cookie
+     * as /refresh; the service re-validates membership and re-mints the pair under the requested group.
+     * A group the caller is not a member of is refused (403) and leaves the current session untouched.
+     */
+    @PostMapping("/switch-group")
+    fun switchGroup(
+        @RequestBody request: SwitchGroupRequest,
+        exchange: ServerWebExchange
+    ): Mono<AuthResponseDto> = mono {
+        val refreshToken = exchange.request.cookies.getFirst(AuthConstants.REFRESH_TOKEN_COOKIE)?.value
+            ?: throw AuthException("Refresh token not found in cookie", 401)
+        val response = authService.switchGroup(refreshToken, request.groupId)
+        setRefreshTokenCookie(exchange, response.refreshToken)
+        syncSkillsQuietly(response.user.id)
         response.toDto()
     }
 
@@ -169,7 +188,18 @@ data class RegisterRequest(
 
 data class LoginRequest(
     val username: String,
-    val password: String
+    val password: String,
+    /**
+     * Optional group this login acts under, for a user who belongs to more than one. The product's
+     * claims contributor validates membership and resolves the group's shared-asset bucket; null (or
+     * an unknown/unauthorized id) degrades to a personal, group-less session.
+     */
+    val groupId: String? = null
+)
+
+data class SwitchGroupRequest(
+    /** Group to act under from now on; null leaves the group context (back to a personal session). */
+    val groupId: String? = null
 )
 
 data class AuthResponseDto(

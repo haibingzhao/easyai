@@ -32,6 +32,20 @@ interface AuxModelResolver {
      */
     suspend fun resolveConfig(userId: String?, task: AuxModelTask): ModelProviderConfig?
 
-    /** Invalidate the cached model for one `(userId, task)` so the next [resolve] re-reads config. */
+    /**
+     * Group-aware [resolve]: the choice is read across [owners] (self → group → system, first hit
+     * wins) and the referenced config is resolved against the same set. Callers with an
+     * [com.easy.easyai.core.agent.AgentContext] pass `effectiveOwners`.
+     */
+    suspend fun resolve(owners: Collection<String>, task: AuxModelTask): ResolvedAuxModel?
+
+    /** Group-aware [resolveConfig]; see [resolve] for the owner-set semantics. */
+    suspend fun resolveConfig(owners: Collection<String>, task: AuxModelTask): ModelProviderConfig?
+
+    /**
+     * Invalidate every cached entry whose owner set contains [userId] for [task], so the next
+     * [resolve] re-reads config. Passing a group bucket id evicts all members who cached a resolution
+     * through that group — one save by the group owner takes effect for the whole group, no restart.
+     */
     fun refresh(userId: String, task: AuxModelTask)
 }

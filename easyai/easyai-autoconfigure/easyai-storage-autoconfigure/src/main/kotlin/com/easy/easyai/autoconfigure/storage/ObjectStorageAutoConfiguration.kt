@@ -8,6 +8,7 @@ import com.easy.easyai.storage.local.LocalDirObjectStorage
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
+import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import java.nio.file.Path
@@ -17,22 +18,25 @@ import java.nio.file.Path
  * single [com.easy.easyai.core.storage.ObjectStorage] bean: per-user rows (edited live in the
  * frontend Settings page) resolved through the shared `system` row as fallback.
  *
- * The database is the only configuration source — there are no storage properties. Without
- * R2DBC or stored rows the resolver simply answers null everywhere, which keeps every
- * storage-dependent feature off, exactly like a missing bean did.
+ * The database is the default configuration source; an optional deployment-wide `easyai.storage.*`
+ * STATIC layer ([StorageProperties]) sits above it and, when enabled, pins one bucket for everyone.
+ * Without R2DBC or stored rows (and no STATIC layer) the resolver simply answers null everywhere,
+ * which keeps every storage-dependent feature off, exactly like a missing bean did.
  *
  * Two backends share one contract:
  * - `type=aliyun`: Aliyun OSS, the production object store
  * - `type=local`: a directory on disk, for dev / offline / desktop deployments
  */
 @Configuration(proxyBeanMethods = false)
+@EnableConfigurationProperties(StorageProperties::class)
 class ObjectStorageAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(ObjectStorageResolver::class)
     open fun objectStorageResolver(
-        @Autowired(required = false) store: StorageSettingsStore? = null
-    ): ObjectStorageResolver = DefaultObjectStorageResolver(store)
+        @Autowired(required = false) store: StorageSettingsStore? = null,
+        staticProperties: StorageProperties
+    ): ObjectStorageResolver = DefaultObjectStorageResolver(store, staticProperties)
 
     @Bean
     @ConditionalOnMissingBean(StorageSettingsService::class)

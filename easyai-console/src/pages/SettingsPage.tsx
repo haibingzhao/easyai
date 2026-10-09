@@ -8,6 +8,7 @@ import { IntegrationsTab } from '@/components/settings/IntegrationsTab';
 import { RagTab } from '@/components/settings/RagTab';
 import { StorageTab } from '@/components/settings/StorageTab';
 import { AuxModelsTab } from '@/components/settings/AuxModelsTab';
+import { ReadOnlyBanner } from '@/components/ui/ReadOnlyBanner';
 import { UserAvatar } from '@/components/user/UserAvatar';
 import { ProfileEditDialog } from '@/components/user/ProfileEditDialog';
 import { Button } from '@/components/ui/Button';
@@ -349,6 +350,9 @@ const DatabaseTab: React.FC = () => {
   }
 
   const dbTypeLabel = dbInfo?.dbType === 'postgres' ? 'PostgreSQL' : 'H2 (Embedded)';
+  // Deployment-pinned (`easyai.r2dbc.*`): show the current database but hide the change form — the
+  // backend refuses apply/test with 403 so a member cannot override the deployment configuration.
+  const isStatic = dbInfo?.source === 'spring';
 
   return (
     <div className="space-y-6">
@@ -367,7 +371,11 @@ const DatabaseTab: React.FC = () => {
       </div>
 
       {/* Change database */}
-      {!editing ? (
+      {isStatic ? (
+        <ReadOnlyBanner
+          message={i18n('The database is managed by a deployment-wide configuration and cannot be changed here.')}
+        />
+      ) : !editing ? (
         <button
           onClick={() => setEditing(true)}
           className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border

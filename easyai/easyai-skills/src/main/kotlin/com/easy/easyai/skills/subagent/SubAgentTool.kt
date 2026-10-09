@@ -161,12 +161,13 @@ class SubAgentTool(
                 )
             }
 
-            // 1. Look up AgentDefinition from store (use userId for user+system scope query)
-            val userId = agentContext.userId ?: "system"
-            val definition = agentStore.findById(params.agentType, userId)
+            // 1. Look up AgentDefinition across the caller's visibility set (self → group → system),
+            // so a sub-agent owned by a shared bucket can be spawned by a member.
+            val owners = agentContext.effectiveOwners
+            val definition = agentStore.findById(params.agentType, owners)
             resolvedDefinition = definition ?: run {
                 // Fallback 1: search by name among sub-agents
-                val availableSubAgents = agentStore.findSubAgents(userId)
+                val availableSubAgents = agentStore.findSubAgents(owners)
                 val byName = availableSubAgents.find { it.name == params.agentType }
                 if (byName != null) {
                     byName
@@ -581,7 +582,7 @@ class SubAgentTool(
             definition: AgentDefinition,
             agentStore: AsyncAgentStore
         ): List<ToolDefinition> {
-            val whitelist = agentStore.getAgentToolConfigs(definition.id, TargetType.TOOL)
+            val whitelist = agentStore.getAgentToolConfigs(definition.id, TargetType.TOOL, definition.userId)
             var tools = parentTools
             // Whitelist filter (empty = inherit all)
             if (whitelist.isNotEmpty()) {

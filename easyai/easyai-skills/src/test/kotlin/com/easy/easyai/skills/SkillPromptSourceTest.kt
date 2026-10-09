@@ -21,7 +21,7 @@ class SkillPromptSourceTest {
         rag: Boolean = false,
         inject: Boolean = true,
         ready: Boolean = rag,
-        firstAccessSync: (suspend (String?) -> Unit)? = null,
+        firstAccessSync: (suspend (Collection<String>) -> Unit)? = null,
         directMax: Int = 0
     ) = SkillPromptSource(f.registry, f.catalog, inject, rag, ready, firstAccessSync, directMax)
 
@@ -69,14 +69,14 @@ class SkillPromptSourceTest {
             f.rows = listOf(f.row(shared))
             val prompt = source()
             prompt.skillsForPrompt("alice", listOf("review"))
-            coEvery { f.catalog.listByUser("alice") } throws IllegalStateException("catalog down")
+            coEvery { f.catalog.listByOwners(any()) } throws IllegalStateException("catalog down")
             assertFailsWith<IllegalStateException> { prompt.skillsForPrompt("alice", listOf("review")) }
             assertFailsWith<IllegalStateException> { source().skillsForPrompt("alice", listOf("review")) }
         }
 
         @Test
         fun `cancellation propagates`() = runTest {
-            coEvery { f.catalog.listByUser(any()) } throws CancellationException("cancelled")
+            coEvery { f.catalog.listByOwners(any()) } throws CancellationException("cancelled")
             assertFailsWith<CancellationException> { source().skillsForPrompt("alice", listOf("review")) }
         }
 

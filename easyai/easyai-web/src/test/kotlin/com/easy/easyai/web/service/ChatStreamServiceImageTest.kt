@@ -71,7 +71,7 @@ internal class ChatStreamServiceImageTest {
 
     @BeforeEach
     fun setup() {
-        coEvery { configStore.getConfig(config.id, "alice") } returns config
+        coEvery { configStore.getConfig(config.id, any<Collection<String>>()) } returns config
         every { factory.supports(config.protocol) } returns true
         coEvery { manager.getOrCreateSession(any(), config, factory) } returns session
         coEvery { manager.loadMessages("session-1") } returns emptyList()

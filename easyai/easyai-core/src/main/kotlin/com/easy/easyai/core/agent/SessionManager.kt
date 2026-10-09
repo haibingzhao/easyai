@@ -45,8 +45,11 @@ interface SessionManager {
      * Get a session by ID.
      * Always restores from DB (no cross-request cache).
      * @param userId Optional user ID for data isolation during DB restoration.
+     * @param owners Full visibility set (`{self, groupUserId, system}`) so a resumed session restores
+     *   the same group-shared skills/subagents/commands a fresh chat sees. Empty (the default, for
+     *   callers with no request identity) degrades to `{self, system}`.
      */
-    suspend fun getSession(sessionId: String, userId: String = "system"): ChatSession?
+    suspend fun getSession(sessionId: String, userId: String = "system", owners: Collection<String> = emptyList()): ChatSession?
 
     /**
      * Remove and close a session.

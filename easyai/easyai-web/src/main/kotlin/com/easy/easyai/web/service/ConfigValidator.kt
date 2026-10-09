@@ -43,7 +43,11 @@ class ConfigValidator(
     /**
      * Validate an Agent config from a JsonNode.
      */
-    suspend fun validateAgentConfig(configNode: JsonNode, userId: String): ConfigValidationResult {
+    suspend fun validateAgentConfig(
+        configNode: JsonNode,
+        userId: String,
+        owners: Collection<String> = listOf(userId)
+    ): ConfigValidationResult {
         // 1. Deserialize
         val request = try {
             objectMapper.treeToValue(configNode, AgentCreateRequest::class.java)
@@ -61,7 +65,7 @@ class ConfigValidator(
         }
         for (validator in agentValidators) {
             try {
-                allErrors.addAll(validator.validate(request, userId))
+                allErrors.addAll(validator.validate(request, userId, owners))
             } catch (e: Exception) {
                 logger.warn("Validator {} threw exception: {}", validator::class.java.simpleName, e.message)
                 allErrors.add(ConfigValidationError(

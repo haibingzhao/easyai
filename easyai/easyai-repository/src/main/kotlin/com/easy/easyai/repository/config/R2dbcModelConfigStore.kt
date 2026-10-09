@@ -14,6 +14,7 @@ import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
 import org.jetbrains.exposed.v1.r2dbc.deleteWhere
 import org.jetbrains.exposed.v1.r2dbc.insert
+import org.jetbrains.exposed.v1.r2dbc.select
 import org.jetbrains.exposed.v1.r2dbc.selectAll
 import org.jetbrains.exposed.v1.r2dbc.update
 import org.jetbrains.exposed.v1.r2dbc.transactions.suspendTransaction
@@ -44,16 +45,28 @@ class R2dbcModelConfigStore(
 
     override suspend fun saveConfig(config: ModelProviderConfig, userId: String) {
         suspendTransaction(db) {
-            val existingCount = Tables.ModelProviderConfigTable
-                .selectAll()
+            // `id` is this table's whole primary key, so it is globally unique across owner buckets.
+            // The probe therefore has to ask *who owns it*, not merely whether it exists: an id held by
+            // another bucket can neither be updated here (the scoped UPDATE matches nothing) nor
+            // inserted (the PK rejects it). Probing existence alone — the previous shape — took the
+            // update branch, matched zero rows, and reported success while persisting nothing.
+            val existingOwner = Tables.ModelProviderConfigTable
+                .select(Tables.ModelProviderConfigTable.userId)
                 .where { Tables.ModelProviderConfigTable.id eq config.id }
-                .count()
+                .limit(1)
+                .firstOrNull()
+                ?.get(Tables.ModelProviderConfigTable.userId)
+            require(existingOwner == null || existingOwner == userId) {
+                "Model config '${config.id}' belongs to another owner (a shared group or system " +
+                    "config); it cannot be saved into '$userId'. Pick a different id, or save it " +
+                    "with the scope that owns it."
+            }
 
             val now = System.currentTimeMillis()
             val optionsJson = config.options?.let { objectMapper.writeValueAsString(it) }
             val capabilitiesJson = config.capabilities?.let { objectMapper.writeValueAsString(it) }
 
-            if (existingCount > 0) {
+            if (existingOwner != null) {
                 Tables.ModelProviderConfigTable.update(
                     where = { (Tables.ModelProviderConfigTable.id eq config.id) and UserScope.filterStrict(Tables.ModelProviderConfigTable.userId, userId) }
                 ) {
@@ -148,6 +161,42 @@ class R2dbcModelConfigStore(
                         (Tables.ModelProviderConfigTable.modelType eq modelType.name)
                 }
                 // Deterministic fallback for "no explicit default" resolution: default first, then oldest.
+                .orderBy(
+                    Tables.ModelProviderConfigTable.isDefault to SortOrder.DESC,
+                    Tables.ModelProviderConfigTable.createdAt to SortOrder.ASC,
+                )
+                .map { row -> mapToModelProviderConfig(row, objectMapper) }
+                .toList()
+        }
+    }
+
+    override suspend fun getConfig(id: String, owners: Collection<String>): ModelProviderConfig? {
+        val ordered = owners.filter { it.isNotBlank() }.distinct()
+        if (ordered.isEmpty()) return null
+        return suspendTransaction(db) {
+            // `id` is this table's whole primary key, so the owner set only decides visibility — at
+            // most one row can ever match.
+            Tables.ModelProviderConfigTable
+                .selectAll()
+                .where {
+                    (Tables.ModelProviderConfigTable.id eq id) and
+                        UserScope.filterOwners(Tables.ModelProviderConfigTable.userId, ordered)
+                }
+                .limit(1)
+                .firstOrNull()?.let { row -> mapToModelProviderConfig(row, objectMapper) }
+        }
+    }
+
+    override suspend fun getModelConfigs(modelType: ModelType, owners: Collection<String>): List<ModelProviderConfig> {
+        val ordered = owners.filter { it.isNotBlank() }.distinct()
+        if (ordered.isEmpty()) return emptyList()
+        return suspendTransaction(db) {
+            Tables.ModelProviderConfigTable
+                .selectAll()
+                .where {
+                    UserScope.filterOwners(Tables.ModelProviderConfigTable.userId, ordered) and
+                        (Tables.ModelProviderConfigTable.modelType eq modelType.name)
+                }
                 .orderBy(
                     Tables.ModelProviderConfigTable.isDefault to SortOrder.DESC,
                     Tables.ModelProviderConfigTable.createdAt to SortOrder.ASC,

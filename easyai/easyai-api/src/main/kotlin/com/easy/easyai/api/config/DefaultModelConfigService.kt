@@ -51,15 +51,32 @@ class DefaultModelConfigService(
             ?.takeIf { it.isCustom }
     }
 
-    override suspend fun saveUserConfiguration(request: SaveModelProviderConfigRequest, userId: String): ModelProviderConfig {
+    override suspend fun getUserConfigurations(modelType: ModelType, owners: Collection<String>): List<ModelProviderConfig> {
+        return configStore.getModelConfigs(modelType, owners)
+            .filter { it.isCustom }
+    }
+
+    override suspend fun getUserConfiguration(id: String, owners: Collection<String>): ModelProviderConfig? {
+        return configStore.getConfig(id, owners)
+            ?.takeIf { it.isCustom }
+    }
+
+    override suspend fun saveUserConfiguration(
+        request: SaveModelProviderConfigRequest,
+        userId: String,
+        owners: Collection<String>
+    ): ModelProviderConfig {
         request.options?.let { validateOptions(it) }
         validateGenerationRow(request)
         val id = request.id ?: UUID.randomUUID().toString()
         // When apiKey is null, preserve existing key or resolve from group
-        // (frontend sends null for masked/unchanged keys to avoid overwriting with masked values)
+        // (frontend sends null for masked/unchanged keys to avoid overwriting with masked values).
+        // The two reads differ in scope on purpose: the row being upserted lives in the write owner's
+        // bucket alone, while the referenced group is any group the caller can see — a member joining
+        // a group-owned config group must resolve its key, or the save fails on a group they can read.
         val effectiveApiKey = request.apiKey
-            ?: configStore.getConfig(id, userId)?.apiKey
-            ?: request.groupId?.let { groupStore?.getGroup(it, userId)?.apiKey }
+            ?: configStore.getConfig(id, listOf(userId))?.apiKey
+            ?: request.groupId?.let { groupStore?.getGroup(it, owners)?.apiKey }
         if (request.modelType != ModelType.CHAT && effectiveApiKey.isNullOrBlank()) {
             throw IllegalArgumentException(
                 "a ${request.modelType.name.lowercase()} model needs an api key on itself or its group"
@@ -95,13 +112,18 @@ class DefaultModelConfigService(
             ?: false
     }
 
-    override suspend fun testGenerationConfiguration(request: SaveModelProviderConfigRequest, userId: String): String? {
+    override suspend fun testGenerationConfiguration(
+        request: SaveModelProviderConfigRequest,
+        userId: String,
+        owners: Collection<String>
+    ): String? {
         if (request.modelType == ModelType.CHAT) return "the test endpoint only covers generation models"
         return try {
             validateGenerationRow(request)
+            // Same scoping as saveUserConfiguration, so a draft that tests clean also saves.
             val effectiveApiKey = request.apiKey
-                ?: request.id?.let { configStore.getConfig(it, userId)?.apiKey }
-                ?: request.groupId?.let { groupStore?.getGroup(it, userId)?.apiKey }
+                ?: request.id?.let { configStore.getConfig(it, listOf(userId))?.apiKey }
+                ?: request.groupId?.let { groupStore?.getGroup(it, owners)?.apiKey }
             if (effectiveApiKey.isNullOrBlank()) {
                 "a ${request.modelType.name.lowercase()} model needs an api key on itself or its group"
             } else {
@@ -116,6 +138,10 @@ class DefaultModelConfigService(
 
     override suspend fun getGroups(userId: String): List<ModelConfigGroup> {
         return groupStore?.getAllGroups(userId) ?: emptyList()
+    }
+
+    override suspend fun getGroups(owners: Collection<String>): List<ModelConfigGroup> {
+        return groupStore?.getAllGroups(owners) ?: emptyList()
     }
 
     override suspend fun saveGroup(request: SaveModelConfigGroupRequest, userId: String): ModelConfigGroup {

@@ -273,6 +273,8 @@ data class UserMessage(
         const val SYSTEM_ORIGIN_KEY = "systemOrigin"
         const val ORIGIN_BACKGROUND_TASK = "background_task"
         const val ORIGIN_RESUME_GUIDANCE = "resume_guidance"
+        const val ORIGIN_REPETITION_GUARD = "repetition_guard"
+        const val ORIGIN_COMPLETION_CHECK = "completion_check"
         const val COMMAND_EXPANSION = "commandExpansion"
         const val COMMAND_NAME = "commandName"
         const val COMMAND_SOURCE = "commandSource"

@@ -97,7 +97,7 @@ class FileStorageServiceTest {
         val reference = StoredFileReference.create("alice", "session-1", "png")
         assertFailsWith<IllegalArgumentException> { service.resolveImageUrl(reference, "bob") }
         assertFailsWith<IllegalArgumentException> { service.readStoredImage(reference, "bob") }
-        coVerify(exactly = 0) { resolver.resolve(any()) }
+        coVerify(exactly = 0) { resolver.resolve(any<String>()) }
     }
 
     @Test

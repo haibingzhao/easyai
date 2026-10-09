@@ -5,6 +5,7 @@ import type { UserProfile } from '@/services/auth-service';
 import { uploadAvatar } from '@/services/user-service';
 import { useProjectStore } from './project-store';
 import { useChatStore } from './chat-store';
+import { useCapabilityStore } from './capability-store';
 
 interface AuthState {
   user: UserProfile | null;
@@ -59,6 +60,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       if (res.ok) {
         const user: UserProfile = await res.json();
         set({ user, isAuthenticated: true, authLoading: false });
+        void useCapabilityStore.getState().load();
         return true;
       }
     } catch {
@@ -74,6 +76,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     setAccessToken(response.accessToken);
     resetUserScopedState();
     set({ user: response.user, isAuthenticated: true });
+    void useCapabilityStore.getState().load();
   },
 
   register: async (username, password, email, displayName, avatarFile) => {
@@ -81,6 +84,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     setAccessToken(response.accessToken);
     resetUserScopedState();
     set({ user: response.user, isAuthenticated: true });
+    void useCapabilityStore.getState().load();
     if (!avatarFile) return;
     // The avatar rides on the account that now exists: picking one must never be a reason to fail signup,
     // and Settings offers the same upload if this call is cut short.
@@ -109,4 +113,5 @@ export const useAuthStore = create<AuthState>((set) => ({
 function resetUserScopedState() {
   useProjectStore.getState().resetForUserSwitch();
   useChatStore.getState().clearChat();
+  useCapabilityStore.getState().clear();
 }

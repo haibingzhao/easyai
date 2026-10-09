@@ -4,7 +4,11 @@ import com.easy.easyai.tools.mcp.AsyncMcpServerStore
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.tools.mcp.McpServerConfig
 import com.easy.easyai.tools.mcp.McpServerStatus
+import com.easy.easyai.web.security.currentGroupOwners
 import com.easy.easyai.web.security.getCurrentUserId
+import com.easy.easyai.web.security.isGroupOwner
+import com.easy.easyai.web.security.parseAssetScope
+import com.easy.easyai.web.security.resolveWriteOwner
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import io.modelcontextprotocol.spec.McpSchema
 import kotlinx.coroutines.reactor.mono
@@ -123,42 +127,54 @@ class McpServerController(
 
     @GetMapping
     fun listAll(): Mono<List<McpServerDto>> = mono {
-        val userId = getCurrentUserId()
-        // Trigger lazy connection for this user's MCP servers
-        mcpClientManager.ensureUserConnected(userId)
-        val configs = mcpServerStore.findAll(userId)
-        val statuses = mcpClientManager.getAllStatuses(userId)
-        val toolDefs = mcpClientManager.getAllToolDefs(userId)
+        // MCP never folds in the shared layer, so the listing and the connection warm-up both cover
+        // exactly the caller's own bucket plus any group bucket they belong to.
+        val owners = currentGroupOwners()
+        mcpClientManager.ensureOwnersConnected(owners)
+        val configs = mcpServerStore.findAll(owners)
+        // `name` is not unique across buckets (the table's PK is `id`), so status and tools are keyed
+        // by (owner, name): a member's own server and their group's same-named one are distinct rows
+        // and must not overwrite each other in the rendered list.
+        val connected = mcpClientManager.getConnectedServers(owners)
+            .associateBy { it.userId to it.serverName }
 
         configs.map { config ->
-            val status = statuses[config.name] ?: McpServerStatus.Disabled
-            config.toDto(status, toolDefs[config.name] ?: emptyList(), userId)
+            val server = connected[config.userId to config.name]
+            val status = if (server != null) McpServerStatus.Connected
+            else mcpClientManager.getStatus(config.name, config.userId)
+            config.toDto(status, server?.tools ?: emptyList(), config.userId)
         }
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    fun create(@RequestBody request: McpServerCreateRequest): Mono<McpServerDto> = mono {
-        val userId = getCurrentUserId()
+    fun create(
+        @RequestBody request: McpServerCreateRequest,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<McpServerDto> = mono {
+        val owner = resolveWriteOwner(parseAssetScope(scope))
         validateCreateRequest(request)
-        val existing = mcpServerStore.findByName(request.name, userId)
+        val existing = mcpServerStore.findByName(request.name, owner)
         if (existing != null) {
             throw ResponseStatusException(HttpStatus.CONFLICT, "MCP server already exists: ${request.name}")
         }
         val config = request.toConfig()
-        mcpServerStore.save(config, userId)
+        mcpServerStore.save(config, owner)
 
         val status = if (config.enabled) {
-            mcpClientManager.connect(config, userId)
+            mcpClientManager.connect(config, owner)
         } else {
             McpServerStatus.Disabled
         }
-        config.toDto(status, mcpClientManager.getAllToolDefs(userId)[config.name] ?: emptyList(), userId)
+        config.toDto(status, mcpClientManager.getToolDefs(owner, config.name), owner)
     }
 
     @PostMapping("/import")
-    fun bulkImport(@RequestBody request: McpBulkImportRequest): Mono<List<McpServerDto>> = mono {
-        val userId = getCurrentUserId()
+    fun bulkImport(
+        @RequestBody request: McpBulkImportRequest,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<List<McpServerDto>> = mono {
+        val owner = resolveWriteOwner(parseAssetScope(scope))
         val results = mutableListOf<McpServerDto>()
         for ((name, entry) in request.mcpServers.orEmpty()) {
             try {
@@ -188,14 +204,14 @@ class McpServerController(
                     timeoutSeconds = entry.timeoutSeconds ?: 120L,
                     enabled = true
                 )
-                val existing = mcpServerStore.findByName(name, userId)
+                val existing = mcpServerStore.findByName(name, owner)
                 if (existing != null) {
-                    mcpServerStore.update(config, userId)
+                    mcpServerStore.update(config, owner)
                 } else {
-                    mcpServerStore.save(config, userId)
+                    mcpServerStore.save(config, owner)
                 }
-                val status = mcpClientManager.connect(config, userId)
-                results.add(config.toDto(status, mcpClientManager.getAllToolDefs(userId)[name] ?: emptyList(), userId))
+                val status = mcpClientManager.connect(config, owner)
+                results.add(config.toDto(status, mcpClientManager.getToolDefs(owner, name), owner))
             } catch (e: Exception) {
                 // Skip failed entries but continue with others
                 results.add(McpServerDto(
@@ -210,9 +226,13 @@ class McpServerController(
     }
 
     @PutMapping("/{name}")
-    fun update(@PathVariable name: String, @RequestBody request: McpServerCreateRequest): Mono<McpServerDto> = mono {
-        val userId = getCurrentUserId()
-        val existing = mcpServerStore.findByName(name, userId)
+    fun update(
+        @PathVariable name: String,
+        @RequestBody request: McpServerCreateRequest,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<McpServerDto> = mono {
+        val owner = resolveWriteOwner(parseAssetScope(scope))
+        val existing = mcpServerStore.findByName(name, owner)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "MCP server not found: $name")
 
         val updated = existing.copy(
@@ -225,65 +245,84 @@ class McpServerController(
             enabled = request.enabled,
             updatedAt = System.currentTimeMillis()
         )
-        mcpServerStore.update(updated, userId)
+        mcpServerStore.update(updated, owner)
 
         // Reconnect with new config
         if (updated.enabled) {
-            mcpClientManager.connect(updated, userId)
+            mcpClientManager.connect(updated, owner)
         } else {
-            mcpClientManager.disconnect(name, userId)
+            mcpClientManager.disconnect(name, owner)
         }
 
-        val status = mcpClientManager.getStatus(name, userId)
-        updated.toDto(status, mcpClientManager.getAllToolDefs(userId)[name] ?: emptyList(), userId)
+        val status = mcpClientManager.getStatus(name, owner)
+        updated.toDto(status, mcpClientManager.getToolDefs(owner, name), owner)
     }
 
     @DeleteMapping("/{name}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    fun delete(@PathVariable name: String): Mono<Void> = mono {
-        val userId = getCurrentUserId()
-        mcpServerStore.findByName(name, userId)
+    fun delete(
+        @PathVariable name: String,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<Void> = mono {
+        val owner = resolveWriteOwner(parseAssetScope(scope))
+        mcpServerStore.findByName(name, owner)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "MCP server not found: $name")
-        mcpClientManager.disconnect(name, userId)
-        mcpServerStore.delete(name, userId)
+        mcpClientManager.disconnect(name, owner)
+        mcpServerStore.delete(name, owner)
     }.then()
 
     @PostMapping("/{name}/connect")
     fun reconnect(@PathVariable name: String): Mono<McpServerDto> = mono {
-        val userId = getCurrentUserId()
-        val config = mcpServerStore.findByName(name, userId)
+        val config = mcpServerStore.findByName(name, currentGroupOwners())
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "MCP server not found: $name")
-        val status = mcpClientManager.connect(config, userId)
-        config.toDto(status, mcpClientManager.getAllToolDefs(userId)[name] ?: emptyList(), userId)
+        // Connect under the config's true owner so a group server is shared, not duplicated per member.
+        val owner = config.userId
+        assertCanToggle(owner)
+        val status = mcpClientManager.connect(config, owner)
+        config.toDto(status, mcpClientManager.getToolDefs(owner, name), owner)
     }
 
     @PostMapping("/{name}/disconnect")
     fun disconnect(@PathVariable name: String): Mono<McpServerDto> = mono {
-        val userId = getCurrentUserId()
-        val config = mcpServerStore.findByName(name, userId)
+        val config = mcpServerStore.findByName(name, currentGroupOwners())
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "MCP server not found: $name")
-        mcpClientManager.disconnect(name, userId)
-        config.toDto(McpServerStatus.Disabled, emptyList(), userId)
+        val owner = config.userId
+        assertCanToggle(owner)
+        mcpClientManager.disconnect(name, owner)
+        config.toDto(McpServerStatus.Disabled, emptyList(), owner)
     }
 
     @GetMapping("/{name}/tools")
     fun getTools(@PathVariable name: String): Mono<List<McpToolInfoDto>> = mono {
-        val userId = getCurrentUserId()
-        mcpServerStore.findByName(name, userId)
+        val config = mcpServerStore.findByName(name, currentGroupOwners())
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "MCP server not found: $name")
-        val tools = mcpClientManager.getAllToolDefs(userId)[name] ?: emptyList()
+        // Read the tools under the server's own bucket: the tool cache is keyed `owner:name`, so a
+        // name-keyed lookup across the whole visibility set could answer from a same-named server
+        // belonging to another visible bucket.
+        val tools = mcpClientManager.getToolDefs(config.userId, name)
         tools.map { McpToolInfoDto(name = it.name(), description = it.description() ?: "") }
     }
 
     @GetMapping("/{name}/prompts")
     fun getPrompts(@PathVariable name: String): Mono<List<McpPromptInfoDto>> = mono {
-        val userId = getCurrentUserId()
-        mcpServerStore.findByName(name, userId)
+        val config = mcpServerStore.findByName(name, currentGroupOwners())
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "MCP server not found: $name")
-        mcpClientManager.getServerPrompts(name, userId).map { toPromptDto(it) }
+        // Prompts are cached under the connected owner's key. A group server is connected as the group
+        // bucket, so query by config.userId — not the caller — or a member sees an empty list.
+        mcpClientManager.getServerPrompts(name, config.userId).map { toPromptDto(it) }
     }
 
     // ─── Helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * Connect/disconnect a server owned by the group bucket affects every member, so it is a group
+     * write: only the group owner may toggle it. A caller's own server is always toggleable.
+     */
+    private suspend fun assertCanToggle(owner: String) {
+        if (owner != getCurrentUserId() && !isGroupOwner()) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "Only the group owner can manage a shared MCP server")
+        }
+    }
 
     private fun validateCreateRequest(request: McpServerCreateRequest) {
         if (request.name.isBlank()) {

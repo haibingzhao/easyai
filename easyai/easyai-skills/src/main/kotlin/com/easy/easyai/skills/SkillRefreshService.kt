@@ -35,25 +35,35 @@ class SkillRefreshService(
     private val syncedOwners = ConcurrentHashMap.newKeySet<String>()
 
     /** Full reconcile for the requester (and the shared layer): sync first, then re-index both owners. */
-    suspend fun refreshFor(userId: String?): RefreshOutcome {
-        val owners = ownersFor(userId)
+    suspend fun refreshFor(userId: String?): RefreshOutcome =
+        refreshForOwners(ownersFor(userId), syncService.ownerOf(userId))
+
+    /**
+     * Group-aware full reconcile over an ordered owner set (`{self, groupUserId, system}`): sync every
+     * owner root, then re-index the same set. A member's refresh thus restores the group's skills too,
+     * so what `load_skill`/`skill_search` can see matches what the catalog holds. [self] is the acting
+     * caller's own bucket — the only one (besides `system`) whose disk may be written back; the group
+     * bucket stays a read-only mirror (see [SkillSyncService.syncForOwners]).
+     */
+    suspend fun refreshForOwners(owners: Collection<String>, self: String? = null): RefreshOutcome {
+        val resolved = ownersForOwners(owners)
         val sync = try {
-            syncService.syncFor(userId)
+            syncService.syncForOwners(resolved, self)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("Skill sync could not complete for {}: {}", owners, e.message)
+            logger.warn("Skill sync could not complete for {}: {}", resolved, e.message)
             null
         }
         val summary = try {
-            indexer.reconcileByDrift(owners)
+            indexer.reconcileByDrift(resolved, self)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("Skill index reconciliation could not complete for {}: {}", owners, e.message)
+            logger.warn("Skill index reconciliation could not complete for {}: {}", resolved, e.message)
             null
         }
-        return RefreshOutcome(owners, sync?.delta, sync, summary)
+        return RefreshOutcome(resolved, sync?.delta, sync, summary)
     }
 
     /**
@@ -62,16 +72,21 @@ class SkillRefreshService(
      * later call is a set lookup. A failed pass un-marks the owners so the next access retries.
      */
     suspend fun ensureSynced(userId: String?) {
-        val owners = ownersFor(userId)
-        val claimed = owners.filter { syncedOwners.add(it) }
+        ensureSyncedOwners(ownersFor(userId), syncService.ownerOf(userId))
+    }
+
+    /** Group-aware [ensureSynced] over an ordered owner set; each owner is claimed once per process. */
+    suspend fun ensureSyncedOwners(owners: Collection<String>, self: String? = null) {
+        val resolved = ownersForOwners(owners)
+        val claimed = resolved.filter { syncedOwners.add(it) }
         if (claimed.isEmpty()) return
         try {
-            val sync = syncService.syncFor(userId)
-            indexer.reconcileByDrift(owners)
+            val sync = syncService.syncForOwners(resolved, self)
+            indexer.reconcileByDrift(resolved, self)
             logger.info(
                 "Lazy skill sync for {} claimed={} pushed={} restored={} backfilled={} " +
                     "skipped={} failed={} unclaimed={}",
-                owners, sync.claimed, sync.pushed, sync.restored, sync.backfilled,
+                resolved, sync.claimed, sync.pushed, sync.restored, sync.backfilled,
                 sync.skipped, sync.failed, sync.unclaimed
             )
         } catch (e: CancellationException) {
@@ -79,7 +94,7 @@ class SkillRefreshService(
             throw e
         } catch (e: Exception) {
             syncedOwners.removeAll(claimed.toSet())
-            logger.warn("Lazy skill sync for {} failed; will retry on next access: {}", owners, e.message)
+            logger.warn("Lazy skill sync for {} failed; will retry on next access: {}", resolved, e.message)
         }
     }
 
@@ -125,9 +140,16 @@ class SkillRefreshService(
     }
 
     /** Owners one request touches: the shared layer plus the requester (once, for `system` itself). */
-    fun ownersFor(userId: String?): List<String> {
-        val owner = syncService.ownerOf(userId)
-        return if (owner == SkillCatalogEntry.DEFAULT_USER_ID) listOf(owner)
-        else listOf(SkillCatalogEntry.DEFAULT_USER_ID, owner)
+    fun ownersFor(userId: String?): List<String> = ownersForOwners(listOfNotNull(userId))
+
+    /**
+     * Owners an owner set touches: the shared `system` layer first, then each distinct non-system
+     * owner in priority order. Group sharing passes `{self, groupUserId, system}`, so the group bucket
+     * is synced and indexed alongside the requester's own root.
+     */
+    fun ownersForOwners(owners: Collection<String>): List<String> {
+        val system = SkillCatalogEntry.DEFAULT_USER_ID
+        val cleaned = owners.map { syncService.ownerOf(it) }.filter { it != system }.distinct()
+        return listOf(system) + cleaned
     }
 }

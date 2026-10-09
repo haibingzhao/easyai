@@ -4,7 +4,10 @@ import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.core.model.aux.AuxModelResolver
 import com.easy.easyai.core.model.aux.AuxModelSettingsStore
 import com.easy.easyai.core.model.aux.AuxModelTask
-import com.easy.easyai.web.security.getCurrentUserId
+import com.easy.easyai.web.security.currentGroupOwners
+import com.easy.easyai.web.security.currentOwners
+import com.easy.easyai.web.security.parseAssetScope
+import com.easy.easyai.web.security.resolveWriteOwner
 import kotlinx.coroutines.reactor.mono
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpStatus
@@ -13,6 +16,7 @@ import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.server.ResponseStatusException
 import reactor.core.publisher.Mono
@@ -44,8 +48,7 @@ class AuxModelConfigController(
     @GetMapping
     fun list(): Mono<List<AuxModelConfigDto>> = mono {
         val store = settingsStore ?: throw databaseDisabled()
-        val userId = getCurrentUserId()
-        val byTask = store.getAll(userId).associateBy { it.taskKey }
+        val byTask = store.getAll(currentGroupOwners()).associateBy { it.taskKey }
         AuxModelTask.entries.map { task ->
             val modelConfigId = byTask[task.key]?.modelConfigId.orEmpty()
             toDto(task, modelConfigId)
@@ -55,25 +58,28 @@ class AuxModelConfigController(
     @PutMapping("/{taskKey}")
     fun save(
         @PathVariable taskKey: String,
-        @RequestBody request: SaveAuxModelRequest
+        @RequestBody request: SaveAuxModelRequest,
+        @RequestParam(required = false) scope: String? = null
     ): Mono<AuxModelConfigDto> = mono {
         val store = settingsStore ?: throw databaseDisabled()
         val task = AuxModelTask.fromKey(taskKey)
             ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown task key: $taskKey")
-        val userId = getCurrentUserId()
+        val owner = resolveWriteOwner(parseAssetScope(scope))
         val modelConfigId = request.modelConfigId?.trim().orEmpty()
 
         if (modelConfigId.isBlank()) {
             // Clearing the choice returns the task to its default.
-            store.delete(userId, task)
+            store.delete(owner, task)
         } else {
             val configs = configStore ?: throw databaseDisabled()
-            if (configs.getConfig(modelConfigId, userId) == null) {
+            // The referenced model only has to be visible to the caller (own, group or system); where
+            // the choice itself is stored is the write owner resolved above.
+            if (configs.getConfig(modelConfigId, currentOwners()) == null) {
                 throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Model config not found: $modelConfigId")
             }
-            store.save(userId, task, modelConfigId)
+            store.save(owner, task, modelConfigId)
         }
-        resolver?.refresh(userId, task)
+        resolver?.refresh(owner, task)
         toDto(task, modelConfigId)
     }
 

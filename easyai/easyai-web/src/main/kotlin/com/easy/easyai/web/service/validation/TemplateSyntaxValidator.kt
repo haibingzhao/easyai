@@ -12,7 +12,7 @@ class TemplateSyntaxValidator(
     private val templateRenderer: TemplateRenderer? = null,
 ) : AgentConfigValidator {
 
-    override suspend fun validate(request: AgentCreateRequest, userId: String): List<ConfigValidationError> {
+    override suspend fun validate(request: AgentCreateRequest, userId: String, owners: Collection<String>): List<ConfigValidationError> {
         val errors = mutableListOf<ConfigValidationError>()
 
         val template = request.promptTemplate

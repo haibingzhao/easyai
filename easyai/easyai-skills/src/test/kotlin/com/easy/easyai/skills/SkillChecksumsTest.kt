@@ -9,9 +9,9 @@ import org.junit.jupiter.api.Test
  * Guards the two properties the catalog depends on:
  *
  * 1. **UTF-8 pinning (M2)** — [SkillChecksums.sha256Hex] for [String] must not read the platform
- *    default charset. `projectHashOf` feeds a UNIQUE index column, so the same non-ASCII path
- *    hashing differently on Linux (UTF-8) vs Windows (CP1252) would split one workspace into two
- *    catalog identities.
+ *    default charset. The digest is persisted as the catalog `checksum`, so the same non-ASCII
+ *    content hashing differently on Linux (UTF-8) vs Windows (CP1252) would look like drift and
+ *    trigger a needless re-index of one and the same skill.
  *
  * 2. **Lowercase hex** — [java.util.HexFormat.of] defaults to lowercase; the catalog stores what
  *    this returns verbatim, and equality checks in [SkillIndexer] are string-based.

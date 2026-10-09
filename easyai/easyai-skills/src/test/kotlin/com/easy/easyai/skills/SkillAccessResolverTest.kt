@@ -46,6 +46,10 @@ class SkillAccessResolverTest {
             val owner = firstArg<String>()
             rows.filter { it.userId == owner }
         }
+        coEvery { store.listByOwners(any()) } answers {
+            val owners = firstArg<List<String>>()
+            rows.filter { it.userId in owners }
+        }
         return store
     }
 
@@ -104,8 +108,12 @@ class SkillAccessResolverTest {
             for (user in listOf(null, " ", "system")) {
                 assertEquals(SkillCatalogEntry.DEFAULT_USER_ID, resolver.listScopedSkills(user).single().catalogEntry?.userId)
             }
-            coVerify(exactly = 3) { store.listByUser(SkillCatalogEntry.DEFAULT_USER_ID) }
-            coVerify(exactly = 0) { store.listByUser("alice") }
+            val queried = mutableListOf<List<String>>()
+            coVerify(exactly = 3) { store.listByOwners(capture(queried)) }
+            assertTrue(
+                queried.all { it == listOf(SkillCatalogEntry.DEFAULT_USER_ID) },
+                "a blank/null/system request must read the shared layer only, never alice's bucket: $queried"
+            )
         }
     }
 
@@ -161,7 +169,7 @@ class SkillAccessResolverTest {
             val pdf = skill("pdf")
             registry.register("alice", pdf)
             val store = mockk<AsyncSkillCatalogStore>()
-            coEvery { store.listByUser(any()) } returns listOf(row(pdf, "bob"))
+            coEvery { store.listByOwners(any()) } returns listOf(row(pdf, "bob"))
 
             assertTrue(SkillAccessResolver(registry, store).listScopedSkills("alice").isEmpty())
         }
@@ -192,14 +200,14 @@ class SkillAccessResolverTest {
         fun `catalog read errors propagate instead of exposing unbound candidates`() = runTest {
             registry.register("system", skill("shared", owner = "system"))
             val store = mockk<AsyncSkillCatalogStore>()
-            coEvery { store.listByUser("alice") } throws IOException("unavailable")
+            coEvery { store.listByOwners(any()) } throws IOException("unavailable")
             assertFailsWith<IOException> { SkillAccessResolver(registry, store).listScopedSkills("alice") }
         }
 
         @Test
         fun `cancellation propagates`() = runTest {
             val store = mockk<AsyncSkillCatalogStore>()
-            coEvery { store.listByUser("alice") } throws CancellationException("cancelled")
+            coEvery { store.listByOwners(any()) } throws CancellationException("cancelled")
             assertFailsWith<CancellationException> {
                 SkillAccessResolver(registry, store).listScopedSkills("alice")
             }

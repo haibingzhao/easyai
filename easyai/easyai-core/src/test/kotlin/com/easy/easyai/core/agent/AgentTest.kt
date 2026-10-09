@@ -181,7 +181,7 @@ class AgentTest {
             val expectedUser = userId ?: "system"
             val messages = listOf(UserMessage("Look at the image"))
             val converter = mockk<MessageConverter>()
-            coEvery { converter.toSpringAiMessages(messages, expectedUser) } returns listOf(SpringAiUserMsg("Converted"))
+            coEvery { converter.toSpringAiMessages(messages, expectedUser, any()) } returns listOf(SpringAiUserMsg("Converted"))
             val services = mockk<AgentService>(relaxed = true)
             every { services.messageConverter } returns converter
             every { services.promptTemplateService.build(any(), any()) } returns ""
@@ -190,7 +190,7 @@ class AgentTest {
             val prompt = runner.preparePrompt(messages, emptyList())
 
             assertEquals("Converted", prompt.instructions.single().text)
-            coVerify(exactly = 1) { converter.toSpringAiMessages(messages, expectedUser) }
+            coVerify(exactly = 1) { converter.toSpringAiMessages(messages, expectedUser, any()) }
         }
     }
 

@@ -61,7 +61,7 @@ internal class ChatStreamServiceSkillRoutingTest {
 
     @BeforeEach
     fun setup() {
-        coEvery { configStore.getConfig(config.id, "alice") } returns config
+        coEvery { configStore.getConfig(config.id, any<Collection<String>>()) } returns config
         every { factory.supports(config.protocol) } returns true
         coEvery { manager.getOrCreateSession(any(), config, factory) } returns session
         coEvery { manager.loadMessages("session-1") } returns emptyList()
@@ -84,7 +84,7 @@ internal class ChatStreamServiceSkillRoutingTest {
         @Test
         fun `a routing hit rewrites this turn's skills before prompting`() = runTest {
             val service = service(withRouting = true)
-            coEvery { router.route("alice", listOf("poster", "review"), "帮我生成一张海报") } returns routed
+            coEvery { router.routeOwners(any(), listOf("poster", "review"), "帮我生成一张海报") } returns routed
 
             service.streamChat(request, "alice").toList()
 
@@ -94,7 +94,7 @@ internal class ChatStreamServiceSkillRoutingTest {
         @Test
         fun `a routing miss leaves the session's baseline visibility untouched`() = runTest {
             val service = service(withRouting = true)
-            coEvery { router.route(any(), any(), any()) } returns null
+            coEvery { router.routeOwners(any(), any(), any()) } returns null
 
             service.streamChat(request, "alice").toList()
 
@@ -107,7 +107,7 @@ internal class ChatStreamServiceSkillRoutingTest {
 
             service.streamChat(request, "alice").toList()
 
-            coVerify(exactly = 0) { router.route(any(), any(), any()) }
+            coVerify(exactly = 0) { router.routeOwners(any(), any(), any()) }
             verify(exactly = 0) { session.updateTurnSkills(any()) }
         }
     }
@@ -119,7 +119,7 @@ internal class ChatStreamServiceSkillRoutingTest {
         fun `resume with a message routes on that raw message`() = runTest {
             val service = service(withRouting = true)
             coEvery { manager.getSession("session-1", "alice") } returns session
-            coEvery { router.route("alice", listOf("poster", "review"), "再做一版") } returns routed
+            coEvery { router.routeOwners(any(), listOf("poster", "review"), "再做一版") } returns routed
 
             service.resumeChat("session-1", "alice", "再做一版").toList()
 
@@ -135,7 +135,7 @@ internal class ChatStreamServiceSkillRoutingTest {
 
             service.resumeChat("session-1", "alice", null).toList()
 
-            coVerify(exactly = 0) { router.route(any(), any(), any()) }
+            coVerify(exactly = 0) { router.routeOwners(any(), any(), any()) }
             verify(exactly = 0) { session.updateTurnSkills(any()) }
         }
     }

@@ -3,6 +3,7 @@ package com.easy.easyai.web.service
 import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.api.model.ModelProviderConfig
+import com.easy.easyai.auth.AuthConstants
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.compaction.CompactionTransformContextService
 import com.easy.easyai.compaction.ContextCompactionOrchestrator
@@ -252,12 +253,20 @@ class ChatStreamService(
     /**
      * Stream chat events as a Kotlin Flow.
      */
-    suspend fun streamChat(request: ChatRequest, userId: String = "system"): Flow<ServerSentEvent<ChatStreamEvent>> {
+    suspend fun streamChat(
+        request: ChatRequest,
+        userId: String = "system",
+        owners: Set<String> = emptySet()
+    ): Flow<ServerSentEvent<ChatStreamEvent>> {
         val configId = request.modelProviderConfigId
             ?: return flowOf(errorSse("modelProviderConfigId is required"))
 
+        // Group sharing: resolve the model against the caller's full visibility set (self + group +
+        // system) so a member can chat with a group-owned config. Empty owners (internal/test callers)
+        // fall back to the pre-group {userId, system}.
+        val readOwners = owners.ifEmpty { setOf(userId, AuthConstants.SYSTEM_USER_ID) }
         val config = try {
-            configStore.getConfig(configId, userId)
+            configStore.getConfig(configId, readOwners)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -273,7 +282,7 @@ class ChatStreamService(
             // Mint the session id up front: a project-less chat resolves its temporary workspace
             // by session, so the very first turn must already run inside that directory.
             val sessionId = request.sessionId ?: UUID.randomUUID().toString()
-            val agentContext = createAgentContext(agentId, config, sessionId, request.projectId, userId).let { ctx ->
+            val agentContext = createAgentContext(agentId, config, sessionId, request.projectId, userId, readOwners).let { ctx ->
                 if (request.inputData != null) ctx.copy(inputVariables = request.inputData) else ctx
             }
 
@@ -453,9 +462,9 @@ class ChatStreamService(
      * Optionally accepts a user message to add before resuming.
      * Injects resumption context and streams the continuation as SSE.
      */
-    suspend fun resumeChat(sessionId: String, userId: String = "system", message: String? = null): Flow<ServerSentEvent<ChatStreamEvent>> {
+    suspend fun resumeChat(sessionId: String, userId: String = "system", message: String? = null, owners: Collection<String> = emptyList()): Flow<ServerSentEvent<ChatStreamEvent>> {
         return try {
-            val session = sessionManager.getSession(sessionId, userId)
+            val session = sessionManager.getSession(sessionId, userId, owners)
                 ?: throw IllegalStateException("Session not found: $sessionId")
 
             // Resume goal timer if it was paused waiting for user input
@@ -464,7 +473,7 @@ class ChatStreamService(
             // Load fresh messages from DB (single source of truth)
             val messages = sessionManager.loadMessages(sessionId)
 
-            commandService?.validateReplay(messages, userId)
+            commandService?.validateReplay(messages, userId, session.agentContext.effectiveOwners)
             val stream = if (message.isNullOrBlank()) {
                 session.resume(messages = messages)
             } else {
@@ -473,7 +482,7 @@ class ChatStreamService(
                 )
                 val prepared = prepareCommandMessage(message, UserMessage(content = content), session)
                 sessionManager.saveSessionMessages(session.agentContext, listOf(prepared))
-                skillTurnRouter?.route(userId, session.agentContext.allowedSkillNames, message)
+                skillTurnRouter?.routeOwners(session.agentContext.effectiveOwners, session.agentContext.allowedSkillNames, message)
                     ?.let { session.updateTurnSkills(it) }
                 session.promptWithHistory(messages + prepared)
             }
@@ -555,7 +564,7 @@ class ChatStreamService(
         }
 
         val history = sessionManager.loadMessages(session.id)
-        commandService?.validateReplay(history, agentContext.userId ?: "system")
+        commandService?.validateReplay(history, agentContext.userId ?: "system", agentContext.effectiveOwners)
 
         // Resume goal timer if paused (defensive: user may send a new message instead of using dedicated resume endpoints)
         resumeGoalTimer(session.id, agentContext.userId ?: "system")
@@ -578,7 +587,7 @@ class ChatStreamService(
         sessionManager.saveSessionMessages(session.agentContext, listOf(userMessage))
         // Update session agent with fresh inputVariables from current request
         session.updateInputVariables(agentContext.inputVariables)
-        skillTurnRouter?.route(session.agentContext.userId, session.agentContext.allowedSkillNames, messageText)
+        skillTurnRouter?.routeOwners(session.agentContext.effectiveOwners, session.agentContext.allowedSkillNames, messageText)
             ?.let { session.updateTurnSkills(it) }
         val stream = session.promptWithHistory(messages)
 
@@ -602,7 +611,7 @@ class ChatStreamService(
     ): UserMessage {
         val context = session.agentContext
         val userId = context.userId ?: "system"
-        val expansion = commandService?.resolveAndExpand(rawText, userId, session.id, allowSideEffects)
+        val expansion = commandService?.resolveAndExpand(rawText, userId, session.id, allowSideEffects, context.effectiveOwners)
         val commandKeys = setOf(
             UserMessage.COMMAND_NAME, UserMessage.COMMAND_EXPANSION, UserMessage.COMMAND_SOURCE,
             UserMessage.COMMAND_CATEGORY, UserMessage.COMMAND_USER_ID
@@ -662,7 +671,8 @@ class ChatStreamService(
         config: ModelProviderConfig,
         sessionId: String? = null,
         projectId: String? = null,
-        userId: String = "system"
+        userId: String = "system",
+        owners: Set<String> = emptySet()
     ): AgentContext {
         if (sessionId != null && sessionStore?.isSessionOwnedByUser(sessionId, userId) == false) {
             throw IllegalArgumentException("Session is not available to this user")
@@ -692,7 +702,8 @@ class ChatStreamService(
             agentId = agentId,
             modelConfig = config,
             sessionId = sessionId,
-            userId = userId
+            userId = userId,
+            owners = owners
         )
         val scriptEnv = scriptEnvProvider?.getScriptEnv(partialContext) ?: emptyMap()
 
@@ -701,6 +712,7 @@ class ChatStreamService(
             modelConfig = config,
             sessionId = sessionId,
             userId = userId,
+            owners = owners,
             projectId = verifiedProjectId,
             projectPath = projectPath,
             projectKind = project?.kind ?: ProjectKind.USER,
@@ -723,7 +735,7 @@ class ChatStreamService(
      * Resume after answering a question.
      * Constructs a ToolResultMessage (role=TOOL) and resumes the session.
      */
-    suspend fun resumeAfterAnswer(sessionId: String, userId: String = "system", toolCallId: String, answers: List<List<String>>): Flow<ServerSentEvent<ChatStreamEvent>> {
+    suspend fun resumeAfterAnswer(sessionId: String, userId: String = "system", toolCallId: String, answers: List<List<String>>, owners: Collection<String> = emptyList()): Flow<ServerSentEvent<ChatStreamEvent>> {
         val answerText = buildAnswerText(answers)
         val toolResultEntry = ToolResultEntry(
             toolCallId = toolCallId,
@@ -735,7 +747,8 @@ class ChatStreamService(
             sessionId = sessionId,
             userId = userId,
             toolCallId = toolCallId,
-            context = "answer"
+            context = "answer",
+            owners = owners
         ) { messages, resolvedToolCallId ->
             // toolName will be resolved from messages
             val toolName = findToolNameById(messages, resolvedToolCallId)
@@ -747,7 +760,7 @@ class ChatStreamService(
      * Reject a pending question and resume the session.
      * Constructs a ToolResultMessage (role=TOOL) with rejection info and resumes the session.
      */
-    suspend fun rejectAndResume(sessionId: String, userId: String = "system", toolCallId: String): Flow<ServerSentEvent<ChatStreamEvent>> {
+    suspend fun rejectAndResume(sessionId: String, userId: String = "system", toolCallId: String, owners: Collection<String> = emptyList()): Flow<ServerSentEvent<ChatStreamEvent>> {
         val toolResultEntry = ToolResultEntry(
             toolCallId = toolCallId,
             toolName = "", // will be resolved in resumeWithToolResult
@@ -758,7 +771,8 @@ class ChatStreamService(
             sessionId = sessionId,
             userId = userId,
             toolCallId = toolCallId,
-            context = "resume"
+            context = "resume",
+            owners = owners
         ) { messages, resolvedToolCallId ->
             val toolName = findToolNameById(messages, resolvedToolCallId)
             toolResultEntry.copy(toolName = toolName)
@@ -772,7 +786,7 @@ class ChatStreamService(
      * @param permission Permission type echoed back from the frontend (originally sent in PermissionRequestEvent)
      * @param pattern Pattern echoed back from the frontend
      */
-    suspend fun allowPermissionAndResume(sessionId: String, userId: String = "system", toolCallId: String, remember: Boolean, permission: String?, pattern: String?): Flow<ServerSentEvent<ChatStreamEvent>> {
+    suspend fun allowPermissionAndResume(sessionId: String, userId: String = "system", toolCallId: String, remember: Boolean, permission: String?, pattern: String?, owners: Collection<String> = emptyList()): Flow<ServerSentEvent<ChatStreamEvent>> {
         // If remember=true, save the allow rule before resuming
         if (remember && permissionService != null && permission != null) {
             val context = sessionManager.getSessionContext(sessionId, userId)
@@ -790,7 +804,8 @@ class ChatStreamService(
             userId = userId,
             toolCallId = toolCallId,
             context = "permission_allow",
-            saveToolResult = false
+            saveToolResult = false,
+            owners = owners
         ) { messages, resolvedToolCallId ->
             val toolName = findToolNameById(messages, resolvedToolCallId)
             ToolResultEntry(toolCallId = resolvedToolCallId, toolName = toolName, result = "", isError = false)
@@ -804,7 +819,7 @@ class ChatStreamService(
      * @param permission Permission type echoed back from the frontend (originally sent in PermissionRequestEvent)
      * @param pattern Pattern echoed back from the frontend
      */
-    suspend fun denyPermissionAndResume(sessionId: String, userId: String = "system", toolCallId: String, remember: Boolean, reason: String?, permission: String?, pattern: String?): Flow<ServerSentEvent<ChatStreamEvent>> {
+    suspend fun denyPermissionAndResume(sessionId: String, userId: String = "system", toolCallId: String, remember: Boolean, reason: String?, permission: String?, pattern: String?, owners: Collection<String> = emptyList()): Flow<ServerSentEvent<ChatStreamEvent>> {
         // If remember=true, save the deny rule before resuming
         if (remember && permissionService != null && permission != null) {
             val context = sessionManager.getSessionContext(sessionId, userId)
@@ -826,7 +841,8 @@ class ChatStreamService(
             sessionId = sessionId,
             userId = userId,
             toolCallId = toolCallId,
-            context = "permission_deny"
+            context = "permission_deny",
+            owners = owners
         ) { messages, resolvedToolCallId ->
             val toolName = findToolNameById(messages, resolvedToolCallId)
             entry.copy(toolName = toolName)
@@ -851,10 +867,11 @@ class ChatStreamService(
         toolCallId: String,
         context: String,
         saveToolResult: Boolean = true,
+        owners: Collection<String> = emptyList(),
         resolveToolName: (messages: List<EasyAiMessage>, toolCallId: String) -> ToolResultEntry
     ): Flow<ServerSentEvent<ChatStreamEvent>> {
         return try {
-            val session = sessionManager.getSession(sessionId, userId)
+            val session = sessionManager.getSession(sessionId, userId, owners)
                 ?: throw IllegalStateException("Session not found: $sessionId")
 
             // Clear pending permission from DB (permission has been answered)
@@ -868,7 +885,7 @@ class ChatStreamService(
 
             // Load fresh messages from DB
             val messages = sessionManager.loadMessages(session.id)
-            commandService?.validateReplay(messages, userId)
+            commandService?.validateReplay(messages, userId, session.agentContext.effectiveOwners)
 
             val chatContext = session.agentContext
             val messagesWithResult: List<EasyAiMessage>
@@ -1188,14 +1205,14 @@ class ChatStreamService(
      * Manually trigger context compaction for a session.
      * Streams compaction events as SSE in real-time via a Channel bridge.
      */
-    fun compactChat(sessionId: String, userId: String = "system"): Flow<ServerSentEvent<ChatStreamEvent>> = flow {
+    fun compactChat(sessionId: String, userId: String = "system", owners: Collection<String> = emptyList()): Flow<ServerSentEvent<ChatStreamEvent>> = flow {
         val channel = Channel<AgentEvent>(Channel.UNLIMITED)
 
         // Launch compaction in a background coroutine that pushes events to the channel.
         // Job is held so cancellation can abort it when the SSE connection drops.
         val compactionJob = CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
             try {
-                val session = sessionManager.getSession(sessionId, userId)
+                val session = sessionManager.getSession(sessionId, userId, owners)
                     ?: throw IllegalStateException("Session not found: $sessionId")
 
                 val context = session.agentContext

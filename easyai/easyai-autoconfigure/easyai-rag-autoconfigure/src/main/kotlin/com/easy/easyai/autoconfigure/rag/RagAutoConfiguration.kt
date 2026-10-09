@@ -4,9 +4,11 @@ import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.skill.SkillStore
 import com.easy.easyai.rag.RagClient
+import com.easy.easyai.rag.RagConfig
 import com.easy.easyai.rag.RagKnowledgeStores
 import com.easy.easyai.rag.RagMemoryStores
 import com.easy.easyai.rag.RagSkillStores
+import org.springframework.beans.factory.InitializingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
@@ -33,11 +35,37 @@ class RagAutoConfiguration {
     @ConditionalOnMissingBean
     fun ragClient(): RagClient = RagClient.create()
 
+    /**
+     * Installs the deployment-wide STATIC RAG config from `easyai.rag.*` before any request reads it.
+     * A no-op when no base URL is pinned, which leaves `~/.easyai/rag.json` in charge (file mode).
+     */
+    @Bean
+    fun ragStaticOverrideInitializer(properties: RagProperties): InitializingBean = InitializingBean {
+        if (properties.isStatic()) {
+            RagConfig.setStaticOverride(
+                RagConfig(
+                    enabled = properties.enabled,
+                    baseUrl = properties.baseUrl,
+                    username = properties.username.ifBlank { null },
+                    password = properties.password.ifBlank { null },
+                    workspace = properties.workspace.ifBlank { null },
+                    topK = properties.topK,
+                    readTimeoutMs = properties.readTimeoutMs,
+                    indexTimeoutMs = properties.indexTimeoutMs,
+                    indexSubmitTimeoutMs = properties.indexSubmitTimeoutMs,
+                    indexPollIntervalMs = properties.indexPollIntervalMs,
+                    indexPollMaxMs = properties.indexPollMaxMs
+                )
+            )
+        }
+    }
+
     @Bean
     @ConditionalOnProperty(prefix = "easyai.memory", name = ["enabled"], havingValue = "true", matchIfMissing = true)
     fun memoryStore(ragClient: RagClient): MemoryStore = RagMemoryStores.create(ragClient)
 
     @Bean
+    @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "easyai.knowledge", name = ["enabled"], havingValue = "true", matchIfMissing = true)
     fun knowledgeStore(ragClient: RagClient): KnowledgeStore = RagKnowledgeStores.create(ragClient)
 

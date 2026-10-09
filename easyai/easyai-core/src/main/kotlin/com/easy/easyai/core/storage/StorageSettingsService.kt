@@ -32,7 +32,10 @@ interface StorageSettingsService {
     suspend fun current(userId: String): StorageSettings?
 
     /** Which layer is actually in force for this user right now. */
-    suspend fun effectiveSource(userId: String): StorageSource
+    suspend fun effectiveSource(userId: String): StorageSource = effectiveSource(listOf(userId))
+
+    /** Which layer is in force across [owners] (self → group → system), STATIC above all. */
+    suspend fun effectiveSource(owners: Collection<String>): StorageSource
 
     /**
      * Validate, persist and hot-apply one configuration.

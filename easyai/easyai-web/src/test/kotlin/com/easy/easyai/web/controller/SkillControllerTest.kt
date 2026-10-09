@@ -126,12 +126,12 @@ class SkillControllerTest {
 
         @Test
         fun `a listing reads the authenticated user`() = runTest {
-            coEvery { access.listScopedSkills("alice") } returns emptyList()
-            coEvery { catalogService.list(SkillOwnerContext("alice")) } returns emptyList()
+            coEvery { access.listScopedSkillsForOwners(any()) } returns emptyList()
+            coEvery { catalogService.listForOwners(any()) } returns emptyList()
 
             controller().listSkills().contextWrite(asAlice()).block()
 
-            coVerify(exactly = 1) { catalogService.list(SkillOwnerContext("alice")) }
+            coVerify(exactly = 1) { catalogService.listForOwners(any()) }
         }
 
         @Test
@@ -148,8 +148,8 @@ class SkillControllerTest {
         fun `the system identity may publish shared skills`() = runTest {
             val source = Files.createDirectories(sourceRoot.resolve("pdf"))
             coEvery { refresh.addSkill("system", "pdf", any()) } returns SkillAddResult.Added(entry("pdf", owner = "system"))
-            coEvery { catalogService.list(SkillOwnerContext("system")) } returns listOf(installed(entry("pdf", owner = "system")))
-            coEvery { access.listScopedSkills("system") } returns listOf(candidate(entry("pdf", owner = "system")))
+            coEvery { catalogService.listForOwners(any()) } returns listOf(installed(entry("pdf", owner = "system")))
+            coEvery { access.listScopedSkillsForOwners(any()) } returns listOf(candidate(entry("pdf", owner = "system")))
 
             val response = controller().addFromDirectory(
                 SkillAddRequest(name = "pdf", sourcePath = source.toString(), shared = true)
@@ -167,8 +167,8 @@ class SkillControllerTest {
         @Test
         fun `a row lists with catalog lifecycle fields`() = runTest {
             val row = entry("pdf-report", enabled = false, indexed = false)
-            coEvery { catalogService.list(any()) } returns listOf(installed(row, onDisk = false))
-            coEvery { access.listScopedSkills(any()) } returns emptyList()
+            coEvery { catalogService.listForOwners(any()) } returns listOf(installed(row, onDisk = false))
+            coEvery { access.listScopedSkillsForOwners(any()) } returns emptyList()
 
             val dto = controller().listSkills().contextWrite(asAlice()).block()!!.single()
 
@@ -183,8 +183,8 @@ class SkillControllerTest {
         @Test
         fun `an installed row carries its description and tags`() = runTest {
             val row = entry("pdf-report")
-            coEvery { catalogService.list(any()) } returns listOf(installed(row))
-            coEvery { access.listScopedSkills(any()) } returns listOf(candidate(row))
+            coEvery { catalogService.listForOwners(any()) } returns listOf(installed(row))
+            coEvery { access.listScopedSkillsForOwners(any()) } returns listOf(candidate(row))
 
             val dto = controller().listSkills().contextWrite(asAlice()).block()!!.single()
 
@@ -197,8 +197,8 @@ class SkillControllerTest {
         @Test
         fun `a shared row is marked shared`() = runTest {
             val row = entry("pdf-report", owner = "system")
-            coEvery { catalogService.list(any()) } returns listOf(installed(row))
-            coEvery { access.listScopedSkills(any()) } returns listOf(candidate(row))
+            coEvery { catalogService.listForOwners(any()) } returns listOf(installed(row))
+            coEvery { access.listScopedSkillsForOwners(any()) } returns listOf(candidate(row))
 
             assertTrue(controller().listSkills().contextWrite(asAlice()).block()!!.single().shared)
         }
@@ -206,7 +206,7 @@ class SkillControllerTest {
         @Test
         fun `without a catalog the registry snapshot is listed`() = runTest {
             val bare = SkillController(skillAccessResolver = access)
-            coEvery { access.listScopedSkills(any()) } returns listOf(candidate())
+            coEvery { access.listScopedSkillsForOwners(any()) } returns listOf(candidate())
 
             val listed = bare.listSkills().contextWrite(asAlice()).block()!!
 
@@ -280,7 +280,7 @@ class SkillControllerTest {
             val mine = Files.createDirectories(tempRoot.resolve("alice").resolve("draft"))
             val shared = Files.createDirectories(tempRoot.resolve(SkillCatalogEntry.DEFAULT_USER_ID).resolve("pdf"))
             coEvery { refresh.addSkill("alice", any(), any()) } returns SkillAddResult.Added(entry("pdf"))
-            coEvery { catalogService.list(any()) } returns emptyList()
+            coEvery { catalogService.listForOwners(any()) } returns emptyList()
 
             val own = controller().addFromDirectory(SkillAddRequest(name = "draft", sourcePath = mine.toString()))
                 .contextWrite(asAlice()).block()!!
@@ -296,8 +296,8 @@ class SkillControllerTest {
             val source = Files.createDirectories(sourceRoot.resolve("shadow"))
             val row = entry("pdf")
             coEvery { refresh.addSkill("alice", "pdf", any()) } returns SkillAddResult.Added(row)
-            coEvery { catalogService.list(any()) } returns listOf(installed(row))
-            coEvery { access.listScopedSkills(any()) } returns listOf(candidate(row))
+            coEvery { catalogService.listForOwners(any()) } returns listOf(installed(row))
+            coEvery { access.listScopedSkillsForOwners(any()) } returns listOf(candidate(row))
             coEvery { store.findByName(SkillCatalogEntry.DEFAULT_USER_ID, "pdf") } returns entry("pdf", owner = "system")
 
             val body = controller().addFromDirectory(SkillAddRequest(name = "pdf", sourcePath = source.toString()))
@@ -312,8 +312,8 @@ class SkillControllerTest {
             val row = entry("pdf")
             val captured = slot<SkillUpload>()
             coEvery { refresh.addUploaded("alice", "pdf", capture(captured)) } returns SkillAddResult.Added(row)
-            coEvery { catalogService.list(any()) } returns listOf(installed(row))
-            coEvery { access.listScopedSkills(any()) } returns listOf(candidate(row))
+            coEvery { catalogService.listForOwners(any()) } returns listOf(installed(row))
+            coEvery { access.listScopedSkillsForOwners(any()) } returns listOf(candidate(row))
 
             val parts = LinkedMultiValueMap<String, Part>().apply {
                 add("name", textPart("pdf"))
@@ -352,8 +352,8 @@ class SkillControllerTest {
             val row = entry("pdf")
             val captured = slot<SkillUpload>()
             coEvery { refresh.addUploaded("alice", "pdf", capture(captured)) } returns SkillAddResult.Added(row)
-            coEvery { catalogService.list(any()) } returns listOf(installed(row))
-            coEvery { access.listScopedSkills(any()) } returns emptyList()
+            coEvery { catalogService.listForOwners(any()) } returns listOf(installed(row))
+            coEvery { access.listScopedSkillsForOwners(any()) } returns emptyList()
 
             val parts = LinkedMultiValueMap<String, Part>().apply {
                 add("name", textPart("pdf"))
@@ -461,10 +461,81 @@ class SkillControllerTest {
         }
     }
 
+    @Nested
+    inner class `group-scoped management` {
+
+        @Test
+        fun `a group owner installs into the group bucket`() = runTest {
+            val source = Files.createDirectories(sourceRoot.resolve("gpdf"))
+            coEvery { refresh.addSkill("grp-1", "gpdf", any()) } returns
+                SkillAddResult.Added(entry("gpdf", owner = "grp-1"))
+            coEvery { catalogService.listForOwners(any()) } returns emptyList()
+
+            val response = controller().addFromDirectory(
+                SkillAddRequest(name = "gpdf", sourcePath = source.toString()), scope = "group"
+            ).contextWrite(asGroupMember(isOwner = true)).block()!!
+
+            assertEquals(HttpStatus.OK, response.statusCode)
+            assertEquals("gpdf", response.body!!.skill!!.name)
+            coVerify(exactly = 1) { refresh.addSkill("grp-1", "gpdf", any()) }
+        }
+
+        @Test
+        fun `a group member may not install into the group bucket`() = runTest {
+            val source = Files.createDirectories(sourceRoot.resolve("gpdf2"))
+
+            val error = assertFailsWith<ResponseStatusException> {
+                controller().addFromDirectory(
+                    SkillAddRequest(name = "gpdf2", sourcePath = source.toString()), scope = "group"
+                ).contextWrite(asGroupMember(isOwner = false)).block()
+            }
+
+            assertEquals(HttpStatus.FORBIDDEN, error.statusCode)
+            coVerify(exactly = 0) { refresh.addSkill(any(), any(), any()) }
+        }
+
+        @Test
+        fun `the listing reads through the group bucket`() = runTest {
+            coEvery { catalogService.listForOwners(any()) } returns emptyList()
+            coEvery { access.listScopedSkillsForOwners(any()) } returns emptyList()
+
+            controller().listSkills().contextWrite(asGroupMember(isOwner = false)).block()
+
+            coVerify(exactly = 1) { catalogService.listForOwners(match { "grp-1" in it && "alice" in it }) }
+        }
+
+        @Test
+        fun `a group-scoped toggle targets the group row`() = runTest {
+            coEvery { catalogService.find("pdf", SkillOwnerContext("grp-1")) } returns
+                installed(entry("pdf", owner = "grp-1"))
+            coEvery { catalogService.setEnabled("pdf", SkillOwnerContext("grp-1"), false) } returns
+                SkillToggleResult.Applied("pdf", enabled = false, indexSynced = true)
+
+            val dto = controller().setEnabled(
+                SkillEnabledRequest(name = "pdf", enabled = false), scope = "group"
+            ).contextWrite(asGroupMember(isOwner = true)).block()!!
+
+            assertFalse(dto.enabled)
+            coVerify(exactly = 1) { catalogService.setEnabled("pdf", SkillOwnerContext("grp-1"), false) }
+        }
+    }
+
     // ── Fixtures ───────────────────────────────────────────────────────────────
 
     private fun asAlice() = ReactiveSecurityContextHolder.withAuthentication(
         UsernamePasswordAuthenticationToken("alice", "", emptyList<GrantedAuthority>())
+    )
+
+    /** A login carrying group claims: [isOwner] decides whether group-scoped writes are permitted. */
+    private fun asGroupMember(isOwner: Boolean) = ReactiveSecurityContextHolder.withAuthentication(
+        UsernamePasswordAuthenticationToken("alice", "", emptyList<GrantedAuthority>()).apply {
+            details = com.easy.easyai.auth.group.GroupClaims(
+                owners = listOf("alice", "grp-1"),
+                groupId = "g1",
+                groupUserId = "grp-1",
+                isGroupOwner = isOwner
+            )
+        }
     )
 
     private fun exchangeWith(parts: MultiValueMap<String, Part>): ServerWebExchange {

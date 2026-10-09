@@ -102,7 +102,8 @@ class KnowledgeToolsTest {
             val store = FakeKnowledgeStore(entries = listOf(entry("docs/arch.md", "Architecture body")))
             val tool = KnowledgeSearchTool(
                 ToolMetadata(name = "knowledge_search", description = "test"),
-                store
+                store,
+                "user-1"
             )
 
             val (isError, output) = runTool(tool, mapOf("query" to "architecture"))
@@ -119,7 +120,8 @@ class KnowledgeToolsTest {
         fun `returns friendly message when no hits`() {
             val tool = KnowledgeSearchTool(
                 ToolMetadata(name = "knowledge_search", description = "test"),
-                FakeKnowledgeStore()
+                FakeKnowledgeStore(),
+                "user-1"
             )
 
             val (isError, output) = runTool(tool, mapOf("query" to "nothing"))
@@ -132,7 +134,8 @@ class KnowledgeToolsTest {
         fun `missing query returns error`() {
             val tool = KnowledgeSearchTool(
                 ToolMetadata(name = "knowledge_search", description = "test"),
-                FakeKnowledgeStore()
+                FakeKnowledgeStore(),
+                "user-1"
             )
             val (isError, output) = runTool(tool, emptyMap())
 
@@ -141,11 +144,12 @@ class KnowledgeToolsTest {
         }
 
         @Test
-        fun `null userId falls back to system`() {
+        fun `uses the baked knowledge owner regardless of the context user`() {
             val store = FakeKnowledgeStore()
             val tool = KnowledgeSearchTool(
                 ToolMetadata(name = "knowledge_search", description = "test"),
-                store
+                store,
+                "system"
             )
 
             runTool(tool, mapOf("query" to "q"), userId = null)
@@ -162,7 +166,8 @@ class KnowledgeToolsTest {
             val store = FakeKnowledgeStore(contents = mapOf("docs/arch.md" to "Full document"))
             val tool = KnowledgeReadTool(
                 ToolMetadata(name = "knowledge_read", description = "test"),
-                store
+                store,
+                "user-1"
             )
 
             val (isError, output) = runTool(tool, mapOf("key" to "docs/arch.md"))
@@ -176,7 +181,8 @@ class KnowledgeToolsTest {
         fun `missing entry returns error`() {
             val tool = KnowledgeReadTool(
                 ToolMetadata(name = "knowledge_read", description = "test"),
-                FakeKnowledgeStore()
+                FakeKnowledgeStore(),
+                "user-1"
             )
 
             val (isError, output) = runTool(tool, mapOf("key" to "missing/doc.md"))
@@ -189,7 +195,8 @@ class KnowledgeToolsTest {
         fun `missing key returns error`() {
             val tool = KnowledgeReadTool(
                 ToolMetadata(name = "knowledge_read", description = "test"),
-                FakeKnowledgeStore()
+                FakeKnowledgeStore(),
+                "user-1"
             )
 
             val (isError, output) = runTool(tool, emptyMap())

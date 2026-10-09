@@ -2,17 +2,20 @@ package com.easy.easyai.web.controller
 
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.knowledge.KnowledgeEntry
+import com.easy.easyai.core.knowledge.KnowledgeOwnership
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.knowledge.KnowledgeUploadItem
 import com.easy.easyai.web.model.KnowledgeDetailDto
 import com.easy.easyai.web.model.KnowledgeEntryDto
 import com.easy.easyai.web.model.UploadResponseDto
 import com.easy.easyai.web.model.UploadResultDto
+import com.easy.easyai.web.security.currentGroupUserId
 import com.easy.easyai.web.security.getCurrentUserId
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.coroutines.reactor.mono
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.core.io.buffer.DataBufferUtils
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
@@ -37,9 +40,22 @@ import reactor.core.publisher.Mono
 @RestController
 @RequestMapping("/api/knowledge")
 class KnowledgeController(
-    @param:Autowired(required = false) private val knowledgeStore: KnowledgeStore?
+    @param:Autowired(required = false) private val knowledgeStore: KnowledgeStore?,
+    @param:Value("\${easyai.knowledge.shared-within-group:false}") private val sharedWithinGroup: Boolean = false
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
+
+    /**
+     * The owner id knowledge is scoped to: the group bucket when sharing is on and this login has one,
+     * so a household owner and its members read/write the same slice; otherwise the caller. The group
+     * claim is only read when sharing is enabled, so the default path stays a single context lookup.
+     */
+    private suspend fun knowledgeOwnerId(): String =
+        if (sharedWithinGroup) {
+            KnowledgeOwnership.ownerId(getCurrentUserId(), currentGroupUserId(), true)
+        } else {
+            KnowledgeOwnership.ownerId(getCurrentUserId(), null, false)
+        }
 
     @PostMapping("/upload", consumes = [MediaType.MULTIPART_FORM_DATA_VALUE])
     fun uploadFiles(
@@ -51,6 +67,7 @@ class KnowledgeController(
             mono {
                 val store = knowledgeStore ?: throw knowledgeNotEnabled()
                 val userId = getCurrentUserId()
+                val ownerId = knowledgeOwnerId()
 
                 val fileParts = multipartData["files"]?.filterIsInstance<FilePart>() ?: emptyList()
                 val pathsPart = multipartData["paths"]?.firstOrNull()
@@ -76,7 +93,7 @@ class KnowledgeController(
                     KnowledgeUploadItem(relativePath = path, content = content)
                 }
 
-                val results = store.uploadBatch(userId, resolvedSource, items, category)
+                val results = store.uploadBatch(ownerId, resolvedSource, items, category)
                 val dtoResults = results.map { r ->
                     UploadResultDto(
                         relativePath = r.relativePath,
@@ -103,8 +120,7 @@ class KnowledgeController(
     ): Mono<List<KnowledgeEntryDto>> {
         return mono {
             val store = knowledgeStore ?: return@mono emptyList()
-            val userId = getCurrentUserId()
-            store.list(userId, source, category, q).map { toEntryDto(it) }
+            store.list(knowledgeOwnerId(), source, category, q).map { toEntryDto(it) }
         }
     }
 
@@ -112,8 +128,7 @@ class KnowledgeController(
     fun listSources(): Mono<List<String>> {
         return mono {
             val store = knowledgeStore ?: return@mono emptyList()
-            val userId = getCurrentUserId()
-            store.sources(userId)
+            store.sources(knowledgeOwnerId())
         }
     }
 
@@ -123,8 +138,7 @@ class KnowledgeController(
             val store = knowledgeStore
                 ?: throw knowledgeNotEnabled()
             validateRelativePath(key)
-            val userId = getCurrentUserId()
-            val detail = store.detail(userId, key)
+            val detail = store.detail(knowledgeOwnerId(), key)
                 ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Knowledge entry not found: $key")
             KnowledgeDetailDto(
                 entry = toEntryDto(detail.entry),
@@ -143,8 +157,7 @@ class KnowledgeController(
             val store = knowledgeStore
                 ?: throw knowledgeNotEnabled()
             validateRelativePath(key)
-            val userId = getCurrentUserId()
-            val deleted = store.delete(userId, key)
+            val deleted = store.delete(knowledgeOwnerId(), key)
             mapOf("deleted" to deleted)
         }
     }
@@ -155,8 +168,7 @@ class KnowledgeController(
             val store = knowledgeStore
                 ?: throw knowledgeNotEnabled()
             validateSource(source)
-            val userId = getCurrentUserId()
-            val count = store.deleteSource(userId, source)
+            val count = store.deleteSource(knowledgeOwnerId(), source)
             mapOf("deleted" to count)
         }
     }

@@ -27,14 +27,22 @@ internal class SkillModelFixture {
     private val entries = mutableListOf<Pair<String, SkillInfo>>()
 
     init {
-        every { registry.visibleFor(any()) } answers {
-            val owner = firstArg<String>()
+        every { registry.visibleForOwners(any()) } answers {
+            val owners = firstArg<Collection<String>>()
+            val ordered = owners.filter { it.isNotBlank() }.distinct().let {
+                if (SYSTEM in it) it else it + SYSTEM
+            }
             val best = LinkedHashMap<String, SkillInfo>()
-            entries.filter { it.first == SYSTEM }.forEach { best.putIfAbsent(it.second.name, it.second) }
-            if (owner != SYSTEM) entries.filter { it.first == owner }.forEach { best[it.second.name] = it.second }
+            for (owner in ordered) {
+                entries.filter { it.first == owner }.forEach { best.putIfAbsent(it.second.name, it.second) }
+            }
             best.values.sortedBy { it.name }
         }
         coEvery { catalog.listByUser(any()) } answers { rows.filter { it.userId == firstArg<String>() } }
+        coEvery { catalog.listByOwners(any()) } answers {
+            val owners = firstArg<List<String>>()
+            rows.filter { it.userId in owners }
+        }
     }
 
     fun skill(

@@ -8,6 +8,7 @@ import com.easy.easyai.skills.command.CommandCategory
 import com.easy.easyai.skills.command.CommandInfo
 import com.easy.easyai.skills.command.CommandRegistry
 import com.easy.easyai.skills.command.CommandService
+import com.easy.easyai.web.security.currentOwners
 import com.easy.easyai.web.security.getCurrentUserId
 import com.fasterxml.jackson.annotation.JsonInclude
 import org.springframework.http.HttpStatus
@@ -51,18 +52,22 @@ class CommandController(
     ): Mono<List<CommandDto>> {
         return mono {
             val userId = getCurrentUserId()
+            val owners = currentOwners()
             val userCommands = userCommandStore?.findAll(userId)?.map { it.toCommandInfo() } ?: emptyList()
-            val registryCommands = commandRegistry?.all().orEmpty().filter { it.category != CommandCategory.SKILL }
-            val skills = commandService?.listSkillCommands(userId).orEmpty()
+            // Scoped to the caller's visibility set: MCP prompts are cached per owning bucket, and an
+            // unscoped registry listing would advertise other users' servers to everyone.
+            val registryCommands = commandRegistry?.all(owners).orEmpty().filter { it.category != CommandCategory.SKILL }
+            val skills = commandService?.listSkillCommands(userId, owners).orEmpty()
             val all = userCommands + registryCommands + skills
 
             if (agentId == null || agentStore == null) {
                 all.map { it.toDto() }
             } else {
-                agentStore.findById(agentId, userId)
+                val agent = agentStore.findById(agentId, owners)
                     ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Agent not found")
-                val mcpConfigs = agentStore.getAgentMcpConfigs(agentId)
-                val allowedCommands = agentStore.getAgentCommandNames(agentId)
+                // The agent's bindings live in its own bucket, which for a shared agent is not the caller's.
+                val mcpConfigs = agentStore.getAgentMcpConfigs(agentId, agent.userId)
+                val allowedCommands = agentStore.getAgentCommandNames(agentId, agent.userId)
                 all.filter { cmd -> filterCommand(cmd, mcpConfigs, allowedCommands) }
                     .map { it.toDto() }
             }

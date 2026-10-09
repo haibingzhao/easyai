@@ -53,7 +53,7 @@ class CompactionTransformContextService(
         agentContext: AgentContext,
         sessionChatModel: ChatModel?
     ): Pair<AgentContext, ChatModel?> {
-        val resolved = auxModelResolver?.resolve(agentContext.userId, AuxModelTask.COMPACTION)
+        val resolved = auxModelResolver?.resolve(agentContext.effectiveOwners, AuxModelTask.COMPACTION)
             ?: return agentContext to sessionChatModel
         return agentContext.copy(modelConfig = resolved.modelConfig) to resolved.chatModel
     }

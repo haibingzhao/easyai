@@ -125,8 +125,11 @@ export interface SaveModelConfigGroupRequest {
 
 // Object-storage settings types (Settings → Storage)
 
-/** Which layer is in force right now: the user's row, the shared system row, or nothing configured. */
-export type StorageEffectiveSource = 'user' | 'system' | 'none';
+/**
+ * Which layer is in force right now: the user's row, the shared system row, a deployment-wide
+ * `easyai.storage.*` layer (`static` — the form is hidden and saves are refused), or nothing.
+ */
+export type StorageEffectiveSource = 'user' | 'system' | 'static' | 'none';
 
 export type StorageBackendType = 'aliyun' | 'local';
 

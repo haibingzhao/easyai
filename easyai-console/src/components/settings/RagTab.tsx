@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { ragService } from '@/services/rag-service';
 import type { RagStatus, RagTestResult } from '@/services/rag-service';
 import { WorkspaceConfigSection } from '@/components/settings/WorkspaceConfigSection';
+import { ReadOnlyBanner } from '@/components/ui/ReadOnlyBanner';
 import { i18n } from '@/utils/i18n';
 import { Loader2, CheckCircle2, AlertCircle, Eye, EyeOff, Layers } from 'lucide-react';
 
@@ -101,6 +102,10 @@ export const RagTab: React.FC = () => {
     );
   }
 
+  // Deployment-pinned (`easyai.rag.*`): show connection status but hide the editable form and the
+  // workspace tenant config — the backend refuses those writes with 403.
+  const isStatic = status?.source === 'static';
+
   return (
     <div className="space-y-6 max-w-lg">
       <div>
@@ -124,6 +129,11 @@ export const RagTab: React.FC = () => {
           {i18n('Connect an EasyRAG server for semantic memory storage and retrieval. When enabled, memories are stored entirely in EasyRAG.')}
         </p>
 
+        {isStatic ? (
+          <ReadOnlyBanner
+            message={i18n('RAG integration is managed by a deployment-wide configuration and cannot be changed here.')}
+          />
+        ) : (
         <div className="space-y-4">
           {/* Enabled toggle */}
           <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
@@ -249,10 +259,11 @@ export const RagTab: React.FC = () => {
             </div>
           )}
         </div>
+        )}
       </div>
 
-      {/* Workspace Configuration — visible only when connected with a workspace */}
-      {enabled && status?.connected && workspace && (
+      {/* Workspace Configuration — visible only when connected with a workspace (not in static mode) */}
+      {!isStatic && enabled && status?.connected && workspace && (
         <div className="pt-6 border-t border-border">
           <WorkspaceConfigSection
             workspace={workspace}

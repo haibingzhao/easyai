@@ -37,6 +37,13 @@ class DefaultMediaProviderResolverTest {
             reads.add(userId to modelType)
             return rows.filter { it.modelType == modelType && (it.userId == userId || it.userId == "system") }
         }
+
+        // Mirror the R2dbc store's single ordered `IN (owners)` query so cache-read counts stay meaningful.
+        override suspend fun getModelConfigs(modelType: ModelType, owners: Collection<String>): List<ModelProviderConfig> {
+            reads.add(owners.joinToString(",") to modelType)
+            val set = owners.toSet()
+            return rows.filter { it.modelType == modelType && (it.userId in set || it.userId == "system") }
+        }
     }
 
     private fun row(
@@ -174,6 +181,52 @@ class DefaultMediaProviderResolverTest {
             resolver.refresh(DefaultMediaProviderResolver.SYSTEM_USER_ID)
             resolver.resolveEntries("alice", "image")
             resolver.resolveEntries("bob", "image")
+            assertEquals(4, store.reads.size)
+        }
+    }
+
+    @Nested
+    inner class `group owners` {
+
+        @Test
+        fun `self rows shadow the group bucket`() = runBlocking {
+            val store = FakeStore()
+            store.rows += row("group-image", ModelType.IMAGE, "grp-1", isDefault = true)
+            store.rows += row("self-image", ModelType.IMAGE, "alice")
+            val resolver = DefaultMediaProviderResolver(store)
+
+            val entries = resolver.resolveEntries(listOf("alice", "grp-1", "system"), "image")
+
+            assertEquals(listOf("self-image"), entries.map { it.displayName })
+            assertEquals(MediaProviderSource.USER, resolver.sourceOf(listOf("alice", "grp-1", "system"), "image"))
+        }
+
+        @Test
+        fun `group bucket serves a member with no own rows`() = runBlocking {
+            val store = FakeStore()
+            store.rows += row("group-image", ModelType.IMAGE, "grp-1")
+            val resolver = DefaultMediaProviderResolver(store)
+
+            val entries = resolver.resolveEntries(listOf("alice", "grp-1", "system"), "image")
+
+            assertEquals(listOf("group-image"), entries.map { it.displayName })
+            // A group row is caller-specific, not the shared platform default.
+            assertEquals(MediaProviderSource.USER, resolver.sourceOf(listOf("alice", "grp-1", "system"), "image"))
+        }
+
+        @Test
+        fun `refresh on the group bucket evicts every member resolution`() = runBlocking {
+            val store = FakeStore()
+            store.rows += row("group-image", ModelType.IMAGE, "grp-1")
+            val resolver = DefaultMediaProviderResolver(store)
+
+            resolver.resolveEntries(listOf("alice", "grp-1"), "image")
+            resolver.resolveEntries(listOf("bob", "grp-1"), "image")
+            assertEquals(2, store.reads.size)
+
+            resolver.refresh("grp-1")
+            resolver.resolveEntries(listOf("alice", "grp-1"), "image")
+            resolver.resolveEntries(listOf("bob", "grp-1"), "image")
             assertEquals(4, store.reads.size)
         }
     }

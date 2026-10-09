@@ -49,6 +49,27 @@ data class RagConfig(
 
         private class CachedConfig(val modifiedMillis: Long, val config: RagConfig)
 
+        /**
+         * Deployment-wide STATIC override, the analogue of the object-storage STATIC layer. Set once at
+         * startup from Spring properties (`easyai.rag.*`) by the autoconfigure layer; when present it wins
+         * over `~/.easyai/rag.json` for every read, the file is never consulted, and the Settings → RAG
+         * form is rendered read-only (writes are refused). Left null for file-driven deployments
+         * (desktop / single-tenant), which keeps the historical per-request file reload behavior.
+         */
+        @Volatile
+        private var staticOverride: RagConfig? = null
+
+        /** Install (or clear, with null) the deployment-wide STATIC configuration. */
+        @JvmStatic
+        fun setStaticOverride(config: RagConfig?) {
+            staticOverride = config
+            if (config != null) logger.info("RAG config pinned by deployment-wide easyai.rag.* properties")
+        }
+
+        /** Whether a deployment-wide STATIC layer is in force (file config and UI writes are bypassed). */
+        @JvmStatic
+        fun isStaticOverridden(): Boolean = staticOverride != null
+
         /** Default config file location: `~/.easyai/rag.json` */
         @JvmStatic
         fun defaultConfigPath(): Path = Path.of(System.getProperty("user.home"), ".easyai", "rag.json")
@@ -56,9 +77,11 @@ data class RagConfig(
         /**
          * Load RAG config from the given path.
          * Returns default (enabled) config when the file is missing or unparsable.
+         * A deployment-wide STATIC override, when installed, always wins over the file.
          */
         @JvmStatic
         suspend fun load(path: Path = defaultConfigPath()): RagConfig = withContext(Dispatchers.IO) {
+            staticOverride?.let { return@withContext it }
             // Modification time doubles as the cache key; it is 0 for an absent file, so a file
             // that appears later always misses the cache instead of reusing the default config.
             val modified = path.toFile().lastModified()

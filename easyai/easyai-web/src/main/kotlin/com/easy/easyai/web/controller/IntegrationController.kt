@@ -3,7 +3,9 @@ package com.easy.easyai.web.controller
 import com.easy.easyai.tools.web.IntegrationConfig
 import kotlinx.coroutines.reactor.mono
 import org.slf4j.LoggerFactory
+import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.*
+import org.springframework.web.server.ResponseStatusException
 import reactor.core.publisher.Mono
 
 /**
@@ -25,21 +27,31 @@ class IntegrationController {
         val exaKey = IntegrationConfig.resolveExaApiKey()
         val parallelKey = IntegrationConfig.resolveParallelApiKey()
         val provider = IntegrationConfig.resolveWebsearchProvider()
+        val isStatic = IntegrationConfig.isStaticOverridden()
 
         mapOf(
             "webSearch" to mapOf(
                 "configured" to (!exaKey.isNullOrBlank() || !parallelKey.isNullOrBlank()),
                 "exaConfigured" to !exaKey.isNullOrBlank(),
                 "parallelConfigured" to !parallelKey.isNullOrBlank(),
-                "exaApiKey" to maskApiKey(config?.exaApiKey),
-                "parallelApiKey" to maskApiKey(config?.parallelApiKey),
+                // Deployment-pinned keys are never echoed, not even masked — mirroring the storage STATIC
+                // layer. A member sees only whether search is configured, never a slice of the secret.
+                "exaApiKey" to if (isStatic) null else maskApiKey(config?.exaApiKey),
+                "parallelApiKey" to if (isStatic) null else maskApiKey(config?.parallelApiKey),
                 "provider" to (provider ?: "exa")
-            )
+            ),
+            "source" to if (isStatic) "static" else "file"
         )
     }
 
     @PutMapping
     fun updateSettings(@RequestBody request: IntegrationUpdateRequest): Mono<Map<String, Any?>> = mono {
+        if (IntegrationConfig.isStaticOverridden()) {
+            throw ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Integrations are pinned by a deployment-wide easyai.integrations.* configuration and cannot be changed here"
+            )
+        }
         try {
             val existing = IntegrationConfig.load() ?: IntegrationConfig()
 

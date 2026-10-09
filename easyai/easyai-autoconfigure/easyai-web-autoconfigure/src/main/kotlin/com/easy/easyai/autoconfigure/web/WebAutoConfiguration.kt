@@ -5,6 +5,8 @@ import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.auth.RefreshTokenStore
 import com.easy.easyai.auth.UserStore
+import com.easy.easyai.auth.group.AccessTokenClaimsContributor
+import com.easy.easyai.auth.group.NoopClaimsContributor
 import com.easy.easyai.auth.jwt.JwtTokenProvider
 import com.easy.easyai.common.textio.template.TemplateRenderer
 import com.easy.easyai.core.agent.*
@@ -307,15 +309,25 @@ open class WebAutoConfiguration {
 
     // ─── Auth Beans ──────────────────────────────────────────────────────────────
 
+    /**
+     * Default group-claims contributor: no group sharing, so a login's only owner is itself and the
+     * runtime read filter stays `{self, system}`. A product that adds group sharing registers its own
+     * [AccessTokenClaimsContributor] bean, which this backs off for.
+     */
+    @Bean
+    @ConditionalOnMissingBean(AccessTokenClaimsContributor::class)
+    open fun accessTokenClaimsContributor(): AccessTokenClaimsContributor = NoopClaimsContributor
+
     @Bean
     @ConditionalOnMissingBean(AuthService::class)
     open fun authService(
         userStore: UserStore,
         refreshTokenStore: RefreshTokenStore,
         jwtTokenProvider: JwtTokenProvider,
-        authProperties: AuthProperties
+        authProperties: AuthProperties,
+        claimsContributor: AccessTokenClaimsContributor
     ): AuthService {
-        return AuthService(userStore, refreshTokenStore, jwtTokenProvider, authProperties)
+        return AuthService(userStore, refreshTokenStore, jwtTokenProvider, authProperties, claimsContributor)
     }
 
     @Bean

@@ -132,7 +132,7 @@ class SkillSearchToolTest {
         @Test
         fun `empty whitelist rejects before catalog and index access`() = runTest {
             assertTrue(search(this, tool(emptyList())).isError)
-            coVerify(exactly = 0) { f.catalog.listByUser(any()) }
+            coVerify(exactly = 0) { f.catalog.listByOwners(any()) }
             coVerify(exactly = 0) { store.search(any(), any(), any()) }
         }
     }
@@ -164,7 +164,7 @@ class SkillSearchToolTest {
             assertTrue(text(search(this, searchTool, query = "review")).contains("[mine] review:"))
             f.rows = listOf(f.row(review, enabled = false))
             assertTrue(text(search(this, searchTool, query = "review")).contains("No skills found"))
-            coEvery { f.catalog.listByUser("alice") } throws IllegalStateException("db down")
+            coEvery { f.catalog.listByOwners(any()) } throws IllegalStateException("db down")
             val failed = search(this, searchTool, query = "review")
             assertTrue(failed.isError)
             assertTrue(text(failed).contains("catalog is unavailable"))
@@ -184,7 +184,7 @@ class SkillSearchToolTest {
             f.rows = listOf(f.row(review))
             coEvery { store.search(any(), any(), any()) } throws CancellationException("cancelled")
             assertFailsWith<CancellationException> { search(this, tool(listOf("review"))) }
-            coEvery { f.catalog.listByUser(any()) } throws CancellationException("cancelled")
+            coEvery { f.catalog.listByOwners(any()) } throws CancellationException("cancelled")
             assertFailsWith<CancellationException> { search(this, tool(listOf("review"))) }
         }
 

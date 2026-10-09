@@ -29,8 +29,9 @@ internal object TeamMemberResolver {
         agentContext: AgentContext,
         agentStore: AsyncAgentStore,
     ): ResolvedMember? {
-        val userId = agentContext.userId ?: "system"
-        val definition = agentStore.findById(memberId, userId)
+        // Resolve across the caller's visibility set (self → group → system) so a member owned by a
+        // shared bucket is found; the inline fallback below is unaffected.
+        val definition = agentStore.findById(memberId, agentContext.effectiveOwners)
             ?: resolveInlineMember(memberId, agentContext)
             ?: return null
 

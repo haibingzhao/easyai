@@ -5,6 +5,7 @@ import com.easy.easyai.repository.database.UserScope.filter
 import org.jetbrains.exposed.v1.core.Column
 import org.jetbrains.exposed.v1.core.Op
 import org.jetbrains.exposed.v1.core.eq
+import org.jetbrains.exposed.v1.core.inList
 import org.jetbrains.exposed.v1.core.or
 
 /**
@@ -33,6 +34,23 @@ object UserScope {
         (column eq userId) or (column eq SYSTEM_USER_ID)
 
     /**
+     * Build a filter condition matching rows owned by any id in [owners] — the N-value form used for
+     * group sharing, where a request sees its own rows, its group bucket's rows, and the system rows.
+     *
+     * Named apart from [filter] because the two differ in a way that is easy to miss and hard to
+     * debug: unlike [filter] this does NOT add [SYSTEM_USER_ID] implicitly. The caller supplies the
+     * complete visibility set (`SecurityUtils.currentOwners()` already unions in self and system;
+     * `currentGroupOwners()` deliberately does not). Duplicates are collapsed so a caller passing
+     * `{self, self, system}` yields a clean `IN (...)`.
+     *
+     * [owners] must be non-empty — every `current*Owners()` helper is. An empty set is not a
+     * supported input: it renders an `IN ()` predicate that matches nothing, which is never what a
+     * caller means here.
+     */
+    fun filterOwners(column: Column<String>, owners: Collection<String>): Op<Boolean> =
+        column inList owners.distinct()
+
+    /**
      * Build a filter condition that matches rows owned strictly by the given user
      * (excludes system user data).
      */
@@ -45,8 +63,9 @@ object UserScope {
      */
     fun matches(dataOwnerId: String, userId: String): Boolean =
         dataOwnerId == userId || dataOwnerId == SYSTEM_USER_ID
+
     /**
-     * In-memory equivalent of [filter] for checking ownership after loading a row.
+     * In-memory equivalent of [filterStrict] for checking ownership after loading a row.
      * Returns true if the data is owned by the given user.
      * (excludes system user data).
      */

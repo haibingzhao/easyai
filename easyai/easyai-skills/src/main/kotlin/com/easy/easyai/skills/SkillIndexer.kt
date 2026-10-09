@@ -43,12 +43,12 @@ class SkillIndexer(
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
 
-    suspend fun reconcileByDrift(userIds: List<String>): ReconcileSummary {
+    suspend fun reconcileByDrift(userIds: List<String>, self: String? = null): ReconcileSummary {
         val store = catalog ?: return ReconcileSummary()
         val owners = userIds.distinct()
         // A failed list is not an empty catalog. No claims or visibility publication may follow it.
         val rows = store.listByOwners(owners)
-        return reconcileRows(rows, force = true).copy(owners = owners.size)
+        return reconcileRows(rows, force = true, self = self).copy(owners = owners.size)
     }
 
     /** Lifecycle owner supplies the cancellable loop. Bounded due-row inspection also heals remote loss. */
@@ -58,7 +58,10 @@ class SkillIndexer(
         val rows = store.listByOwners(store.listDistinctUserIds())
             .filter { (it.nextAttemptAt ?: 0L) <= now }
             .sortedWith(compareBy({ it.nextAttemptAt ?: 0L }, { it.id })).take(limit.coerceIn(1, 1024))
-        return reconcileRows(rows, force = false).copy(owners = rows.map { it.userId }.distinct().size)
+        // A background pass has no acting caller, so `self` is null: only `system` drift may push, and
+        // no personal or group bucket is written back from disk here (that happens on the owner's own
+        // interactive refresh).
+        return reconcileRows(rows, force = false, self = null).copy(owners = rows.map { it.userId }.distinct().size)
     }
 
     /** Parse and publish before atomically enabling the exact bytes; a concurrent disable wins the CAS. */
@@ -89,9 +92,9 @@ class SkillIndexer(
         }
     }
 
-    private suspend fun reconcileRows(rows: List<SkillCatalogEntry>, force: Boolean): ReconcileSummary = coroutineScope {
+    private suspend fun reconcileRows(rows: List<SkillCatalogEntry>, force: Boolean, self: String? = null): ReconcileSummary = coroutineScope {
         val results = rows.chunked(indexConcurrency.coerceIn(1, 32)).flatMap { batch ->
-            batch.map { row -> async { reconcile(row, force) } }.awaitAll()
+            batch.map { row -> async { reconcile(row, force, self = self) } }.awaitAll()
         }
         ReconcileSummary(
             rows = rows.size, unchanged = results.sumOf { it.unchanged },
@@ -101,7 +104,12 @@ class SkillIndexer(
         )
     }
 
-    private suspend fun reconcile(entry: SkillCatalogEntry, force: Boolean, await: Boolean = false): ReconcileSummary =
+    private suspend fun reconcile(
+        entry: SkillCatalogEntry,
+        force: Boolean,
+        await: Boolean = false,
+        self: String? = null
+    ): ReconcileSummary =
         syncService.withOwnerLock(entry.userId) {
             val store = catalog ?: return@withOwnerLock ReconcileSummary()
             var row = store.findById(entry.id) ?: return@withOwnerLock ReconcileSummary()
@@ -132,6 +140,17 @@ class SkillIndexer(
                 if (snapshot != null) {
                     require(snapshot.info.name == row.name) { "Skill name differs from its catalog identity" }
                     if (snapshot.checksum != row.checksum) {
+                        // Only the acting caller's own bucket (or `system`) may push drifted disk content
+                        // back. A read-only group bucket's disk is not authoritative — the sync pass
+                        // re-mirrors it from the package — so never push or index what a member dropped there.
+                        val pushAllowed = row.userId == SkillCatalogEntry.DEFAULT_USER_ID ||
+                            (self != null && row.userId == self)
+                        if (!pushAllowed) {
+                            logger.warn(
+                                "Leaving drifted skill '{}' of read-only owner '{}' unpushed", row.name, row.userId
+                            )
+                            return@withOwnerLock ReconcileSummary(pending = 1)
+                        }
                         syncService.publish(row.userId, snapshot)
                         // Drifted local content is the newer copy: push package + row together before indexing.
                         if (!runCatchingPush(row, snapshot)) {

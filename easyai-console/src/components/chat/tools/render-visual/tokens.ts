@@ -66,6 +66,9 @@ const FONT_MONO = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, mon
 const FONT_SERIF = 'Georgia, Cambria, "Times New Roman", Times, serif';
 
 const LIGHT_TOKENS: VisualTokens = {
+  // Drives UA widgets (scrollbars) so a horizontally scrolling fragment
+  // matches the host theme instead of painting light scrollbars in dark mode.
+  'color-scheme': 'light',
   '--color-background-primary': 'oklch(1 0 0)',
   '--color-background-secondary': 'oklch(0.967 0.001 286.375)',
   '--color-background-tertiary': 'oklch(1 0 0)',
@@ -93,6 +96,7 @@ const LIGHT_TOKENS: VisualTokens = {
 };
 
 const DARK_TOKENS: VisualTokens = {
+  'color-scheme': 'dark',
   '--color-background-primary': 'oklch(0.145 0 0)',
   '--color-background-secondary': 'oklch(0.269 0 0)',
   '--color-background-tertiary': 'oklch(0.145 0 0)',

@@ -3,6 +3,7 @@ package com.easy.easyai.web.controller
 import com.easy.easyai.web.model.AiConfigGenerateRequest
 import com.easy.easyai.web.model.AiConfigValidateRequest
 import com.easy.easyai.web.model.ConfigValidationResult
+import com.easy.easyai.web.security.currentOwners
 import com.easy.easyai.web.security.getCurrentUserId
 import com.easy.easyai.web.service.ConfigValidator
 import com.easy.easyai.web.service.configgen.AgentBasedConfigGenerator
@@ -55,7 +56,7 @@ class AiConfigController(
 
         return flow {
             val userId = getCurrentUserId()
-            agentBasedConfigGenerator.generate(request, userId, this)
+            agentBasedConfigGenerator.generate(request, userId, this, currentOwners())
         }.asFlux()
             .timeout(Duration.ofSeconds(1200))
     }
@@ -71,7 +72,7 @@ class AiConfigController(
         }
         val userId = getCurrentUserId()
         when (request.configType) {
-            "agent" -> configValidator.validateAgentConfig(request.config, userId)
+            "agent" -> configValidator.validateAgentConfig(request.config, userId, currentOwners())
             "swarm" -> configValidator.validateSwarmConfig(request.config, userId)
             else -> throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown configType")
         }

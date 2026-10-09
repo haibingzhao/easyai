@@ -60,7 +60,7 @@ class TtsTool(
         val format = args["format"] as? String
         val model = (args["model"] as? String)?.takeIf { it.isNotBlank() }
 
-        val settings = resolver.resolveEntry(userId, MediaProviderSettings.SERVICE_KIND_SPEECH, model)
+        val settings = resolver.resolveEntry(agentContext.effectiveOwners, MediaProviderSettings.SERVICE_KIND_SPEECH, model)
             ?: return errorResult(toolCallId, name, "no enabled speech model is configured${model?.let { " for '$it'" } ?: ""}")
 
         onUpdate(ToolUpdate.Progress("Synthesizing speech…"))

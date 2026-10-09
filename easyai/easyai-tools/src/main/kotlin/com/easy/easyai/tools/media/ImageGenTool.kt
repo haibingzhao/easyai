@@ -62,7 +62,7 @@ class ImageGenTool(
         val size = args["size"] as? String
         val model = (args["model"] as? String)?.takeIf { it.isNotBlank() }
 
-        val settings = resolver.resolveEntry(userId, MediaProviderSettings.SERVICE_KIND_IMAGE, model)
+        val settings = resolver.resolveEntry(agentContext.effectiveOwners, MediaProviderSettings.SERVICE_KIND_IMAGE, model)
             ?: return errorResult(toolCallId, name, "no enabled image model is configured${model?.let { " for '$it'" } ?: ""}")
 
         onUpdate(ToolUpdate.Progress("Generating $n image(s)…"))
