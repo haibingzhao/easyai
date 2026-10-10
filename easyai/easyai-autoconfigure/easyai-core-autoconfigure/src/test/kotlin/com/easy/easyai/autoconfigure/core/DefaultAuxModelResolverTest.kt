@@ -15,7 +15,7 @@ import io.mockk.verify
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
-import org.springframework.ai.chat.model.ChatModel
+import com.easy.easyai.api.llm.ChatModel
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 

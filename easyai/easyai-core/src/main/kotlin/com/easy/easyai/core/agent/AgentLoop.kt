@@ -4,6 +4,7 @@ import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.AgentLoop.Companion.MAX_COMPLETION_CHECK_BONUS
 import com.easy.easyai.core.event.*
 import com.easy.easyai.core.model.*
+import com.easy.easyai.core.message.ThinkingHistoryProjection
 import com.easy.easyai.core.message.ToolFoldConfig
 import com.easy.easyai.core.message.ToolFoldProjection
 import com.easy.easyai.core.tool.RecallToolResultTool
@@ -16,8 +17,8 @@ import com.easy.easyai.core.validation.OutputSchemaCompletionCheck
 import com.easy.easyai.core.validation.ValidationResult
 import kotlinx.coroutines.CancellationException
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.prompt.Prompt
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.Prompt
 import tools.jackson.core.type.TypeReference
 
 private val objectMapper = SharedObjectMapper.instance
@@ -81,6 +82,10 @@ internal class AgentLoop(
         enabled = context.toolFoldEnabled,
         keepRecentRuns = context.toolFoldKeepRecentRuns
     )
+
+    /** Agent-level gate for reasoning replay; applied to every send view so estimates match the wire. */
+    private fun gateThinking(messages: List<EasyAiMessage>): List<EasyAiMessage> =
+        ThinkingHistoryProjection.project(messages, context.thinkingHistoryEnabled)
 
     /**
      * Per-run memo of tool-call fold placeholders (ref → text), shared by every [ToolFoldProjection.project]
@@ -251,9 +256,10 @@ internal class AgentLoop(
         // Cross-run tool fold: send-time projection. The transcript always keeps originals.
         // The pre-compaction view only measures the trigger; the view actually sent is projected
         // from the transform output, because compaction may have rewritten the transcript head.
-        val measureView = ToolFoldProjection.project(transcript.toList(), foldConfig, foldPlaceholderCache).first
+        val measureView = gateThinking(ToolFoldProjection.project(transcript.toList(), foldConfig, foldPlaceholderCache).first)
         val transformedMessages = transformContext(transcript, turnId, messageTimestamps, CompactionTriggerType.Auto, measureView)
-        val (promptView, foldReport) = ToolFoldProjection.project(transformedMessages, foldConfig, foldPlaceholderCache)
+        val (foldedPromptView, foldReport) = ToolFoldProjection.project(transformedMessages, foldConfig, foldPlaceholderCache)
+        val promptView = gateThinking(foldedPromptView)
         if (foldReport.hasFolds) {
             push(
                 ToolFoldEvent(
@@ -882,7 +888,8 @@ internal class AgentLoop(
                 )
 
                 // Prepare new prompt with compacted messages, folded again for the retry view
-                val (retryView, retryReport) = ToolFoldProjection.project(compactedMessages, foldConfig, foldPlaceholderCache)
+                val (foldedRetryView, retryReport) = ToolFoldProjection.project(compactedMessages, foldConfig, foldPlaceholderCache)
+                val retryView = gateThinking(foldedRetryView)
                 val retryTools = if (retryReport.hasFolds &&
                     promptTools.none { it.name == RecallToolResultTool.TOOL_NAME }
                 ) {

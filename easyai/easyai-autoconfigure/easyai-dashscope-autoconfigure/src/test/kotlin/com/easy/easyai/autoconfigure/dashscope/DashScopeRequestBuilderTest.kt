@@ -11,9 +11,8 @@ import io.mockk.every
 import io.mockk.mockk
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
-import org.springframework.ai.chat.prompt.ChatOptions
-import org.springframework.ai.tool.ToolCallback
-import org.springframework.ai.tool.definition.ToolDefinition
+import com.easy.easyai.api.llm.ChatOptions
+import com.easy.easyai.api.llm.ToolCallback
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -26,13 +25,11 @@ import kotlin.test.assertTrue
  */
 internal class DashScopeRequestBuilderTest {
 
-    private val tool = mockk<ToolCallback> {
-        every { toolDefinition } returns ToolDefinition.builder()
-            .name("get_weather")
-            .description("Lookup weather")
-            .inputSchema("""{"type":"object","properties":{"city":{"type":"string"}}}""")
-            .build()
-    }
+    private val tool = ToolCallback(
+        name = "get_weather",
+        description = "Lookup weather",
+        inputSchema = """{"type":"object","properties":{"city":{"type":"string"}}}"""
+    )
 
     private fun options(block: DashScopeChatOptions.Builder.() -> Unit = {}) =
         DashScopeChatOptions.builder()

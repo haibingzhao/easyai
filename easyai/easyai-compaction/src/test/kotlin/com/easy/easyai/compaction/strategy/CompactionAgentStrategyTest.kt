@@ -25,10 +25,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.model.ChatResponse
-import org.springframework.ai.chat.model.Generation
-import org.springframework.ai.chat.prompt.Prompt
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatResponse
+import com.easy.easyai.api.llm.Generation
+import com.easy.easyai.api.llm.Prompt
 import reactor.core.publisher.Flux
 import tools.jackson.databind.node.ObjectNode
 import java.util.concurrent.CopyOnWriteArrayList
@@ -37,8 +37,8 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import org.springframework.ai.chat.messages.AssistantMessage as SpringAiAssistantMessage
-import org.springframework.ai.chat.messages.SystemMessage as SpringAiSystemMessage
+import com.easy.easyai.api.llm.AssistantMessage as SpringAiAssistantMessage
+import com.easy.easyai.api.llm.SystemMessage as SpringAiSystemMessage
 
 class CompactionAgentStrategyTest {
 
@@ -143,10 +143,10 @@ class CompactionAgentStrategyTest {
             val prompts = CopyOnWriteArrayList<Prompt>()
             every { model.stream(any<Prompt>()) } answers {
                 prompts.add(firstArg())
-                val response = SpringAiAssistantMessage.builder()
-                    .content("Summary with captured command constraints")
-                    .toolCalls(listOf(SpringAiAssistantMessage.ToolCall("variables", "function", "update_variable", "{\"variables\":{}}")))
-                    .build()
+                val response = SpringAiAssistantMessage(
+                    content = "Summary with captured command constraints",
+                    toolCalls = listOf(SpringAiAssistantMessage.ToolCall("variables", "function", "update_variable", "{\"variables\":{}"))
+                )
                 Flux.just(ChatResponse(listOf(Generation(response))))
             }
             val promptService = mockk<PromptTemplateService>()

@@ -1,0 +1,14 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "type" : "object",
+  "properties" : {
+    "x" : {
+      "type" : [ "string", "null" ]
+    },
+    "y" : {
+      "type" : [ "integer", "null" ],
+      "format" : "int32"
+    }
+  },
+  "additionalProperties" : false
+}

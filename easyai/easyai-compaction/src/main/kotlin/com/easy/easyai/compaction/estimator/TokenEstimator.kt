@@ -37,11 +37,14 @@ interface TokenEstimator {
  *   transmits the persisted text as-is (oversized results are spilled to the temp dir and
  *   replaced with a small pointer notice at generation time, so persisted text is bounded
  *   in practice), so the estimate matches what is actually transmitted to the model.
- * - [estimateContextTokens]: trusts the latest AssistantMessage usage report
- *   (input + cacheRead + cacheWrite + output) plus a tokenizer-estimated delta of messages
- *   after it. The report is rejected and replaced by pure [estimate] when it falls outside
- *   the plausibility window `[baseline * 0.25, baseline * 4]`, guarding against gateway
- *   under-reporting (e.g., message_delta events missing input_tokens) and reporting spikes.
+ * - [estimateContextTokens]: trusts the latest AssistantMessage usage report's input tokens
+ *   (input + cacheRead + cacheWrite) plus a tokenizer estimate of that assistant's own persisted
+ *   content and of the messages after it. usage.outputTokens is deliberately NOT added: for
+ *   reasoning models it counts ephemeral thinking tokens that are never persisted nor re-sent,
+ *   which would otherwise inflate the estimate and trigger premature compaction. The report is
+ *   rejected and replaced by pure [estimate] when it falls outside the plausibility window
+ *   `[baseline * 0.25, baseline * 4]`, guarding against gateway under-reporting (e.g.,
+ *   message_delta events missing input_tokens) and reporting spikes.
  */
 class UsageAwareTokenEstimator : TokenEstimator {
 
@@ -72,6 +75,10 @@ class UsageAwareTokenEstimator : TokenEstimator {
      *
      * The plausibility window is only enforced when the content baseline exceeds
      * [MIN_BASELINE_FOR_CHECK]; tiny baselines would degenerate the interval.
+     *
+     * Caveat: the caller feeds a send-time view, so thinking blocks counted here are assumed to
+     * travel on the wire. With thinking replay enabled on providers that have no replay field
+     * (OpenAI/DashScope), the estimate overshoots and compaction triggers slightly early.
      */
     override fun estimateContextTokens(messages: List<EasyAiMessage>): Int {
         val lastUsageIndex = messages.indexOfLast { msg ->
@@ -84,7 +91,12 @@ class UsageAwareTokenEstimator : TokenEstimator {
         }
 
         val assistant = messages[lastUsageIndex] as AssistantMessage
-        val reported = totalInputTokens(assistant.usage) + assistant.usage.outputTokens
+        // The usage report's input tokens cover everything sent BEFORE this assistant turn was
+        // generated; they exclude the assistant's own output. To size the NEXT request we add the
+        // assistant's persisted content (what will actually be replayed as history) — NOT
+        // usage.outputTokens, which for reasoning models includes ephemeral thinking tokens that
+        // are never persisted nor re-sent and would inflate the estimate (premature compaction).
+        val reported = totalInputTokens(assistant.usage) + estimate(listOf(assistant))
         val baseline = estimate(messages.subList(0, lastUsageIndex + 1))
 
         if (baseline > MIN_BASELINE_FOR_CHECK &&
@@ -189,8 +201,8 @@ class UsageAwareTokenEstimator : TokenEstimator {
         private const val HIGH_REPORT_RATIO = 4.0
 
         /**
-         * Total input tokens represented by a usage report, including cached portions
-         * (inputTokens alone excludes cache reads/writes in Anthropic-style accounting).
+         * Total input tokens represented by a usage report. Every protocol reports [Usage.inputTokens]
+         * exclusive of the cached portions, so summing the three counts the whole prompt exactly once.
          */
         private fun totalInputTokens(usage: Usage): Int =
             usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens

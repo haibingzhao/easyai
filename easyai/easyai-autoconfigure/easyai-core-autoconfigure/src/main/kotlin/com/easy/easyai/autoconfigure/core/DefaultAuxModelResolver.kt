@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Default [AuxModelResolver]: reads the per-task choice from [AuxModelSettingsStore], resolves the
- * referenced `ModelProviderConfig` and builds its [org.springframework.ai.chat.model.ChatModel] via
+ * referenced `ModelProviderConfig` and builds its [com.easy.easyai.api.llm.ChatModel] via
  * the matching [ChatModelFactory].
  *
  * Group sharing: the owners overloads walk the caller's visibility set in order (self → group →

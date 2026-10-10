@@ -21,11 +21,12 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.NullSource
 import org.junit.jupiter.params.provider.ValueSource
 import tools.jackson.databind.node.ObjectNode
-import org.springframework.ai.chat.messages.AssistantMessage as SpringAiAssistantMsg
-import org.springframework.ai.chat.model.ChatResponse
-import org.springframework.ai.chat.metadata.ChatResponseMetadata
-import org.springframework.ai.chat.model.Generation
-import org.springframework.ai.chat.metadata.ChatGenerationMetadata
+import com.easy.easyai.api.llm.AssistantMessage as SpringAiAssistantMsg
+import com.easy.easyai.api.llm.ChatResponse
+import com.easy.easyai.api.llm.ChatResponseMetadata
+import com.easy.easyai.api.llm.Generation
+import com.easy.easyai.api.llm.ChatGenerationMetadata
+import com.easy.easyai.api.llm.MediaSource
 import io.mockk.every
 import io.mockk.mockk
 import java.nio.file.Files
@@ -37,7 +38,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
-import org.springframework.ai.chat.messages.UserMessage as SpringAiUserMsg
+import com.easy.easyai.api.llm.UserMessage as SpringAiUserMsg
 
 class MessageConverterTest {
 
@@ -68,22 +69,22 @@ class MessageConverterTest {
     }
 
     @Nested
-    inner class `toSpringAiMessages` {
+    inner class `toLlmMessages` {
 
         @Test
         fun `converts UserMessage to Spring AI UserMessage`() = runTest {
             val messages = listOf(UserMessage("Hello"))
-            val result = converter.toSpringAiMessages(messages)
+            val result = converter.toLlmMessages(messages)
 
             assertEquals(1, result.size)
-            assertTrue(result[0] is org.springframework.ai.chat.messages.UserMessage)
+            assertTrue(result[0] is com.easy.easyai.api.llm.UserMessage)
             assertEquals("Hello", result[0].text)
         }
 
         @Test
         fun `converts AssistantMessage with text to Spring AI AssistantMessage`() = runTest {
             val messages = listOf(AssistantMessage(id = "test-id", content = listOf(TextContent("Response"))))
-            val result = converter.toSpringAiMessages(messages)
+            val result = converter.toLlmMessages(messages)
 
             assertEquals(1, result.size)
             assertTrue(result[0] is SpringAiAssistantMsg)
@@ -100,7 +101,7 @@ class MessageConverterTest {
                     )
                 )
             )
-            val result = converter.toSpringAiMessages(messages)
+            val result = converter.toLlmMessages(messages)
 
             assertEquals(1, result.size)
             val assistantMsg = result[0] as SpringAiAssistantMsg
@@ -125,12 +126,12 @@ class MessageConverterTest {
                     )
                 )
             )
-            val result = converter.toSpringAiMessages(messages)
+            val result = converter.toLlmMessages(messages)
 
             assertEquals(2, result.size)
             assertTrue(result[0] is SpringAiAssistantMsg)
-            assertTrue(result[1] is org.springframework.ai.chat.messages.ToolResponseMessage)
-            val toolResponse = result[1] as org.springframework.ai.chat.messages.ToolResponseMessage
+            assertTrue(result[1] is com.easy.easyai.api.llm.ToolResponseMessage)
+            val toolResponse = result[1] as com.easy.easyai.api.llm.ToolResponseMessage
             assertEquals(1, toolResponse.responses.size)
             assertEquals("call1", toolResponse.responses[0].id)
             assertEquals("file content", toolResponse.responses[0].responseData)
@@ -139,7 +140,7 @@ class MessageConverterTest {
         @Test
         fun `filters out empty user messages`() = runTest {
             val messages = listOf(UserMessage(""))
-            val result = converter.toSpringAiMessages(messages)
+            val result = converter.toLlmMessages(messages)
             assertTrue(result.isEmpty())
         }
 
@@ -153,7 +154,7 @@ class MessageConverterTest {
                     FileRefContent(filePath = file.toString(), name = "small.txt", mimeType = "text/plain", source = "inline", displayOffset = 16)
                 ))
             )
-            val result = converter.toSpringAiMessages(messages)
+            val result = converter.toLlmMessages(messages)
             assertEquals(1, result.size)
             val text = result[0].text!!
             assertTrue(text.contains("Hello from file"), "Expected file content to be inlined, got: $text")
@@ -168,7 +169,7 @@ class MessageConverterTest {
                     FolderRefContent(filePath = "/proj/summary", name = "summary", displayOffset = 21)
                 ))
             )
-            val result = converter.toSpringAiMessages(messages)
+            val result = converter.toLlmMessages(messages)
 
             assertEquals(1, result.size)
             val text = result[0].text!!
@@ -191,7 +192,7 @@ class MessageConverterTest {
                     FolderRefContent(filePath = "/proj/b", name = "b", displayOffset = 20)
                 ))
             )
-            val result = converter.toSpringAiMessages(messages)
+            val result = converter.toLlmMessages(messages)
 
             assertEquals(1, result.size)
             val text = result[0].text!!
@@ -214,7 +215,7 @@ class MessageConverterTest {
                     FileRefContent(filePath = file.toString(), name = "a.txt", mimeType = "text/plain", source = "inline", displayOffset = 5)
                 ))
             )
-            val result = converter.toSpringAiMessages(messages)
+            val result = converter.toLlmMessages(messages)
 
             assertEquals(1, result.size)
             val text = result[0].text!!
@@ -235,7 +236,7 @@ class MessageConverterTest {
                     FolderRefContent(filePath = "/proj/d", name = "d", displayOffset = 5)
                 ))
             )
-            val result = converter.toSpringAiMessages(messages)
+            val result = converter.toLlmMessages(messages)
 
             assertEquals(1, result.size)
             val text = result[0].text!!
@@ -255,7 +256,7 @@ class MessageConverterTest {
                     FolderRefContent(filePath = "/proj/a", name = "a", displayOffset = 25)
                 ))
             )
-            val result = converter.toSpringAiMessages(messages)
+            val result = converter.toLlmMessages(messages)
 
             assertEquals(1, result.size)
             val text = result[0].text!!
@@ -277,7 +278,7 @@ class MessageConverterTest {
                     FileRefContent(filePath = img2.toString(), name = "b.png", mimeType = "image/png", source = "inline", displayOffset = 13)
                 ))
             )
-            val result = converter.toSpringAiMessages(messages).single() as SpringAiUserMsg
+            val result = converter.toLlmMessages(messages).single() as SpringAiUserMsg
 
             assertEquals(2, result.media.size)
             val text = result.text!!
@@ -298,7 +299,7 @@ class MessageConverterTest {
                     FileRefContent(filePath = img.toString(), name = "i.png", mimeType = "image/png", displayOffset = 4)
                 ))
             )
-            val result = converter.toSpringAiMessages(messages).single() as SpringAiUserMsg
+            val result = converter.toLlmMessages(messages).single() as SpringAiUserMsg
 
             assertEquals(2, result.media.size)
             assertTrue(
@@ -320,7 +321,7 @@ class MessageConverterTest {
                     FileRefContent(filePath = txt.toString(), name = "n.txt", mimeType = "text/plain", displayOffset = 5)
                 ))
             )
-            val text = (converter.toSpringAiMessages(messages).single() as SpringAiUserMsg).text!!
+            val text = (converter.toLlmMessages(messages).single() as SpringAiUserMsg).text!!
 
             val folderAt = text.indexOf("[folder d: /proj/d]")
             val imageAt = text.indexOf("[image 1: i.png]")
@@ -346,7 +347,7 @@ class MessageConverterTest {
                     FileRefContent(filePath = file2.toString(), name = "b.txt", mimeType = "text/plain", source = "inline", displayOffset = 16)
                 ))
             )
-            val result = lowLimitConverter.toSpringAiMessages(messages)
+            val result = lowLimitConverter.toLlmMessages(messages)
             assertEquals(1, result.size)
             val text = result[0].text!!
             // Should NOT contain the inlined CDATA content
@@ -374,9 +375,9 @@ class MessageConverterTest {
                     FileRefContent(filePath = imageFile.toString(), name = "tiny.png", mimeType = "image/png", source = "inline", displayOffset = 12)
                 ))
             )
-            val result = lowLimitConverter.toSpringAiMessages(messages)
+            val result = lowLimitConverter.toLlmMessages(messages)
             assertEquals(1, result.size)
-            val springAiMsg = result[0] as org.springframework.ai.chat.messages.UserMessage
+            val springAiMsg = result[0] as com.easy.easyai.api.llm.UserMessage
             // Image should still be in Media
             assertEquals(1, springAiMsg.media.size, "Image should still be present as Media")
             // Text file should be path-only
@@ -397,9 +398,9 @@ class MessageConverterTest {
             val messages = listOf(
                 ToolResultMessage(toolResults = listOf(ToolResultEntry("call1", "search", big)))
             )
-            val result = converter.toSpringAiMessages(messages)
+            val result = converter.toLlmMessages(messages)
 
-            val toolResponse = result.single() as org.springframework.ai.chat.messages.ToolResponseMessage
+            val toolResponse = result.single() as com.easy.easyai.api.llm.ToolResponseMessage
             val response = toolResponse.responses.single()
             assertEquals("call1", response.id)
             assertEquals(big, response.responseData, "send time must not truncate or alter the result")
@@ -411,10 +412,52 @@ class MessageConverterTest {
             val messages = listOf(
                 ToolResultMessage(toolResults = listOf(ToolResultEntry("call1", "read", "file content")))
             )
-            val result = converter.toSpringAiMessages(messages)
+            val result = converter.toLlmMessages(messages)
 
-            val toolResponse = result.single() as org.springframework.ai.chat.messages.ToolResponseMessage
+            val toolResponse = result.single() as com.easy.easyai.api.llm.ToolResponseMessage
             assertEquals("file content", toolResponse.responses.single().responseData)
+        }
+    }
+
+    @Nested
+    inner class `thinking replay` {
+
+        @Test
+        fun `maps persisted thinking blocks onto the llm assistant message`() = runTest {
+            val messages = listOf(
+                AssistantMessage(
+                    id = "asst1",
+                    content = listOf(
+                        ThinkingContent("pondering", thinkingSignature = "sig-abc"),
+                        ThinkingContent("redacted chunk", thinkingSignature = "opaque-data", redacted = true),
+                        TextContent("answer")
+                    ),
+                    stopReason = StopReason.STOP
+                )
+            )
+            val result = converter.toLlmMessages(messages)
+
+            val assistant = result.single() as SpringAiAssistantMsg
+            assertEquals(2, assistant.thinkingBlocks.size)
+            val first = assistant.thinkingBlocks[0]
+            assertEquals("pondering", first.text)
+            assertEquals("sig-abc", first.signature)
+            assertFalse(first.redacted)
+            val second = assistant.thinkingBlocks[1]
+            assertEquals("redacted chunk", second.text)
+            assertEquals("opaque-data", second.signature)
+            assertTrue(second.redacted)
+            assertEquals("answer", assistant.content)
+        }
+
+        @Test
+        fun `assistant messages without thinking carry no blocks`() = runTest {
+            val messages = listOf(
+                AssistantMessage(id = "asst1", content = listOf(TextContent("answer")), stopReason = StopReason.STOP)
+            )
+            val result = converter.toLlmMessages(messages)
+            val assistant = result.single() as SpringAiAssistantMsg
+            assertTrue(assistant.thinkingBlocks.isEmpty())
         }
     }
 
@@ -446,7 +489,7 @@ class MessageConverterTest {
                 )
             )
 
-            val result = sanitizer.toSpringAiMessages(messages, userId)
+            val result = sanitizer.toLlmMessages(messages, userId)
 
             val toolCall = (result.single() as SpringAiAssistantMsg).toolCalls.single()
             assertEquals("""{"image_url": "$reSignedUrl"}""", toolCall.arguments)
@@ -459,9 +502,9 @@ class MessageConverterTest {
                 ToolResultMessage(toolResults = listOf(ToolResultEntry("call1", "image_edit", "saved $freshUrl")))
             )
 
-            val result = sanitizer.toSpringAiMessages(messages, userId)
+            val result = sanitizer.toLlmMessages(messages, userId)
 
-            val response = (result.single() as org.springframework.ai.chat.messages.ToolResponseMessage).responses.single()
+            val response = (result.single() as com.easy.easyai.api.llm.ToolResponseMessage).responses.single()
             assertEquals("saved $freshUrl", response.responseData)
             coVerify(exactly = 0) { storage.presignedGetUrl(any(), any()) }
         }
@@ -472,9 +515,9 @@ class MessageConverterTest {
                 ToolResultMessage(toolResults = listOf(ToolResultEntry("call1", "image_edit", "see ($expiredUrl) 请查看")))
             )
 
-            val result = sanitizer.toSpringAiMessages(messages, userId)
+            val result = sanitizer.toLlmMessages(messages, userId)
 
-            val response = (result.single() as org.springframework.ai.chat.messages.ToolResponseMessage).responses.single()
+            val response = (result.single() as com.easy.easyai.api.llm.ToolResponseMessage).responses.single()
             assertEquals("see ($reSignedUrl) 请查看", response.responseData)
         }
 
@@ -491,9 +534,9 @@ class MessageConverterTest {
                 ToolResultMessage(toolResults = listOf(ToolResultEntry("call1", "image_edit", escaped)))
             )
 
-            val result = sanitizer.toSpringAiMessages(messages, userId)
+            val result = sanitizer.toLlmMessages(messages, userId)
 
-            val response = (result.single() as org.springframework.ai.chat.messages.ToolResponseMessage).responses.single()
+            val response = (result.single() as com.easy.easyai.api.llm.ToolResponseMessage).responses.single()
             assertEquals("\\\"$reSignedUrl\\\" \\\"$reSignedSecond\\\"", response.responseData)
             coVerify(exactly = 1) { storage.presignedGetUrl(key, StoredFileReference.URL_TTL_SECONDS) }
             coVerify(exactly = 1) { storage.presignedGetUrl(secondKey, StoredFileReference.URL_TTL_SECONDS) }
@@ -530,11 +573,11 @@ class MessageConverterTest {
             val original = message.copy(content = message.content.toList())
             coEvery { storage.presignedGetUrl(key, 3600L) } returnsMany listOf(firstUrl, secondUrl)
 
-            val first = storedConverter.toSpringAiMessages(messages, userId).single() as SpringAiUserMsg
-            val second = storedConverter.toSpringAiMessages(messages, userId).single() as SpringAiUserMsg
+            val first = storedConverter.toLlmMessages(messages, userId).single() as SpringAiUserMsg
+            val second = storedConverter.toLlmMessages(messages, userId).single() as SpringAiUserMsg
 
-            assertEquals(firstUrl, first.media.single().data)
-            assertEquals(secondUrl, second.media.single().data)
+            assertEquals(firstUrl, (first.media.single().source as MediaSource.Url).uri.toString())
+            assertEquals(secondUrl, (second.media.single().source as MediaSource.Url).uri.toString())
             assertEquals("image/png", first.media.single().mimeType.toString())
             assertTrue(
                 first.text!!.startsWith("Look [image 1: screenshot.png ($firstUrl)]"),
@@ -565,7 +608,7 @@ class MessageConverterTest {
             coEvery { storage.presignedGetUrl(key, 3600L) } returns freshUrl
             val persisted = ref.copy(accessibleUrl = "/stale/local-copy.png")
 
-            val result = storedConverter.toSpringAiMessages(
+            val result = storedConverter.toLlmMessages(
                 listOf(UserMessage(content = listOf(TextContent("Look "), persisted))), userId
             ).single() as SpringAiUserMsg
 
@@ -590,8 +633,8 @@ class MessageConverterTest {
             val original = message.copy(content = message.content.toList())
 
             repeat(2) {
-                val result = storedConverter.toSpringAiMessages(messages, userId).single() as SpringAiUserMsg
-                assertContentEquals(bytes, assertIs<ByteArray>(result.media.single().data))
+                val result = storedConverter.toLlmMessages(messages, userId).single() as SpringAiUserMsg
+                assertContentEquals(bytes, (result.media.single().source as MediaSource.Bytes).data)
                 assertEquals("image/png", result.media.single().mimeType.toString())
                 assertTrue(
                     result.text!!.contains("[image 1: screenshot.png]"),
@@ -609,15 +652,15 @@ class MessageConverterTest {
         @Test
         fun `signing failure falls back to reading the object`() = runTest {
             coEvery { storage.presignedGetUrl(key, 3600L) } throws ObjectStorageException("Signing unavailable")
-            val result = storedConverter.toSpringAiMessages(messages, userId).single() as SpringAiUserMsg
-            assertContentEquals(bytes, result.media.single().dataAsByteArray)
+            val result = storedConverter.toLlmMessages(messages, userId).single() as SpringAiUserMsg
+            assertContentEquals(bytes, (result.media.single().source as MediaSource.Bytes).data)
             coVerify(exactly = 1) { storage.get(key) }
         }
 
         @Test
         fun `missing object fails before signing or reading`() = runTest {
             coEvery { storage.head(key) } returns null
-            assertFailsWith<ObjectStorageException> { storedConverter.toSpringAiMessages(messages, userId) }
+            assertFailsWith<ObjectStorageException> { storedConverter.toLlmMessages(messages, userId) }
             coVerify(exactly = 0) { storage.presignedGetUrl(any(), any()) }
             coVerify(exactly = 0) { storage.get(any()) }
         }
@@ -625,14 +668,14 @@ class MessageConverterTest {
         @Test
         fun `object disappearing after head fails instead of dropping the image`() = runTest {
             coEvery { storage.get(key) } returns null
-            assertFailsWith<ObjectStorageException> { storedConverter.toSpringAiMessages(messages, userId) }
+            assertFailsWith<ObjectStorageException> { storedConverter.toLlmMessages(messages, userId) }
         }
 
         @Test
         fun `missing resolver and disabled storage both fail explicitly`() = runTest {
-            assertFailsWith<ObjectStorageException> { converter.toSpringAiMessages(messages, userId) }
+            assertFailsWith<ObjectStorageException> { converter.toLlmMessages(messages, userId) }
             coEvery { resolver.resolve(listOf(userId)) } returns null
-            assertFailsWith<ObjectStorageException> { storedConverter.toSpringAiMessages(messages, userId) }
+            assertFailsWith<ObjectStorageException> { storedConverter.toLlmMessages(messages, userId) }
             coVerify(exactly = 0) { storage.head(any()) }
         }
 
@@ -646,7 +689,7 @@ class MessageConverterTest {
                 "get" -> coEvery { storage.get(key) } throws failure
             }
             assertSame(failure, assertFailsWith<ObjectStorageException> {
-                storedConverter.toSpringAiMessages(messages, userId)
+                storedConverter.toLlmMessages(messages, userId)
             })
         }
 
@@ -661,7 +704,7 @@ class MessageConverterTest {
                 "get" -> coEvery { storage.get(key) } throws cancellation
             }
             assertSame(cancellation, assertFailsWith<CancellationException> {
-                storedConverter.toSpringAiMessages(messages, userId)
+                storedConverter.toLlmMessages(messages, userId)
             })
             if (operation != "get") {
                 coVerify(exactly = 0) { storage.get(any()) }
@@ -672,7 +715,7 @@ class MessageConverterTest {
         @ValueSource(longs = [-1, 6291457])
         fun `invalid head size is rejected before signing or downloading`(size: Long) = runTest {
             coEvery { storage.head(key) } returns ObjectMeta(key, size)
-            assertFailsWith<ObjectStorageException> { storedConverter.toSpringAiMessages(messages, userId) }
+            assertFailsWith<ObjectStorageException> { storedConverter.toLlmMessages(messages, userId) }
             coVerify(exactly = 0) { storage.presignedGetUrl(any(), any()) }
             coVerify(exactly = 0) { storage.get(any()) }
         }
@@ -684,10 +727,10 @@ class MessageConverterTest {
             coEvery { storage.head(key) } returns meta
             coEvery { storage.presignedGetUrl(key, 3600L) } returnsMany listOf("https://objects.example/image.png", null)
             coEvery { storage.get(key) } returns ObjectContent(meta, ByteArray(limit))
-            val signed = storedConverter.toSpringAiMessages(messages, userId).single() as SpringAiUserMsg
-            assertEquals("https://objects.example/image.png", signed.media.single().data)
-            val downloaded = storedConverter.toSpringAiMessages(messages, userId).single() as SpringAiUserMsg
-            assertEquals(limit, downloaded.media.single().dataAsByteArray.size)
+            val signed = storedConverter.toLlmMessages(messages, userId).single() as SpringAiUserMsg
+            assertEquals("https://objects.example/image.png", (signed.media.single().source as MediaSource.Url).uri.toString())
+            val downloaded = storedConverter.toLlmMessages(messages, userId).single() as SpringAiUserMsg
+            assertEquals(limit, (downloaded.media.single().source as MediaSource.Bytes).data.size)
         }
 
         @Test
@@ -695,7 +738,7 @@ class MessageConverterTest {
             coEvery { storage.get(key) } returns ObjectContent(
                 ObjectMeta(key, 3), ByteArray(StoredFileReference.MAX_IMAGE_BYTES + 1)
             )
-            assertFailsWith<ObjectStorageException> { storedConverter.toSpringAiMessages(messages, userId) }
+            assertFailsWith<ObjectStorageException> { storedConverter.toLlmMessages(messages, userId) }
         }
 
         @Test
@@ -703,7 +746,7 @@ class MessageConverterTest {
             coEvery { storage.get(key) } returns ObjectContent(
                 ObjectMeta(key, StoredFileReference.MAX_IMAGE_BYTES.toLong() + 1), bytes
             )
-            assertFailsWith<ObjectStorageException> { storedConverter.toSpringAiMessages(messages, userId) }
+            assertFailsWith<ObjectStorageException> { storedConverter.toLlmMessages(messages, userId) }
         }
 
         @Test
@@ -713,7 +756,7 @@ class MessageConverterTest {
                 filePath = StoredFileReference.create("other-user", "session-1", "png"), source = "inline"
             )
             assertFailsWith<IllegalArgumentException> {
-                storedConverter.toSpringAiMessages(listOf(UserMessage(content = listOf(foreignRef))), userId)
+                storedConverter.toLlmMessages(listOf(UserMessage(content = listOf(foreignRef))), userId)
             }
             coVerify(exactly = 0) { resolver.resolve(any<Collection<String>>()) }
             coVerify(exactly = 0) { storage.head(any()) }
@@ -729,7 +772,7 @@ class MessageConverterTest {
             )
             for (invalid in invalidRefs) {
                 assertFailsWith<IllegalArgumentException> {
-                    storedConverter.toSpringAiMessages(listOf(UserMessage(content = listOf(invalid))), userId)
+                    storedConverter.toLlmMessages(listOf(UserMessage(content = listOf(invalid))), userId)
                 }
             }
             coVerify(exactly = 0) { resolver.resolve(any<Collection<String>>()) }
@@ -742,10 +785,10 @@ class MessageConverterTest {
             coEvery { resolver.resolve(listOf("system")) } returns storage
             coEvery { storage.head(systemKey) } returns ObjectMeta(systemKey, 3)
             coEvery { storage.presignedGetUrl(systemKey, 3600L) } returns "https://objects.example/system.png"
-            val result = storedConverter.toSpringAiMessages(
+            val result = storedConverter.toLlmMessages(
                 listOf(UserMessage(content = listOf(ref.copy(filePath = systemPath))))
             ).single() as SpringAiUserMsg
-            assertEquals("https://objects.example/system.png", result.media.single().data)
+            assertEquals("https://objects.example/system.png", (result.media.single().source as MediaSource.Url).uri.toString())
             coVerify(exactly = 1) { resolver.resolve(listOf("system")) }
         }
     }
@@ -764,7 +807,7 @@ class MessageConverterTest {
                 )
             )
 
-            val toolCall = (converter.toSpringAiMessages(messages).single() as SpringAiAssistantMsg).toolCalls.single()
+            val toolCall = (converter.toLlmMessages(messages).single() as SpringAiAssistantMsg).toolCalls.single()
 
             assertTrue(toolCall.arguments.contains("\"title\":\"My Chart\""), "title must survive, got: ${toolCall.arguments}")
             assertTrue(
@@ -781,7 +824,7 @@ class MessageConverterTest {
                 AssistantMessage(id = "a1", content = listOf(ToolCallContent("call1", "read", args)))
             )
 
-            val toolCall = (converter.toSpringAiMessages(messages).single() as SpringAiAssistantMsg).toolCalls.single()
+            val toolCall = (converter.toLlmMessages(messages).single() as SpringAiAssistantMsg).toolCalls.single()
 
             assertEquals(args, toolCall.arguments)
         }
@@ -791,7 +834,7 @@ class MessageConverterTest {
             val toolCallContent = ToolCallContent("call1", "render_visual", """{"title":"T","code":"<svg></svg>"}""")
             val message = AssistantMessage(id = "a1", content = listOf(toolCallContent))
 
-            converter.toSpringAiMessages(listOf(message))
+            converter.toLlmMessages(listOf(message))
 
             assertTrue(
                 toolCallContent.arguments.contains("<svg></svg>"),
@@ -806,44 +849,32 @@ class MessageConverterTest {
                 AssistantMessage(id = "a1", content = listOf(ToolCallContent("call1", "render_visual", broken)))
             )
 
-            val toolCall = (converter.toSpringAiMessages(messages).single() as SpringAiAssistantMsg).toolCalls.single()
+            val toolCall = (converter.toLlmMessages(messages).single() as SpringAiAssistantMsg).toolCalls.single()
 
             assertEquals(broken, toolCall.arguments)
         }
     }
 
     @Nested
-    inner class `fromSpringAiResponse` {
+    inner class `fromChatResponse` {
 
         private fun createMockResponse(
             text: String,
             toolCalls: List<SpringAiAssistantMsg.ToolCall> = emptyList(),
             finishReason: String? = "stop"
-        ): ChatResponse {
-            val assistantMsg = if (toolCalls.isEmpty()) {
-                SpringAiAssistantMsg(text)
-            } else {
-                SpringAiAssistantMsg.builder().content(text).toolCalls(toolCalls).build()
-            }
-            val genMetadata = mockk<ChatGenerationMetadata>(relaxed = true)
-            every { genMetadata.finishReason } returns finishReason
-
-            val generation = mockk<Generation>(relaxed = true)
-            every { generation.output } returns assistantMsg
-            every { generation.metadata } returns genMetadata
-
-            val responseMetadata = mockk<ChatResponseMetadata>(relaxed = true)
-
-            val response = mockk<ChatResponse>(relaxed = true)
-            every { response.result } returns generation
-            every { response.metadata } returns responseMetadata
-            return response
-        }
+        ): ChatResponse = ChatResponse(
+            listOf(
+                Generation(
+                    SpringAiAssistantMsg(content = text, toolCalls = toolCalls),
+                    ChatGenerationMetadata(finishReason = finishReason)
+                )
+            )
+        )
 
         @Test
         fun `extracts text content`() = runTest {
             val response = createMockResponse("Hello world")
-            val result = converter.fromSpringAiResponse(response)
+            val result = converter.fromChatResponse(response)
 
             assertEquals("Hello world", result.text())
             assertEquals(StopReason.STOP, result.stopReason)
@@ -853,7 +884,7 @@ class MessageConverterTest {
         fun `extracts tool calls`() = runTest {
             val tc = SpringAiAssistantMsg.ToolCall("call1", "function", "read", """{"path":"test.txt"}""")
             val response = createMockResponse("", listOf(tc), finishReason = "tool_calls")
-            val result = converter.fromSpringAiResponse(response)
+            val result = converter.fromChatResponse(response)
 
             assertEquals(1, result.toolCalls().size)
             assertEquals("call1", result.toolCalls()[0].id)
@@ -864,7 +895,7 @@ class MessageConverterTest {
         @Test
         fun `handles length finish reason`() = runTest {
             val response = createMockResponse("truncated", finishReason = "length")
-            val result = converter.fromSpringAiResponse(response)
+            val result = converter.fromChatResponse(response)
 
             assertEquals(StopReason.LENGTH, result.stopReason)
         }

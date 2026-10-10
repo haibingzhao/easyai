@@ -1,6 +1,5 @@
 package com.easy.easyai.autoconfigure.anthropic
 
-import com.anthropic.models.messages.OutputConfig
 import com.easy.easyai.api.model.ModelCapabilities
 import com.easy.easyai.api.model.ModelOptions
 import com.easy.easyai.api.model.ModelProviderConfig
@@ -8,17 +7,16 @@ import com.easy.easyai.api.model.ModelProviderInfo.Protocol
 import com.easy.easyai.api.model.StructuredOutputSupport
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
-import org.springframework.ai.anthropic.AnthropicChatOptions
-import org.springframework.ai.model.tool.StructuredOutputChatOptions
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 /**
- * Tests for the structuredOutput capability gate in [AnthropicChatModelFactory.build]:
- * the schema is only pushed into output_config when the model declares support, and
- * must coexist with the effort field on the same OutputConfig.
+ * Tests for [AnthropicChatModelFactory.build]: the structuredOutput capability gate only pushes the
+ * schema when the model declares support, and thinking/effort are mutually exclusive on the
+ * Anthropic-compatible wire (thinking budget wins when thinking is on). The mapper turns
+ * `thinkingBudget == null` into an explicit `{type: disabled}` config, so the options only carry
+ * the budget/effort decision.
  */
 class AnthropicChatModelFactoryTest {
 
@@ -38,96 +36,68 @@ class AnthropicChatModelFactoryTest {
         options = options
     )
 
+    private fun built(capabilities: ModelCapabilities? = null, options: ModelOptions? = null, outputSchema: String? = null): AnthropicChatOptions =
+        factory.build(config(capabilities, options), emptyList(), outputSchema) as AnthropicChatOptions
+
     @Nested
     inner class `structured output gate` {
 
         @Test
         fun `undeclared capabilities keep schema enforcement`() {
-            val options = factory.build(config(null), emptyList(), schema) as StructuredOutputChatOptions
-            assertNotNull(options.outputSchema)
+            assertNotNull(built(outputSchema = schema).outputSchema)
         }
 
         @Test
         fun `JSON_SCHEMA declares support - schema enforced`() {
             val caps = ModelCapabilities(structuredOutput = StructuredOutputSupport.JSON_SCHEMA)
-            val options = factory.build(config(caps), emptyList(), schema) as StructuredOutputChatOptions
-            assertNotNull(options.outputSchema)
+            assertNotNull(built(caps, outputSchema = schema).outputSchema)
         }
 
         @Test
         fun `JSON_OBJECT not expressible on Anthropic protocol - skipped`() {
             val caps = ModelCapabilities(structuredOutput = StructuredOutputSupport.JSON_OBJECT)
-            val options = factory.build(config(caps), emptyList(), schema) as StructuredOutputChatOptions
-            assertNull(options.outputSchema)
+            assertNull(built(caps, outputSchema = schema).outputSchema)
         }
 
         @Test
         fun `NONE skips schema enforcement`() {
             val caps = ModelCapabilities(structuredOutput = StructuredOutputSupport.NONE)
-            val options = factory.build(config(caps), emptyList(), schema) as StructuredOutputChatOptions
-            assertNull(options.outputSchema)
+            assertNull(built(caps, outputSchema = schema).outputSchema)
         }
 
         @Test
-        fun `null schema sets no output format`() {
-            val options = factory.build(config(null), emptyList(), null) as StructuredOutputChatOptions
-            assertNull(options.outputSchema)
+        fun `null schema sets no output schema`() {
+            assertNull(built(outputSchema = null).outputSchema)
         }
     }
 
     @Nested
-    inner class `output config merge with effort` {
+    inner class `effort and thinking` {
 
         @Test
-        fun `schema and effort coexist on the same OutputConfig`() {
+        fun `thinking=false emits effort and no budget`() {
             val options = ModelOptions(temperature = 0.7, maxTokens = 1000, thinking = false, effort = "high")
-            val built = factory.build(
-                config(null, options), emptyList(), schema
-            ) as AnthropicChatOptions
-            assertNotNull(built.outputSchema)
-            assertEquals(OutputConfig.Effort.HIGH, built.outputConfig?.effort()?.orElse(null))
-        }
-    }
-
-    @Nested
-    inner class `thinking toggle` {
-
-        @Test
-        fun `thinking=false sends explicit disabled config instead of omitting it`() {
-            // Some Anthropic-protocol models (e.g. qwen3.x-max) reason by DEFAULT, so the
-            // thinking field must be sent as {type: disabled}; omitting it leaves reasoning on.
-            val options = ModelOptions(temperature = 0.7, maxTokens = 1000, thinking = false)
-            val built = factory.build(config(null, options), emptyList(), null) as AnthropicChatOptions
-            val thinking = built.thinking
-            assertNotNull(thinking, "thinking config must be sent explicitly, not omitted")
-            assertTrue(thinking.isDisabled(), "thinking=false must map to a disabled thinking config")
+            val b = built(options = options, outputSchema = schema)
+            assertNull(b.thinkingBudget)
+            assertEquals("high", b.effort)
+            assertNotNull(b.outputSchema)
         }
 
         @Test
-        fun `thinking=true sends enabled config`() {
-            val options = ModelOptions(temperature = 0.7, maxTokens = 20_000, thinking = true)
-            val built = factory.build(config(null, options), emptyList(), null) as AnthropicChatOptions
-            val thinking = built.thinking
-            assertNotNull(thinking)
-            assertTrue(thinking.isEnabled(), "thinking=true must map to an enabled thinking config")
-        }
-
-        @Test
-        fun `thinking=true suppresses effort - reasoning_effort and thinking_budget are mutually exclusive`() {
-            // Bailian token-plan rejects both being set at once; thinking budget wins so the
-            // explicit thinking=true intent is honored and effort is dropped.
+        fun `thinking=true sends a budget and suppresses effort`() {
+            // Bailian token-plan rejects reasoning_effort alongside thinking_budget; thinking wins.
             val options = ModelOptions(temperature = 0.7, maxTokens = 20_000, thinking = true, effort = "high")
-            val built = factory.build(config(null, options), emptyList(), null) as AnthropicChatOptions
-            assertTrue(built.thinking!!.isEnabled())
-            assertNull(built.outputConfig?.effort()?.orElse(null), "effort must not be sent when thinking is enabled")
+            val b = built(options = options)
+            assertNotNull(b.thinkingBudget, "thinking=true must set a thinking budget")
+            assertNull(b.effort, "effort must not be sent when thinking is enabled")
         }
 
         @Test
-        fun `thinking=false still emits effort`() {
-            val options = ModelOptions(temperature = 0.7, maxTokens = 1000, thinking = false, effort = "high")
-            val built = factory.build(config(null, options), emptyList(), null) as AnthropicChatOptions
-            assertTrue(built.thinking!!.isDisabled())
-            assertEquals(OutputConfig.Effort.HIGH, built.outputConfig?.effort()?.orElse(null))
+        fun `thinking=false without effort leaves both unset`() {
+            val options = ModelOptions(temperature = 0.7, maxTokens = 1000, thinking = false)
+            val b = built(options = options)
+            assertNull(b.thinkingBudget)
+            assertNull(b.effort)
         }
     }
 }

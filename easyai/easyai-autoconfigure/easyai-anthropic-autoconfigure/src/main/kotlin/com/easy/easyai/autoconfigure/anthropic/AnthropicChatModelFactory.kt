@@ -1,24 +1,23 @@
 package com.easy.easyai.autoconfigure.anthropic
 
-import com.anthropic.models.messages.OutputConfig
+import com.anthropic.client.okhttp.AnthropicOkHttpClient
+import com.anthropic.client.okhttp.AnthropicOkHttpClientAsync
 import com.easy.easyai.api.config.ChatModelFactory
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatOptions
+import com.easy.easyai.api.llm.ToolCallback
+import com.easy.easyai.api.llm.observation.ObservationChatModel
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
 import com.easy.easyai.api.model.StructuredOutputSupport
 import io.micrometer.observation.ObservationRegistry
 import org.slf4j.LoggerFactory
-import org.springframework.ai.anthropic.AnthropicChatModel
-import org.springframework.ai.anthropic.AnthropicChatOptions
-import org.springframework.ai.anthropic.AnthropicSetup
-import org.springframework.ai.anthropic.http.okhttp.AnthropicHttpClientBuilderCustomizer
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.prompt.ChatOptions
-import org.springframework.ai.tool.ToolCallback
 import java.time.Duration
 
 /**
- * Anthropic implementation of ChatModelFactory.
- * Creates AnthropicChatModel instances and builds AnthropicChatOptions based on the provided configuration.
+ * Anthropic implementation of ChatModelFactory. Builds sync/async clients on the official
+ * `com.anthropic` SDK (with the raw-error logging interceptor) and returns [AnthropicStreamingChatModel]
+ * wrapped for observation, and builds per-turn [AnthropicChatOptions] from the provider configuration.
  */
 class AnthropicChatModelFactory : ChatModelFactory {
 
@@ -35,47 +34,30 @@ class AnthropicChatModelFactory : ChatModelFactory {
 
         // Log raw non-2xx bodies so gateway errors returned inside SSE frames — which the
         // Anthropic SDK otherwise reduces to "400: Unknown" with body=JsonMissing — remain
-        // diagnosable. Applied to both sync and async clients via the http customizer seam.
-        val httpCustomizers = listOf(
-            AnthropicHttpClientBuilderCustomizer { it.interceptor(AnthropicErrorLoggingInterceptor()) }
-        )
+        // diagnosable. Applied to both sync and async clients via the SDK interceptor seam.
+        val errorInterceptor = AnthropicErrorLoggingInterceptor()
 
-        val syncClient = AnthropicSetup.setupSyncClient(
-            baseUrl,
-            apiKey,
-            timeout,
-            2,      // maxRetries
-            null,   // proxy
-            null,   // customHeaders
-            observationRegistry,
-            null,   // meterRegistry
-            null,   // dispatcherExecutor
-            httpCustomizers
-        )
-
-        val asyncClient = AnthropicSetup.setupAsyncClient(
-            baseUrl,
-            apiKey,
-            timeout,
-            2,      // maxRetries
-            null,   // proxy
-            null,   // customHeaders
-            observationRegistry,
-            null,   // meterRegistry
-            null,   // dispatcherExecutor
-            httpCustomizers
-        )
-
-        val defaultOptions = AnthropicChatOptions.builder().model(config.modelId).build()
-
-        val chatModel = AnthropicChatModel.builder()
-            .anthropicClient(syncClient)
-            .anthropicClientAsync(asyncClient)
-            .options(defaultOptions)
-            .observationRegistry(observationRegistry)
+        val syncClient = AnthropicOkHttpClient.builder()
+            .apiKey(apiKey)
+            .baseUrl(baseUrl)
+            .timeout(timeout)
+            .maxRetries(2)
+            .addInterceptor(errorInterceptor)
             .build()
 
-        return UsageCorrectingAnthropicChatModel(chatModel)
+        val asyncClient = AnthropicOkHttpClientAsync.builder()
+            .apiKey(apiKey)
+            .baseUrl(baseUrl)
+            .timeout(timeout)
+            .maxRetries(2)
+            .addInterceptor(errorInterceptor)
+            .build()
+
+        // timeoutSeconds travels into per-request RequestOptions; otherwise the mapper's
+        // DEFAULT_TIMEOUT_SECONDS floor would silently override the configured client timeout.
+        val defaultOptions = AnthropicChatOptions(model = config.modelId, timeoutSeconds = config.timeoutSeconds)
+        val mapper = AnthropicStreamingChatModel(syncClient, asyncClient, defaultOptions)
+        return ObservationChatModel(mapper, observationRegistry)
     }
 
     override fun build(
@@ -83,38 +65,43 @@ class AnthropicChatModelFactory : ChatModelFactory {
         toolCallbacks: List<ToolCallback>,
         outputSchema: String?
     ): ChatOptions {
-        val builder = AnthropicChatOptions.builder()
-            .model(config.modelId)
-            .toolCallbacks(toolCallbacks)
+        var options = AnthropicChatOptions(
+            model = config.modelId,
+            toolCallbacks = toolCallbacks,
+            timeoutSeconds = config.timeoutSeconds
+        )
 
         config.options?.let {
             if (it.thinking) {
-                // Thinking: pass thinking.budget_tokens when enabled.
-                builder.thinkingEnabled(DEFAULT_THINKING_BUDGET_TOKENS)
-                // max_tokens must be > budget_tokens; enforce a safe floor
-                builder.maxTokens(maxOf(it.maxTokens, DEFAULT_THINKING_BUDGET_TOKENS.toInt() + 1))
+                // Thinking: pass thinking.budget_tokens when enabled. The mapper floors
+                // max_tokens to budget + reserve, so no explicit bump is needed here.
+                options = options.copy(
+                    thinkingBudget = DEFAULT_THINKING_BUDGET_TOKENS,
+                    maxTokens = maxOf(it.maxTokens, DEFAULT_THINKING_BUDGET_TOKENS.toInt() + 1)
+                )
             } else {
                 // Effort maps to reasoning_effort. Some Anthropic-compatible gateways (e.g.
-                // Bailian token-plan) reject reasoning_effort alongside thinking.budget_tokens
-                // ("'reasoning_effort' and 'thinking_budget' cannot be set simultaneously"), so
-                // it is only emitted when thinking is off.
-                it.effort?.let { effort -> builder.effort(mapToOutputConfigEffort(effort)) }
-                // thinkingDisabled() must be sent explicitly — some Anthropic-protocol models
-                // (e.g. qwen3.x-max) reason by DEFAULT, so merely omitting the thinking field
-                // leaves reasoning on; only an explicit {type: disabled} turns it off.
-                builder.thinkingDisabled()
-                builder.temperature(it.temperature)
-                builder.maxTokens(it.maxTokens)
+                // Bailian token-plan) reject reasoning_effort alongside thinking.budget_tokens, so
+                // it is only emitted when thinking is off; the mapper sends an explicit
+                // {type: disabled} thinking config whenever thinkingBudget is null (some models
+                // reason by DEFAULT, e.g. qwen3.x-max, so merely omitting the field leaves it on).
+                options = options.copy(
+                    effort = it.effort,
+                    temperature = it.temperature,
+                    maxTokens = it.maxTokens
+                )
             }
         }
 
-        // 4. Structured output: applied only when the model declares support. The Anthropic
-        // SDK's JsonOutputFormat hardcodes type=json_schema, so JSON_OBJECT is not
-        // expressible here and degrades to the prompt-based enforcement path.
+        // Structured output: the Anthropic mapper does not put the schema on the wire (spring-ai
+        // 2.0.1 never did either — its AnthropicChatModel ignores StructuredOutputChatOptions).
+        // options.outputSchema is recorded for the loop's bookkeeping; actual enforcement is the
+        // prompt-based OutputSchemaCompletionCheck path in easyai-core.
         if (outputSchema != null) {
             when (config.capabilities?.structuredOutput) {
-                // null = undeclared, keep today's schema enforcement
-                null, StructuredOutputSupport.JSON_SCHEMA -> builder.outputSchema(outputSchema)
+                // null = undeclared: record the schema; a future wire-level output_config hookup
+                // (SDK 2.52 OutputConfig.format) would start enforcing at the API here.
+                null, StructuredOutputSupport.JSON_SCHEMA -> options = options.copy(outputSchema = outputSchema)
                 StructuredOutputSupport.JSON_OBJECT -> logger.debug(
                     "Model {} declares JSON_OBJECT-only structured output, which the Anthropic protocol cannot express; using prompt-based enforcement",
                     config.modelId
@@ -122,21 +109,11 @@ class AnthropicChatModelFactory : ChatModelFactory {
                 StructuredOutputSupport.NONE -> Unit
             }
         }
-        return builder.build()
+        return options
     }
 
     companion object {
         /** Default token budget for extended thinking when enabled. */
         private const val DEFAULT_THINKING_BUDGET_TOKENS = 10_000L
-
-        /** Maps effort string to Anthropic OutputConfig.Effort enum. */
-        private fun mapToOutputConfigEffort(effort: String): OutputConfig.Effort = when (effort.lowercase()) {
-            "low" -> OutputConfig.Effort.LOW
-            "medium" -> OutputConfig.Effort.MEDIUM
-            "high" -> OutputConfig.Effort.HIGH
-            "xhigh" -> OutputConfig.Effort.XHIGH
-            "max" -> OutputConfig.Effort.MAX
-            else -> OutputConfig.Effort.HIGH
-        }
     }
 }

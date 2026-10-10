@@ -7,12 +7,11 @@ import com.easy.easyai.core.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.prompt.Prompt
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.Prompt
 import java.security.MessageDigest
 import java.time.LocalDate
 import java.util.*
-import org.springframework.ai.chat.messages.UserMessage as SpringAiUserMessage
 
 /**
  * Extracts durable facts from conversation history before context compaction.
@@ -101,7 +100,7 @@ class MemoryFlushAgent(
         val flushPrompt = buildFlushPrompt(recentMessages, existingByName.values)
         val response = try {
             withContext(Dispatchers.IO) {
-                chatModel.call(Prompt(SpringAiUserMessage(flushPrompt)))
+                chatModel.call(Prompt(flushPrompt))
             }
         } catch (e: Exception) {
             logger.warn("Memory flush LLM call failed: {}", e.message)

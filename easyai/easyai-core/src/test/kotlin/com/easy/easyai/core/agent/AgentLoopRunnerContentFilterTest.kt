@@ -14,11 +14,11 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.springframework.ai.chat.messages.AssistantMessage as SpringAiAssistantMessage
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.model.ChatResponse
-import org.springframework.ai.chat.model.Generation
-import org.springframework.ai.chat.prompt.Prompt
+import com.easy.easyai.api.llm.AssistantMessage as SpringAiAssistantMessage
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatResponse
+import com.easy.easyai.api.llm.Generation
+import com.easy.easyai.api.llm.Prompt
 import reactor.core.publisher.Flux
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -78,7 +78,7 @@ class AgentLoopRunnerContentFilterTest {
         val runner = createRunner(streamingThenBlockedModel("部分", "分析结果"))
         val transcript = mutableListOf<EasyAiMessage>()
         val events = mutableListOf<AgentEvent>()
-        val prompt = Prompt(listOf(org.springframework.ai.chat.messages.UserMessage("hi")))
+        val prompt = Prompt(listOf(com.easy.easyai.api.llm.UserMessage("hi")))
 
         assertFailsWith<ContentFilteredException> {
             runner.callLLMAndBuildResponse(transcript, prompt, "m1", 1) { events.add(it) }
@@ -97,7 +97,7 @@ class AgentLoopRunnerContentFilterTest {
         val runner = createRunner(streamingThenBlockedModel())
         val transcript = mutableListOf<EasyAiMessage>()
         val events = mutableListOf<AgentEvent>()
-        val prompt = Prompt(listOf(org.springframework.ai.chat.messages.UserMessage("hi")))
+        val prompt = Prompt(listOf(com.easy.easyai.api.llm.UserMessage("hi")))
 
         assertFailsWith<ContentFilteredException> {
             runner.callLLMAndBuildResponse(transcript, prompt, "m2", 1) { events.add(it) }

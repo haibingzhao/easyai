@@ -28,35 +28,30 @@ import kotlin.test.assertTrue
 class AgentLoopHookTest {
 
     private fun createMockChatModelWithToolCalls(
-        toolCalls: List<org.springframework.ai.chat.messages.AssistantMessage.ToolCall>,
+        toolCalls: List<com.easy.easyai.api.llm.AssistantMessage.ToolCall>,
         followUpText: String = "done"
-    ): org.springframework.ai.chat.model.ChatModel {
-        val toolCallResponse = mockk<org.springframework.ai.chat.model.ChatResponse>(relaxed = true)
-        val genMetadata = mockk<org.springframework.ai.chat.metadata.ChatGenerationMetadata>(relaxed = true)
-        io.mockk.every { genMetadata.finishReason } returns "tool_calls"
-        val generation = mockk<org.springframework.ai.chat.model.Generation>(relaxed = true)
-        val assistantMsg = org.springframework.ai.chat.messages.AssistantMessage.builder()
-            .content("")
-            .toolCalls(toolCalls)
-            .build()
-        io.mockk.every { generation.output } returns assistantMsg
-        io.mockk.every { generation.metadata } returns genMetadata
-        io.mockk.every { toolCallResponse.result } returns generation
-        io.mockk.every { toolCallResponse.results } returns listOf(generation)
+    ): com.easy.easyai.api.llm.ChatModel {
+        val toolCallResponse = com.easy.easyai.api.llm.ChatResponse(
+            listOf(
+                com.easy.easyai.api.llm.Generation(
+                    com.easy.easyai.api.llm.AssistantMessage(content = "", toolCalls = toolCalls),
+                    com.easy.easyai.api.llm.ChatGenerationMetadata(finishReason = "tool_calls")
+                )
+            )
+        )
 
-        val textResponse = mockk<org.springframework.ai.chat.model.ChatResponse>(relaxed = true)
-        val textGenMetadata = mockk<org.springframework.ai.chat.metadata.ChatGenerationMetadata>(relaxed = true)
-        io.mockk.every { textGenMetadata.finishReason } returns "stop"
-        val textGeneration = mockk<org.springframework.ai.chat.model.Generation>(relaxed = true)
-        val textAssistantMsg = org.springframework.ai.chat.messages.AssistantMessage(followUpText)
-        io.mockk.every { textGeneration.output } returns textAssistantMsg
-        io.mockk.every { textGeneration.metadata } returns textGenMetadata
-        io.mockk.every { textResponse.result } returns textGeneration
-        io.mockk.every { textResponse.results } returns listOf(textGeneration)
+        val textResponse = com.easy.easyai.api.llm.ChatResponse(
+            listOf(
+                com.easy.easyai.api.llm.Generation(
+                    com.easy.easyai.api.llm.AssistantMessage(content = followUpText),
+                    com.easy.easyai.api.llm.ChatGenerationMetadata(finishReason = "stop")
+                )
+            )
+        )
 
-        val mock = mockk<org.springframework.ai.chat.model.ChatModel>()
+        val mock = mockk<com.easy.easyai.api.llm.ChatModel>()
         var index = 0
-        io.mockk.every { mock.stream(any<org.springframework.ai.chat.prompt.Prompt>()) } answers {
+        io.mockk.every { mock.stream(any<com.easy.easyai.api.llm.Prompt>()) } answers {
             val resp = if (index == 0) toolCallResponse else textResponse
             index++
             reactor.core.publisher.Flux.just(resp)
@@ -77,7 +72,7 @@ class AgentLoopHookTest {
     }
 
     private fun createHookedAgentService(
-        chatModel: org.springframework.ai.chat.model.ChatModel,
+        chatModel: com.easy.easyai.api.llm.ChatModel,
         toolEngine: ToolExecutionEngine,
         beforeHook: BeforeToolCallHook,
         afterHook: AfterToolCallHook
@@ -96,18 +91,18 @@ class AgentLoopHookTest {
 
         override fun createChatModel(
             config: com.easy.easyai.api.model.ModelProviderConfig,
-            toolCallbacks: List<org.springframework.ai.tool.ToolCallback>
+            toolCallbacks: List<com.easy.easyai.api.llm.ToolCallback>
         ) = chatModel
 
         override fun buildChatOptions(
             config: com.easy.easyai.api.model.ModelProviderConfig,
-            toolCallbacks: List<org.springframework.ai.tool.ToolCallback>,
+            toolCallbacks: List<com.easy.easyai.api.llm.ToolCallback>,
             outputSchema: String?
-        ) = org.springframework.ai.chat.prompt.ChatOptions.builder().model("test-model").build()
+        ) = com.easy.easyai.api.llm.DefaultChatOptions(model = "test-model")
     }
 
     private fun toolCall(id: String, name: String) =
-        org.springframework.ai.chat.messages.AssistantMessage.ToolCall(id, "function", name, """{}""")
+        com.easy.easyai.api.llm.AssistantMessage.ToolCall(id, "function", name, """{}""")
 
     @Nested
     inner class `Phase 2 - batch execution` {

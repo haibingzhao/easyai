@@ -12,6 +12,7 @@ import { ArrowLeft, Save, Loader2, Bot, Shield, Settings, Terminal, BookOpen, Us
 import { JinjaTemplateEditor, type JinjaTemplateEditorHandle } from '@/components/agent/JinjaTemplateEditor';
 import { type VariableGroup } from '@/components/agent/VariableDropdown';
 import { AiConfigPanel } from '@/components/ai/AiConfigPanel';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import type { AgentCreateRequest, AgentType, AgentEnv, McpBindingDto, InlineAgentSpec, TemplateValidationError } from '@/types/agent';
 import { agentService } from '@/services/agent-service';
 import { swarmExcludedToolNames, teamExcludedToolNames } from '@/constants/tools';
@@ -79,6 +80,9 @@ export const AgentCreatePage: React.FC = () => {
   const [instructionsEnabled, setInstructionsEnabled] = useState(true);
   const [toolFoldEnabled, setToolFoldEnabled] = useState(false);
   const [toolFoldKeepRecentRuns, setToolFoldKeepRecentRuns] = useState(1);
+  const [thinkingHistoryEnabled, setThinkingHistoryEnabled] = useState(false);
+  // The toggle flips only after an explicit confirmation (token/context impact both ways).
+  const [pendingThinkingToggle, setPendingThinkingToggle] = useState<boolean | null>(null);
   const [inputSchemaEnabled, setInputSchemaEnabled] = useState(false);
   const [inputSchema, setInputSchema] = useState('');
   const [outputSchemaEnabled, setOutputSchemaEnabled] = useState(false);
@@ -171,6 +175,7 @@ export const AgentCreatePage: React.FC = () => {
         setInstructionsEnabled(agent.instructionsEnabled);
         setToolFoldEnabled(agent.toolFoldEnabled);
         setToolFoldKeepRecentRuns(agent.toolFoldKeepRecentRuns);
+        setThinkingHistoryEnabled(agent.thinkingHistoryEnabled);
         setInputSchemaEnabled(!!agent.inputSchema);
         setInputSchema(agent.inputSchema || '');
         setOutputSchemaEnabled(!!agent.outputSchema);
@@ -308,6 +313,7 @@ export const AgentCreatePage: React.FC = () => {
     if (typeof config.instructionsEnabled === 'boolean') setInstructionsEnabled(config.instructionsEnabled);
     if (typeof config.toolFoldEnabled === 'boolean') setToolFoldEnabled(config.toolFoldEnabled);
     if (typeof config.toolFoldKeepRecentRuns === 'number') setToolFoldKeepRecentRuns(config.toolFoldKeepRecentRuns);
+    if (typeof config.thinkingHistoryEnabled === 'boolean') setThinkingHistoryEnabled(config.thinkingHistoryEnabled);
     if (typeof config.inputSchema === 'string') { setInputSchemaEnabled(true); setInputSchema(config.inputSchema); }
     if (typeof config.outputSchema === 'string') { setOutputSchemaEnabled(true); setOutputSchema(config.outputSchema); }
   }, [agentContext]);
@@ -377,6 +383,7 @@ export const AgentCreatePage: React.FC = () => {
       instructionsEnabled,
       toolFoldEnabled,
       toolFoldKeepRecentRuns,
+      thinkingHistoryEnabled,
       inputSchema: inputSchemaEnabled && inputSchema.trim() ? inputSchema.trim() : undefined,
       outputSchema: outputSchemaEnabled && outputSchema.trim() ? outputSchema.trim() : undefined,
       outputSchemaMultiTurn: outputSchemaEnabled && outputSchemaMultiTurn,
@@ -759,6 +766,47 @@ export const AgentCreatePage: React.FC = () => {
                       />
                     </div>
                   )}
+                </div>
+
+                {/* Thinking History */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="text-sm font-medium">{i18n('Thinking History')}</label>
+                      <p className="text-xs text-muted-foreground">
+                        {i18n('When enabled, persisted thinking is replayed to the LLM as assistant history each turn. Providers without a replay field ignore it.')}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={thinkingHistoryEnabled}
+                      onClick={() => setPendingThinkingToggle(!thinkingHistoryEnabled)}
+                      disabled={readOnly}
+                      className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${
+                        thinkingHistoryEnabled ? '' : 'bg-muted'
+                      } ${readOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                      style={thinkingHistoryEnabled ? { backgroundColor: '#22c55e' } : undefined}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-background shadow ring-0 transition duration-200 ease-in-out ${
+                          thinkingHistoryEnabled ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  <ConfirmDialog
+                    open={pendingThinkingToggle !== null}
+                    message={pendingThinkingToggle
+                      ? i18n('Replay thinking as history? Persisted reasoning is sent back on every turn, noticeably growing prompt tokens and context usage. Some gateways may reject historical thinking blocks.')
+                      : i18n('Stop replaying thinking? The model will no longer see its own reasoning from earlier turns. This saves tokens but drops cross-turn reasoning continuity.')}
+                    danger={false}
+                    onConfirm={() => {
+                      if (pendingThinkingToggle !== null) setThinkingHistoryEnabled(pendingThinkingToggle);
+                      setPendingThinkingToggle(null);
+                    }}
+                    onCancel={() => setPendingThinkingToggle(null)}
+                  />
                 </div>
 
                 {/* Max Iterations */}

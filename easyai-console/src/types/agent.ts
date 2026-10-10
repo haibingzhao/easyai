@@ -84,6 +84,8 @@ export interface AgentDto {
   toolFoldEnabled: boolean;
   /** Completed runs kept verbatim in addition to the current run. */
   toolFoldKeepRecentRuns: number;
+  /** Replay persisted thinking blocks as assistant history. */
+  thinkingHistoryEnabled: boolean;
   inputSchema: string | null;
   outputSchema: string | null;
   outputSchemaMultiTurn: boolean;
@@ -121,6 +123,7 @@ export interface AgentCreateRequest {
   instructionsEnabled?: boolean;
   toolFoldEnabled?: boolean;
   toolFoldKeepRecentRuns?: number;
+  thinkingHistoryEnabled?: boolean;
   inputSchema?: string;
   outputSchema?: string;
   outputSchemaMultiTurn?: boolean;

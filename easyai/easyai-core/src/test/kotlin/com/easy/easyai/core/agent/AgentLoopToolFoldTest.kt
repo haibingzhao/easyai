@@ -22,21 +22,19 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
-import org.springframework.ai.chat.metadata.ChatGenerationMetadata
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.model.ChatResponse
-import org.springframework.ai.chat.model.Generation
-import org.springframework.ai.chat.prompt.Prompt
-import org.springframework.ai.chat.messages.ToolResponseMessage
-import org.springframework.ai.model.tool.ToolCallingChatOptions
-import org.springframework.ai.tool.ToolCallback
+import com.easy.easyai.api.llm.ChatGenerationMetadata
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatResponse
+import com.easy.easyai.api.llm.Generation
+import com.easy.easyai.api.llm.Prompt
+import com.easy.easyai.api.llm.ToolResponseMessage
 import reactor.core.publisher.Flux
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import org.springframework.ai.chat.messages.AssistantMessage as SpringAssistantMessage
+import com.easy.easyai.api.llm.AssistantMessage as LlmAssistantMessage
 
 /**
  * Verifies the AgentLoop wiring of cross-run tool folding: the model sees the folded projection
@@ -45,13 +43,13 @@ import org.springframework.ai.chat.messages.AssistantMessage as SpringAssistantM
  */
 internal class AgentLoopToolFoldTest {
 
-    private fun toolCall(id: String) = SpringAssistantMessage.ToolCall(id, "function", "probe", "{\"q\":\"x\"}")
+    private fun toolCall(id: String) = LlmAssistantMessage.ToolCall(id, "function", "probe", "{\"q\":\"x\"}")
 
     private fun callResponse(id: String): ChatResponse = ChatResponse(
         listOf(
             Generation(
-                SpringAssistantMessage.builder().content("").toolCalls(listOf(toolCall(id))).build(),
-                ChatGenerationMetadata.builder().finishReason("tool_calls").build()
+                LlmAssistantMessage(content = "", toolCalls = listOf(toolCall(id))),
+                ChatGenerationMetadata(finishReason = "tool_calls")
             )
         )
     )
@@ -59,8 +57,8 @@ internal class AgentLoopToolFoldTest {
     private fun textResponse(text: String): ChatResponse = ChatResponse(
         listOf(
             Generation(
-                SpringAssistantMessage.builder().content(text).build(),
-                ChatGenerationMetadata.builder().finishReason("stop").build()
+                LlmAssistantMessage(content = text),
+                ChatGenerationMetadata(finishReason = "stop")
             )
         )
     )
@@ -136,14 +134,13 @@ internal class AgentLoopToolFoldTest {
 
         fun promptText(index: Int): String = prompts[index].instructions.joinToString("\n") { message ->
             when (message) {
-                is ToolResponseMessage -> message.responses.joinToString("|") { it.responseData() ?: "" }
+                is ToolResponseMessage -> message.responses.joinToString("|") { it.responseData }
                 else -> message.text ?: ""
             }
         }
 
         fun toolNames(index: Int): List<String> =
-            (prompts[index].options as? ToolCallingChatOptions)?.toolCallbacks
-                ?.map(ToolCallback::getToolDefinition)?.map { it.name() } ?: emptyList()
+            prompts[index].options?.toolCallbacks?.map { it.name } ?: emptyList()
     }
 
     @Nested

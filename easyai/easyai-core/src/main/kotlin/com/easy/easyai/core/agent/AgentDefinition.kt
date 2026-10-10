@@ -34,6 +34,8 @@ data class AgentDefinition(
     val toolFoldEnabled: Boolean = false,
     /** Completed runs kept verbatim (besides the current run) when folding. */
     val toolFoldKeepRecentRuns: Int = 1,
+    /** Replay persisted thinking blocks as assistant history. Off by default (thinking is cost). */
+    val thinkingHistoryEnabled: Boolean = false,
     val inputSchema: String? = null,
     val outputSchema: String? = null,
     /** When true, defer structured output to a final enforced iteration after multi-turn tool calling. */
@@ -59,6 +61,7 @@ data class AgentDefinition(
             instructionsEnabled: Boolean = true,
             toolFoldEnabled: Boolean = false,
             toolFoldKeepRecentRuns: Int = 1,
+            thinkingHistoryEnabled: Boolean = false,
             inputSchema: String? = null,
             outputSchema: String? = null,
             outputSchemaMultiTurn: Boolean = false
@@ -71,6 +74,7 @@ data class AgentDefinition(
                 maxIterations = maxIterations, maxSubAgentDepth = maxSubAgentDepth,
                 color = color, enabled = enabled, instructionsEnabled = instructionsEnabled,
                 toolFoldEnabled = toolFoldEnabled, toolFoldKeepRecentRuns = toolFoldKeepRecentRuns,
+                thinkingHistoryEnabled = thinkingHistoryEnabled,
                 inputSchema = inputSchema, outputSchema = outputSchema,
                 outputSchemaMultiTurn = outputSchemaMultiTurn,
                 userId = "system", createdAt = now, updatedAt = now

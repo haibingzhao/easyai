@@ -12,7 +12,7 @@ import com.easy.easyai.core.event.CompactionEndEvent
 import com.easy.easyai.core.event.CompactionStartEvent
 import com.easy.easyai.core.model.*
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.model.ChatModel
+import com.easy.easyai.api.llm.ChatModel
 
 /**
  * Orchestrates context compaction:

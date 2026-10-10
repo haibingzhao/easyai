@@ -19,7 +19,7 @@ easyai-core/src/main/kotlin/com/easy/easyai/core/
 ├── goal/        # GoalState, GoalCompletionCheck, GoalStatusNotifier, GoalStore
 ├── command/     # UserCommandDefinition, AsyncUserCommandStore
 ├── model/       # EasyAiMessage, ProjectInfo, TodoInfo, ToolCallStatus
-└── message/     # MessageConverter (EasyAI ↔ Spring AI bridge)
+└── message/     # MessageConverter (EasyAI domain ↔ own `api.llm` SPI bridge)
 ```
 
 ## WHERE TO LOOK
@@ -34,7 +34,7 @@ easyai-core/src/main/kotlin/com/easy/easyai/core/
 | Permission | `permission/PermissionService.kt` | Rule evaluation, user prompt flow |
 | Memory | `memory/MemoryStore.kt` | Storage interface; the only implementation is `RagMemoryStore` in `easyai-rag` (one EasyRAG document per entry) |
 | Goal tracking | `goal/GoalState.kt` + `GoalCompletionCheck.kt` | Auto-pause on completion |
-| Message conversion | `message/MessageConverter.kt` | EasyAI ↔ Spring AI message types |
+| Message conversion | `message/MessageConverter.kt` | EasyAI ↔ `com.easy.easyai.api.llm` message types |
 
 ## CONVENTIONS
 - `suspend fun` + `withContext(Dispatchers.IO)` for all I/O

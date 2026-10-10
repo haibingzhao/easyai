@@ -11,7 +11,7 @@ import com.easy.easyai.core.model.EasyAiMessage
 import com.easy.easyai.core.model.aux.AuxModelResolver
 import com.easy.easyai.core.model.aux.AuxModelTask
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.model.ChatModel
+import com.easy.easyai.api.llm.ChatModel
 
 /**
  * TransformContextService implementation that applies context compaction when needed.

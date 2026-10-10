@@ -18,13 +18,16 @@
             <groupId>com.easy</groupId>
             <artifactId>easyai-api</artifactId>
         </dependency>
+        <!-- Official OpenAI Java SDK (okhttp client) — the streaming mapper is built directly
+             on this; replaces the spring-ai-openai thin wrapper. Version managed at root. -->
         <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-openai</artifactId>
+            <groupId>com.openai</groupId>
+            <artifactId>openai-java-client-okhttp</artifactId>
         </dependency>
+        <!-- Micrometer Observation API — ObservationChatModel wraps the mapper for GenAI tracing. -->
         <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-model</artifactId>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-observation</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

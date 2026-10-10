@@ -139,10 +139,12 @@ class UsageAwareTokenEstimatorTest {
                 UserMessage.COMMAND_EXPANSION to "Previously submitted command instructions. ".repeat(200)
             ))
             val baseline = estimator.estimate(listOf(command))
+            // The assistant has no persisted content, so it contributes 0; its reported
+            // outputTokens=10 is phantom and must NOT be added to the next-request estimate.
             val assistant = assistantWithUsage(inputTokens = baseline, outputTokens = 10)
             val trailing = UserMessage("/next").copy(metadata = mapOf(UserMessage.COMMAND_EXPANSION to "Next command snapshot"))
             val messages = listOf(command, assistant, trailing)
-            val expected = baseline + 10 + estimator.estimate(listOf(trailing))
+            val expected = baseline + estimator.estimate(listOf(trailing))
             assertEquals(expected, estimator.estimateContextTokens(messages))
             assertEquals(expected, estimator.estimateContextTokens(CommandMessageProjection.project(messages)))
         }
@@ -166,18 +168,37 @@ class UsageAwareTokenEstimatorTest {
             val estimator = UsageAwareTokenEstimator()
             val user = textMessage("Initial research request about semiconductor supply chains.")
             val assistant = assistantWithUsage(text = "Here is the first pass analysis result.")
-            // Pick a reported input that lies inside the plausibility window
-            val baseline = estimator.estimate(listOf(user, assistant))
             val trailing = textMessage("Follow-up question about the latest earnings.")
-            val messages = listOf(user, assistant, trailing)
 
-            val outputTokens = 120
-            val reported = baseline + outputTokens
+            // Realistic accounting: usage.inputTokens is the input that PRODUCED the assistant
+            // turn (everything before it), so it excludes the assistant's own output.
+            val userTokens = estimator.estimate(listOf(user))
+            val assistantTokens = estimator.estimate(listOf(assistant))
             val withUsage = assistant.copy(
-                usage = Usage(inputTokens = baseline, outputTokens = outputTokens)
+                usage = Usage(inputTokens = userTokens, outputTokens = 120)
             )
+            val reported = userTokens + assistantTokens
             val expected = reported + estimator.estimate(listOf(trailing))
             assertEquals(expected, estimator.estimateContextTokens(listOf(user, withUsage, trailing)))
+        }
+
+        @Test
+        fun `excludes phantom reasoning output tokens from the reported context`() {
+            val estimator = UsageAwareTokenEstimator()
+            // Reasoning model: usage.outputTokens counts ephemeral thinking that is neither
+            // persisted nor re-sent, so it must not inflate the next-request estimate and
+            // trip compaction prematurely.
+            val longText = "The quick brown fox jumps over the lazy dog. ".repeat(400)
+            val user = textMessage(longText)
+            val assistant = assistantWithUsage(text = "Short visible answer.")
+            val userTokens = estimator.estimate(listOf(user))
+            val assistantTokens = estimator.estimate(listOf(assistant))
+            val withUsage = assistant.copy(
+                usage = Usage(inputTokens = userTokens, outputTokens = 50_000) // 50k phantom reasoning
+            )
+            // reported = userTokens + assistantTokens; the 50k output is ignored (the old
+            // userTokens + 50_000 would have far exceeded the real re-sendable context).
+            assertEquals(userTokens + assistantTokens, estimator.estimateContextTokens(listOf(user, withUsage)))
         }
 
         @Test
@@ -210,9 +231,11 @@ class UsageAwareTokenEstimatorTest {
         @Test
         fun `trusts report directly when baseline is small`() {
             val estimator = UsageAwareTokenEstimator()
-            // Tiny baseline (<= 500 tokens): window check is skipped, report trusted as-is
+            // Tiny baseline (<= 500 tokens): window check is skipped, report trusted as-is.
+            // The assistant carries no persisted content, so reported = inputTokens(50) + 0;
+            // the phantom outputTokens=10 is excluded.
             val messages = listOf(textMessage("hi"), assistantWithUsage(inputTokens = 50, outputTokens = 10))
-            assertEquals(60, estimator.estimateContextTokens(messages))
+            assertEquals(50, estimator.estimateContextTokens(messages))
         }
 
         @Test
@@ -227,15 +250,16 @@ class UsageAwareTokenEstimatorTest {
             val estimator = UsageAwareTokenEstimator()
             val user = textMessage("Cache-heavy conversation with lots of prior context.")
             val assistant = assistantWithUsage(text = "Answer with cache accounting.")
-            val baseline = estimator.estimate(listOf(user, assistant))
-            assertTrue(baseline > 0)
+            val userTokens = estimator.estimate(listOf(user))
+            val assistantTokens = estimator.estimate(listOf(assistant))
+            assertTrue(userTokens > 0)
 
             val withUsage = assistant.copy(
-                // Split so input + cacheRead sums to exactly `baseline` regardless of parity
-                usage = Usage(inputTokens = baseline / 2, cacheReadTokens = baseline - baseline / 2, outputTokens = 10)
+                // input + cacheRead sum to the prior context (the user turn); split by parity.
+                usage = Usage(inputTokens = userTokens / 2, cacheReadTokens = userTokens - userTokens / 2, outputTokens = 10)
             )
-            // totalInput = input + cacheRead (+ cacheWrite=0) stays inside the window
-            assertEquals(baseline + 10, estimator.estimateContextTokens(listOf(user, withUsage)))
+            // reported = totalInput(input + cacheRead) + assistant's own content; outputTokens ignored.
+            assertEquals(userTokens + assistantTokens, estimator.estimateContextTokens(listOf(user, withUsage)))
         }
     }
 }

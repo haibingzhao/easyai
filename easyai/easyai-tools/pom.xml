@@ -24,11 +24,6 @@
             <artifactId>easyai-skills</artifactId>
         </dependency>
 
-        <!-- MCP: Spring AI MCP 工具封装层（McpToolUtils, SyncMcpToolCallbackProvider 等） -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-mcp</artifactId>
-        </dependency>
         <!-- MCP: Java MCP SDK 核心（McpSyncClient, StdioClientTransport, HttpClientStreamableHttpTransport 等） -->
         <dependency>
             <groupId>io.modelcontextprotocol.sdk</groupId>

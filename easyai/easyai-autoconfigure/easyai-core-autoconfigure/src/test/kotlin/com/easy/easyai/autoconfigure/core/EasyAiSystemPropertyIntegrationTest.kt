@@ -4,7 +4,6 @@ import com.easy.easyai.core.goal.GoalStore
 import io.mockk.mockk
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
-import org.springframework.ai.chat.model.ChatModel
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.SpringApplication
 import org.springframework.boot.test.context.SpringBootTest
@@ -28,9 +27,6 @@ class EasyAiSystemPropertyIntegrationTest {
 
     @TestConfiguration
     open class MockBeans {
-        @Bean
-        open fun chatModel(): ChatModel = mockk(relaxed = true)
-
         @Bean
         open fun goalStore(): GoalStore = mockk(relaxed = true)
     }

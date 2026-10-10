@@ -15,7 +15,7 @@ import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.model.aux.AuxModelResolver
 import com.easy.easyai.core.tool.ToolBuilder
 import com.easy.easyai.core.tool.ToolContextProjector
-import org.springframework.ai.chat.model.ChatModel
+import com.easy.easyai.api.llm.ChatModel
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass

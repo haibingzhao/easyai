@@ -13,8 +13,6 @@
         </encoder>
     </appender>
 
-    <logger name="org.springframework.ai.converter.BeanOutputConverter" level="OFF"/>
-
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
     </root>

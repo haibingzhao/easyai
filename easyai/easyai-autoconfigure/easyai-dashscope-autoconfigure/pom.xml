@@ -22,15 +22,10 @@
             <groupId>com.alibaba</groupId>
             <artifactId>dashscope-sdk-java</artifactId>
         </dependency>
+        <!-- Micrometer Observation API — ObservationRegistry type used by the adapter. -->
         <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-model</artifactId>
-        </dependency>
-        <!-- Retry exception types (Transient/NonTransientAiException) that easyai-core's
-             LlmErrorClassifier reads; DashScope's own ApiException is normalized into them. -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-retry</artifactId>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-observation</artifactId>
         </dependency>
         <dependency>
             <groupId>io.projectreactor</groupId>

@@ -1,6 +1,6 @@
 package com.easy.easyai.core.agent
 
-import org.springframework.ai.chat.model.ChatModel
+import com.easy.easyai.api.llm.ChatModel
 
 /**
  * Agent - configured, executable agent instance.
@@ -21,4 +21,10 @@ data class Agent(
         ?.takeIf { services.supportsProtocol(it.protocol) }
         ?.let { services.createChatModel(it) }
         ?: services.defaultChatModel
+        ?: error(
+            "No ChatModel for agent '${context.agentId}'" +
+                (context.modelConfig?.let { ": protocol '${it.protocol}' of config '${it.id}' is unsupported" }
+                    ?: ": no model config was resolved") +
+                " and the host registers no default ChatModel bean"
+        )
 }

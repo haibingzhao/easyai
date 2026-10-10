@@ -15,10 +15,10 @@ import com.easy.easyai.core.prompt.PromptTemplateService
 import com.easy.easyai.core.tool.ToolExecutionEngine
 import com.easy.easyai.core.tool.ToolFactory
 import com.easy.easyai.core.validation.OutputSchemaValidator
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatOptions
+import com.easy.easyai.api.llm.ToolCallback
 import io.micrometer.observation.ObservationRegistry
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.prompt.ChatOptions
-import org.springframework.ai.tool.ToolCallback
 
 /**
  * Default implementation of [AgentService].
@@ -34,7 +34,7 @@ class DefaultAgentService(
     override val messageConverter: MessageConverter,
     override val toolExecutor: ToolExecutionEngine,
     override val promptTemplateService: PromptTemplateService,
-    override val defaultChatModel: ChatModel,
+    override val defaultChatModel: ChatModel? = null,
     override val messageListener: MessageListener? = null,
     private val permissionService: PermissionService? = null,
     private val toolFactory: ToolFactory? = null,
@@ -42,7 +42,7 @@ class DefaultAgentService(
     override val eventListeners: List<AgentEventListener> = emptyList(),
     override val completionChecks: List<AgentCompletionCheck> = emptyList(),
     /**
-     * ObservationRegistry for Spring AI LLM call tracing.
+     * ObservationRegistry for easyai GenAI LLM call tracing.
      * When a real registry is provided, all ChatModel instances created via [createChatModel]
      * will emit GenAI observation spans (model name, token usage, prompt/completion, etc.).
      * Defaults to [ObservationRegistry.NOOP] to disable observation when not configured.

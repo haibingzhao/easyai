@@ -289,6 +289,10 @@ const translations: Record<string, Record<string, string>> = {
     'When a new question arrives, tool-call arguments and results from older runs are folded into one-line placeholders before being sent to the LLM. The model can recall the originals on demand.': 'When a new question arrives, tool-call arguments and results from older runs are folded into one-line placeholders before being sent to the LLM. The model can recall the originals on demand.',
     'Keep Recent Runs': 'Keep Recent Runs',
     'Completed runs kept verbatim in addition to the current run. Older runs are folded.': 'Completed runs kept verbatim in addition to the current run. Older runs are folded.',
+    'Thinking History': 'Thinking History',
+    'When enabled, persisted thinking is replayed to the LLM as assistant history each turn. Providers without a replay field ignore it.': 'When enabled, persisted thinking is replayed to the LLM as assistant history each turn. Providers without a replay field ignore it.',
+    'Replay thinking as history? Persisted reasoning is sent back on every turn, noticeably growing prompt tokens and context usage. Some gateways may reject historical thinking blocks.': 'Replay thinking as history? Persisted reasoning is sent back on every turn, noticeably growing prompt tokens and context usage. Some gateways may reject historical thinking blocks.',
+    'Stop replaying thinking? The model will no longer see its own reasoning from earlier turns. This saves tokens but drops cross-turn reasoning continuity.': 'Stop replaying thinking? The model will no longer see its own reasoning from earlier turns. This saves tokens but drops cross-turn reasoning continuity.',
     // Auth / Login
     'Create a new account': 'Create a new account',
     'Sign in to your account': 'Sign in to your account',
@@ -929,6 +933,10 @@ const translations: Record<string, Record<string, string>> = {
     'When a new question arrives, tool-call arguments and results from older runs are folded into one-line placeholders before being sent to the LLM. The model can recall the originals on demand.': '当新问题到来时，较早轮次的工具调用参数与结果会在发送给 LLM 前被折叠成单行占位符。模型可按需召回原始内容。',
     'Keep Recent Runs': '保留最近轮次',
     'Completed runs kept verbatim in addition to the current run. Older runs are folded.': '除当前轮次外，额外逐字保留的已完成轮次数。更早的轮次会被折叠。',
+    'Thinking History': '思考回传',
+    'When enabled, persisted thinking is replayed to the LLM as assistant history each turn. Providers without a replay field ignore it.': '开启后，已保存的思考内容会作为助手历史在每轮请求中回传给 LLM。不支持回传字段的协议会自动忽略。',
+    'Replay thinking as history? Persisted reasoning is sent back on every turn, noticeably growing prompt tokens and context usage. Some gateways may reject historical thinking blocks.': '开启思考回传？已保存的推理内容将在每轮请求中原样发送，会明显增加输入 token 与上下文占用。部分网关可能拒绝历史思考块。',
+    'Stop replaying thinking? The model will no longer see its own reasoning from earlier turns. This saves tokens but drops cross-turn reasoning continuity.': '关闭思考回传？模型将不再看到此前各轮自己的推理内容。可以节省 token，但会失去跨轮推理连续性。',
     // Auth / Login
     'Create a new account': '创建新账户',
     'Sign in to your account': '登录你的账户',

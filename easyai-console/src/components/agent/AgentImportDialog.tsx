@@ -150,6 +150,7 @@ export const AgentImportDialog: React.FC<AgentImportDialogProps> = ({ agent, onC
         instructionsEnabled: agent.instructionsEnabled,
         toolFoldEnabled: agent.toolFoldEnabled,
         toolFoldKeepRecentRuns: agent.toolFoldKeepRecentRuns,
+        thinkingHistoryEnabled: agent.thinkingHistoryEnabled,
         inputSchema: agent.inputSchema ?? undefined,
         outputSchema: agent.outputSchema ?? undefined,
       };

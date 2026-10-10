@@ -20,14 +20,16 @@
             <artifactId>jackson-databind</artifactId>
         </dependency>
 
-        <!-- Spring AI -->
+        <!-- Micrometer Observation API — ObservationRegistry default in DefaultAgentService
+             (previously supplied transitively by spring-ai-model). -->
         <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-client-chat</artifactId>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-observation</artifactId>
         </dependency>
+        <!-- spring-web — LlmErrorClassifier catches ResourceAccessException for retry classification. -->
         <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-model</artifactId>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-web</artifactId>
         </dependency>
         <dependency>
             <groupId>com.easy</groupId>
@@ -69,10 +71,6 @@
             <artifactId>mockk</artifactId>
             <version>1.13.16</version>
             <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-retry</artifactId>
         </dependency>
 
         <!-- JSON Schema validation (zero Jackson dependency, compatible with Jackson 3.x) -->

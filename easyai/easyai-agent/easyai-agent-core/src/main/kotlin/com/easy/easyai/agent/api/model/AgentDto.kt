@@ -51,6 +51,8 @@ data class AgentDto(
     val toolFoldEnabled: Boolean = false,
     /** Completed runs kept verbatim (besides the current run) when folding. */
     val toolFoldKeepRecentRuns: Int = 1,
+    /** Replay persisted thinking blocks as assistant history. Off by default. */
+    val thinkingHistoryEnabled: Boolean = false,
     val inputSchema: String? = null,
     val outputSchema: String? = null,
     val outputSchemaMultiTurn: Boolean = false,
@@ -89,6 +91,7 @@ data class AgentCreateRequest(
     val instructionsEnabled: Boolean? = null,
     val toolFoldEnabled: Boolean? = null,
     val toolFoldKeepRecentRuns: Int? = null,
+    val thinkingHistoryEnabled: Boolean? = null,
     val inputSchema: String? = null,
     val outputSchema: String? = null,
     val outputSchemaMultiTurn: Boolean? = null

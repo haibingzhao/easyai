@@ -1,0 +1,29 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "type" : "object",
+  "properties" : {
+    "count" : {
+      "type" : "integer",
+      "format" : "int64"
+    },
+    "flag" : {
+      "type" : "boolean"
+    },
+    "n" : {
+      "type" : [ "integer", "null" ],
+      "format" : "int32"
+    },
+    "prompt" : {
+      "type" : "string"
+    },
+    "ratio" : {
+      "type" : [ "number", "null" ],
+      "format" : "double"
+    },
+    "size" : {
+      "type" : [ "string", "null" ]
+    }
+  },
+  "required" : [ "prompt" ],
+  "additionalProperties" : false
+}

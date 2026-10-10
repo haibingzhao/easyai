@@ -11,8 +11,8 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.prompt.Prompt
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.Prompt
 import org.springframework.web.client.ResourceAccessException
 import reactor.core.publisher.Flux
 import kotlin.test.assertFailsWith
@@ -68,7 +68,7 @@ class AgentLoopRunnerCircuitBreakerTest {
     fun `consecutive outage failures trip the breaker and the next attempt fails fast`() = runBlocking {
         val chatModel = failingModel()
         val runner = createRunner(chatModel)
-        val prompt = Prompt(listOf(org.springframework.ai.chat.messages.UserMessage("hi")))
+        val prompt = Prompt(listOf(com.easy.easyai.api.llm.UserMessage("hi")))
 
         // Attempts 1-3 fail and count toward the breaker (threshold 3);
         // attempt 4 is rejected by the open breaker before any model call.
@@ -82,7 +82,7 @@ class AgentLoopRunnerCircuitBreakerTest {
     @Test
     fun `once open a fresh call fails fast without touching the model`() = runBlocking {
         val chatModel = failingModel()
-        val prompt = Prompt(listOf(org.springframework.ai.chat.messages.UserMessage("hi")))
+        val prompt = Prompt(listOf(com.easy.easyai.api.llm.UserMessage("hi")))
 
         // Trip the breaker with the first runner.
         val first = createRunner(chatModel)
@@ -103,10 +103,10 @@ class AgentLoopRunnerCircuitBreakerTest {
     fun `rate limit failures never trip the breaker`() = runBlocking {
         val chatModel = mockk<ChatModel>()
         every { chatModel.stream(any<Prompt>()) } answers {
-            Flux.error(org.springframework.ai.retry.NonTransientAiException("429 Too Many Requests"))
+            Flux.error(com.easy.easyai.api.llm.NonTransientAiException("429 Too Many Requests"))
         }
         val runner = createRunner(chatModel)
-        val prompt = Prompt(listOf(org.springframework.ai.chat.messages.UserMessage("hi")))
+        val prompt = Prompt(listOf(com.easy.easyai.api.llm.UserMessage("hi")))
 
         // 429 is not retryable by the runner either, so the first call throws
         // the original error — but crucially the breaker stays closed and a
@@ -114,7 +114,7 @@ class AgentLoopRunnerCircuitBreakerTest {
         repeat(3) {
             runCatching { runner.callLLMAndBuildResponse(mutableListOf(), prompt, "m$it", 1) { } }
         }
-        val e = assertFailsWith<org.springframework.ai.retry.NonTransientAiException> {
+        val e = assertFailsWith<com.easy.easyai.api.llm.NonTransientAiException> {
             runner.callLLMAndBuildResponse(mutableListOf(), prompt, "m-final", 1) { }
         }
         assertTrue(e.message!!.contains("429"))

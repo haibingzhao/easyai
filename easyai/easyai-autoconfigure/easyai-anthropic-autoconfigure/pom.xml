@@ -18,13 +18,16 @@
             <groupId>com.easy</groupId>
             <artifactId>easyai-api</artifactId>
         </dependency>
+        <!-- Official Anthropic Java SDK (okhttp client) — mapper + error interceptor are built
+             directly on com.anthropic.core.http. Version managed at root. -->
         <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-anthropic</artifactId>
+            <groupId>com.anthropic</groupId>
+            <artifactId>anthropic-java-client-okhttp</artifactId>
         </dependency>
+        <!-- Micrometer Observation API — ObservationChatModel wraps the mapper for GenAI tracing. -->
         <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-model</artifactId>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-observation</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

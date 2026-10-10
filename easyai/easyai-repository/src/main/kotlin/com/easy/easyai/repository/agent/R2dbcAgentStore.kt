@@ -52,6 +52,7 @@ class R2dbcAgentStore(private val db: R2dbcDatabase) : AsyncAgentStore {
                     it[Tables.AgentTable.instructionsEnabled] = agent.instructionsEnabled
                     it[Tables.AgentTable.toolFoldEnabled] = agent.toolFoldEnabled
                     it[Tables.AgentTable.toolFoldKeepRecentRuns] = agent.toolFoldKeepRecentRuns
+                    it[Tables.AgentTable.thinkingHistoryEnabled] = agent.thinkingHistoryEnabled
                     it[Tables.AgentTable.inputSchema] = agent.inputSchema
                     it[Tables.AgentTable.outputSchema] = agent.outputSchema
                     it[Tables.AgentTable.outputSchemaMultiTurn] = agent.outputSchemaMultiTurn
@@ -74,6 +75,7 @@ class R2dbcAgentStore(private val db: R2dbcDatabase) : AsyncAgentStore {
                     it[Tables.AgentTable.instructionsEnabled] = agent.instructionsEnabled
                     it[Tables.AgentTable.toolFoldEnabled] = agent.toolFoldEnabled
                     it[Tables.AgentTable.toolFoldKeepRecentRuns] = agent.toolFoldKeepRecentRuns
+                    it[Tables.AgentTable.thinkingHistoryEnabled] = agent.thinkingHistoryEnabled
                     it[Tables.AgentTable.inputSchema] = agent.inputSchema
                     it[Tables.AgentTable.outputSchema] = agent.outputSchema
                     it[Tables.AgentTable.outputSchemaMultiTurn] = agent.outputSchemaMultiTurn
@@ -420,6 +422,7 @@ class R2dbcAgentStore(private val db: R2dbcDatabase) : AsyncAgentStore {
         instructionsEnabled = row[Tables.AgentTable.instructionsEnabled],
         toolFoldEnabled = row[Tables.AgentTable.toolFoldEnabled],
         toolFoldKeepRecentRuns = row[Tables.AgentTable.toolFoldKeepRecentRuns],
+        thinkingHistoryEnabled = row[Tables.AgentTable.thinkingHistoryEnabled],
         inputSchema = row[Tables.AgentTable.inputSchema],
         outputSchema = row[Tables.AgentTable.outputSchema],
         outputSchemaMultiTurn = row[Tables.AgentTable.outputSchemaMultiTurn],

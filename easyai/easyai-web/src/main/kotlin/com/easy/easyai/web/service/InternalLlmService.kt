@@ -2,21 +2,24 @@ package com.easy.easyai.web.service
 
 import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.config.ModelProviderConfigStore
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.web.model.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.messages.AssistantMessage
-import org.springframework.ai.chat.messages.Message
-import org.springframework.ai.chat.messages.SystemMessage
-import org.springframework.ai.chat.messages.UserMessage
-import org.springframework.ai.chat.prompt.ChatOptions
-import org.springframework.ai.chat.prompt.Prompt
+import com.easy.easyai.api.llm.AssistantMessage
+import com.easy.easyai.api.llm.DefaultChatOptions
+import com.easy.easyai.api.llm.Message
+import com.easy.easyai.api.llm.SystemMessage
+import com.easy.easyai.api.llm.UserMessage
+import com.easy.easyai.api.llm.Prompt
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.web.server.ResponseStatusException
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Service for internal LLM processing.
@@ -30,6 +33,12 @@ class InternalLlmService(
     private val modelFactories: List<ChatModelFactory>
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
+
+    // One provider client per config (data-class key: edits hash to a fresh key). Creating a
+    // ChatModel per script call would build a new connection pool every time. Superseded entries
+    // are never evicted on purpose: neither the ChatModel SPI nor the provider SDK clients expose
+    // a close hook, and their idle pools/threads are reclaimed once the entry is dropped.
+    private val chatModelCache = ConcurrentHashMap<ModelProviderConfig, ChatModel>()
 
     /**
      * Process a single LLM request synchronously.
@@ -47,28 +56,26 @@ class InternalLlmService(
         val factory = modelFactories.firstOrNull { it.supports(config.protocol) }
             ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "No ChatModelFactory for protocol: ${config.protocol}")
 
-        val chatModel = factory.create(config)
+        val chatModel = chatModelCache.computeIfAbsent(config) { factory.create(it) }
 
-        val springAiMessages = messages.map { msg ->
+        val llmMessages = messages.map { msg ->
             when (msg.role.lowercase()) {
                 "system" -> SystemMessage(msg.content) as Message
-                "assistant" -> AssistantMessage(msg.content) as Message
+                "assistant" -> AssistantMessage(content = msg.content) as Message
                 else -> UserMessage(msg.content) as Message
             }
         }
 
         val options = if (temperature != null || maxTokens != null) {
-            ChatOptions.builder()
-                .apply {
-                    temperature?.let { temperature(it) }
-                    maxTokens?.let { maxTokens(it) }
-                }
-                .build()
+            DefaultChatOptions(
+                temperature = temperature,
+                maxTokens = maxTokens
+            )
         } else {
             null
         }
 
-        val prompt = if (options != null) Prompt(springAiMessages, options) else Prompt(springAiMessages)
+        val prompt = if (options != null) Prompt(llmMessages, options) else Prompt(llmMessages)
 
         val response = withContext(Dispatchers.IO) {
             chatModel.call(prompt)

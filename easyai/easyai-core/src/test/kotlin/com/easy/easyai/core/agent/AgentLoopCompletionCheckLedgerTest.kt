@@ -18,16 +18,16 @@ import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
-import org.springframework.ai.chat.metadata.ChatGenerationMetadata
-import org.springframework.ai.chat.metadata.ChatResponseMetadata
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.model.ChatResponse
-import org.springframework.ai.chat.model.Generation
-import org.springframework.ai.chat.prompt.ChatOptions
-import org.springframework.ai.chat.prompt.Prompt
+import com.easy.easyai.api.llm.ChatGenerationMetadata
+import com.easy.easyai.api.llm.ChatResponseMetadata
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatResponse
+import com.easy.easyai.api.llm.Generation
+import com.easy.easyai.api.llm.ChatOptions
+import com.easy.easyai.api.llm.Prompt
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
-import org.springframework.ai.chat.messages.AssistantMessage as SpringAiAssistantMsg
+import com.easy.easyai.api.llm.AssistantMessage as SpringAiAssistantMsg
 
 /**
  * A check whose behaviour is a scripted list of results; the last entry repeats once the
@@ -83,25 +83,10 @@ class AgentLoopCompletionCheckLedgerTest {
         toolCalls: List<SpringAiAssistantMsg.ToolCall> = emptyList(),
         finishReason: String? = "stop"
     ): ChatResponse {
-        val assistantMsg = if (toolCalls.isEmpty()) {
-            SpringAiAssistantMsg(text)
-        } else {
-            SpringAiAssistantMsg.builder().content(text).toolCalls(toolCalls).build()
-        }
-        val genMetadata = mockk<ChatGenerationMetadata>(relaxed = true)
-        every { genMetadata.finishReason } returns finishReason
-
-        val generation = mockk<Generation>(relaxed = true)
-        every { generation.output } returns assistantMsg
-        every { generation.metadata } returns genMetadata
-
-        val responseMetadata = mockk<ChatResponseMetadata>(relaxed = true)
-
-        val response = mockk<ChatResponse>(relaxed = true)
-        every { response.result } returns generation
-        every { response.results } returns listOf(generation)
-        every { response.metadata } returns responseMetadata
-        return response
+        val assistantMsg = SpringAiAssistantMsg(content = text, toolCalls = toolCalls)
+        return ChatResponse(
+            listOf(Generation(assistantMsg, ChatGenerationMetadata(finishReason = finishReason)))
+        )
     }
 
     /** Repeats the last response forever, so a runaway loop stays observable via [llmCalls]. */
@@ -120,7 +105,7 @@ class AgentLoopCompletionCheckLedgerTest {
     private fun createMockChatModelFactory(chatModel: ChatModel): ChatModelFactory {
         val factory = mockk<ChatModelFactory>(relaxed = true)
         every { factory.create(any(), any()) } returns chatModel
-        every { factory.build(any(), any(), any()) } returns ChatOptions.builder().model("test-model").build()
+        every { factory.build(any(), any(), any()) } returns com.easy.easyai.api.llm.DefaultChatOptions(model = "test-model")
         every { factory.supports(any()) } returns true
         return factory
     }

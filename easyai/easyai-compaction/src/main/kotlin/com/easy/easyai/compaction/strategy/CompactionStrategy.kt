@@ -6,7 +6,7 @@ import com.easy.easyai.core.model.EasyAiMessage
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.model.Usage
 import com.easy.easyai.core.model.UserMessage
-import org.springframework.ai.chat.model.ChatModel
+import com.easy.easyai.api.llm.ChatModel
 
 /**
  * Strategy interface for generating compaction summaries.

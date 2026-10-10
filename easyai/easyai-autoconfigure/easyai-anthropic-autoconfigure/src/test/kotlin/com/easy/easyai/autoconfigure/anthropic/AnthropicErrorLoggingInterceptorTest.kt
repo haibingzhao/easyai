@@ -1,70 +1,69 @@
 package com.easy.easyai.autoconfigure.anthropic
 
+import com.anthropic.core.RequestOptions
+import com.anthropic.core.http.HttpClient
+import com.anthropic.core.http.HttpRequest
+import com.anthropic.core.http.HttpResponse
+import com.anthropic.core.http.Headers
 import io.mockk.every
 import io.mockk.mockk
-import okhttp3.Interceptor
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.Protocol
-import okhttp3.Request
-import okhttp3.Response
-import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import java.io.ByteArrayInputStream
+import java.io.InputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertSame
 
 /**
- * Verifies [AnthropicErrorLoggingInterceptor] passes the response through untouched and
- * leaves the body readable after peeking — the peek must not consume the stream that the
- * Anthropic SDK's own handlers read downstream.
+ * Verifies [AnthropicErrorLoggingInterceptor] on the SDK transport: an error (non-2xx) response is
+ * logged and its body replayed so the SDK's downstream error parsing still reads it, while a
+ * successful (streaming) response is returned untouched so the SSE stream is never consumed early.
  */
 class AnthropicErrorLoggingInterceptorTest {
 
     private val interceptor = AnthropicErrorLoggingInterceptor()
 
-    private fun response(
-        code: Int,
-        body: String,
-        contentType: String
-    ): Response = Response.Builder()
-        .request(Request.Builder().url("https://example.com/v1/messages").build())
-        .protocol(Protocol.HTTP_1_1)
-        .code(code)
-        .message(if (code in 200..299) "OK" else "Error")
-        .header("content-type", contentType)
-        .header("x-request-id", "req-abc")
-        .body(body.toResponseBody(contentType.toMediaType()))
-        .build()
+    private class FakeResponse(
+        private val code: Int,
+        private val bodyText: String,
+        private val contentType: String,
+        private val requestId: String?
+    ) : HttpResponse {
+        override fun statusCode(): Int = code
+        override fun headers(): Headers = Headers.builder().apply {
+            put("content-type", contentType)
+            requestId?.let { put("x-request-id", it) }
+        }.build()
+        override fun body(): InputStream = ByteArrayInputStream(bodyText.toByteArray())
+        override fun close() {}
+    }
 
-    private fun chainReturning(response: Response): Interceptor.Chain =
-        mockk<Interceptor.Chain> {
-            every { request() } returns response.request
-            every { proceed(any()) } returns response
-        }
+    private fun wrappedFor(response: HttpResponse): HttpClient {
+        val delegate = mockk<HttpClient>()
+        every { delegate.execute(any<HttpRequest>(), any<RequestOptions>()) } returns response
+        return interceptor.intercept(delegate)
+    }
+
+    private fun execute(client: HttpClient): HttpResponse =
+        client.execute(mockk<HttpRequest>(relaxed = true), mockk<RequestOptions>(relaxed = true))
 
     @Nested
     inner class `error responses` {
 
         @Test
-        fun `SSE error body is logged and the original stream stays readable`() {
+        fun `SSE error body stays readable after logging`() {
             val payload = "event: error\ndata: {\"code\":\"InvalidParameter\"}"
-            val original = response(400, payload, "text/event-stream")
+            val returned = execute(wrappedFor(FakeResponse(400, payload, "text/event-stream", "req-abc")))
 
-            val returned = interceptor.intercept(chainReturning(original))
-
-            assertSame(original, returned)
-            assertEquals(payload, returned.body!!.string())
+            assertEquals(payload, returned.body().readBytes().toString(Charsets.UTF_8))
         }
 
         @Test
         fun `json error body is passed through`() {
             val payload = """{"type":"error","error":{"type":"invalid_request_error","message":"boom"}}"""
-            val original = response(422, payload, "application/json")
+            val returned = execute(wrappedFor(FakeResponse(422, payload, "application/json", "req-abc")))
 
-            val returned = interceptor.intercept(chainReturning(original))
-
-            assertSame(original, returned)
-            assertEquals(payload, returned.body!!.string())
+            assertEquals(payload, returned.body().readBytes().toString(Charsets.UTF_8))
         }
     }
 
@@ -73,12 +72,11 @@ class AnthropicErrorLoggingInterceptorTest {
 
         @Test
         fun `2xx is returned untouched without peeking`() {
-            val original = response(200, "ok", "application/json")
-
-            val returned = interceptor.intercept(chainReturning(original))
+            val original = FakeResponse(200, "ok", "application/json", "req-abc")
+            val returned = execute(wrappedFor(original))
 
             assertSame(original, returned)
-            assertEquals("ok", returned.body!!.string())
+            assertEquals("ok", returned.body().readBytes().toString(Charsets.UTF_8))
         }
     }
 }

@@ -4,23 +4,22 @@ import com.alibaba.dashscope.aigc.generation.Generation as DashScopeGeneration
 import com.alibaba.dashscope.aigc.multimodalconversation.MultiModalConversation
 import com.alibaba.dashscope.common.Status
 import com.alibaba.dashscope.exception.ApiException
-import org.springframework.ai.chat.metadata.ChatGenerationMetadata
-import org.springframework.ai.chat.metadata.ChatResponseMetadata
-import org.springframework.ai.chat.metadata.DefaultUsage
-import org.springframework.ai.chat.messages.AssistantMessage
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.model.ChatResponse
-import org.springframework.ai.chat.model.Generation
-import org.springframework.ai.chat.prompt.ChatOptions
-import org.springframework.ai.chat.prompt.Prompt
-import org.springframework.ai.model.tool.ToolCallingChatOptions
-import org.springframework.ai.retry.NonTransientAiException
-import org.springframework.ai.retry.TransientAiException
-import org.springframework.ai.tool.ToolCallback
+import com.easy.easyai.api.llm.AssistantMessage
+import com.easy.easyai.api.llm.ChatGenerationMetadata
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatOptions
+import com.easy.easyai.api.llm.ChatResponse
+import com.easy.easyai.api.llm.ChatResponseMetadata
+import com.easy.easyai.api.llm.Generation
+import com.easy.easyai.api.llm.NonTransientAiException
+import com.easy.easyai.api.llm.Prompt
+import com.easy.easyai.api.llm.ToolCallback
+import com.easy.easyai.api.llm.TransientAiException
+import com.easy.easyai.api.llm.Usage
 import reactor.core.publisher.Flux
 
 /**
- * Spring AI [ChatModel] over the DashScope (Aliyun Bailian) native protocol.
+ * easyai [ChatModel] over the DashScope (Aliyun Bailian) native protocol.
  *
  * The ReAct loop in easyai-core is the only tool executor: this adapter sends tool definitions and
  * reads tool calls back, and never invokes a [ToolCallback]. Streaming therefore has to satisfy the
@@ -38,7 +37,7 @@ internal class DashScopeChatModel(
     private val vision: Boolean
 ) : ChatModel {
 
-    override fun getOptions(): ChatOptions = defaultOptions
+    override val options: ChatOptions get() = defaultOptions
 
     override fun call(prompt: Prompt): ChatResponse {
         val options = resolveOptions(prompt)
@@ -53,7 +52,7 @@ internal class DashScopeChatModel(
                 DashScopeResponseMapper.fromGeneration(requireText().call(param))
             }
         } catch (e: ApiException) {
-            throw e.toSpringAiException()
+            throw e.toAiException()
         }
         return toResponses(chunk, options, DashScopeStreamingAccumulator()).first()
     }
@@ -74,7 +73,7 @@ internal class DashScopeChatModel(
         // Flux.defer turns a synchronous streamCall() throw into a stream error, so this single
         // seam covers both the subscribe-time and the mid-stream failure paths.
         chunks.concatMap { chunk -> Flux.fromIterable(toResponses(chunk, options, accumulator)) }
-    }.onErrorResume { e -> Flux.error(e.toSpringAiException()) }
+    }.onErrorResume { e -> Flux.error(e.toAiException()) }
 
     /**
      * Callers outside the agent loop pass portable [ChatOptions], which carry no DashScope
@@ -88,16 +87,14 @@ internal class DashScopeChatModel(
         provided.model?.let { builder.model(it) }
         provided.temperature?.let { builder.temperature(it) }
         provided.maxTokens?.let { builder.maxTokens(it) }
-        provided.topP?.let { builder.topP(it) }
-        provided.topK?.let { builder.topK(it) }
-        val providedTools = (provided as? ToolCallingChatOptions)?.toolCallbacks.orEmpty()
-        if (providedTools.isNotEmpty()) builder.toolCallbacks(providedTools)
+        if (provided.toolCallbacks.isNotEmpty()) builder.toolCallbacks(provided.toolCallbacks)
+        provided.outputSchema?.let { builder.outputSchema(it) }
         return builder.build()
     }
 
     private fun toolCallbacks(prompt: Prompt, options: DashScopeChatOptions): List<ToolCallback> {
-        val fromPrompt = (prompt.options as? ToolCallingChatOptions)?.toolCallbacks.orEmpty()
-        return if (fromPrompt.isNotEmpty()) fromPrompt else options.toolCallbacks.orEmpty()
+        val fromPrompt = prompt.options?.toolCallbacks.orEmpty()
+        return if (fromPrompt.isNotEmpty()) fromPrompt else options.toolCallbacks
     }
 
     private fun toResponses(
@@ -107,37 +104,29 @@ internal class DashScopeChatModel(
     ): List<ChatResponse> {
         chunk.error?.let { throw it.toStatusException(chunk.requestId) }
         val frame = accumulator.accept(chunk)
-        val resultMetadata = ChatGenerationMetadata.builder().let { builder ->
-            frame.finishReason?.let { builder.finishReason(it) }
-            builder.build()
-        }
+        val resultMetadata = ChatGenerationMetadata(finishReason = frame.finishReason)
 
         val results = mutableListOf<Generation>()
         frame.reasoningDelta?.takeIf { it.isNotEmpty() }?.let { reasoning ->
             results.add(
                 Generation(
-                    AssistantMessage.builder()
-                        .content(reasoning)
-                        .properties(mapOf(THINKING_METADATA_KEY to true))
-                        .build(),
+                    AssistantMessage(content = reasoning, metadata = mapOf(THINKING_METADATA_KEY to true)),
                     resultMetadata
                 )
             )
         }
         frame.textDelta?.takeIf { it.isNotEmpty() }?.let { text ->
-            results.add(Generation(AssistantMessage(text), resultMetadata))
+            results.add(Generation(AssistantMessage(content = text), resultMetadata))
         }
         if (frame.toolCalls.isNotEmpty()) {
             results.add(
                 Generation(
-                    AssistantMessage.builder()
-                        .content("")
-                        .toolCalls(
-                            frame.toolCalls.map { call ->
-                                AssistantMessage.ToolCall(call.id, "function", call.name, call.arguments)
-                            }
-                        )
-                        .build(),
+                    AssistantMessage(
+                        content = "",
+                        toolCalls = frame.toolCalls.map { call ->
+                            AssistantMessage.ToolCall(call.id, "function", call.name, call.arguments)
+                        }
+                    ),
                     resultMetadata
                 )
             )
@@ -145,25 +134,30 @@ internal class DashScopeChatModel(
         if (results.isEmpty()) {
             // Usage and finish reason still ride on this frame; the loop reads them from an
             // otherwise empty chunk.
-            results.add(Generation(AssistantMessage(""), resultMetadata))
+            results.add(Generation(AssistantMessage(content = ""), resultMetadata))
         }
 
-        val metadata = ChatResponseMetadata.builder()
-        options.model?.let { metadata.model(it) }
-        chunk.requestId?.let { metadata.id(it) }
-        frame.usage?.let { usage ->
-            metadata.usage(
-                DefaultUsage(
-                    usage.inputTokens,
-                    usage.outputTokens,
-                    usage.totalTokens,
-                    usage,
-                    usage.cacheReadTokens,
-                    usage.cacheWriteTokens
-                )
+        val usage = frame.usage?.let { u ->
+            // DashScope follows the OpenAI accounting: input_tokens already contains
+            // prompt_tokens_details.cached_tokens, but the Usage contract wants the non-cached
+            // count. cache_creation_input_tokens is left as reported — whether the provider folds
+            // it into input_tokens is not documented and it is absent on the implicit-cache path.
+            val promptTokens = (u.inputTokens - (u.cacheReadTokens ?: 0L)).coerceAtLeast(0L).toInt()
+            Usage(
+                promptTokens = promptTokens,
+                completionTokens = u.outputTokens,
+                totalTokens = promptTokens + u.outputTokens,
+                nativeUsage = u,
+                cacheReadInputTokens = u.cacheReadTokens,
+                cacheWriteInputTokens = u.cacheWriteTokens
             )
-        }
-        return listOf(ChatResponse(results, metadata.build()))
+        } ?: Usage()
+        val metadata = ChatResponseMetadata(
+            id = chunk.requestId ?: "",
+            model = options.model ?: "",
+            usage = usage
+        )
+        return listOf(ChatResponse(results, metadata))
     }
 
     private fun DashScopeError.toStatusException(requestId: String?): Throwable =
@@ -174,7 +168,7 @@ internal class DashScopeChatModel(
                 .message(message ?: "")
                 .requestId(requestId ?: "")
                 .build()
-        ).toSpringAiException()
+        ).toAiException()
 
     /**
      * The SDK throws its own [ApiException], which never reaches Spring AI's retry exception types,
@@ -187,7 +181,7 @@ internal class DashScopeChatModel(
      * [com.easy.easyai.core.agent.LlmErrorClassifier] detects context overflow and content-safety
      * rejection from the message text.
      */
-    private fun Throwable.toSpringAiException(): Throwable {
+    private fun Throwable.toAiException(): Throwable {
         val api = this as? ApiException ?: return this
         val status = api.status ?: return this
         val detail = "${status.statusCode}: code=${status.code} message=${status.message} requestId=${status.requestId}"

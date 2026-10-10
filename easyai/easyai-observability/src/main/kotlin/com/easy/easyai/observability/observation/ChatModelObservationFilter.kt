@@ -1,16 +1,17 @@
 package com.easy.easyai.observability.observation
 
+import com.easy.easyai.api.llm.observation.EasyAiChatModelObservationContext
 import io.micrometer.common.KeyValue
 import io.micrometer.observation.Observation
 import io.micrometer.observation.ObservationFilter
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.observation.ChatModelObservationContext
 
 /**
- * Observation filter that enriches ChatModel observations with OpenTelemetry GenAI semantic conventions.
+ * Observation filter that enriches chat-model observations with OpenTelemetry GenAI semantic conventions.
  *
- * This filter intercepts Spring AI ChatModel observations and extracts model info,
- * token usage, prompts and completions, adding them as key values for tracing.
+ * This filter intercepts easyai [EasyAiChatModelObservationContext] observations (emitted by
+ * [com.easy.easyai.api.llm.observation.ObservationChatModel]) and extracts model info, token usage,
+ * prompts and completions, adding them as key values for tracing.
  *
  * OpenTelemetry GenAI semantic convention attributes added:
  * - `gen_ai.operation.name` - Always "chat" for chat model operations
@@ -36,17 +37,17 @@ class ChatModelObservationFilter(
     private val log = LoggerFactory.getLogger(ChatModelObservationFilter::class.java)
 
     /**
-     * Enriches a [ChatModelObservationContext] with GenAI semantic convention key-values.
+     * Enriches an [EasyAiChatModelObservationContext] with GenAI semantic convention key-values.
      *
      * Adds low-cardinality keys for model names and operation type, and high-cardinality
      * keys for hyperparameters, token usage, prompt content and completion content.
-     * Non-ChatModel contexts are returned unchanged.
+     * Non-chat contexts are returned unchanged.
      *
      * @param context the observation context to enrich
      * @return the enriched context (same instance)
      */
     override fun map(context: Observation.Context): Observation.Context {
-        if (context !is ChatModelObservationContext) {
+        if (context !is EasyAiChatModelObservationContext) {
             return context
         }
 
@@ -78,12 +79,8 @@ class ChatModelObservationFilter(
                     context.addLowCardinalityKeyValue(KeyValue.of("gen_ai.response.model", responseModel))
                 }
                 val usage = response.metadata.usage
-                usage.promptTokens.let { inputTokens ->
-                    context.addHighCardinalityKeyValue(KeyValue.of("gen_ai.usage.input_tokens", inputTokens.toString()))
-                }
-                usage.completionTokens.let { outputTokens ->
-                    context.addHighCardinalityKeyValue(KeyValue.of("gen_ai.usage.output_tokens", outputTokens.toString()))
-                }
+                context.addHighCardinalityKeyValue(KeyValue.of("gen_ai.usage.input_tokens", usage.promptTokens.toString()))
+                context.addHighCardinalityKeyValue(KeyValue.of("gen_ai.usage.output_tokens", usage.completionTokens.toString()))
             }
 
             // Extract prompt from request
@@ -103,22 +100,20 @@ class ChatModelObservationFilter(
             }
 
         } catch (e: Exception) {
-            log.debug("Failed to extract prompt/completion from ChatModelObservationContext", e)
+            log.debug("Failed to extract prompt/completion from EasyAiChatModelObservationContext", e)
         }
 
         return context
     }
 
     /**
-     * Extracts the user prompt from the chat request instructions.
-     * Formats each message as `[org.springframework.ai.chat.messages.AbstractMessage.MESSAGE_TYPE]: text`, joined by newlines.
+     * Extracts the prompt from the chat request instructions.
+     * Formats each message as `[MessageType]: text`, joined by newlines.
      *
      * @return the formatted prompt string, or null if no instructions are available
      */
-    private fun extractPrompt(chatContext: ChatModelObservationContext): String? {
-        val request = chatContext.request ?: return null
-
-        val instructions = request.instructions
+    private fun extractPrompt(chatContext: EasyAiChatModelObservationContext): String? {
+        val instructions = chatContext.request.instructions
         if (instructions.isEmpty()) {
             return null
         }
@@ -136,14 +131,8 @@ class ChatModelObservationFilter(
      *
      * @return the completion text, or null if the response or its output is unavailable
      */
-    private fun extractCompletion(chatContext: ChatModelObservationContext): String? {
-        val response = chatContext.response ?: return null
-
-        val result = response.result
-        if (result == null) {
-            return null
-        }
-
+    private fun extractCompletion(chatContext: EasyAiChatModelObservationContext): String? {
+        val result = chatContext.response?.result ?: return null
         return result.output.text
     }
 

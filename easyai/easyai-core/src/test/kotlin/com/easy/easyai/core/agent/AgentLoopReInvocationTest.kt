@@ -30,12 +30,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
-import org.springframework.ai.chat.messages.ToolResponseMessage
-import org.springframework.ai.chat.metadata.ChatGenerationMetadata
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.model.ChatResponse
-import org.springframework.ai.chat.model.Generation
-import org.springframework.ai.chat.prompt.Prompt
+import com.easy.easyai.api.llm.ToolResponseMessage
+import com.easy.easyai.api.llm.ChatGenerationMetadata
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatResponse
+import com.easy.easyai.api.llm.Generation
+import com.easy.easyai.api.llm.Prompt
 import reactor.core.publisher.Flux
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
@@ -43,8 +43,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import org.springframework.ai.chat.messages.AssistantMessage as SpringAssistantMessage
-import org.springframework.ai.chat.messages.UserMessage as SpringUserMessage
+import com.easy.easyai.api.llm.AssistantMessage as SpringAssistantMessage
+import com.easy.easyai.api.llm.UserMessage as SpringUserMessage
 
 internal class AgentLoopReInvocationTest {
 
@@ -56,8 +56,8 @@ internal class AgentLoopReInvocationTest {
 
     private fun response(vararg calls: SpringAssistantMessage.ToolCall): ChatResponse = ChatResponse(
         listOf(Generation(
-            SpringAssistantMessage.builder().content(if (calls.isEmpty()) "done" else "").toolCalls(calls.toList()).build(),
-            ChatGenerationMetadata.builder().finishReason(if (calls.isEmpty()) "stop" else "tool_calls").build()
+            SpringAssistantMessage(content = if (calls.isEmpty()) "done" else "", toolCalls = calls.toList()),
+            ChatGenerationMetadata(finishReason = if (calls.isEmpty()) "stop" else "tool_calls")
         ))
     )
 

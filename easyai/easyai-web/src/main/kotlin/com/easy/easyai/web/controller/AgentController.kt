@@ -199,6 +199,7 @@ class AgentController(
             toolFoldEnabled = request.toolFoldEnabled ?: false,
             toolFoldKeepRecentRuns = (request.toolFoldKeepRecentRuns ?: 1)
                 .coerceIn(MIN_TOOL_FOLD_KEEP_RECENT_RUNS, MAX_TOOL_FOLD_KEEP_RECENT_RUNS),
+            thinkingHistoryEnabled = request.thinkingHistoryEnabled ?: false,
             inputSchema = request.inputSchema,
             outputSchema = request.outputSchema,
             outputSchemaMultiTurn = request.outputSchemaMultiTurn ?: false
@@ -265,6 +266,7 @@ class AgentController(
             toolFoldEnabled = request.toolFoldEnabled ?: existing.toolFoldEnabled,
             toolFoldKeepRecentRuns = (request.toolFoldKeepRecentRuns ?: existing.toolFoldKeepRecentRuns)
                 .coerceIn(MIN_TOOL_FOLD_KEEP_RECENT_RUNS, MAX_TOOL_FOLD_KEEP_RECENT_RUNS),
+            thinkingHistoryEnabled = request.thinkingHistoryEnabled ?: existing.thinkingHistoryEnabled,
             inputSchema = request.inputSchema,
             outputSchema = request.outputSchema,
             outputSchemaMultiTurn = request.outputSchemaMultiTurn ?: existing.outputSchemaMultiTurn,
@@ -460,6 +462,7 @@ class AgentController(
         instructionsEnabled = this.instructionsEnabled,
         toolFoldEnabled = this.toolFoldEnabled,
         toolFoldKeepRecentRuns = this.toolFoldKeepRecentRuns,
+        thinkingHistoryEnabled = this.thinkingHistoryEnabled,
         builtin = this.userId == AuthConstants.SYSTEM_USER_ID,
         createdAt = this.createdAt,
         updatedAt = this.updatedAt
@@ -497,6 +500,7 @@ class AgentController(
         instructionsEnabled = this.instructionsEnabled,
         toolFoldEnabled = this.toolFoldEnabled,
         toolFoldKeepRecentRuns = this.toolFoldKeepRecentRuns,
+        thinkingHistoryEnabled = this.thinkingHistoryEnabled,
         inputSchema = this.inputSchema,
         outputSchema = this.outputSchema,
         outputSchemaMultiTurn = this.outputSchemaMultiTurn,

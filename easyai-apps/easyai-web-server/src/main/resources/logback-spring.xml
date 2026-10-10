@@ -16,7 +16,6 @@
     </appender>
 
     <!-- 🔧 Logger Levels -->
-    <logger name="org.springframework.ai.converter.BeanOutputConverter" level="OFF"/>
     <logger name="org.jline" level="ERROR"/>
 
     <!-- 🔍 Root Logger -->
