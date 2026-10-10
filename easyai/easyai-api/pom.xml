@@ -30,6 +30,14 @@
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-stdlib</artifactId>
         </dependency>
+        <!-- kotlin-reflect powers the hand-rolled JsonSchemaGenerator: it reads Kotlin
+             nullability (isMarkedNullable) and default-value presence (isOptional) to decide
+             which properties are `required`, matching the previous spring-ai/victools output. -->
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-reflect</artifactId>
+            <version>${kotlin.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
@@ -40,19 +48,8 @@
             <scope>provided</scope>
         </dependency>
         <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-model</artifactId>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-openai</artifactId>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-anthropic</artifactId>
-            <scope>provided</scope>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-core</artifactId>
         </dependency>
     </dependencies>
 

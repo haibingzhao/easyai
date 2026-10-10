@@ -72,6 +72,7 @@ object Tables {
         val instructionsEnabled = bool("instructions_enabled").default(true)
         val toolFoldEnabled = bool("tool_fold_enabled").default(false)
         val toolFoldKeepRecentRuns = integer("tool_fold_keep_recent_runs").default(1)
+        val thinkingHistoryEnabled = bool("thinking_history_enabled").default(false)
         val inputSchema = text("input_schema").nullable()
         val outputSchema = text("output_schema").nullable()
         val outputSchemaMultiTurn = bool("output_schema_multi_turn").default(false)

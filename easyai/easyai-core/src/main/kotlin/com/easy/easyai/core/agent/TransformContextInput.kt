@@ -1,8 +1,8 @@
 package com.easy.easyai.core.agent
 
+import com.easy.easyai.api.llm.ChatModel
 import com.easy.easyai.core.event.AgentEvent
 import com.easy.easyai.core.model.EasyAiMessage
-import org.springframework.ai.chat.model.ChatModel
 
 /**
  * Input for the transformContext extension point.

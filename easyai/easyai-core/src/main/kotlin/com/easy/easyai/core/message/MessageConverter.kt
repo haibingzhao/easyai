@@ -1,5 +1,10 @@
 package com.easy.easyai.core.message
 
+import com.easy.easyai.api.llm.ChatResponse
+import com.easy.easyai.api.llm.Media
+import com.easy.easyai.api.llm.MediaSource
+import com.easy.easyai.api.llm.Message
+import com.easy.easyai.api.llm.ToolResponseMessage
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.storage.ObjectStorageException
 import com.easy.easyai.core.storage.ObjectStorageResolver
@@ -7,26 +12,21 @@ import com.easy.easyai.core.storage.StoredFileReference
 import com.easy.easyai.core.tool.ToolContextProjector
 import kotlinx.coroutines.CancellationException
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.messages.Message
-import org.springframework.ai.chat.messages.ToolResponseMessage
-import org.springframework.ai.chat.model.ChatResponse
-import org.springframework.ai.content.Media
-import org.springframework.util.MimeType
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.IdentityHashMap
-import org.springframework.ai.chat.messages.AssistantMessage as SpringAiAssistantMessage
-import org.springframework.ai.chat.messages.SystemMessage as SpringAiSystemMessage
-import org.springframework.ai.chat.messages.UserMessage as SpringAiUserMessage
+import com.easy.easyai.api.llm.AssistantMessage as LlmAssistantMessage
+import com.easy.easyai.api.llm.SystemMessage as LlmSystemMessage
+import com.easy.easyai.api.llm.UserMessage as LlmUserMessage
 
 interface MessageConverter {
-    suspend fun toSpringAiMessages(
+    suspend fun toLlmMessages(
         messages: List<EasyAiMessage>,
         userId: String = "system",
         owners: Collection<String> = listOf(userId)
     ): List<Message>
-    fun fromSpringAiResponse(response: ChatResponse): AssistantMessage
+    fun fromChatResponse(response: ChatResponse): AssistantMessage
 }
 
 class DefaultMessageConverter(
@@ -58,7 +58,7 @@ class DefaultMessageConverter(
 
     private val logger = LoggerFactory.getLogger(javaClass)
 
-    override suspend fun toSpringAiMessages(
+    override suspend fun toLlmMessages(
         messages: List<EasyAiMessage>,
         userId: String,
         owners: Collection<String>
@@ -89,12 +89,7 @@ class DefaultMessageConverter(
                         return if (url != null) "$base ($url)]" else "$base]"
                     }
                     for (img in images) {
-                        mediaList.add(
-                            Media.builder()
-                                .mimeType(MimeType.valueOf(img.mimeType))
-                                .data(img.data)
-                                .build()
-                        )
+                        mediaList.add(Media(img.mimeType, MediaSource.Bytes(img.data)))
                     }
                     for (ref in fileRefs) {
                         if (StoredFileReference.isStored(ref.filePath)) {
@@ -178,12 +173,7 @@ class DefaultMessageConverter(
                                 logger.warn("FileRefContent: failed to read image file: {}", ref.filePath, e)
                                 continue
                             }
-                            mediaList.add(
-                                Media.builder()
-                                    .mimeType(MimeType.valueOf(ref.mimeType))
-                                    .data(bytes)
-                                    .build()
-                            )
+                            mediaList.add(Media(ref.mimeType, MediaSource.Bytes(bytes)))
                             anchoredInsertions.add(
                                 AnchoredInsertion(ref.displayOffset, blockSeq[ref] ?: 0, imageMarker(ref))
                             )
@@ -247,37 +237,33 @@ class DefaultMessageConverter(
 
                     val text = sanitizePresignedUrls(textParts.joinToString("\n\n"), owners)
                     if (text.isEmpty() && mediaList.isEmpty()) emptyList()
-                    else {
-                        if (mediaList.isEmpty()) {
-                            listOf(SpringAiUserMessage(text))
-                        } else {
-                            listOf(
-                                SpringAiUserMessage.builder()
-                                    .text(text)
-                                    .media(mediaList)
-                                    .build()
-                            )
-                        }
-                    }
+                    else listOf(LlmUserMessage(text, mediaList))
                 }
                 is AssistantMessage -> {
                     val text = msg.content.filterIsInstance<TextContent>().joinToString("") { it.text }
                     val sanitizedText = sanitizePresignedUrls(text, owners)
                     val toolCalls = msg.content.filterIsInstance<ToolCallContent>()
-                    val springAiToolCalls = toolCalls.map { tc ->
+                    val llmToolCalls = toolCalls.map { tc ->
                         // Replayed arguments are a context source too: the model copies image URLs
                         // straight out of its own earlier tool calls. Per-tool projectors may rewrite
                         // arguments first (e.g. eliding display-only payloads).
                         val args = ToolContextProjector.projectSafely(contextProjectors, tc.name, tc.arguments)
-                        SpringAiAssistantMessage.ToolCall(
+                        LlmAssistantMessage.ToolCall(
                             tc.id, "function", tc.name, sanitizePresignedUrls(args, owners)
                         )
                     }
-                    if (springAiToolCalls.isEmpty()) {
-                        listOf(SpringAiAssistantMessage(sanitizedText))
-                    } else {
-                        listOf(SpringAiAssistantMessage.builder().content(sanitizedText).toolCalls(springAiToolCalls).build())
+                    // Thinking replay is gated upstream by ThinkingHistoryProjection: blocks that
+                    // survive to here are meant to be sent. Anthropic's redacted_thinking payload
+                    // lives in the signature field; the redacted flag tells the adapter which side
+                    // carries the opaque data.
+                    val llmThinking = msg.content.filterIsInstance<ThinkingContent>().map {
+                        LlmAssistantMessage.ThinkingBlock(
+                            text = it.thinking,
+                            signature = it.thinkingSignature,
+                            redacted = it.redacted
+                        )
                     }
+                    listOf(LlmAssistantMessage(content = sanitizedText, toolCalls = llmToolCalls, thinkingBlocks = llmThinking))
                     // Tool results are handled separately via ToolResultMessage
                 }
                 is ToolResultMessage -> {
@@ -287,7 +273,7 @@ class DefaultMessageConverter(
                     val responses = msg.toolResults.map { entry ->
                         ToolResponseMessage.ToolResponse(entry.toolCallId, entry.toolName, sanitizePresignedUrls(entry.result, owners))
                     }
-                    listOf(ToolResponseMessage.builder().responses(responses).build())
+                    listOf(ToolResponseMessage(responses))
                 }
                 is ErrorMessage -> {
                     // ErrorMessage is not sent to LLM - it's for UI display only
@@ -297,7 +283,7 @@ class DefaultMessageConverter(
                 is SystemMessage -> {
                     // SystemMessage may appear mid-conversation (before the triggering UserMessage),
                     // not just at position 0. Most LLM providers handle this correctly.
-                    listOf(SpringAiSystemMessage(msg.text))
+                    listOf(LlmSystemMessage(msg.text))
                 }
                 // Future message types should return empty list rather than silently fail
                 else -> emptyList()
@@ -388,16 +374,15 @@ class DefaultMessageConverter(
             logger.warn("Failed to sign stored chat image; reading object instead: {}", stored.key, e)
             null
         }
-        val mimeType = MimeType.valueOf(ref.mimeType)
         // Anthropic only accepts HTTPS URL media. Do not rewrite a signature's scheme.
         if (signedUri?.scheme == "https" && !signedUri.host.isNullOrBlank()) {
-            return StoredImage(Media.builder().mimeType(mimeType).data(signedUri).build(), signedUri.toString())
+            return StoredImage(Media(ref.mimeType, MediaSource.Url(signedUri)), signedUri.toString())
         }
         val content = storage.get(stored.key)
             ?: throw ObjectStorageException("Stored chat image could not be read: ${stored.key}")
         validateStoredImageSize(content.meta.size)
         validateStoredImageSize(content.bytes.size.toLong())
-        return StoredImage(Media.builder().mimeType(mimeType).data(content.bytes).build(), null)
+        return StoredImage(Media(ref.mimeType, MediaSource.Bytes(content.bytes)), null)
     }
 
     private fun validateStoredImageSize(size: Long) {
@@ -413,7 +398,7 @@ class DefaultMessageConverter(
         .replace("<", "&lt;")
         .replace(">", "&gt;")
 
-    override fun fromSpringAiResponse(response: ChatResponse): AssistantMessage {
+    override fun fromChatResponse(response: ChatResponse): AssistantMessage {
         val result = response.result
         val contentBlocks = mutableListOf<ContentBlock>()
 

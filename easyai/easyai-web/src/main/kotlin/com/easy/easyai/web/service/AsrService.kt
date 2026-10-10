@@ -14,10 +14,10 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.messages.Message
-import org.springframework.ai.chat.messages.SystemMessage
-import org.springframework.ai.chat.messages.UserMessage
-import org.springframework.ai.chat.prompt.Prompt
+import com.easy.easyai.api.llm.Message
+import com.easy.easyai.api.llm.SystemMessage
+import com.easy.easyai.api.llm.UserMessage
+import com.easy.easyai.api.llm.Prompt
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service

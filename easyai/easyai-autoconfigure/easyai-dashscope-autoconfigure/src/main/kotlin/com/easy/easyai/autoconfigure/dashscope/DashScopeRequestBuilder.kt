@@ -12,8 +12,8 @@ import com.alibaba.dashscope.tools.ToolFunction
 import com.alibaba.dashscope.utils.JsonUtils
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.easy.easyai.api.llm.ToolCallback
 import org.slf4j.LoggerFactory
-import org.springframework.ai.tool.ToolCallback
 
 /**
  * Renders [DashScopeMessageSpec]s and [DashScopeChatOptions] into DashScope SDK request params.
@@ -133,18 +133,15 @@ internal object DashScopeRequestBuilder {
 
     // region tools
 
-    private fun ToolCallback.toToolFunction(): ToolFunction {
-        val definition = getToolDefinition()
-        return ToolFunction.builder()
-            .function(
-                FunctionDefinition.builder()
-                    .name(definition.name())
-                    .description(definition.description())
-                    .parameters(definition.inputSchema().toJsonParameters())
-                    .build()
-            )
-            .build()
-    }
+    private fun ToolCallback.toToolFunction(): ToolFunction = ToolFunction.builder()
+        .function(
+            FunctionDefinition.builder()
+                .name(name)
+                .description(description)
+                .parameters(inputSchema.toJsonParameters())
+                .build()
+        )
+        .build()
 
     /** Bailian rejects a malformed schema, so an unusable one degrades to "any object". */
     internal fun String.toJsonParameters(): JsonObject = runCatching {

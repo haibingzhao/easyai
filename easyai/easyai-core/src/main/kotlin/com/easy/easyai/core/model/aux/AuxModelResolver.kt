@@ -1,7 +1,7 @@
 package com.easy.easyai.core.model.aux
 
+import com.easy.easyai.api.llm.ChatModel
 import com.easy.easyai.api.model.ModelProviderConfig
-import org.springframework.ai.chat.model.ChatModel
 
 /**
  * A resolved auxiliary model: both the live [ChatModel] to call and the [ModelProviderConfig] it

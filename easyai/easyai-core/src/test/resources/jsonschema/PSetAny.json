@@ -1,0 +1,30 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "type" : "object",
+  "properties" : {
+    "attrs" : {
+      "type" : "object"
+    },
+    "ids" : {
+      "type" : "array",
+      "items" : {
+        "type" : "string"
+      }
+    },
+    "opt" : {
+      "type" : [ "object", "null" ],
+      "properties" : {
+        "a" : {
+          "type" : [ "string", "null" ]
+        },
+        "b" : {
+          "type" : [ "integer", "null" ],
+          "format" : "int32"
+        }
+      },
+      "additionalProperties" : false
+    }
+  },
+  "required" : [ "attrs", "ids" ],
+  "additionalProperties" : false
+}

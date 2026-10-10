@@ -3,8 +3,8 @@ package com.easy.easyai.core.agent
 import com.easy.easyai.core.event.AgentEvent
 import com.easy.easyai.core.event.EventStream
 import com.easy.easyai.core.model.*
+import com.easy.easyai.api.llm.ChatModel
 import kotlinx.coroutines.Job
-import org.springframework.ai.chat.model.ChatModel
 
 /**
  * Manages a conversation session.

@@ -92,6 +92,13 @@ data class AgentContext(
     val toolFoldEnabled: Boolean = false,
     /** Completed runs kept verbatim in addition to the current run when folding. */
     val toolFoldKeepRecentRuns: Int = 1,
+    /**
+     * Replay persisted thinking blocks as assistant history (send-time projection gate).
+     * Only Anthropic actually replays them; on OpenAI/DashScope the gate merely keeps thinking in
+     * the token estimate, so enabling it there over-measures the prompt and can trigger
+     * compaction slightly early.
+     */
+    val thinkingHistoryEnabled: Boolean = false,
     val initialMessages: List<EasyAiMessage> = emptyList(),
     val modelContextLength: Int = 204_800,  // Default context window size (200K)
     /** JSON Schema for structured output enforcement. Injected into ChatOptions and system prompt. */

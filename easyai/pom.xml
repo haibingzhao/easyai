@@ -38,7 +38,6 @@
         <project.build.sourceEncoding>${java.encoding}</project.build.sourceEncoding>
         <easyai-version>${revision}</easyai-version>
         <spring-boot.version>4.1.1</spring-boot.version>
-        <spring-ai.version>2.0.1</spring-ai.version>
 
         <kotlin.co.version>1.11.0</kotlin.co.version>
         <kotlin.version>2.3.10</kotlin.version>
@@ -49,6 +48,9 @@
         <exposed.version>1.2.0</exposed.version>
         <jtokkit.version>1.1.0</jtokkit.version>
         <dashscope-sdk.version>2.23.1</dashscope-sdk.version>
+        <!-- Official LLM provider SDKs (adapters built directly on these; spring-ai removed). -->
+        <openai-java.version>4.49.0</openai-java.version>
+        <anthropic-java.version>2.52.0</anthropic-java.version>
         <!-- Build Plugins -->
         <maven.compiler-plugin.version>3.14.0</maven.compiler-plugin.version>
         <maven-install-plugin.version>3.1.4</maven-install-plugin.version>
@@ -133,13 +135,6 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
-            <dependency>
-                <groupId>org.springframework.ai</groupId>
-                <artifactId>spring-ai-bom</artifactId>
-                <version>${spring-ai.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
             <!-- MCP Java SDK BOM -->
             <dependency>
                 <groupId>io.modelcontextprotocol.sdk</groupId>
@@ -149,10 +144,16 @@
                 <scope>import</scope>
             </dependency>
 
+            <!-- Official provider SDKs the self-authored LLM adapters are built on -->
             <dependency>
-                <groupId>org.springframework.ai</groupId>
-                <artifactId>spring-ai-model</artifactId>
-                <version>${spring-ai.version}</version>
+                <groupId>com.openai</groupId>
+                <artifactId>openai-java-client-okhttp</artifactId>
+                <version>${openai-java.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.anthropic</groupId>
+                <artifactId>anthropic-java-client-okhttp</artifactId>
+                <version>${anthropic-java.version}</version>
             </dependency>
             <!-- easyai-common modules -->
             <dependency>

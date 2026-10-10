@@ -3,6 +3,9 @@ package com.easy.easyai.core.agent
 import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatOptions
+import com.easy.easyai.api.llm.ToolCallback
 import com.easy.easyai.core.event.MessageListener
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.message.MessageConverter
@@ -12,9 +15,6 @@ import com.easy.easyai.core.storage.ObjectStorageResolver
 import com.easy.easyai.core.prompt.PromptTemplateService
 import com.easy.easyai.core.tool.ToolExecutionEngine
 import com.easy.easyai.core.validation.OutputSchemaValidator
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.prompt.ChatOptions
-import org.springframework.ai.tool.ToolCallback
 
 /**
  * Unified service interface encapsulating all Agent runtime infrastructure.
@@ -66,10 +66,12 @@ interface AgentService {
     val transformContextService: TransformContextService
 
     /**
-     * Default ChatModel instance used as a fallback.
-     * Used when AgentContext.modelConfig is null or the protocol is unsupported.
+     * Optional host-provided [ChatModel] used as a last-resort fallback when
+     * `AgentContext.modelConfig` is null or its protocol is unsupported. Null unless the host
+     * registers a bean: models are normally resolved per session from a `ModelProviderConfig`, so
+     * the framework itself has no global default to offer.
      */
-    val defaultChatModel: ChatModel
+    val defaultChatModel: ChatModel?
 
     /**
      * Lazily creates a ChatModel.

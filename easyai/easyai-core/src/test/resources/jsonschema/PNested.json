@@ -1,0 +1,45 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "type" : "object",
+  "properties" : {
+    "inner" : {
+      "type" : [ "object", "null" ],
+      "properties" : {
+        "id" : {
+          "type" : "integer",
+          "format" : "int64"
+        },
+        "label" : {
+          "type" : [ "string", "null" ]
+        }
+      },
+      "required" : [ "id" ],
+      "additionalProperties" : false
+    },
+    "meta" : {
+      "type" : [ "object", "null" ]
+    },
+    "mode" : {
+      "type" : "string",
+      "enum" : [ "FAST", "BALANCED", "QUALITY" ]
+    },
+    "name" : {
+      "type" : "string"
+    },
+    "scores" : {
+      "type" : "array",
+      "items" : {
+        "type" : "integer",
+        "format" : "int32"
+      }
+    },
+    "tags" : {
+      "type" : "array",
+      "items" : {
+        "type" : "string"
+      }
+    }
+  },
+  "required" : [ "mode", "name", "scores", "tags" ],
+  "additionalProperties" : false
+}

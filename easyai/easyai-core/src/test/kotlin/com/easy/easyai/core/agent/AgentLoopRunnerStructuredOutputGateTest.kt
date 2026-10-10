@@ -9,8 +9,8 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.prompt.ChatOptions
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatOptions
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
@@ -35,7 +35,7 @@ class AgentLoopRunnerStructuredOutputGateTest {
     private fun stubBuildChatOptions(services: AgentService, capturedSchemas: MutableList<String?>) {
         every { services.buildChatOptions(any(), any(), any()) } answers {
             capturedSchemas.add(thirdArg<String?>())
-            ChatOptions.builder().model("test-model").build()
+            com.easy.easyai.api.llm.DefaultChatOptions(model = "test-model")
         }
     }
 

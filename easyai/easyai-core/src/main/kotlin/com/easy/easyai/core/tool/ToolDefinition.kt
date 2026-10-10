@@ -7,13 +7,8 @@ import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.model.ToolResultContent
 import com.easy.easyai.core.model.Usage
 import com.fasterxml.jackson.annotation.JsonIgnore
-import com.easy.easyai.common.util.SharedObjectMapper
+import com.easy.easyai.api.llm.schema.JsonSchemaGenerator
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
-import org.springframework.ai.util.json.schema.JsonSchemaGenerator
-import tools.jackson.module.kotlin.readValue
-import java.util.*
 
 /**
  * Tool execution mode: sequential or parallel.
@@ -222,42 +217,4 @@ abstract class BaseToolDefinition(
         content = listOf(ToolResultContent(toolCallId = toolCallId, toolName = toolName, output = message, isError = true)),
         isError = true
     )
-}
-
-/**
- * Bridges ToolDefinition to Spring AI's ToolCallback interface.
- *
- * Since Spring AI's ToolCallback.call() is synchronous, we use runBlocking with
- * Dispatchers.IO to avoid blocking critical threads during tool execution.
- */
-internal class EasyAiToolCallback(
-    private val toolDefinition: ToolDefinition
-) : org.springframework.ai.tool.ToolCallback {
-
-    private val objectMapper = SharedObjectMapper.instance
-
-    private val springAiDefinition = org.springframework.ai.tool.definition.ToolDefinition.builder()
-        .name(toolDefinition.name)
-        .description(toolDefinition.description)
-        .inputSchema(toolDefinition.inputSchema)
-        .build()
-
-    override fun getToolDefinition(): org.springframework.ai.tool.definition.ToolDefinition = springAiDefinition
-
-    override fun call(toolInput: String): String {
-        val args: Map<String, Any?> = objectMapper.readValue(toolInput)
-        // Fallback context for Spring AI compatibility path (non-primary)
-        val fallbackContext = AgentContext(agentId = "spring-ai-callback")
-        val result = runBlocking(Dispatchers.IO) {
-            toolDefinition.execute(
-                agentContext = fallbackContext,
-                toolCallId = "tc-${UUID.randomUUID()}",
-                messageId = null,
-                args = args,
-                coroutineScope = this,
-                onUpdate = {}
-            )
-        }
-        return result.content.filterIsInstance<TextContent>().joinToString(separator = "") { it.text }
-    }
 }

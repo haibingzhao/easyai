@@ -1,0 +1,26 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$defs" : {
+    "PSharedChild" : {
+      "type" : "object",
+      "properties" : {
+        "a" : {
+          "type" : "string"
+        }
+      },
+      "required" : [ "a" ],
+      "additionalProperties" : false
+    }
+  },
+  "type" : "object",
+  "properties" : {
+    "x" : {
+      "$ref" : "#/$defs/PSharedChild"
+    },
+    "y" : {
+      "$ref" : "#/$defs/PSharedChild"
+    }
+  },
+  "required" : [ "x", "y" ],
+  "additionalProperties" : false
+}

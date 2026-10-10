@@ -190,6 +190,11 @@ enum class StopReason {
     ABORTED
 }
 
+/**
+ * Per-message token accounting. [inputTokens] excludes the cached portions by contract on every
+ * protocol, so `inputTokens + cacheReadTokens + cacheWriteTokens` is the whole prompt exactly once
+ * — the sum the compaction estimator sizes the context window with.
+ */
 data class Usage(
     val inputTokens: Int = 0,
     val outputTokens: Int = 0,

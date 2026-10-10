@@ -2,8 +2,8 @@ package com.easy.easyai.core.agent
 
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
-import org.springframework.ai.retry.NonTransientAiException
-import org.springframework.ai.retry.TransientAiException
+import com.easy.easyai.api.llm.NonTransientAiException
+import com.easy.easyai.api.llm.TransientAiException
 import org.springframework.web.client.ResourceAccessException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException

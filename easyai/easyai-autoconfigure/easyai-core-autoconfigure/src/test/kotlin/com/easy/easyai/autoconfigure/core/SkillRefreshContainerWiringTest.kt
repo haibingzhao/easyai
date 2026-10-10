@@ -14,7 +14,6 @@ import com.easy.easyai.skills.SkillSyncService
 import com.easy.easyai.core.tool.ToolBuilder
 import io.mockk.mockk
 import org.junit.jupiter.api.Test
-import org.springframework.ai.chat.model.ChatModel
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.TestConfiguration
@@ -39,9 +38,6 @@ class SkillRefreshContainerWiringTest {
 
     @TestConfiguration
     open class MockBeans {
-        @Bean
-        open fun chatModel(): ChatModel = mockk(relaxed = true)
-
         @Bean
         open fun goalStore(): GoalStore = mockk(relaxed = true)
     }

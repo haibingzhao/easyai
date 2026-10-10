@@ -65,6 +65,7 @@ class SessionAgentFactory(
             maxIterations = agentDef.maxIterations,
             toolFoldEnabled = agentDef.toolFoldEnabled,
             toolFoldKeepRecentRuns = agentDef.toolFoldKeepRecentRuns,
+            thinkingHistoryEnabled = agentDef.thinkingHistoryEnabled,
             inputSchema = agentDef.inputSchema,
             outputSchema = agentDef.outputSchema,
             outputSchemaMultiTurn = agentDef.outputSchemaMultiTurn

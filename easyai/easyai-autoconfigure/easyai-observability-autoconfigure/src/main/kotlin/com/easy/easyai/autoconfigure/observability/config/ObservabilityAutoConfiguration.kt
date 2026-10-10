@@ -147,14 +147,14 @@ class ObservabilityAutoConfiguration {
     }
 
     /**
-     * Creates filter to enrich Spring AI LLM observations with prompt/completion.
+     * Creates filter to enrich easyai chat-model observations with prompt/completion.
      *
      * @param properties the observability properties
      * @return the configured observation filter
      */
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnClass(name = ["org.springframework.ai.chat.observation.ChatModelObservationContext"])
+    @ConditionalOnClass(name = ["com.easy.easyai.api.llm.observation.EasyAiChatModelObservationContext"])
     @ConditionalOnProperty(prefix = "easyai.observability", name = ["trace-llm-calls"], havingValue = "true", matchIfMissing = true)
     fun chatModelObservationFilter(properties: ObservabilityProperties): ChatModelObservationFilter {
         log.debug("Configuring ChatModel observation filter for LLM call tracing")

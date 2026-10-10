@@ -2,16 +2,19 @@ package com.easy.easyai.autoconfigure.r2dbc
 
 import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.config.ModelProviderConfigStore
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.core.permission.AiRiskResult
 import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.permission.ShellAiRiskChecker
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.messages.SystemMessage
-import org.springframework.ai.chat.messages.UserMessage
-import org.springframework.ai.chat.prompt.Prompt
+import com.easy.easyai.api.llm.SystemMessage
+import com.easy.easyai.api.llm.UserMessage
+import com.easy.easyai.api.llm.Prompt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * LLM-backed [ShellAiRiskChecker].
@@ -29,6 +32,8 @@ class LlmShellAiRiskChecker(
 ) : ShellAiRiskChecker {
 
     private val logger = LoggerFactory.getLogger(javaClass)
+
+    private val chatModelCache = ConcurrentHashMap<ModelProviderConfig, ChatModel>()
 
     override suspend fun checkRisk(
         command: String,
@@ -49,7 +54,11 @@ class LlmShellAiRiskChecker(
             return AiRiskResult(allowed = false, reason = "AI 检查模型协议不受支持")
         }
 
-        val chatModel = factory.create(config)
+        // ChatModel creation builds a full provider client (connection pool + dispatcher);
+        // one per shell command would leak resources. ModelProviderConfig is a data class, so
+        // an edited config hashes to a new key and gets a fresh model. Superseded entries are
+        // never evicted on purpose: neither the SPI nor the SDK clients expose a close hook.
+        val chatModel = chatModelCache.computeIfAbsent(config) { factory.create(it) }
         val prompt = Prompt(
             listOf(
                 SystemMessage(SYSTEM_PROMPT),

@@ -9,9 +9,9 @@ import com.easy.easyai.api.model.ModelProviderInfo.Protocol
 import com.easy.easyai.api.model.StructuredOutputSupport
 import io.micrometer.observation.ObservationRegistry
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.prompt.ChatOptions
-import org.springframework.ai.tool.ToolCallback
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatOptions
+import com.easy.easyai.api.llm.ToolCallback
 import java.time.Duration
 
 /**
@@ -88,22 +88,30 @@ class DashScopeChatModelFactory : ChatModelFactory {
             }
         }
 
-        if (outputSchema != null) {
-            when (config.capabilities?.structuredOutput) {
-                // null = undeclared, keep schema enforcement as the default behavior.
-                null, StructuredOutputSupport.JSON_SCHEMA ->
-                    builder.outputSchema(outputSchema)
-                        .responseFormatKind(DashScopeResponseFormatKind.JSON_SCHEMA)
+        // The capability gate decides the response-format kind for the whole model, not just for
+        // turns that carry a schema: DashScopeChatModel.resolveOptions can merge an outputSchema
+        // from a caller's generic ChatOptions onto these defaults, and a NONE model must never
+        // emit json_schema even then.
+        when (config.capabilities?.structuredOutput) {
+            // null = undeclared, keep schema enforcement as the default behavior.
+            null, StructuredOutputSupport.JSON_SCHEMA ->
+                builder.responseFormatKind(DashScopeResponseFormatKind.JSON_SCHEMA)
 
-                StructuredOutputSupport.JSON_OBJECT ->
-                    builder.outputSchema(outputSchema)
-                        .responseFormatKind(DashScopeResponseFormatKind.JSON_OBJECT)
+            StructuredOutputSupport.JSON_OBJECT ->
+                builder.responseFormatKind(DashScopeResponseFormatKind.JSON_OBJECT)
 
-                StructuredOutputSupport.NONE -> logger.debug(
-                    "Model {} declares no API-level structured output; using prompt-based enforcement",
-                    config.modelId
-                )
+            StructuredOutputSupport.NONE -> {
+                builder.responseFormatKind(DashScopeResponseFormatKind.NONE)
+                if (outputSchema != null) {
+                    logger.debug(
+                        "Model {} declares no API-level structured output; using prompt-based enforcement",
+                        config.modelId
+                    )
+                }
             }
+        }
+        if (outputSchema != null && config.capabilities?.structuredOutput != StructuredOutputSupport.NONE) {
+            builder.outputSchema(outputSchema)
         }
         return builder.build()
     }

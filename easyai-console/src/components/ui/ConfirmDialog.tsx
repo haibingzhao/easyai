@@ -38,8 +38,8 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
       >
         <p className="text-sm">{message}</p>
         <div className="mt-4 flex justify-end gap-2">
-          <Button variant="outline" size="sm" onClick={onCancel}>{i18n('Cancel')}</Button>
-          <Button variant={danger ? 'destructive' : 'default'} size="sm" onClick={onConfirm}>
+          <Button type="button" variant="outline" size="sm" onClick={onCancel}>{i18n('Cancel')}</Button>
+          <Button type="button" variant={danger ? 'destructive' : 'default'} size="sm" onClick={onConfirm}>
             {confirmLabel ?? i18n('Confirm')}
           </Button>
         </div>

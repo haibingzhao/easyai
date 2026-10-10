@@ -41,7 +41,7 @@ import com.easy.easyai.tools.web.IntegrationConfig
 import io.micrometer.observation.ObservationRegistry
 import jakarta.annotation.PostConstruct
 import java.nio.file.Path
-import org.springframework.ai.chat.model.ChatModel
+import com.easy.easyai.api.llm.ChatModel
 import org.springframework.beans.factory.InitializingBean
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Autowired
@@ -390,7 +390,11 @@ open class EasyAiCoreAutoConfiguration(
     @ConditionalOnMissingBean(AgentService::class)
     open fun agentService(
         chatModelFactories: List<ChatModelFactory>,
-        chatModel: ChatModel,
+        // Optional: models are resolved per session from a ModelProviderConfig through the
+        // factories. A host may still register a ChatModel bean to serve as the fallback for
+        // contexts that carry no config (Agent.chatModel fails with a clear error otherwise).
+        @Autowired(required = false)
+        chatModel: ChatModel?,
         messageConverter: MessageConverter,
         toolExecutionEngine: ToolExecutionEngine,
         promptTemplateService: PromptTemplateService,

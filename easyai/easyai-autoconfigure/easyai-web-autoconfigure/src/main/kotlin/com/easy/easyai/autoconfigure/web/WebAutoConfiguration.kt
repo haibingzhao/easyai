@@ -44,7 +44,7 @@ import com.easy.easyai.web.security.AuthService
 import com.easy.easyai.web.security.McpPreConnectFilter
 import com.easy.easyai.web.service.*
 import com.easy.easyai.web.service.configgen.AgentBasedConfigGenerator
-import org.springframework.ai.chat.model.ChatModel
+import com.easy.easyai.api.llm.ChatModel
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.SmartInitializingSingleton
 import org.springframework.beans.factory.annotation.Autowired

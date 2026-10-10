@@ -16,11 +16,11 @@ import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
-import org.springframework.ai.chat.messages.Message
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.model.ChatResponse
-import org.springframework.ai.chat.model.Generation
-import org.springframework.ai.chat.prompt.Prompt
+import com.easy.easyai.api.llm.Message
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatResponse
+import com.easy.easyai.api.llm.Generation
+import com.easy.easyai.api.llm.Prompt
 import reactor.core.publisher.Flux
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
@@ -31,8 +31,8 @@ import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
-import org.springframework.ai.chat.messages.AssistantMessage as SpringAiAssistantMessage
-import org.springframework.ai.chat.messages.SystemMessage as SpringAiSystemMessage
+import com.easy.easyai.api.llm.AssistantMessage as SpringAiAssistantMessage
+import com.easy.easyai.api.llm.SystemMessage as SpringAiSystemMessage
 
 class AgentLoopCommandProjectionTest {
 
@@ -72,14 +72,14 @@ class AgentLoopCommandProjectionTest {
             services = DefaultAgentService(
                 chatModelFactories = emptyList(),
                 messageConverter = object : MessageConverter by converter {
-                    override suspend fun toSpringAiMessages(
+                    override suspend fun toLlmMessages(
                         messages: List<EasyAiMessage>,
                         userId: String,
                         owners: Collection<String>
                     ): List<Message> {
                         assertEquals("alice", userId)
                         convertedSnapshots.add(messages)
-                        return converter.toSpringAiMessages(messages, userId, owners)
+                        return converter.toLlmMessages(messages, userId, owners)
                     }
                 },
                 toolExecutor = DefaultToolExecutionEngine(),

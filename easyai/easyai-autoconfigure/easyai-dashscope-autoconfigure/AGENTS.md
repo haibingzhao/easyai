@@ -3,7 +3,7 @@
 Guidance for working on the DashScope (Aliyun Bailian) native-protocol adapter.
 
 ## OVERVIEW
-`ChatModelFactory` + Spring AI `ChatModel` on top of `com.alibaba:dashscope-sdk-java`.
+`QChatModelFactory` + own `api.llm.ChatModel` implementation on top of `com.alibaba:dashscope-sdk-java`.
 Third supported LLM protocol next to OpenAI and Anthropic; selected by
 `chatModelFactories.firstOrNull { it.supports(protocol) }`, so there is no `when(protocol)` dispatch to update.
 
@@ -15,7 +15,7 @@ easyai-dashscope-autoconfigure/
 ├── DashScopeChatOptions             # ToolCallingChatOptions + StructuredOutputChatOptions + SDK-only fields
 ├── DashScopeChatModel               # call()/stream(), options merging, error normalization
 ├── DashScopeRequestBuilder          # Prompt → GenerationParam / MultiModalConversationParam
-├── DashScopeMessageConverter        # Spring AI Message → role/toolCall/media specs
+├── DashScopeMessageConverter        # `api.llm` Message → role/toolCall/media specs
 ├── DashScopeResponseMapper          # SDK result → DashScopeChunk (usage incl. cache + reasoning tokens)
 └── DashScopeStreamingAccumulator    # cross-chunk tool-call assembly
 ```
@@ -46,5 +46,5 @@ easyai-dashscope-autoconfigure/
   qwen3 hybrid models reason by default.
 - **Do not replay `reasoning_content` into history.** `preserve_thinking` requires it verbatim, and compaction
   truncates it.
-- Provider failures must leave through Spring AI's retry types. The SDK's `ApiException` is translated in
+- Provider failures must leave through the own retry types (Transient/NonTransientAiException). The SDK's `ApiException` is translated in
   `DashScopeChatModel`; `easyai-core` must not gain a compile dependency on the SDK.

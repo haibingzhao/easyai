@@ -11,11 +11,11 @@ import io.mockk.slot
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
-import org.springframework.ai.chat.messages.AssistantMessage as SpringAssistantMessage
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.prompt.Prompt
-import org.springframework.ai.chat.model.ChatResponse
-import org.springframework.ai.chat.model.Generation
+import com.easy.easyai.api.llm.AssistantMessage as SpringAssistantMessage
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.Prompt
+import com.easy.easyai.api.llm.ChatResponse
+import com.easy.easyai.api.llm.Generation
 import java.nio.file.Path
 import java.time.LocalDate
 import kotlin.test.assertEquals

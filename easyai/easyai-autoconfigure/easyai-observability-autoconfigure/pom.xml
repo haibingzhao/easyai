@@ -125,13 +125,6 @@
             <optional>true</optional>
         </dependency>
 
-        <!-- Spring AI (for ChatModelObservationFilter) -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-model</artifactId>
-            <optional>true</optional>
-        </dependency>
-
         <!-- Kotlin -->
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>

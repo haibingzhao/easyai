@@ -16,12 +16,12 @@ import io.mockk.slot
 import io.mockk.verify
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
-import org.springframework.ai.chat.messages.UserMessage
-import org.springframework.ai.chat.model.ChatResponse
-import org.springframework.ai.chat.prompt.ChatOptions
-import org.springframework.ai.chat.prompt.Prompt
-import org.springframework.ai.retry.NonTransientAiException
-import org.springframework.ai.retry.TransientAiException
+import com.easy.easyai.api.llm.UserMessage
+import com.easy.easyai.api.llm.ChatResponse
+import com.easy.easyai.api.llm.ChatOptions
+import com.easy.easyai.api.llm.Prompt
+import com.easy.easyai.api.llm.NonTransientAiException
+import com.easy.easyai.api.llm.TransientAiException
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
@@ -91,7 +91,7 @@ internal class DashScopeChatModelTest {
             // carry the whole accumulated argument string.
             assertEquals(
                 listOf("{\"ci", "{\"city\":\"Hang", "{\"city\":\"Hangzhou\"}"),
-                responses.map { it.results.single().output.toolCalls.single().arguments() }
+                responses.map { it.results.single().output.toolCalls.single().arguments }
             )
             assertEquals("tool_calls", responses.last().results.single().metadata.finishReason)
             assertEquals(11, responses.last().metadata.usage.promptTokens)
@@ -119,6 +119,10 @@ internal class DashScopeChatModelTest {
 
             assertEquals(80L, usage.cacheReadInputTokens)
             assertEquals(10L, usage.cacheWriteInputTokens)
+            // input_tokens already covers cached_tokens, and the Usage contract wants the
+            // non-cached count so summing the fields does not double-count the cached prefix.
+            assertEquals(20, usage.promptTokens)
+            assertEquals(40, usage.totalTokens)
         }
     }
 
@@ -207,7 +211,7 @@ internal class DashScopeChatModelTest {
             every { generation.call(capture(param)) } returns
                 result("""{"output":{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]}}""")
 
-            model().call(Prompt(listOf(UserMessage("你好")), ChatOptions.builder().temperature(0.1).build()))
+            model().call(Prompt(listOf(UserMessage("你好")), com.easy.easyai.api.llm.DefaultChatOptions(temperature = 0.1)))
 
             assertEquals("qwen3-max", param.captured.model)
             assertEquals("sk-test", param.captured.apiKey)

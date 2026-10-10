@@ -27,46 +27,31 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.NullSource
 import org.junit.jupiter.params.provider.ValueSource
-import org.springframework.ai.chat.metadata.ChatGenerationMetadata
-import org.springframework.ai.chat.metadata.ChatResponseMetadata
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.model.ChatResponse
-import org.springframework.ai.chat.model.Generation
-import org.springframework.ai.chat.prompt.ChatOptions
-import org.springframework.ai.chat.prompt.Prompt
-import org.springframework.ai.tool.ToolCallback
+import com.easy.easyai.api.llm.ChatGenerationMetadata
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatResponse
+import com.easy.easyai.api.llm.DefaultChatOptions
+import com.easy.easyai.api.llm.Generation
+import com.easy.easyai.api.llm.Prompt
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
-import org.springframework.ai.chat.messages.AssistantMessage as SpringAiAssistantMsg
-import org.springframework.ai.chat.messages.UserMessage as SpringAiUserMsg
+import com.easy.easyai.api.llm.AssistantMessage as LlmAssistantMsg
+import com.easy.easyai.api.llm.UserMessage as LlmUserMsg
 
 class AgentTest {
 
     private fun createMockChatResponse(
         text: String = "",
-        toolCalls: List<SpringAiAssistantMsg.ToolCall> = emptyList(),
+        toolCalls: List<LlmAssistantMsg.ToolCall> = emptyList(),
         finishReason: String? = "stop"
     ): ChatResponse {
-        val assistantMsg = if (toolCalls.isEmpty()) {
-            SpringAiAssistantMsg(text)
-        } else {
-            SpringAiAssistantMsg.builder().content(text).toolCalls(toolCalls).build()
-        }
-        val genMetadata = mockk<ChatGenerationMetadata>(relaxed = true)
-        every { genMetadata.finishReason } returns finishReason
-
-        val generation = mockk<Generation>(relaxed = true)
-        every { generation.output } returns assistantMsg
-        every { generation.metadata } returns genMetadata
-
-        val responseMetadata = mockk<ChatResponseMetadata>(relaxed = true)
-
-        val response = mockk<ChatResponse>(relaxed = true)
-        every { response.result } returns generation
-        every { response.results } returns listOf(generation)
-        every { response.metadata } returns responseMetadata
-        return response
+        val assistantMsg = LlmAssistantMsg(content = text, toolCalls = toolCalls)
+        return ChatResponse(
+            listOf(Generation(assistantMsg, ChatGenerationMetadata(finishReason = finishReason)))
+        )
     }
 
     private fun createMockChatModel(vararg responses: ChatResponse): ChatModel {
@@ -96,7 +81,7 @@ class AgentTest {
     private fun createMockChatModelFactory(chatModel: ChatModel): ChatModelFactory {
         val factory = mockk<ChatModelFactory>(relaxed = true)
         every { factory.create(any(), any()) } returns chatModel
-        every { factory.build(any(), any(), any()) } returns ChatOptions.builder().model("test-model").build()
+        every { factory.build(any(), any(), any()) } returns DefaultChatOptions(model = "test-model")
         every { factory.supports(any()) } returns true
         return factory
     }
@@ -145,7 +130,7 @@ class AgentTest {
             val toolCallResponse = createMockChatResponse(
                 text = "Let me check",
                 toolCalls = listOf(
-                    SpringAiAssistantMsg.ToolCall("call1", "function", "echo", """{}""")
+                    LlmAssistantMsg.ToolCall("call1", "function", "echo", """{}""")
                 ),
                 finishReason = "tool_calls"
             )
@@ -181,7 +166,7 @@ class AgentTest {
             val expectedUser = userId ?: "system"
             val messages = listOf(UserMessage("Look at the image"))
             val converter = mockk<MessageConverter>()
-            coEvery { converter.toSpringAiMessages(messages, expectedUser, any()) } returns listOf(SpringAiUserMsg("Converted"))
+            coEvery { converter.toLlmMessages(messages, expectedUser, any()) } returns listOf(LlmUserMsg("Converted"))
             val services = mockk<AgentService>(relaxed = true)
             every { services.messageConverter } returns converter
             every { services.promptTemplateService.build(any(), any()) } returns ""
@@ -190,7 +175,7 @@ class AgentTest {
             val prompt = runner.preparePrompt(messages, emptyList())
 
             assertEquals("Converted", prompt.instructions.single().text)
-            coVerify(exactly = 1) { converter.toSpringAiMessages(messages, expectedUser, any()) }
+            coVerify(exactly = 1) { converter.toLlmMessages(messages, expectedUser, any()) }
         }
     }
 
@@ -276,7 +261,7 @@ class AgentTest {
         fun `emits turn events during tool execution`() = runBlocking {
             val toolCallResponse = createMockChatResponse(
                 text = "",
-                toolCalls = listOf(SpringAiAssistantMsg.ToolCall("call1", "function", "echo", "{}")),
+                toolCalls = listOf(LlmAssistantMsg.ToolCall("call1", "function", "echo", "{}")),
                 finishReason = "tool_calls"
             )
             val textResponse = createMockChatResponse(text = "done", finishReason = "stop")
@@ -304,6 +289,60 @@ class AgentTest {
             assertTrue(result.isNotEmpty())
             assertTrue(events.any { it is AgentStartEvent })
             assertTrue(events.any { it is AgentEndEvent })
+        }
+    }
+
+    @Nested
+    inner class `chat model resolution` {
+
+        private fun serviceWith(defaultChatModel: ChatModel?): AgentService {
+            val promptService = mockk<PromptTemplateService>(relaxed = true)
+            every { promptService.build(any(), any()) } returns "test prompt"
+            return DefaultAgentService(
+                chatModelFactories = listOf(createMockChatModelFactory(createMockChatModel())),
+                messageConverter = DefaultMessageConverter(),
+                toolExecutor = DefaultToolExecutionEngine(),
+                promptTemplateService = promptService,
+                defaultChatModel = defaultChatModel
+            )
+        }
+
+        @Test
+        fun `a host default model covers a context that resolved no config`() {
+            val fallback = createMockChatModel()
+
+            val agent = Agent(AgentContext(agentId = "a1"), serviceWith(fallback))
+
+            assertSame(fallback, agent.chatModel)
+        }
+
+        @Test
+        fun `no config and no host default fails with an actionable message`() {
+            val failure = assertFailsWith<IllegalStateException> {
+                Agent(AgentContext(agentId = "a1"), serviceWith(null))
+            }
+
+            val message = requireNotNull(failure.message)
+            assertTrue("no model config was resolved" in message, message)
+            assertTrue("default ChatModel bean" in message, message)
+        }
+
+        @Test
+        fun `an unsupported protocol names the config instead of failing obscurely`() {
+            val config = mockk<ModelProviderConfig>()
+            every { config.id } returns "cfg-9"
+            every { config.protocol } returns Protocol.ANTHROPIC
+            val services = mockk<AgentService>(relaxed = true)
+            every { services.supportsProtocol(Protocol.ANTHROPIC) } returns false
+            every { services.defaultChatModel } returns null
+
+            val failure = assertFailsWith<IllegalStateException> {
+                Agent(AgentContext(agentId = "a1", modelConfig = config), services)
+            }
+
+            val message = requireNotNull(failure.message)
+            assertTrue("cfg-9" in message, message)
+            assertTrue("ANTHROPIC" in message, message)
         }
     }
 }

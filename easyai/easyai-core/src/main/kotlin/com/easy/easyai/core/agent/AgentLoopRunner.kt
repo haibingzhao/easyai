@@ -6,21 +6,20 @@ import com.easy.easyai.core.message.CommandMessageProjection
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.prompt.PromptContext
 import com.easy.easyai.core.resilience.LlmCircuitBreakerRegistry
-import com.easy.easyai.core.tool.EasyAiToolCallback
 import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.reactive.asFlow
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.model.ChatResponse
-import org.springframework.ai.chat.prompt.Prompt
-import org.springframework.ai.model.tool.StructuredOutputChatOptions
-import org.springframework.ai.model.tool.ToolCallingChatOptions
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatResponse
+import com.easy.easyai.api.llm.DefaultChatOptions
+import com.easy.easyai.api.llm.Prompt
+import com.easy.easyai.api.llm.ToolCallback
 import java.util.concurrent.TimeoutException
 import kotlin.time.Duration.Companion.milliseconds
-import org.springframework.ai.chat.messages.SystemMessage as SpringAiSystemMessage
+import com.easy.easyai.api.llm.SystemMessage as LlmSystemMessage
 
 /**
  * Handles LLM streaming calls with retry logic and response parsing.
@@ -102,6 +101,12 @@ internal class AgentLoopRunner(
         var thinkingEnded = false
         var thinkingStartTime = 0L
         var thinkingDuration = 0L
+        // Anthropic emits the thinking-block signature as a dedicated empty-text chunk after the
+        // reasoning deltas; persisting it lets thinkingHistoryEnabled replay the block later.
+        // More than one signature means more than one thinking block in this turn — the merged
+        // text then matches no single signature, so replay is disabled for the turn.
+        var thinkingSignature: String? = null
+        var thinkingSignatures = 0
         var textStartTime = 0L
         var chunkCount = 0
         var retryCount = 0
@@ -186,6 +191,12 @@ internal class AgentLoopRunner(
                                 push(ThinkingEndEvent(messageId, turnId, context.sessionId ?: "default", thinkingDuration))
                                 thinkingEnded = true
                             }
+                            (results.firstNotNullOfOrNull { it.output.metadata["signature"] as? String })
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { sig ->
+                                    thinkingSignatures++
+                                    thinkingSignature = if (thinkingSignatures == 1) sig else null
+                                }
                             lastResponseWithUsage = chunk
                             continue
                         }
@@ -301,6 +312,8 @@ internal class AgentLoopRunner(
                     lastResponseWithUsage = null
                     fullText.clear()
                     fullThinking.clear()
+                    thinkingSignature = null
+                    thinkingSignatures = 0
                     thinkingEnded = false
                     thinkingStartTime = 0L
                     thinkingDuration = 0L
@@ -321,7 +334,7 @@ internal class AgentLoopRunner(
                         }
                         val partialContent = mutableListOf<ContentBlock>()
                         if (fullThinking.isNotEmpty()) {
-                            partialContent.add(ThinkingContent(thinking = fullThinking.toString(), durationMs = thinkingDuration.takeIf { it > 0 }))
+                            partialContent.add(ThinkingContent(thinking = fullThinking.toString(), thinkingSignature = thinkingSignature, durationMs = thinkingDuration.takeIf { it > 0 }))
                         }
                         if (fullText.isNotEmpty()) {
                             partialContent.add(TextContent(text = fullText.toString(), durationMs = (System.currentTimeMillis() - textStartTime).takeIf { it > 0 }))
@@ -372,7 +385,13 @@ internal class AgentLoopRunner(
 
         val contentBlocks = mutableListOf<ContentBlock>()
         if (fullThinking.isNotEmpty()) {
-            contentBlocks.add(ThinkingContent(thinking = fullThinking.toString(), durationMs = thinkingDuration.takeIf { it > 0 }))
+            contentBlocks.add(
+                ThinkingContent(
+                    thinking = fullThinking.toString(),
+                    thinkingSignature = thinkingSignature,
+                    durationMs = thinkingDuration.takeIf { it > 0 }
+                )
+            )
         }
         if (fullText.isNotEmpty()) {
             contentBlocks.add(TextContent(text = fullText.toString(), durationMs = textDuration.takeIf { it > 0 }))
@@ -424,10 +443,10 @@ internal class AgentLoopRunner(
         tools: List<ToolDefinition>
     ): Prompt {
         val projectedMessages = CommandMessageProjection.project(transformedMessages)
-        val springAiMessages = services.messageConverter.toSpringAiMessages(
+        val llmMessages = services.messageConverter.toLlmMessages(
             projectedMessages, context.userId ?: "system", context.effectiveOwners
         )
-        val toolCallbacks = tools.map { EasyAiToolCallback(it) }
+        val toolCallbacks = tools.map { ToolCallback(it.name, it.description, it.inputSchema) }
 
         // Timing gate for API-level structured output: multi-turn mode defers enforcement
         // until the completion check sets forceStructuredOutput. Whether the model's protocol
@@ -446,15 +465,11 @@ internal class AgentLoopRunner(
             )
         } ?: run {
             // No model config: no capabilities to consult, keep the generic enforcement path.
-            val fallback = ToolCallingChatOptions.builder()
-                .model(context.modelId.ifEmpty { null })
-                .toolCallbacks(toolCallbacks)
-                .build()
-            if (effectiveOutputSchema != null && fallback is StructuredOutputChatOptions) {
-                fallback.mutate().outputSchema(effectiveOutputSchema).build()
-            } else {
-                fallback
-            }
+            DefaultChatOptions(
+                model = context.modelId.ifEmpty { null },
+                toolCallbacks = toolCallbacks,
+                outputSchema = effectiveOutputSchema
+            )
         }
 
         // Memory is NOT injected into the system prompt (keeps the prompt stable for LLM caching).
@@ -507,12 +522,12 @@ internal class AgentLoopRunner(
             null
         }
 
-        val allSpringAiMessages = if (systemPromptText.isNotBlank()) {
-            listOf(SpringAiSystemMessage(systemPromptText)) + springAiMessages
+        val allLlmMessages = if (systemPromptText.isNotBlank()) {
+            listOf(LlmSystemMessage(systemPromptText)) + llmMessages
         } else {
-            springAiMessages
+            llmMessages
         }
-        return Prompt(allSpringAiMessages, chatOptions)
+        return Prompt(allLlmMessages, chatOptions)
     }
 
     /**

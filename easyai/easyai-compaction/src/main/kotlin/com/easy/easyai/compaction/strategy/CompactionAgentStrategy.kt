@@ -15,7 +15,7 @@ import com.easy.easyai.core.tool.*
 import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import kotlinx.coroutines.CoroutineScope
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.model.ChatModel
+import com.easy.easyai.api.llm.ChatModel
 import tools.jackson.core.type.TypeReference
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -493,7 +493,7 @@ internal class CompactionDryRunAgentService(
 ) : AgentService by delegate {
 
     /** Use session-specific model so compaction agent uses the same model as the conversation. */
-    override val defaultChatModel: ChatModel
+    override val defaultChatModel: ChatModel?
         get() = sessionChatModel ?: delegate.defaultChatModel
 
     /** Disable message persistence. */

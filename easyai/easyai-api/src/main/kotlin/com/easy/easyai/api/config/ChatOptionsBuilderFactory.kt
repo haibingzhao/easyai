@@ -1,9 +1,9 @@
 package com.easy.easyai.api.config
 
+import com.easy.easyai.api.llm.ChatOptions
+import com.easy.easyai.api.llm.ToolCallback
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
-import org.springframework.ai.chat.prompt.ChatOptions
-import org.springframework.ai.tool.ToolCallback
 
 /**
  * Factory interface for building ChatOptions based on protocol.

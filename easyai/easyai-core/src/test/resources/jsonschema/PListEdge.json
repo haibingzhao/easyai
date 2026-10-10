@@ -1,0 +1,32 @@
+{
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "$defs" : {
+    "PStatus" : {
+      "type" : "string",
+      "enum" : [ "OPEN", "DONE" ]
+    }
+  },
+  "type" : "object",
+  "properties" : {
+    "a" : {
+      "type" : [ "array", "null" ],
+      "items" : {
+        "type" : "string"
+      }
+    },
+    "b" : {
+      "type" : "array",
+      "items" : {
+        "$ref" : "#/$defs/PStatus"
+      }
+    },
+    "c" : {
+      "type" : "object"
+    },
+    "d" : {
+      "$ref" : "#/$defs/PStatus"
+    }
+  },
+  "required" : [ "b", "c", "d" ],
+  "additionalProperties" : false
+}
