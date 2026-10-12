@@ -1,10 +1,15 @@
 package com.easy.easyai.core.agent
 
+import com.easy.easyai.api.llm.*
 import com.easy.easyai.core.event.*
 import com.easy.easyai.core.memory.MemoryRef
 import com.easy.easyai.core.message.CommandMessageProjection
 import com.easy.easyai.core.model.*
+import com.easy.easyai.core.model.AssistantMessage
+import com.easy.easyai.core.model.SystemMessage
+import com.easy.easyai.core.model.Usage
 import com.easy.easyai.core.prompt.PromptContext
+import com.easy.easyai.core.resilience.CircuitBreakerOpenException
 import com.easy.easyai.core.resilience.LlmCircuitBreakerRegistry
 import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
@@ -12,11 +17,6 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.reactive.asFlow
 import org.slf4j.LoggerFactory
-import com.easy.easyai.api.llm.ChatModel
-import com.easy.easyai.api.llm.ChatResponse
-import com.easy.easyai.api.llm.DefaultChatOptions
-import com.easy.easyai.api.llm.Prompt
-import com.easy.easyai.api.llm.ToolCallback
 import java.util.concurrent.TimeoutException
 import kotlin.time.Duration.Companion.milliseconds
 import com.easy.easyai.api.llm.SystemMessage as LlmSystemMessage
@@ -112,18 +112,24 @@ internal class AgentLoopRunner(
         var retryCount = 0
         var streamDuration: Long
         // Endpoint circuit breaker (null when disabled or no model config).
-        // When OPEN, acquirePermission() fails fast with CircuitBreakerOpenException,
-        // which is not a timeout and therefore never enters the retry branch below.
+        // When OPEN, acquirePermission() fails fast with CircuitBreakerOpenException, which the
+        // catch below turns into an LlmEndpointUnavailableException without consuming retry budget.
         val breaker = LlmCircuitBreakerRegistry.forContext(context)
 
         while (true) {
-            breaker?.acquirePermission()
             var streamStartTime = 0L
             try {
+                // Timestamped before the breaker gate: the catch below reports elapsed time, and a
+                // rejection thrown by acquirePermission would otherwise subtract an unset start time
+                // and log an absurd ~epoch-scale duration.
+                streamStartTime = System.currentTimeMillis()
+                // Inside the try: an OPEN breaker must reach the classification chain below so it
+                // surfaces as a readable endpoint-unavailable error instead of escaping as a raw
+                // CircuitBreakerOpenException that AgentRunner can only report as a generic "error".
+                breaker?.acquirePermission()
                 logger.debug("${logPrefix}[Turn {}] Starting LLM stream call (agent={}, model={}, attempt={}/{}, tools={}, subAgents={}, skills={})",
                     turnId,context.agentId, context.modelId, retryCount + 1, context.maxRetries + 1,
                     context.tools.size, context.subAgents.size, context.skills.size)
-                streamStartTime = System.currentTimeMillis()
                 chunkCount = 0
 
                 // Channel-based streaming with per-chunk stall detection.
@@ -288,6 +294,21 @@ internal class AgentLoopRunner(
                         it.initCause(e)
                     }
                 }
+                // An OPEN breaker is a verdict, not a request failure: never retry it (the next
+                // acquirePermission would just be rejected again) and never let it reach
+                // recordFailure below (that would double the cooldown for a non-request event).
+                // Checked first so that guarantee does not depend on isEndpointOutage's matching.
+                if (e is CircuitBreakerOpenException) {
+                    logger.warn("${logPrefix}[Turn {}] LLM endpoint circuit open, failing fast (no retry): {}",
+                        turnId, e.message)
+                    // How long the breaker still blocks is the one actionable thing about an outage;
+                    // HALF_OPEN rejections report 0 ("re-check shortly"), so the hint degrades to a
+                    // plain retry.
+                    val retryHint = if (e.retryAfterSeconds > 0) "，约 ${e.retryAfterSeconds}s 后可重试" else "，请稍后重试"
+                    throw LlmEndpointUnavailableException(
+                        "模型端点暂时不可用（连续失败已进入熔断保护）$retryHint", e
+                    )
+                }
                 // Report outage-class failures (connection errors, stalls, 5xx) to the
                 // endpoint circuit breaker. Rate limits and client errors are filtered
                 // out by isEndpointOutage and never count.
@@ -364,9 +385,7 @@ internal class AgentLoopRunner(
 
         // Build the assistant message
         val finalResponse = lastResponseWithResults
-        val responseToolCalls = finalResponse?.results
-            ?.mapNotNull { it.output.toolCalls }
-            ?.flatten()
+        val responseToolCalls = finalResponse?.results?.flatMap { it.output.toolCalls }
             ?.map { tc ->
                 ToolCallContent(
                     id = tc.id,

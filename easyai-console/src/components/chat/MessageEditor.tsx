@@ -6,7 +6,7 @@ import { useSideAskStore } from '@/services/stores/side-ask-store';
 import { useProjectStore, adoptHandshakeWorkspace } from '@/services/stores/project-store';
 import { useNavStore } from '@/services/stores/nav-store';
 import { pathToFile, IMAGE_EXTS } from '@/services/file-browser-service';
-import { sendMessageToBackend, abortAllActiveStreams, cancelChat, getCurrentSendService, type ChatService } from '../../services/chat-service';
+import { sendMessageToBackend, abortAllActiveStreams, cancelChat, requireStreamingStatus, getCurrentSendService, type ChatService } from '../../services/chat-service';
 import { SessionService, sessionService } from '../../services/session-service';
 import { isImageAttachment, isTextAttachment, toChatAttachment, buildMessageWithTextAttachments, buildFileRef, buildFolderRef, resolveEmptyFileRefs } from '../../utils/attachment-utils';
 import { useMention } from '@/hooks/useMention';
@@ -29,11 +29,55 @@ import { createCommandChip, createQuoteChip, populateMessageEditor, readMessageE
 import type { Attachment, QueuedMessage } from '../../types/message';
 import type { ModelCapabilities } from '@/types/settings';
 import { i18n } from '../../utils/i18n';
-import { addQueueMessage, removeQueueMessage } from '../../services/chat-service';
+import { addQueueMessage, removeQueueMessage, getQueueMessages } from '../../services/chat-service';
 import { QueuedMessagesPanel } from './QueuedMessagesPanel';
 import { getCheckpoints } from '@/services/checkpoint-service';
 import type { CheckpointInfo } from '@/types/checkpoint';
 import { createRoot, type Root } from 'react-dom/client';
+
+/**
+ * Rebuild the queue view after a stop the backend could not confirm.
+ *
+ * Synced items come from the snapshot rather than from the pre-stop local copy when
+ * `snapshotAuthoritative` holds: a cancel that reached the run drains its queue, so restoring stale
+ * entries would show items whose queue IDs no longer resolve (removing or reordering them would then
+ * hit "No active session"). Drafts that never reached the backend are the one part no snapshot can
+ * return, so they are carried over.
+ *
+ * The snapshot is NOT authoritative when no run is registered on the answering instance — the queue
+ * lives in that run's memory, and the endpoint answers with an empty list it cannot be told apart
+ * from "nothing queued". Then the pre-stop list stands: entries a run this client could neither stop
+ * nor observe may still consume are worse to lose than to show with an unresolvable ID.
+ */
+async function reconcileQueueAfterUnconfirmedStop(
+  sessionId: string,
+  previous: QueuedMessage[],
+  snapshotAuthoritative: boolean,
+): Promise<void> {
+  const drafts = previous.filter((m) => !m.backendQueueId);
+  const snapshot = snapshotAuthoritative ? await getQueueMessages(sessionId).catch(() => null) : null;
+  if (useChatStore.getState().sessionId !== sessionId) return;
+  if (snapshot === null) {
+    useChatStore.setState({ queuedMessages: previous });
+    return;
+  }
+  const synced: QueuedMessage[] = snapshot.map((m) => {
+    // The snapshot carries only what the backend queue stores (id, content, type), so recover the
+    // frontend-only fields from the pre-stop copy by exact queue ID — otherwise a rebuilt row loses
+    // its attachment thumbnails and its command chip.
+    const prior = previous.find((p) => p.backendQueueId === m.id);
+    return {
+      id: m.id,
+      content: m.content,
+      type: m.type,
+      backendQueueId: m.id,
+      status: 'synced' as const,
+      ...(prior?.attachments ? { attachments: prior.attachments } : {}),
+      ...(prior?.commandCategory ? { commandCategory: prior.commandCategory } : {}),
+    };
+  });
+  useChatStore.setState({ queuedMessages: [...synced, ...drafts] });
+}
 
 export const MessageEditor: React.FC = () => {
   const [editorValue, setEditorValue] = useState('');
@@ -49,6 +93,10 @@ export const MessageEditor: React.FC = () => {
   const [toolbarHeight, setToolbarHeight] = useState(0);
   // Tracks whether the user has dismissed the green clock to reveal the Stop button
   const [clockDismissed, setClockDismissed] = useState(false);
+  // Stop is not optimistic: the button waits for the backend verdict before claiming the session
+  // ended, so an unconfirmed cancel cannot light up the Resume affordance for a still-running agent.
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [cancelNotice, setCancelNotice] = useState<{ text: string; whileRunning: boolean } | null>(null);
   // React roots for inline image chips, keyed by container element for cleanup
   const imageRootsRef = useRef<Map<HTMLElement, Root>>(new Map());
   // Voice input: gated on the user's Task Models choices (asr enables the mic,
@@ -81,6 +129,7 @@ export const MessageEditor: React.FC = () => {
     isAwaitingPermission,
     addQueuedMessage,
     queuedMessages,
+    setRunningSessionId,
   } = useChatStore((state) => ({
     sessionId: state.sessionId,
     isStreaming: state.isStreaming,
@@ -94,6 +143,7 @@ export const MessageEditor: React.FC = () => {
     isAwaitingPermission: state.isAwaitingPermission,
     addQueuedMessage: state.addQueuedMessage,
     queuedMessages: state.queuedMessages,
+    setRunningSessionId: state.setRunningSessionId,
   }));
 
   // Read selected agent from global agent store
@@ -968,6 +1018,23 @@ export const MessageEditor: React.FC = () => {
     }
   }, [hasQueuedInput, isStreaming]);
 
+  // A stop notice belongs to the session it was reported for; drop it on switch.
+  useEffect(() => {
+    setCancelNotice(null);
+  }, [sessionId]);
+
+  // A notice that claims "still running" must not outlive the claim: recovery polling settles the
+  // session back to stopped whenever the backend reports no local run, and a leftover banner would
+  // then contradict the state on screen. A notice about the stop action itself ("could not confirm")
+  // claims nothing about the present, so the stopped view must not erase it. Clearing only on the way
+  // to not-streaming also keeps the recovery path — which sets streaming back to true — from wiping
+  // its own message before it is ever rendered.
+  useEffect(() => {
+    if (!isStreaming) {
+      setCancelNotice((notice) => (notice?.whileRunning ? null : notice));
+    }
+  }, [isStreaming]);
+
   // Consume quote chips requested from the selection toolbar
   const pendingQuote = useSideAskStore((s) => s.pendingQuote);
   const clearPendingQuote = useSideAskStore((s) => s.clearPendingQuote);
@@ -1011,6 +1078,77 @@ export const MessageEditor: React.FC = () => {
     }
   }, [hasQueuedMessages, sessionId]);
 
+  // An unconfirmed stop with live proof gives the session back to the agent: undo the optimistic
+  // teardown, keep the view attached to the run, and rebuild the queue from backend truth.
+  const restoreRunningSession = useCallback((sid: string, queued: QueuedMessage[], message: string) => {
+    // The verdict arrives after a round trip or two, during which the view may have moved on.
+    // Attaching a stopped session's running state to whatever is open now would hand the recovery poll
+    // (keyed on runningSessionId, not on the viewed session) the old session's transcript.
+    if (useChatStore.getState().sessionId !== sid) return;
+    setCancelReason(null);
+    setStreaming(true);
+    // Hand the session to the polling recovery loop — the local SSE was already aborted, so without
+    // this the view would show "running" with no way to receive further updates.
+    setRunningSessionId(sid);
+    setCancelNotice({ text: i18n(message), whileRunning: true });
+    // The stop request never reached the run (that is why this path ran at all), so its queue is
+    // still registered and the snapshot it returns is the truth.
+    void reconcileQueueAfterUnconfirmedStop(sid, queued, true);
+  }, [setCancelReason, setStreaming, setRunningSessionId]);
+
+  // Stop tears the local view down immediately for responsiveness, but the claim that the session
+  // ended is only kept if the backend confirms it actually aborted a run. Without that check an
+  // unconfirmed cancel left the UI showing "已结束" (and lit up the Resume affordance) while the
+  // agent kept running to its next timeout.
+  const handleStop = useCallback(async () => {
+    if (isCancelling) return;
+    setCancelNotice(null);
+    commitStreamingMessage();
+    getCurrentSendService()?.abort();
+    abortAllActiveStreams();
+    setCancelReason('Manually Cancelled');
+    setStreaming(false);
+    // Snapshot before the optimistic clear — the drafts among them exist nowhere else, so an
+    // unconfirmed stop needs them to rebuild the queue view.
+    const queued = useChatStore.getState().queuedMessages;
+    useChatStore.setState({ queuedMessages: [] });
+
+    if (!sessionId) return;
+    setIsCancelling(true);
+    const sid = sessionId;
+    try {
+      const outcome = await cancelChat(sid);
+      if (outcome.status === 'cancelled') return;
+      if (outcome.status === 'no_local_run') {
+        // The call downgraded the session row itself, so the pre-downgrade reading it returned is the
+        // only proof left. Idle beforehand means nothing was running — the usual case is the run
+        // finishing between the click and the request — so the stopped view stands unannounced.
+        if (!outcome.rowWasStreaming) return;
+        // Something was running that this instance could neither stop nor attach to, and the recovery
+        // poll cannot see it either (it reads this instance's registry and a row this call cleared).
+        // So report the action, not a state: keep the stopped view, warn that the stop is unconfirmed.
+        if (useChatStore.getState().sessionId !== sid) return;
+        setCancelReason(null);
+        setCancelNotice({
+          text: i18n('Could not confirm that the session stopped, please try again'),
+          whileRunning: false,
+        });
+        // No run here to read the queue from, so an empty snapshot would be a false "nothing queued".
+        void reconcileQueueAfterUnconfirmedStop(sid, queued, false);
+        return;
+      }
+      // failed: no verdict came back and no downgrade happened either, so a live status read still
+      // sees what the run wrote. A failed read must not pass for "idle" — it throws into the catch.
+      const live = await requireStreamingStatus(sid);
+      if (!live.streaming && !live.local) return;
+      restoreRunningSession(sid, queued, 'Could not stop this session — it is still running on the backend');
+    } catch {
+      restoreRunningSession(sid, queued, 'Could not confirm that the session stopped, please try again');
+    } finally {
+      setIsCancelling(false);
+    }
+  }, [isCancelling, sessionId, commitStreamingMessage, setCancelReason, setStreaming, restoreRunningSession]);
+
   // Button visibility logic during streaming:
   // - hasQueuedInput && !clockDismissed → show Clock, hide Stop
   // - hasQueuedInput && clockDismissed → show Stop, hide Clock
@@ -1025,6 +1163,7 @@ export const MessageEditor: React.FC = () => {
   return (
     <div className="flex flex-col gap-2 relative">
       {commandError && <div role="alert" className="text-xs text-destructive">{commandError}</div>}
+      {cancelNotice && <div role="alert" className="text-xs text-destructive">{cancelNotice.text}</div>}
       {voice.phase === 'refining' && (
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Loader2 className="w-3 h-3 animate-spin" />
@@ -1166,20 +1305,10 @@ export const MessageEditor: React.FC = () => {
                 <>
                   {showStopButton && (
                     <button
-                      className="p-1.5 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+                      className="p-1.5 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors disabled:opacity-60"
                       title={i18n('Stop')}
-                      onClick={() => {
-                        commitStreamingMessage();
-                        getCurrentSendService()?.abort();
-                        abortAllActiveStreams();
-                        if (sessionId) {
-                          cancelChat(sessionId);
-                        }
-                        setCancelReason('Manually Cancelled');
-                        setStreaming(false);
-                        // Clear queued messages — they will not be consumed after cancel
-                        useChatStore.setState({ queuedMessages: [] });
-                      }}
+                      disabled={isCancelling}
+                      onClick={() => { void handleStop(); }}
                     >
                       <Square className="w-4 h-4" />
                     </button>

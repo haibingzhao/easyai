@@ -54,11 +54,14 @@ export {
   cancelChat,
   replyPermission,
   getStreamingStatus,
+  requireStreamingStatus,
   addQueueMessage,
   getQueueMessages,
   removeQueueMessage,
   type SendMessageParams,
   type QueuedMessageDto,
+  type CancelStatus,
+  type CancelOutcome,
 } from './services/chat-service';
 
 export {

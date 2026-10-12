@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -16,6 +16,9 @@ function normalizeNewlines(text: string): string {
   // but only when NOT preceded by another backslash (avoid breaking \\n).
   return text.replace(/(?<!\\)\\n/g, '\n');
 }
+
+/** Threshold (px) to determine if the scroll container is at the bottom */
+const SCROLL_BOTTOM_THRESHOLD = 30;
 
 /** Brain icon from kilo-code */
 const BrainIcon: React.FC<{ className?: string }> = ({ className }) => (
@@ -38,6 +41,9 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({ content, isStreami
   const [expanded, setExpanded] = useState(isStreaming === true);
   const [elapsed, setElapsed] = useState(0);
   const startTimeRef = React.useRef<number | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const followBottomRef = useRef(true);
+  const prevScrollTopRef = useRef(0);
 
   // Start timer
   useEffect(() => {
@@ -72,10 +78,31 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({ content, isStreami
 
   const isCurrentlyStreaming = isStreaming && !isFinished;
 
+  const normalized = normalizeNewlines(content);
+
+  const handleBodyScroll = useCallback(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    if (el.scrollTop < prevScrollTopRef.current - 5) {
+      followBottomRef.current = false;
+    } else if (el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_BOTTOM_THRESHOLD) {
+      followBottomRef.current = true;
+    }
+    prevScrollTopRef.current = el.scrollTop;
+  }, []);
+
+  // Pin the body to the bottom as thinking deltas arrive; a manual scroll-up pauses it.
+  useEffect(() => {
+    if (!isCurrentlyStreaming || !expanded || !followBottomRef.current) return;
+    const el = bodyRef.current;
+    if (!el) return;
+    prevScrollTopRef.current = el.scrollTop;
+    el.scrollTop = el.scrollHeight;
+  }, [normalized, expanded, isCurrentlyStreaming]);
+
   const showDuration = elapsed > 0 || (durationMs !== undefined && durationMs > 0);
   const durationText = showDuration ? formatDurationSeconds(durationMs !== undefined ? Math.floor(durationMs / 1000) : elapsed) : '';
 
-  const normalized = normalizeNewlines(content);
   const preview = normalized.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
   const previewText = preview.length > 80 ? preview.slice(0, 80) + '…' : preview;
 
@@ -107,7 +134,11 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({ content, isStreami
       </button>
 
       {expanded && (
-        <div className="mt-1 mb-1 max-h-[24em] overflow-y-auto rounded-lg px-3 py-2.5 text-sm leading-relaxed text-muted-foreground bg-muted/60 border border-border dark:bg-white/[0.04] dark:border-white/[0.08] dark:text-muted-foreground/90">
+        <div
+          ref={bodyRef}
+          onScroll={handleBodyScroll}
+          className="mt-1 mb-1 max-h-[24em] overflow-y-auto rounded-lg px-3 py-2.5 text-sm leading-relaxed text-muted-foreground bg-muted/60 border border-border dark:bg-white/[0.04] dark:border-white/[0.08] dark:text-muted-foreground/90"
+        >
           <div className="prose prose-sm dark:prose-invert max-w-none">
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
               {normalized}

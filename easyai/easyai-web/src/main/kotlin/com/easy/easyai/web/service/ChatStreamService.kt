@@ -20,6 +20,7 @@ import com.easy.easyai.core.permission.PermissionService
 import com.easy.easyai.core.tool.ScriptEnvProvider
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.repository.session.AsyncSessionStore
+import com.easy.easyai.repository.session.CancelVerdict
 import com.easy.easyai.repository.session.SessionExecutionService
 import com.easy.easyai.skills.command.CommandCategory
 import com.easy.easyai.skills.command.CommandReferenceException
@@ -303,13 +304,22 @@ class ChatStreamService(
      * Cancel an ongoing chat session.
      * Delegates to [SessionExecutionService.cancelExecution] which handles:
      * handle removal → session.abort() → DB status update (synchronous).
+     *
+     * @return the [CancelVerdict]: whether a live run on this instance was actually aborted, plus
+     *   the session row's state before this call downgraded it. The controller reports both to the
+     *   client instead of claiming unconditional success — the downgrade erases the evidence, so a
+     *   client that re-reads `streaming-status` afterwards can never see the run this verdict is
+     *   about.
      */
-    suspend fun cancelChat(sessionId: String, userId: String = "system") {
-        try {
+    suspend fun cancelChat(sessionId: String, userId: String = "system"): CancelVerdict {
+        val verdict = try {
             if (executionService != null) {
                 executionService.cancelExecution(sessionId, userId)
             } else {
-                // Fallback: direct DB write when no execution service
+                // Fallback: direct DB write when no execution service. Runs are unregistered in this
+                // deployment (the chat flow's beginExecution is a no-op too), so there is nothing
+                // here that could be aborted — the write is bookkeeping, not a confirmed stop, and no
+                // run can be live behind it.
                 sessionStore?.let { store ->
                     try {
                         store.updateStatus(sessionId, "active", userId, expectedStatus = "streaming")
@@ -318,11 +328,25 @@ class ChatStreamService(
                         logger.warn("Failed to update status after cancel for {}", sessionId, e)
                     }
                 }
+                CancelVerdict(aborted = false, rowWasStreaming = false)
             }
-            sessionStore?.savePendingPermission(sessionId, null)
         } catch (e: Exception) {
             logger.warn("Failed to cancel session: {}", sessionId, e)
+            // The row may still say `streaming` when the failure happened before the downgrade, so it
+            // is still worth reading here — unlike the delegate path, this one erased nothing.
+            CancelVerdict(
+                aborted = false,
+                rowWasStreaming = runCatching { isSessionStreaming(sessionId, userId).remote }.getOrDefault(false)
+            )
         }
+        // Kept out of the try above: a failure to clear the pending permission must not report the
+        // cancel itself as unconfirmed, or the client would keep showing a running agent.
+        try {
+            sessionStore?.savePendingPermission(sessionId, null)
+        } catch (e: Exception) {
+            logger.warn("Failed to clear pending permission for session {}: {}", sessionId, e.message)
+        }
+        return verdict
     }
 
     // ==================== Queue management API ====================
@@ -1247,8 +1271,13 @@ class ChatStreamService(
         }
 
         // Register execution + persist streaming status
-        // NOTE: Do NOT reset endReason for compaction — it's not a new Agent execution
-        val handle = executionService?.beginExecution(sessionId, userId, session = null, resetEndReason = false)
+        // NOTE: Do NOT reset endReason for compaction — it's not a new Agent execution.
+        // onCancel keeps the cancel verdict honest: there is no ChatSession to abort here, so
+        // without the hook a Stop during compaction would report "cancelled" while the job ran on.
+        val handle = executionService?.beginExecution(
+            sessionId, userId, session = null, resetEndReason = false,
+            onCancel = { compactionJob.cancel() }
+        )
 
         try {
             channel.consumeAsFlow().collect { event ->

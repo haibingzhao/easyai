@@ -45,7 +45,7 @@ tools/
 ## CONVENTIONS
 - Each tool: separate `*ToolMessage.tsx` component
 - Props: tool call data (id, name, args, result, status)
-- `compact?: boolean`: render as a borderless process-group row — header from `ToolRowHeader` with a one-line summary from `getToolRowSummary`, details body unchanged. Rows auto-expand only while `status` is RUNNING/PENDING via `useStreamingRowExpand`; a manual toggle wins (`userTouchedRef`).
+- `compact?: boolean`: render as a borderless process-group row — header from `ToolRowHeader` with a one-line summary from `getToolRowSummary`, details body unchanged. Rows auto-expand only while `status` is RUNNING/PENDING via `useStreamingRowExpand` (third arg marks a tool already settled when a committed `result` outruns the status); a manual toggle wins via the returned marker. Don't reimplement that logic per renderer.
 - Use `CollapsibleSection.tsx` for expandable details
 - Icons from `icons.tsx`, not inline Lucide imports
 - `parsers.ts` handles arg parsing — keep UI components pure

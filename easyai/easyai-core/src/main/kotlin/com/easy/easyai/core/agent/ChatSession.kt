@@ -36,6 +36,10 @@ class ChatSession(
     private val followUpQueue = PendingMessageQueue()
     @Volatile
     private var abortRequested = false
+
+    // Written on the producer coroutine (Dispatchers.Default), read by abort() on whatever thread
+    // handles the cancel request — needs the same visibility guarantee as abortRequested above.
+    @Volatile
     private var currentRunJob: Job? = null
 
     /** End reason from the last agent execution (e.g. "normal", "max_iterations"). */

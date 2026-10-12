@@ -2,6 +2,8 @@ package com.easy.easyai.core.agent
 
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.core.event.AgentEvent
+import com.easy.easyai.core.event.RetryEvent
 import com.easy.easyai.core.resilience.CircuitBreakerOpenException
 import com.easy.easyai.core.resilience.LlmCircuitBreakerRegistry
 import io.mockk.every
@@ -22,9 +24,10 @@ import kotlin.test.assertTrue
  * Integration test: AgentLoopRunner + endpoint circuit breaker.
  *
  * Scenario: the endpoint is unreachable. The first 3 outage-class failures
- * trip the breaker; the 4th attempt (normally another full-timeout retry)
- * fails fast with [CircuitBreakerOpenException] without touching the model,
- * and subsequent calls never reach the model at all.
+ * trip the breaker; the 4th attempt (normally another full-timeout retry) is
+ * rejected by [CircuitBreakerOpenException] before touching the model, which the runner surfaces as
+ * an [LlmEndpointUnavailableException] carrying that breaker as its cause, and later calls fail fast
+ * the same way without reaching the model at all.
  */
 class AgentLoopRunnerCircuitBreakerTest {
 
@@ -72,10 +75,13 @@ class AgentLoopRunnerCircuitBreakerTest {
 
         // Attempts 1-3 fail and count toward the breaker (threshold 3);
         // attempt 4 is rejected by the open breaker before any model call.
-        val e = assertFailsWith<CircuitBreakerOpenException> {
+        val e = assertFailsWith<LlmEndpointUnavailableException> {
             runner.callLLMAndBuildResponse(mutableListOf(), prompt, "m1", 1) { }
         }
-        assertTrue(e.message!!.contains("service unavailable"))
+        assertTrue(e.cause is CircuitBreakerOpenException)
+        assertTrue(e.message!!.contains("熔断"))
+        // How long the breaker still blocks is copied into the user-facing message.
+        assertTrue(e.message!!.contains("后可重试"))
         verify(exactly = 3) { chatModel.stream(any<Prompt>()) }
     }
 
@@ -86,17 +92,37 @@ class AgentLoopRunnerCircuitBreakerTest {
 
         // Trip the breaker with the first runner.
         val first = createRunner(chatModel)
-        assertFailsWith<CircuitBreakerOpenException> {
+        assertFailsWith<LlmEndpointUnavailableException> {
             first.callLLMAndBuildResponse(mutableListOf(), prompt, "m1", 1) { }
         }
 
         // A second runner (e.g. another session on the same endpoint) shares
         // the breaker state and fails fast with zero model calls.
         val second = createRunner(chatModel)
-        assertFailsWith<CircuitBreakerOpenException> {
+        assertFailsWith<LlmEndpointUnavailableException> {
             second.callLLMAndBuildResponse(mutableListOf(), prompt, "m2", 1) { }
         }
         verify(exactly = 3) { chatModel.stream(any<Prompt>()) }
+    }
+
+    @Test
+    fun `open circuit is not misclassified as a retriable timeout`() = runBlocking {
+        val chatModel = failingModel()
+        val prompt = Prompt(listOf(com.easy.easyai.api.llm.UserMessage("hi")))
+
+        // Trip the breaker first; these 3 genuine outage attempts legitimately emit RetryEvents.
+        assertFailsWith<LlmEndpointUnavailableException> {
+            createRunner(chatModel).callLLMAndBuildResponse(mutableListOf(), prompt, "m1", 1) { }
+        }
+
+        // A fresh runner whose very first attempt hits the open breaker must fail fast: an open
+        // breaker is a verdict, not a transient timeout, so it emits no RetryEvent and consumes
+        // no retry budget.
+        val pushed = mutableListOf<AgentEvent>()
+        assertFailsWith<LlmEndpointUnavailableException> {
+            createRunner(chatModel).callLLMAndBuildResponse(mutableListOf(), prompt, "m2", 1) { pushed.add(it) }
+        }
+        assertTrue(pushed.none { it is RetryEvent }, "expected no RetryEvent, got $pushed")
     }
 
     @Test

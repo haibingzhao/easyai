@@ -1,11 +1,12 @@
 import { create } from 'zustand';
 import { streamQuickAsk } from '../quick-ask-service';
 import type { QuickAskTurn } from '../quick-ask-service';
-import { i18n } from '@/utils/i18n';
 
 export interface SideAskMessage {
   role: 'user' | 'assistant';
   content: string;
+  /** Set when the stream failed; rendered as an error banner instead of markdown. */
+  error?: string;
 }
 
 interface SideAskState {
@@ -20,6 +21,7 @@ interface SideAskState {
   openWithQuote: (text: string) => void;
   setModelConfigId: (id: string) => void;
   ask: (question: string) => Promise<void>;
+  abort: () => void;
   abortAndClose: () => void;
   requestQuoteToEditor: (text: string) => void;
   clearPendingQuote: () => void;
@@ -64,14 +66,21 @@ export const useSideAskStore = create<SideAskState>()((set, get) => ({
     });
   },
 
+  abort: () => {
+    get().abortController?.abort();
+    set({ isStreaming: false, abortController: null });
+  },
+
   ask: async (question) => {
     const state = get();
     if (state.isStreaming || !state.modelConfigId) return;
     const controller = new AbortController();
-    const history: QuickAskTurn[] = state.messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
+    const history: QuickAskTurn[] = state.messages
+      .filter((m) => m.content !== '')
+      .map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
     set((s) => ({
       isStreaming: true,
       abortController: controller,
@@ -82,15 +91,21 @@ export const useSideAskStore = create<SideAskState>()((set, get) => ({
       ],
     }));
 
-    const appendToLastAssistant = (text: string) =>
+    const patchLastAssistant = (patch: (last: SideAskMessage) => SideAskMessage) =>
       set((s) => {
         const messages = [...s.messages];
         const last = messages[messages.length - 1];
         if (last && last.role === 'assistant') {
-          messages[messages.length - 1] = { ...last, content: last.content + text };
+          messages[messages.length - 1] = patch(last);
         }
         return { messages };
       });
+
+    const appendToLastAssistant = (text: string) =>
+      patchLastAssistant((last) => ({ ...last, content: last.content + text }));
+
+    const failLastAssistant = (errorMessage: string) =>
+      patchLastAssistant((last) => ({ ...last, error: errorMessage }));
 
     try {
       await streamQuickAsk(
@@ -105,16 +120,20 @@ export const useSideAskStore = create<SideAskState>()((set, get) => ({
           if (event.type === 'text_delta') {
             appendToLastAssistant(event.delta);
           } else if (event.type === 'error') {
-            appendToLastAssistant(`\n\n> ${i18n('Quick ask failed')}: ${event.errorMessage ?? 'unknown error'}`);
+            failLastAssistant(event.errorMessage ?? 'unknown error');
           }
         },
       );
     } catch (error) {
       if ((error as Error).name !== 'AbortError') {
-        appendToLastAssistant(`\n\n> ${i18n('Quick ask failed')}: ${(error as Error).message}`);
+        failLastAssistant((error as Error).message);
       }
     } finally {
-      set({ isStreaming: false, abortController: null });
+      set((s) => ({
+        isStreaming: false,
+        abortController: null,
+        messages: s.messages.filter((m) => m.role !== 'assistant' || !!m.content || !!m.error),
+      }));
     }
   },
 }));
