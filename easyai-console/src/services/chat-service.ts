@@ -337,19 +337,52 @@ export function abortAllActiveStreams(): void {
 }
 
 /**
+ * Verdict for a stop request. `cancelled` / `no_local_run` mirror the backend's `status` field;
+ * `failed` is synthesized here when the request produced no usable response (network error or
+ * non-2xx) — the server never returns it.
+ */
+export type CancelStatus = 'cancelled' | 'no_local_run' | 'failed';
+
+/**
+ * Outcome of a stop request.
+ *
+ * @property rowWasStreaming the backend's session row read `streaming` right before the cancel
+ * downgraded it. `/cancel` writes the row to `active` whether or not it stopped a run, so this
+ * pre-downgrade reading is the only proof left: with `no_local_run` it separates "there was nothing
+ * running" (false) from "something was running and this instance could not stop it" (true). Always
+ * false for `failed`, since no verdict came back.
+ */
+export interface CancelOutcome {
+  status: CancelStatus;
+  rowWasStreaming: boolean;
+}
+
+/**
  * Cancel an ongoing chat session by calling the backend /api/chat/cancel endpoint.
  * Used when the frontend is in polling mode (historical running session) and has no
  * local SSE connection to abort — the backend cancel endpoint stops the agent directly.
+ *
+ * Returns the backend's verdict instead of assuming success. `no_local_run` means this server
+ * instance had nothing to abort (already finished, already cancelled, or executing on another
+ * instance); `failed` means the request did not complete. Neither may be presented to the user
+ * as a confirmed stop.
  */
-export async function cancelChat(sessionId: string): Promise<void> {
+export async function cancelChat(sessionId: string): Promise<CancelOutcome> {
   try {
-    await authFetch(`${API_BASE}/cancel`, {
+    const response = await authFetch(`${API_BASE}/cancel`, {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify({ sessionId }),
     });
+    if (!response.ok) return { status: 'failed', rowWasStreaming: false };
+    const data: { status?: string; rowWasStreaming?: string } = await response.json();
+    return {
+      status: data.status === 'cancelled' ? 'cancelled' : 'no_local_run',
+      rowWasStreaming: data.rowWasStreaming === 'true',
+    };
   } catch (e) {
     console.warn('[cancelChat] Failed to cancel session:', e);
+    return { status: 'failed', rowWasStreaming: false };
   }
 }
 
@@ -391,6 +424,22 @@ export async function getStreamingStatus(sessionId: string): Promise<{ streaming
   return response.json();
 }
 
+/**
+ * Strict variant of {@link getStreamingStatus} for callers that must distinguish "confirmed idle"
+ * from "could not tell": a non-2xx throws instead of reading as an idle verdict. Used when a stop
+ * request itself failed (`/cancel` never produced a verdict), where treating a 5xx as `streaming:false`
+ * would show the session as stopped while the agent may still be running.
+ *
+ * Not usable after a `/cancel` that returned `no_local_run`: that call downgrades the row itself, so
+ * the only reading still standing is the `rowWasStreaming` the response carried. Here the request
+ * failed, so the row was left as the run wrote it and both dimensions stay informative.
+ */
+export async function requireStreamingStatus(sessionId: string): Promise<{ streaming: boolean; local: boolean }> {
+  const response = await authFetch(`${API_BASE}/session/${sessionId}/streaming-status`);
+  if (!response.ok) throw new Error(`streaming-status check failed: ${response.status}`);
+  return response.json();
+}
+
 // ==================== Queue management API ====================
 
 export interface QueuedMessageDto {
@@ -424,10 +473,16 @@ export async function addQueueMessage(
 
 /**
  * Get the current queue snapshot for a session.
+ *
+ * Throws when the request fails, so that an empty list stays a real answer ("nothing queued") for
+ * callers rebuilding queue state. Note the backend still answers with an empty list when no run is
+ * registered on the answering instance (queue state lives in that run's memory), which no status code
+ * can distinguish from "empty" — callers that must not read it as empty need that from their own
+ * knowledge of whether a run is live.
  */
 export async function getQueueMessages(sessionId: string): Promise<QueuedMessageDto[]> {
   const response = await authFetch(`${API_BASE}/session/${sessionId}/queue`);
-  if (!response.ok) return [];
+  if (!response.ok) throw new Error(`Failed to load queued messages: ${response.status}`);
   return response.json();
 }
 

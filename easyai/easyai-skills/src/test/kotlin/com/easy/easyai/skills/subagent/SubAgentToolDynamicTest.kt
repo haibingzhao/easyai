@@ -11,7 +11,6 @@ import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.tool.ToolUpdate
-import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.runTest
@@ -346,12 +345,15 @@ class SubAgentToolDynamicTest {
         @Test
         fun `dynamic path builds sub-agent context from parent resources`() = runTest {
             var captured: AgentContext? = null
-            val failingService = mockk<AgentService> {
-                every { defaultChatModel } throws IllegalStateException("boom")
-            }
             val underTest = tool(
-                service = failingService,
-                listenerFactory = { _, ctx, _, _ -> captured = ctx; null }
+                service = mockk<AgentService>(),
+                // Throwing here stops the run right after the context is built. Agent resolves its
+                // ChatModel on first use, so the sub-agent no longer fails at construction and this
+                // run would otherwise continue into the real loop on a background dispatcher.
+                listenerFactory = { _, ctx, _, _ ->
+                    captured = ctx
+                    throw IllegalStateException("boom")
+                }
             )
             val context = parentContext(sessionId = "s-1")
 

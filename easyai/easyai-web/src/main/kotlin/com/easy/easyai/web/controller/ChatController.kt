@@ -323,13 +323,26 @@ class ChatController(
 
     /**
      * Cancel an ongoing chat session.
+     *
+     * Returns `status=cancelled` only when a live run on this instance was actually aborted.
+     * `status=no_local_run` means the stop could not be confirmed here — nothing was registered
+     * (already finished, already cancelled, or executing on another instance) or the cancel itself
+     * failed. The client must not present that as success.
+     *
+     * `rowWasStreaming` carries the session row's state captured before this call downgraded it to
+     * `active`. That downgrade happens either way, so a follow-up `streaming-status` read can only
+     * ever report what this response already says — the client needs this field to tell "there was
+     * nothing running" apart from "something was running and this instance could not stop it".
      */
     @PostMapping("/cancel")
     fun cancelChat(@RequestBody request: CancelRequest): Mono<Map<String, String>> {
         return mono {
             val userId = verifyOwnership(request.sessionId)
-            chatStreamService.cancelChat(request.sessionId, userId)
-            mapOf("status" to "cancelled")
+            val verdict = chatStreamService.cancelChat(request.sessionId, userId)
+            mapOf(
+                "status" to if (verdict.aborted) "cancelled" else "no_local_run",
+                "rowWasStreaming" to verdict.rowWasStreaming.toString()
+            )
         }
     }
 

@@ -11,6 +11,7 @@ import { extractOutput, getToolRowSummary } from './parsers';
 import { getToolDisplayName } from './icons';
 import { ToolRowHeader } from './ToolRowHeader';
 import { ToolSection } from './ToolSection';
+import { useStreamingRowExpand } from './useStreamingRowExpand';
 import { i18n } from '@/utils/i18n';
 import {
   getShikiHighlighter,
@@ -47,13 +48,14 @@ export function CalcToolMessage({
   const isError = (result?.isError ?? false) || status === 'FAILED';
   const output = extractOutput({ result, streamingOutput });
 
-  // Expand script while streaming, collapse by default when completed
+  // Expand script while streaming, auto-collapse once the result lands; a manual toggle wins
   const [expanded, setExpanded] = useState(isStreaming);
+  const markTouched = useStreamingRowExpand(status, setExpanded, !!result);
 
-  // Auto-expand script when streaming state changes
-  useEffect(() => {
-    if (isStreaming) setExpanded(true);
-  }, [isStreaming]);
+  const toggleExpanded = () => {
+    markTouched();
+    setExpanded((prev) => !prev);
+  };
 
   // Shiki highlighting
   const [highlighted, setHighlighted] = useState('');
@@ -129,7 +131,7 @@ export function CalcToolMessage({
       status={status ?? 'PENDING'}
       summary={getToolRowSummary(toolCall.toolName, toolCall.args)}
       expanded={expanded}
-      onToggle={() => setExpanded(!expanded)}
+      onToggle={toggleExpanded}
     />
   );
 
@@ -141,7 +143,7 @@ export function CalcToolMessage({
       {compact ? rowHeader : (
       <div
         className="p-3 flex items-center justify-between gap-2 cursor-pointer hover:bg-muted/50 transition-colors"
-        onClick={() => setExpanded(!expanded)}
+        onClick={toggleExpanded}
       >
         <div className="flex items-center gap-2">
           <Calculator className="w-4 h-4 text-muted-foreground" />

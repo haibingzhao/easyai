@@ -1,7 +1,12 @@
 package com.easy.easyai.core.event
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -65,6 +70,67 @@ class EventStreamTest {
             }
 
             assertTrue(caught is RuntimeException)
+        }
+    }
+
+    @Nested
+    inner class `Producer job identity` {
+
+        /**
+         * `AgentRunner` registers `coroutineContext[Job]` resolved inside the producer lambda so
+         * `ChatSession.abort()` can cancel the run. `ProducerScope` is a `CoroutineScope`, so a bare
+         * `coroutineContext` binds to the receiver's member rather than the suspend intrinsic — if the
+         * receiver's context is not the running coroutine's context, abort() cancels a job nothing
+         * executes in and the run survives cancellation forever.
+         */
+        @Test
+        fun `job resolved inside producer actually cancels the producer`() = runBlocking {
+            var registered: Job? = null
+            val outcome = CompletableDeferred<Boolean>()
+
+            val stream = EventStream.create<AgentEvent, Unit> {
+                registered = coroutineContext[Job]
+                try {
+                    delay(60_000)
+                    outcome.complete(false)
+                } catch (e: CancellationException) {
+                    outcome.complete(true)
+                    throw e
+                }
+            }
+            stream.asFlow()
+
+            val job = withTimeout(5_000) {
+                while (registered == null) delay(10)
+                registered!!
+            }
+            job.cancel()
+
+            assertEquals(
+                true,
+                withTimeoutOrNull(5_000) { outcome.await() },
+                "cancelling the Job resolved inside the producer must stop the producer coroutine"
+            )
+        }
+
+        @Test
+        fun `producer scope context is the running coroutine context`() = runBlocking {
+            var scopeJob: Job? = null
+            var intrinsicJob: Job? = null
+
+            val stream = EventStream.create<AgentEvent, Unit> {
+                scopeJob = this.coroutineContext[Job]
+                intrinsicJob = kotlin.coroutines.coroutineContext[Job]
+                end(Unit)
+            }
+            stream.asFlow().collect { }
+            stream.result()
+
+            assertEquals(
+                intrinsicJob,
+                scopeJob,
+                "ProducerScope.coroutineContext must expose the running coroutine's context, not a detached child Job"
+            )
         }
     }
 

@@ -340,8 +340,8 @@ private class ChannelEventStream<TEvent : AgentEvent, TResult>(
 private class DefaultProducerScope<TEvent : AgentEvent, TResult>(
     private val channel: Channel<TEvent>,
     private val resultDeferred: CompletableDeferred<TResult>,
-    parentContext: CoroutineContext
-) : ProducerScope<TEvent, TResult>, CoroutineScope by CoroutineScope(parentContext + Job(parentContext[Job])) {
+    override val coroutineContext: CoroutineContext
+) : ProducerScope<TEvent, TResult> {
 
     override suspend fun push(event: TEvent) {
         channel.send(event)

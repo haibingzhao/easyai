@@ -75,7 +75,10 @@ class LlmCircuitBreakerTest {
             now += 10_000 // 10s into the 30s cooldown
             val e = assertFailsWith<CircuitBreakerOpenException> { cb.acquirePermission() }
             assertEquals(20L, e.retryAfterSeconds)
-            assertTrue(e.message!!.contains("service unavailable"))
+            // The cooldown is the part worth telling a user about, so it rides in the text too (the
+            // agent loop copies it into the user-facing wrapper).
+            assertTrue(e.message!!.contains("circuit breaker open"))
+            assertTrue(e.message!!.contains("retry after 20s"))
         }
 
         @Test

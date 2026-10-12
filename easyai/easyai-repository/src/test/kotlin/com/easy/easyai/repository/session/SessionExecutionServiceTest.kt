@@ -178,21 +178,45 @@ class SessionExecutionServiceTest {
             service.beginExecution("s1", "user1", session = session)
             testScheduler.advanceUntilIdle()
 
-            service.cancelExecution("s1", "user1")
+            val verdict = service.cancelExecution("s1", "user1")
+            assertTrue(verdict.aborted)
 
             verify { session.abort() }
             coVerify { sessionStore.updateStatus("s1", "active", "user1", expectedStatus = "streaming") }
             coVerify { sessionStore.saveEndReason("s1", "cancelled", "user1") }
             assertFalse(service.isLocallyExecuting("s1"))
+            // A confirmed stop proves itself, so the row state is not read on this path.
+            coVerify(exactly = 0) { sessionStore.findStatus(any(), any()) }
         }
 
         @Test
-        fun `no session - still updates DB`() = runTest {
+        fun `sessionless run with an abort hook is a confirmed cancel`() = runTest {
             service = createService(testScheduler)
+            var aborted = false
+            service.beginExecution("s1", "user1", session = null, onCancel = { aborted = true })
+            testScheduler.advanceUntilIdle()
+
+            // Manual compaction registers without a ChatSession; the hook is what makes "cancelled"
+            // true — without it the client would be told the run stopped while the job ran on.
+            assertTrue(service.cancelExecution("s1", "user1").aborted)
+            assertTrue(aborted)
+
+            coVerify { sessionStore.updateStatus("s1", "active", "user1", expectedStatus = "streaming") }
+            coVerify { sessionStore.saveEndReason("s1", "cancelled", "user1") }
+        }
+
+        @Test
+        fun `sessionless run without an abort hook reports unconfirmed but still updates DB`() = runTest {
+            service = createService(testScheduler)
+            coEvery { sessionStore.findStatus("s1", "user1") } returns "streaming"
             service.beginExecution("s1", "user1", session = null)
             testScheduler.advanceUntilIdle()
 
-            service.cancelExecution("s1", "user1")
+            val verdict = service.cancelExecution("s1", "user1")
+            assertFalse(verdict.aborted)
+            // The row said streaming before this call downgraded it: something was running here that
+            // could not be stopped, which is what the client warns about.
+            assertTrue(verdict.rowWasStreaming)
 
             coVerify { sessionStore.updateStatus("s1", "active", "user1", expectedStatus = "streaming") }
             coVerify { sessionStore.saveEndReason("s1", "cancelled", "user1") }
@@ -201,10 +225,65 @@ class SessionExecutionServiceTest {
         @Test
         fun `unknown session - attempts DB update for cross-instance semantics`() = runTest {
             service = createService(testScheduler)
-            service.cancelExecution("unknown", "user1")
+
+            assertFalse(service.cancelExecution("unknown", "user1").aborted)
 
             coVerify { sessionStore.updateStatus("unknown", "active", "user1", expectedStatus = "streaming") }
             coVerify { sessionStore.saveEndReason("unknown", "cancelled", "user1") }
+        }
+
+        @Test
+        fun `second cancel of the same session reports no local run`() = runTest {
+            service = createService(testScheduler)
+            val session = mockk<ChatSession>(relaxed = true)
+            service.beginExecution("s1", "user1", session = session)
+            testScheduler.advanceUntilIdle()
+
+            assertTrue(service.cancelExecution("s1", "user1").aborted)
+            // The run is gone, so a repeat cancel cannot claim to have stopped anything — this is
+            // the signal the client uses instead of showing "已结束" unconditionally.
+            assertFalse(service.cancelExecution("s1", "user1").aborted)
+            verify(exactly = 1) { session.abort() }
+        }
+
+        @Test
+        fun `row state is read before the downgrade, not after`() = runTest {
+            service = createService(testScheduler)
+            var downgraded = false
+            coEvery { sessionStore.findStatus("s1", "user1") } answers {
+                if (downgraded) "active" else "streaming"
+            }
+            coEvery { sessionStore.updateStatus("s1", "active", "user1", expectedStatus = "streaming") } answers {
+                downgraded = true
+                Unit
+            }
+
+            // Reads the row before writing it: a verdict computed afterwards would always say false,
+            // which is the exact blindness the client used to hit.
+            assertTrue(service.cancelExecution("s1", "user1").rowWasStreaming)
+            assertTrue(downgraded)
+        }
+
+        @Test
+        fun `idle row means nothing was running, so no false warning`() = runTest {
+            service = createService(testScheduler)
+            coEvery { sessionStore.findStatus("s1", "user1") } returns "active"
+
+            val verdict = service.cancelExecution("s1", "user1")
+            assertFalse(verdict.aborted)
+            assertFalse(verdict.rowWasStreaming)
+        }
+
+        @Test
+        fun `unreadable row state degrades to no evidence and still downgrades`() = runTest {
+            service = createService(testScheduler)
+            coEvery { sessionStore.findStatus(any(), any()) } throws IllegalStateException("db down")
+
+            val verdict = service.cancelExecution("s1", "user1")
+            assertFalse(verdict.aborted)
+            assertFalse(verdict.rowWasStreaming)
+
+            coVerify { sessionStore.updateStatus("s1", "active", "user1", expectedStatus = "streaming") }
         }
     }
 

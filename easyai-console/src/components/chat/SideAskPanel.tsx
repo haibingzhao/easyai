@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { X, Quote, Send } from 'lucide-react';
+import { AlertCircle, Quote, Send, Square, X } from 'lucide-react';
 import { markdownCodeComponents } from './markdownCodeComponents';
 import { ModelSelector } from './ModelSelector';
 import { useSideAskStore } from '@/services/stores/side-ask-store';
@@ -20,6 +20,7 @@ export const SideAskPanel: React.FC = () => {
   const modelConfigId = useSideAskStore((s) => s.modelConfigId);
   const setModelConfigId = useSideAskStore((s) => s.setModelConfigId);
   const abortAndClose = useSideAskStore((s) => s.abortAndClose);
+  const abort = useSideAskStore((s) => s.abort);
   const ask = useSideAskStore((s) => s.ask);
   const [input, setInput] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
@@ -73,7 +74,7 @@ export const SideAskPanel: React.FC = () => {
               </div>
             );
           }
-          if (!message.content) {
+          if (!message.content && !message.error) {
             return isLast && isStreaming ? (
               <div key={index} className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
@@ -82,10 +83,22 @@ export const SideAskPanel: React.FC = () => {
             ) : null;
           }
           return (
-            <div key={index} className="prose prose-sm dark:prose-invert max-w-none break-words">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
-                {message.content}
-              </ReactMarkdown>
+            <div key={index} className="flex flex-col gap-2">
+              {message.content && (
+                <div className="prose prose-sm dark:prose-invert max-w-none break-words">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
+                    {message.content}
+                  </ReactMarkdown>
+                </div>
+              )}
+              {message.error && (
+                <div className="flex items-start gap-1.5 p-2 rounded-md bg-destructive/10 border border-destructive/20">
+                  <AlertCircle className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5" />
+                  <span className="text-xs text-destructive whitespace-pre-wrap break-words">
+                    {i18n('Quick ask failed')}: {message.error}
+                  </span>
+                </div>
+              )}
             </div>
           );
         })}
@@ -112,12 +125,16 @@ export const SideAskPanel: React.FC = () => {
             onModelChange={(configId) => setModelConfigId(configId)}
           />
           <button
-            onClick={submit}
-            disabled={isStreaming || !input.trim()}
-            className="p-1.5 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-            title={i18n('Send')}
+            onClick={isStreaming ? abort : submit}
+            disabled={!isStreaming && !input.trim()}
+            className={`p-1.5 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              isStreaming
+                ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                : 'bg-primary text-primary-foreground hover:opacity-90'
+            }`}
+            title={isStreaming ? i18n('Stop') : i18n('Send')}
           >
-            <Send className="w-4 h-4" />
+            {isStreaming ? <Square className="w-4 h-4" /> : <Send className="w-4 h-4" />}
           </button>
         </div>
       </div>

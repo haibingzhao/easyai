@@ -28,8 +28,9 @@ private const val RENDER_VISUAL_DESCRIPTION = """Render a self-contained HTML or
 - Outer background must stay transparent; the host provides the card surface.
 - Colors ONLY through contract CSS variables, never hard-coded hex/rgb:
   base: var(--color-background-primary|secondary|tertiary), var(--color-text-primary|secondary|tertiary), var(--color-border-tertiary|secondary|primary), var(--color-background-info|danger|success|warning), var(--color-text-info|danger|success|warning), var(--font-sans|serif|mono), var(--border-radius-md|lg|xl)
-  palette: var(--viz-{family}-{role}) with family in neutral|blue|green|red|amber|purple|cyan|pink|teal and role in fill|stroke|title|subtitle
-- SVG presentation attributes do not resolve var(): put colors in style="fill:var(--viz-blue-fill)" or in a <style> rule.
+  palette: var(--viz-{family}-{role}) with family in neutral|blue|green|red|amber|purple|cyan|pink|teal and role in fill|accent|stroke|title|subtitle
+- Data marks (bars, lines, points, segments) use `accent`; `fill` is a subtle surface color for chips and zone backgrounds only — in light theme fill is near-white and invisible as a bar.
+- SVG presentation attributes do not resolve var(): put colors in style="fill:var(--viz-blue-accent)" or in a <style> rule.
 - The same fragment must work in light AND dark theme; never assume the current mode.
 
 [LAYOUT CONTRACT] Body text 13px, font weight only 400 or 500, never below 11px. No gradients, shadows, blur or glow. No HTML/CSS comments. No position:fixed; the root sizes itself via viewBox or width:100%.

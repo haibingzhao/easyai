@@ -305,3 +305,14 @@ internal class ContentFilteredException(
     message: String,
     cause: Throwable?,
 ) : RuntimeException(message, cause)
+
+/**
+ * Thrown when the LLM call is refused because the endpoint's circuit breaker is OPEN
+ * (see [com.easy.easyai.core.resilience.CircuitBreakerOpenException]). Carries a
+ * user-facing message while preserving the upstream cause for diagnostics. Never retried
+ * by the agent loop — retrying would only be rejected by the same open breaker.
+ */
+internal class LlmEndpointUnavailableException(
+    message: String,
+    cause: Throwable?,
+) : RuntimeException(message, cause)

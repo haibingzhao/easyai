@@ -318,9 +318,9 @@ class AgentTest {
 
         @Test
         fun `no config and no host default fails with an actionable message`() {
-            val failure = assertFailsWith<IllegalStateException> {
-                Agent(AgentContext(agentId = "a1"), serviceWith(null))
-            }
+            val agent = Agent(AgentContext(agentId = "a1"), serviceWith(null))
+
+            val failure = assertFailsWith<IllegalStateException> { agent.chatModel }
 
             val message = requireNotNull(failure.message)
             assertTrue("no model config was resolved" in message, message)
@@ -336,13 +336,19 @@ class AgentTest {
             every { services.supportsProtocol(Protocol.ANTHROPIC) } returns false
             every { services.defaultChatModel } returns null
 
-            val failure = assertFailsWith<IllegalStateException> {
-                Agent(AgentContext(agentId = "a1", modelConfig = config), services)
-            }
+            val agent = Agent(AgentContext(agentId = "a1", modelConfig = config), services)
+            val failure = assertFailsWith<IllegalStateException> { agent.chatModel }
 
             val message = requireNotNull(failure.message)
             assertTrue("cfg-9" in message, message)
             assertTrue("ANTHROPIC" in message, message)
+        }
+
+        @Test
+        fun `a config-less agent is constructible - only running it needs a model`() {
+            val agent = Agent(AgentContext(agentId = "default-agent"), serviceWith(null))
+
+            assertFailsWith<IllegalStateException> { agent.chatModel }
         }
     }
 }

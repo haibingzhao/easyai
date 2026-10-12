@@ -46,9 +46,26 @@ class SessionCompletedEvent(
 class ExecutionHandle internal constructor(
     val sessionId: String,
     val userId: String,
-    /** The running [ChatSession], or null for compaction-only executions. */
+    /** The running [ChatSession], or null when the execution has no agent (compaction). */
     val session: ChatSession?,
-    internal val beginJob: Job?
+    internal val beginJob: Job?,
+    /** Abort hook for executions with no [session] to abort, e.g. cancelling the compaction job. */
+    internal val onCancel: (() -> Unit)?
+)
+
+/**
+ * Outcome of [SessionExecutionService.cancelExecution].
+ *
+ * @param aborted true only when this instance stopped a live run of its own.
+ * @param rowWasStreaming the session row read `streaming` immediately before this cancel downgraded
+ *   it. Captured because the call itself erases both proofs: it removes the local handle and writes
+ *   the row to `active`, so after it returns neither this instance's registry nor the row can say
+ *   whether a run was live. With `aborted == false` it is the difference between "there was nothing
+ *   running" and "something was running that this instance could not stop".
+ */
+data class CancelVerdict(
+    val aborted: Boolean,
+    val rowWasStreaming: Boolean,
 )
 
 /**
@@ -87,13 +104,16 @@ class SessionExecutionService(
      * @param userId The owning user ID
      * @param session The running ChatSession (null for compaction)
      * @param resetEndReason Whether to clear stale endReason (false for compaction)
+     * @param onCancel Abort hook for executions with no [session]; without either, [cancelExecution]
+     *   has nothing to stop and cannot report a confirmed cancel
      * @return A handle to pass to [endExecution] when the execution completes
      */
     fun beginExecution(
         sessionId: String,
         userId: String,
         session: ChatSession? = null,
-        resetEndReason: Boolean = true
+        resetEndReason: Boolean = true,
+        onCancel: (() -> Unit)? = null
     ): ExecutionHandle {
         val beginJob = sessionStore?.let { store ->
             statusScope.launch {
@@ -108,7 +128,7 @@ class SessionExecutionService(
             }
         }
 
-        val handle = ExecutionHandle(sessionId, userId, session, beginJob)
+        val handle = ExecutionHandle(sessionId, userId, session, beginJob, onCancel)
         val previous = executions.put(sessionId, handle)
         if (previous != null) {
             logger.warn("Overwriting execution handle for session {} (SSE reconnect or concurrent invocation)", sessionId)
@@ -188,10 +208,25 @@ class SessionExecutionService(
      *
      * @param sessionId The session ID to cancel
      * @param userId The owning user ID
+     * @return [CancelVerdict] — `aborted` reports whether this instance stopped a live run, and
+     *   [CancelVerdict.rowWasStreaming] carries the pre-downgrade row state as the only evidence
+     *   left for callers, because the DB downgrade below runs either way. A false `aborted` does not
+     *   mean the cancel was ignored.
      */
-    suspend fun cancelExecution(sessionId: String, userId: String) {
+    suspend fun cancelExecution(sessionId: String, userId: String): CancelVerdict {
         val handle = executions.remove(sessionId)
+        val abortable = handle != null && (handle.session != null || handle.onCancel != null)
+        when {
+            handle == null ->
+                // Was silent before: the caller had no way to tell "stopped a run" from "there was
+                // nothing here to stop" (already finished, already cancelled, or executing on
+                // another instance), so an ineffective cancel looked exactly like a successful one.
+                logger.warn("Cancel for session {} found no local run to stop (finished, already cancelled, or another instance)", sessionId)
+            !abortable ->
+                logger.warn("Cancel for session {} matched a registered run with no abort path, reporting it as unconfirmed", sessionId)
+        }
         handle?.session?.abort()
+        handle?.onCancel?.invoke()
 
         // Wait for beginJob to ensure DB is in "streaming" before downgrading.
         // Without this, cancel could race with the async markStreaming:
@@ -203,6 +238,17 @@ class SessionExecutionService(
             logger.warn("Begin job failed during cancel for session {}: {}", sessionId, e.message)
         }
 
+        // Read after the join (the row may not say `streaming` until then) and before the downgrade
+        // below (after it, nothing can). Only when nothing was aborted here: a confirmed stop already
+        // answers for itself, so the confirmed path stays free of an extra round trip. A failed read
+        // degrades to `false`, which is the pre-verdict behaviour (report nothing to the user).
+        val rowWasStreaming = !abortable && runCatching {
+            sessionStore?.findStatus(sessionId, userId) == "streaming"
+        }.getOrElse {
+            logger.warn("Failed to read status before cancel for session {}: {}", sessionId, it.message)
+            false
+        }
+
         sessionStore?.let { store ->
             try {
                 store.updateStatus(sessionId, "active", userId, expectedStatus = "streaming")
@@ -211,6 +257,7 @@ class SessionExecutionService(
                 logger.warn("Failed to update status after cancel for session {}: {}", sessionId, e.message)
             }
         }
+        return CancelVerdict(aborted = abortable, rowWasStreaming = rowWasStreaming)
     }
 
     /**

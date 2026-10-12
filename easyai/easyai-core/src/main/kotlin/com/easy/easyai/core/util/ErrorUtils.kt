@@ -1,6 +1,7 @@
 package com.easy.easyai.core.util
 
 import com.easy.easyai.core.agent.ContentFilteredException
+import com.easy.easyai.core.agent.LlmEndpointUnavailableException
 import java.net.SocketException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeoutException
@@ -15,6 +16,13 @@ fun isRetryableError(e: Exception): Boolean {
     // the same filter, so it must never be presented as retryable.
     if (e is ContentFilteredException) {
         return false
+    }
+    // An open circuit means the endpoint kept failing, not that this request is doomed:
+    // once the breaker half-opens a retry can succeed, so keep the retry affordance.
+    // Matched by type because the user-facing wrapper carries neither "service unavailable"
+    // nor any other English marker the text checks below would recognize.
+    if (e is LlmEndpointUnavailableException) {
+        return true
     }
     // Check exception type first (handles cases where message is null)
     // SocketException covers ConnectException and SocketTimeoutException as subclasses

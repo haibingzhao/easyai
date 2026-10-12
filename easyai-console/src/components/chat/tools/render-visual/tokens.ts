@@ -5,8 +5,12 @@
  * theme-agnostic: the host injects the table matching the active mode into the
  * sandbox `:root` and swaps values on theme change. Base values mirror the
  * console tokens in src/index.css; the palette encodes the doc rule
- * (light: 50 fill / 600 stroke / 800 title / 600 subtitle,
- *  dark: 800 fill / 200 stroke / 100 title / 200 subtitle).
+ * (light: 50 fill / 600 accent + stroke / 800 title / 600 subtitle,
+ *  dark: 800 fill / 600 accent / 200 stroke / 100 title / 200 subtitle).
+ * `accent` is the data-mark role (bars, lines, points) and must clear 3:1 against the card surface,
+ * WCAG 1.4.11's bar for non-text graphics: measured against the light card (white) the 200 step only
+ * reaches 1.21-1.45 across the nine families while the 600 step reaches 3.19+. In light that puts
+ * accent on the same step as stroke, which is correct — a mark should be as prominent as a border.
  */
 
 export type VisualThemeMode = 'light' | 'dark';
@@ -47,11 +51,13 @@ function paletteTokens(mode: VisualThemeMode): VisualTokens {
     const steps = PALETTE[family];
     if (mode === 'light') {
       tokens[`--viz-${family}-fill`] = steps['50'];
+      tokens[`--viz-${family}-accent`] = steps['600'];
       tokens[`--viz-${family}-stroke`] = steps['600'];
       tokens[`--viz-${family}-title`] = steps['800'];
       tokens[`--viz-${family}-subtitle`] = steps['600'];
     } else {
       tokens[`--viz-${family}-fill`] = steps['800'];
+      tokens[`--viz-${family}-accent`] = steps['600'];
       tokens[`--viz-${family}-stroke`] = steps['200'];
       tokens[`--viz-${family}-title`] = steps['100'];
       tokens[`--viz-${family}-subtitle`] = steps['200'];
