@@ -104,6 +104,9 @@ export { mergeToolResults } from './services/stores/chat/session-loader';
 export { ChatPanel } from './components/chat/ChatPanel';
 export { MessageList } from './components/chat/MessageList';
 export { RenderVisualToolMessage } from './components/chat/tools/RenderVisualToolMessage';
+// Streaming-safe markdown renderer used by chat text segments; hosts reuse it for
+// any LLM-authored text so rendering stays identical to the chat bubbles.
+export { TextMarkdown } from './components/chat/segments/TextMarkdown';
 export { AppLayout, SIDEBAR_COLLAPSED_WIDTH } from './components/layout/AppLayout';
 export { Sidebar } from './components/layout/Sidebar';
 export { ReadOnlyBanner } from './components/ui/ReadOnlyBanner';

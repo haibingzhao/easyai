@@ -1,53 +1,20 @@
 package com.easy.easyai.autoconfigure.openai
 
-import com.easy.easyai.api.llm.AssistantMessage
-import com.easy.easyai.api.llm.ChatGenerationMetadata
-import com.easy.easyai.api.llm.ChatOptions
-import com.easy.easyai.api.llm.ChatResponse
-import com.easy.easyai.api.llm.ChatResponseMetadata
-import com.easy.easyai.api.llm.Generation
-import com.easy.easyai.api.llm.Media
-import com.easy.easyai.api.llm.MediaSource
-import com.easy.easyai.api.llm.Message
-import com.easy.easyai.api.llm.NonTransientAiException
-import com.easy.easyai.api.llm.Prompt
-import com.easy.easyai.api.llm.SystemMessage
-import com.easy.easyai.api.llm.TransientAiException
-import com.easy.easyai.api.llm.ToolResponseMessage
-import com.easy.easyai.api.llm.Usage
-import com.easy.easyai.api.llm.UserMessage
+import com.easy.easyai.api.llm.*
 import com.easy.easyai.api.llm.ChatModel
 import com.openai.client.OpenAIClientAsync
 import com.openai.core.JsonValue
 import com.openai.core.RequestOptions
 import com.openai.errors.OpenAIServiceException
-import com.openai.models.FunctionDefinition
-import com.openai.models.FunctionParameters
-import com.openai.models.ReasoningEffort
-import com.openai.models.ResponseFormatJsonObject
-import com.openai.models.ResponseFormatJsonSchema
-import com.openai.models.ResponseFormatText
-import com.openai.models.chat.completions.ChatCompletionAssistantMessageParam
-import com.openai.models.chat.completions.ChatCompletionChunk
-import com.openai.models.chat.completions.ChatCompletionContentPart
-import com.openai.models.chat.completions.ChatCompletionContentPartImage
-import com.openai.models.chat.completions.ChatCompletionContentPartText
-import com.openai.models.chat.completions.ChatCompletionCreateParams
-import com.openai.models.chat.completions.ChatCompletionFunctionTool
-import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall
-import com.openai.models.chat.completions.ChatCompletionMessageParam
-import com.openai.models.chat.completions.ChatCompletionMessageToolCall
-import com.openai.models.chat.completions.ChatCompletionStreamOptions
-import com.openai.models.chat.completions.ChatCompletionSystemMessageParam
-import com.openai.models.chat.completions.ChatCompletionTool
-import com.openai.models.chat.completions.ChatCompletionToolMessageParam
-import com.openai.models.chat.completions.ChatCompletionUserMessageParam
+import com.openai.models.*
+import com.openai.models.chat.completions.*
 import com.openai.models.completions.CompletionUsage
+import org.slf4j.LoggerFactory
 import reactor.core.publisher.Flux
 import tools.jackson.databind.ObjectMapper
 import tools.jackson.databind.json.JsonMapper
 import java.time.Duration
-import java.util.Base64
+import java.util.*
 
 /**
  * OpenAI-protocol [ChatModel], built directly on the official `com.openai` SDK — the replacement
@@ -68,6 +35,8 @@ internal class OpenAiStreamingChatModel(
 ) : ChatModel {
 
     override val options: ChatOptions get() = defaultOptions
+
+    private val logger = LoggerFactory.getLogger(javaClass)
 
     override fun call(prompt: Prompt): ChatResponse {
         // Aggregate the stream into a single response: concat text, keep accumulated tool calls,
@@ -160,20 +129,20 @@ internal class OpenAiStreamingChatModel(
                 }
             }
 
-            val collected = toolCalls.values.filter { it.choiceIndex == choice.index() && !it.id.isNullOrEmpty() }
-            if (finishReason != null && collected.isNotEmpty()) {
-                results.add(
-                    Generation(
-                        AssistantMessage(
-                            content = "",
-                            toolCalls = collected.map { AssistantMessage.ToolCall(it.id!!, "function", it.name, it.arguments.toString()) }
-                        ),
-                        ChatGenerationMetadata(finishReason = finishReason)
+            val pending = toolCalls.values.filter { it.choiceIndex == choice.index() }
+            if (finishReason != null && pending.isNotEmpty()) {
+                val collected = pending.mapNotNull { assemble(it) }
+                if (collected.isNotEmpty()) {
+                    results.add(
+                        Generation(
+                            AssistantMessage(content = "", toolCalls = collected),
+                            ChatGenerationMetadata(finishReason = finishReason)
+                        )
                     )
-                )
-                // Consume the emitted accumulators: a gateway that repeats the finish frame
+                }
+                // Consume the accumulators: a gateway that repeats the finish frame
                 // (e.g. a trailing usage-only chunk) must not re-emit the same tool-call set.
-                toolCalls.entries.removeAll { it.value.choiceIndex == choice.index() && !it.value.id.isNullOrEmpty() }
+                toolCalls.entries.removeAll { it.value.choiceIndex == choice.index() }
             }
         }
 
@@ -189,6 +158,28 @@ internal class OpenAiStreamingChatModel(
             results[0] = results[0].copy(metadata = ChatGenerationMetadata(finishReason = chunkFinishReason))
         }
         return listOf(ChatResponse(results, metadata))
+    }
+
+    /**
+     * Turns an accumulated call into a wire-ready [AssistantMessage.ToolCall].
+     *
+     * Bailian compatible-mode omits the id on every streamed tool call — the frame that normally
+     * carries it arrives with `"id":""`. The call is still executable without an id, so one is
+     * synthesized instead of dropping the call: dropping it leaves the turn holding an intent
+     * sentence and no call, which reads to the loop as a finished answer.
+     */
+    private fun assemble(accumulator: ToolCallAccumulator): AssistantMessage.ToolCall? {
+        if (accumulator.name.isBlank()) {
+            logger.warn("Dropping an incomplete tool call: no name, {} argument chars", accumulator.arguments.length)
+            return null
+        }
+        val arguments = accumulator.arguments.toString()
+        val streamedId = accumulator.id?.takeIf { it.isNotBlank() }
+        val id = streamedId ?: ("call_" + UUID.randomUUID().toString().replace("-", ""))
+        if (streamedId == null) {
+            logger.debug("Tool call '{}' streamed without an id; using {} ({} argument chars)", accumulator.name, id, arguments.length)
+        }
+        return AssistantMessage.ToolCall(id, "function", accumulator.name, arguments)
     }
 
     private fun finishReasonOf(chunk: ChatCompletionChunk): String? =
@@ -223,8 +214,7 @@ internal class OpenAiStreamingChatModel(
 
         options.model?.let { builder.model(it) }
         options.temperature?.let { builder.temperature(it) }
-        options.maxTokens?.let { builder.maxTokens(it.toLong()) }
-        options.maxCompletionTokens?.let { builder.maxCompletionTokens(it.toLong()) }
+        applyMaxTokens(builder, options)
         options.reasoningEffort?.let { builder.reasoningEffort(ReasoningEffort.of(it.lowercase())) }
         if (options.parallelToolCalls != null) builder.parallelToolCalls(options.parallelToolCalls)
         if (options.stop.isNotEmpty()) {
@@ -238,6 +228,21 @@ internal class OpenAiStreamingChatModel(
 
         builder.streamOptions(ChatCompletionStreamOptions.builder().includeUsage(true).build())
         return builder.build()
+    }
+
+    /**
+     * Output cap on the wire. The portable [OpenAiChatOptions.maxTokens] still goes out as the
+     * legacy `max_tokens`: the SDK deprecates that field in favor of `max_completion_tokens`, but
+     * this protocol is also the OpenAI-compatible gateway path (Bailian compatible-mode, vLLM,
+     * Ollama), which key off `max_tokens` and ignore the new field — switching unconditionally
+     * would drop the caller's cap and let generations run unbounded. Reasoning turns are the
+     * exception: o-series rejects `max_tokens`, so [OpenAiChatModelFactory] routes them to
+     * [OpenAiChatOptions.maxCompletionTokens] instead of `maxTokens`.
+     */
+    @Suppress("DEPRECATION")
+    private fun applyMaxTokens(builder: ChatCompletionCreateParams.Builder, options: OpenAiChatOptions) {
+        options.maxTokens?.let { builder.maxTokens(it.toLong()) }
+        options.maxCompletionTokens?.let { builder.maxCompletionTokens(it.toLong()) }
     }
 
     private fun applyResponseFormat(builder: ChatCompletionCreateParams.Builder, options: OpenAiChatOptions) {
@@ -401,7 +406,7 @@ internal class OpenAiStreamingChatModel(
 
     /** Maps SDK errors to the retry-classification exceptions the agent loop understands. */
     private fun Throwable.toAiException(): Throwable {
-        val service = (this as? OpenAIServiceException) ?: (this?.cause as? OpenAIServiceException) ?: return this
+        val service = (this as? OpenAIServiceException) ?: (this.cause as? OpenAIServiceException) ?: return this
         val status = service.statusCode()
         val detail = "$status: ${service.message}"
         return if (status == 429 || status >= 500) {

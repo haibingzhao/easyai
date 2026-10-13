@@ -1,6 +1,8 @@
 package com.easy.easyai.web.service
 
 import com.easy.easyai.api.config.ModelProviderConfigStore
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatResponse
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
 import com.easy.easyai.core.agent.AgentService
@@ -12,10 +14,19 @@ import com.easy.easyai.web.model.LlmMessage
 import com.easy.easyai.web.model.QuickAskRequest
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.reactive.asFlow
+import kotlinx.coroutines.reactor.asFlux
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -23,6 +34,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+
+/** How long the disconnect test waits for the model stream to start / to be cancelled. */
+private const val DISCONNECT_TIMEOUT_MS = 5_000L
 
 class QuickAskStreamServiceTest {
 
@@ -108,6 +122,41 @@ class QuickAskStreamServiceTest {
 
             val error = assertIs<ChatStreamEvent.Error>(events.single().data())
             assertTrue(error.errorMessage!!.contains("Model config not found"))
+        }
+    }
+
+    @Nested
+    inner class ClientDisconnect {
+
+        /**
+         * A hung model emits nothing, so the SSE layer writes nothing and the cancelled
+         * subscription is the only signal the server gets — exactly what a closed browser tab
+         * produces. Without the explicit `EventStream.cancel()` the detached agent producer
+         * survives it and keeps the LLM connection open until its own timeouts fire.
+         */
+        @Test
+        fun `disposing the stream stops a run whose model never sent a first token`() {
+            val modelStarted = CompletableDeferred<Unit>()
+            val modelEnded = CompletableDeferred<Throwable?>()
+            val hangingStream = flow<ChatResponse> {
+                modelStarted.complete(Unit)
+                awaitCancellation()
+            }.onCompletion { cause -> modelEnded.complete(cause) }.asFlux()
+
+            val chatModel = mockk<ChatModel>()
+            every { chatModel.stream(any()) } returns hangingStream
+            every { agentService.supportsProtocol(any()) } returns true
+            every { agentService.createChatModel(any(), any()) } returns chatModel
+            coEvery { configStore.getConfig("cfg-1", "u1") } returns config()
+
+            val subscription = service.stream("u1", request()).subscribe()
+            runBlocking {
+                withTimeout(DISCONNECT_TIMEOUT_MS) { modelStarted.await() }
+                subscription.dispose()
+                withTimeout(DISCONNECT_TIMEOUT_MS) { modelEnded.await() }
+            }
+
+            assertIs<CancellationException>(modelEnded.getCompleted())
         }
     }
 

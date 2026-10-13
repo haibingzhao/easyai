@@ -104,6 +104,13 @@ internal class AgentLoop(
     private var completionCheckBonusPending = false
 
     /**
+     * Set when the loop stopped because the iteration budget ran out, as opposed to the LLM
+     * finishing its answer. A turn counter alone cannot tell these apart: finishing on the
+     * last allowed turn leaves `turnId == maxIterations`, which would look like exhaustion.
+     */
+    private var iterationBudgetExhausted = false
+
+    /**
      * Per-run ledger of completion-check nudges, keyed by check class name.
      *
      * This lives on the loop (one instance per run) rather than on the checks themselves,
@@ -197,20 +204,20 @@ internal class AgentLoop(
                 // Determine end reason. A completion check may already have set an explicit
                 // reason (see handleCompletionCheckStop) — that takes precedence over derivation.
                 // Otherwise:
-                // 1. max_iterations — loop exhausted its iteration budget (runInnerLoop returned false
-                //    because turnId >= maxIterations inside runInnerLoop, NOT because of abort/pause)
-                // 2. cancelled — abort was requested (either caught at while-top via break, or inside
+                // 1. cancelled — abort was requested (either caught at while-top via break, or inside
                 //    runInnerLoop which returned false; in both cases isAbortRequested() is true)
+                // 2. max_iterations — runInnerLoop bailed at the iteration-budget check; a turn
+                //    counter is not enough, finishing on the last allowed turn looks the same
                 // 3. normal — any other exit (LLM finished, needPause, etc.)
                 if (endReason == "normal") {
                     endReason = when {
-                        turnId >= context.maxIterations && !config.isAbortRequested() -> {
-                            logger.warn("${logPrefix}Agent loop ended: max iterations ({}) reached at turn {}", context.maxIterations, turnId)
-                            "max_iterations"
-                        }
                         config.isAbortRequested() -> {
                             logger.info("${logPrefix}Agent loop ended: abort requested at turn {}", turnId)
                             "cancelled"
+                        }
+                        iterationBudgetExhausted -> {
+                            logger.warn("${logPrefix}Agent loop ended: max iterations ({}) reached at turn {}", context.maxIterations, turnId)
+                            "max_iterations"
                         }
                         else -> "normal"
                     }
@@ -238,6 +245,7 @@ internal class AgentLoop(
                 completionCheckBonusPending = false
                 logger.info("${logPrefix}[Turn {}] Using completion-check bonus iteration (budget left={})", turnId, completionCheckBonusBudget)
             } else {
+                iterationBudgetExhausted = true
                 return false
             }
         } else {

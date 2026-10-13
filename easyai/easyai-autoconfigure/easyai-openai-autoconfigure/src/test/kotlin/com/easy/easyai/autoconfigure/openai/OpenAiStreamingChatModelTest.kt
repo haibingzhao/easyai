@@ -133,6 +133,44 @@ class OpenAiStreamingChatModelTest {
             val repeats = model.mapChunk(chunk(c3), acc).flatMap { it.results }.flatMap { it.output.toolCalls }
             assertTrue(repeats.isEmpty(), "accumulators are consumed on emission")
         }
+
+        @Test
+        fun `salvages a call whose fragments never carried an id`() {
+            val acc = HashMap<String, OpenAiStreamingChatModel.ToolCallAccumulator>()
+
+            val fragment = Choice.builder().index(0L).delta(
+                Delta.builder().toolCalls(listOf(toolCallFragment(0L, null, "read", "{\"path\":\"a.txt\"}"))).build()
+            ).finishReason(Optional.empty()).build()
+            val finish = Choice.builder().index(0L)
+                .delta(Delta.builder().build())
+                .finishReason(Choice.FinishReason.TOOL_CALLS)
+                .build()
+
+            model.mapChunk(chunk(fragment), acc)
+            val call = model.mapChunk(chunk(finish), acc).flatMap { it.results }.flatMap { it.output.toolCalls }.single()
+
+            // Dropping the call would leave the turn holding an intent sentence and nothing to run.
+            assertEquals("read", call.name)
+            assertEquals("{\"path\":\"a.txt\"}", call.arguments)
+            assertTrue(call.id.startsWith("call_"), "id is synthesized, got ${call.id}")
+        }
+
+        @Test
+        fun `drops a call that never got a name`() {
+            val acc = HashMap<String, OpenAiStreamingChatModel.ToolCallAccumulator>()
+
+            val fragment = Choice.builder().index(0L).delta(
+                Delta.builder().toolCalls(listOf(toolCallFragment(0L, "call_9", null, "{}"))).build()
+            ).finishReason(Optional.empty()).build()
+            val finish = Choice.builder().index(0L)
+                .delta(Delta.builder().build())
+                .finishReason(Choice.FinishReason.TOOL_CALLS)
+                .build()
+
+            model.mapChunk(chunk(fragment), acc)
+
+            assertTrue(model.mapChunk(chunk(finish), acc).flatMap { it.results }.flatMap { it.output.toolCalls }.isEmpty())
+        }
     }
 
     @Nested
