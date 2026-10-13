@@ -9,6 +9,7 @@ import com.easy.easyai.core.model.UserMessage
 import com.easy.easyai.core.prompt.PromptTemplateService
 import com.easy.easyai.core.tool.BaseToolDefinition
 import com.easy.easyai.core.tool.DefaultToolExecutionEngine
+import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.tool.ToolUpdate
@@ -32,7 +33,8 @@ import com.easy.easyai.api.llm.AssistantMessage as SpringAiAssistantMsg
  * Tests for AgentLoop.endReason determination across different exit scenarios.
  *
  * Verifies the fix for the boundary bug where abort at turnId == maxIterations
- * incorrectly reported endReason as "max_iterations" instead of "cancelled".
+ * incorrectly reported endReason as "max_iterations" instead of "cancelled", and for
+ * the mirror case where finishing on the last allowed turn reported "max_iterations".
  */
 class AgentLoopEndReasonTest {
 
@@ -290,5 +292,92 @@ class AgentLoopEndReasonTest {
             runner.prompt(listOf(UserMessage("do work"))).result()
             assertEquals("cancelled", captureEndReason(events))
         }
+    }
+
+    @Nested
+    inner class `iteration budget boundary` {
+
+        @Test
+        fun `single-iteration agent that answers within its only turn ends normal`() = runBlocking {
+            // The quick-ask shape: maxIterations=1 with no tools. The loop stopped because the
+            // LLM finished, and turnId landed on maxIterations by coincidence, not by exhaustion.
+            val endReason = runToEndReason(
+                maxIterations = 1,
+                tools = emptyList(),
+                responses = listOf(createMockChatResponse(text = "the answer"))
+            )
+            assertEquals("normal", endReason)
+        }
+
+        @Test
+        fun `finishing on the last allowed turn ends normal`() = runBlocking {
+            val endReason = runToEndReason(
+                maxIterations = 2,
+                tools = listOf(createTestTool()),
+                responses = listOf(
+                    createMockChatResponse(
+                        text = "calling tool",
+                        toolCalls = listOf(SpringAiAssistantMsg.ToolCall("call1", "function", "echo", "{}")),
+                        finishReason = "tool_calls"
+                    ),
+                    createMockChatResponse(text = "final answer")
+                )
+            )
+            assertEquals("normal", endReason)
+        }
+
+        @Test
+        fun `still needing another turn when the budget ends reports max_iterations`() = runBlocking {
+            val endReason = runToEndReason(
+                maxIterations = 1,
+                tools = listOf(createTestTool()),
+                responses = listOf(
+                    createMockChatResponse(
+                        text = "calling tool",
+                        toolCalls = listOf(SpringAiAssistantMsg.ToolCall("call1", "function", "echo", "{}")),
+                        finishReason = "tool_calls"
+                    )
+                )
+            )
+            assertEquals("max_iterations", endReason)
+        }
+    }
+
+    private suspend fun runToEndReason(
+        maxIterations: Int,
+        tools: List<ToolDefinition>,
+        responses: List<ChatResponse>
+    ): String {
+        val mockModel = createMockChatModel(*responses.toTypedArray())
+        val events = CopyOnWriteArrayList<AgentEvent>()
+        val listener = object : AgentEventListener {
+            override suspend fun handle(agentContext: AgentContext, event: AgentEvent, push: suspend (AgentEvent) -> Unit) {
+                events.add(event)
+            }
+        }
+        val context = AgentContext(
+            agentId = "test",
+            customInstructions = "test",
+            tools = tools,
+            maxIterations = maxIterations
+        )
+        val runner = AgentRunner(
+            agent = Agent(
+                context,
+                DefaultAgentService(
+                    chatModelFactories = listOf(createMockChatModelFactory(mockModel)),
+                    messageConverter = DefaultMessageConverter(),
+                    toolExecutor = DefaultToolExecutionEngine(),
+                    promptTemplateService = mockk<PromptTemplateService>(relaxed = true).also {
+                        every { it.build(any(), any()) } returns "test prompt"
+                    },
+                    defaultChatModel = mockModel,
+                    eventListeners = listOf(listener)
+                )
+            ),
+            messages = mutableListOf()
+        )
+        runner.prompt(listOf(UserMessage("hi"))).result()
+        return captureEndReason(events)
     }
 }

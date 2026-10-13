@@ -96,6 +96,13 @@ internal class AgentLoopRunner(
         // ChatResponse.metadata.usage. Without separate tracking this chunk gets filtered
         // by the empty-content skip below and usage is lost for text-only responses.
         var lastResponseWithUsage: ChatResponse? = null
+        // The last non-null finish reason seen anywhere in the stream. Providers send it on the
+        // choice-closing frame and then a trailing usage-only frame whose `choices` is empty and
+        // whose reason is null, so reading only the final frame loses the reason.
+        var lastFinishReason: String? = null
+        // The last chunk that carried tool calls. Every adapter assembles the complete call set
+        // before emitting it, but that frame is not guaranteed to be the last content-bearing one.
+        var lastToolCallResponse: ChatResponse? = null
         val fullText = StringBuilder()
         val fullThinking = StringBuilder()
         var thinkingEnded = false
@@ -131,6 +138,8 @@ internal class AgentLoopRunner(
                     turnId,context.agentId, context.modelId, retryCount + 1, context.maxRetries + 1,
                     context.tools.size, context.subAgents.size, context.skills.size)
                 chunkCount = 0
+                lastFinishReason = null
+                lastToolCallResponse = null
 
                 // Channel-based streaming with per-chunk stall detection.
                 // Producer coroutine feeds LLM chunks into the channel;
@@ -181,6 +190,11 @@ internal class AgentLoopRunner(
                         val chunk = result.getOrNull() ?: break // Channel closed (normal or error)
                         val results = chunk.results
 
+                        // The finish reason rides on the frame that closes the choice; providers then send a
+                        // usage-only frame with no choices and no reason, so it has to be kept across the
+                        // stream instead of read off whichever chunk arrived last.
+                        results.firstNotNullOfOrNull { it.metadata.finishReason }?.let { lastFinishReason = it }
+
                         // Skip empty chunks (SSE keepalive/ping) without resetting stall timer.
                         // Only chunks with actual content indicate the LLM is still making progress.
                         // However, capture usage metadata before skipping — the Anthropic message_delta
@@ -211,6 +225,12 @@ internal class AgentLoopRunner(
                         receivedContentChunk = true
                         chunkCount++
                         lastResponseWithResults = chunk
+                        // A frame carrying tool calls carries the complete set (all three protocol
+                        // adapters assemble before emitting), but it is not necessarily the last
+                        // content-bearing frame — a gateway may still stream text after it.
+                        if (results.any { it.output.toolCalls.isNotEmpty() }) {
+                            lastToolCallResponse = chunk
+                        }
 
                         for (r in results) {
                             val output = r.output
@@ -385,7 +405,7 @@ internal class AgentLoopRunner(
 
         // Build the assistant message
         val finalResponse = lastResponseWithResults
-        val responseToolCalls = finalResponse?.results?.flatMap { it.output.toolCalls }
+        val responseToolCalls = lastToolCallResponse?.results?.flatMap { it.output.toolCalls }
             ?.map { tc ->
                 ToolCallContent(
                     id = tc.id,
@@ -418,7 +438,7 @@ internal class AgentLoopRunner(
         contentBlocks.addAll(responseToolCalls)
 
         val finishReasonStr = finalResponse?.results?.firstOrNull()?.metadata?.finishReason
-            ?: lastResponseWithUsage?.results?.firstOrNull()?.metadata?.finishReason
+            ?: lastFinishReason
         // Prefer usage from the dedicated usage chunk (message_delta), fall back to
         // lastResponseWithResults for providers that embed usage in a content-bearing chunk.
         // NOTE: ChatResponseMetadata.getUsage() never returns null (defaults to EmptyUsage
@@ -438,17 +458,27 @@ internal class AgentLoopRunner(
             )
         } ?: Usage(durationMs = streamDuration)
 
+        val stopReason = when (finishReasonStr) {
+            "length" -> StopReason.LENGTH
+            "tool_calls" -> StopReason.TOOL_USE
+            // Some OpenAI-compatible providers report "stop" (or no finish reason at
+            // all) even when the response contains tool calls; trust the actual
+            // content over the provider flag.
+            else -> if (responseToolCalls.isNotEmpty()) StopReason.TOOL_USE else StopReason.STOP
+        }
+        // Both "the provider said stop" and "the provider never sent a finish reason" collapse into
+        // STOP, which ends the agent loop. Log the raw flag so a one-turn stop can be told apart
+        // from a gateway whose final frame carried no reason at all.
+        logger.debug("${logPrefix}[Turn {}] Stop reason resolved: finishReason={} -> stopReason={}, toolCalls={}, textLen={}",
+            turnId, finishReasonStr ?: "<none>", stopReason, responseToolCalls.size, fullText.length)
+        if (finishReasonStr == "tool_calls" && responseToolCalls.isEmpty()) {
+            logger.warn("${logPrefix}[Turn {}] Provider finished with finish_reason=tool_calls but no tool call was parsed; the turn ends without one", turnId)
+        }
+
         return AssistantMessage(
             id = messageId,
             content = contentBlocks,
-            stopReason = when (finishReasonStr) {
-                "length" -> StopReason.LENGTH
-                "tool_calls" -> StopReason.TOOL_USE
-                // Some OpenAI-compatible providers report "stop" (or no finish reason at
-                // all) even when the response contains tool calls; trust the actual
-                // content over the provider flag.
-                else -> if (responseToolCalls.isNotEmpty()) StopReason.TOOL_USE else StopReason.STOP
-            },
+            stopReason = stopReason,
             usage = rawUsage
         )
     }

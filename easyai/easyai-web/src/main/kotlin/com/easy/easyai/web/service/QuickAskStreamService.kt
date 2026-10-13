@@ -48,10 +48,18 @@ class QuickAskStreamService(
                 return@flow
             }
             val runner = createRunner(userId, config)
-            runner.prompt(buildMessages(request)).asFlow().collect { event ->
-                ChatEventConverter.convert(event).forEach { emit(it.toSse()) }
+            val stream = runner.prompt(buildMessages(request))
+            try {
+                stream.asFlow().collect { event ->
+                    ChatEventConverter.convert(event).forEach { emit(it.toSse()) }
+                }
+                emit(ChatStreamEvent.Done(reason = "stop").toSse())
+            } catch (e: CancellationException) {
+                // The agent producer runs on a detached scope, so a closed SSE connection alone
+                // cannot stop it; cancel the handle or the run keeps streaming to nobody.
+                stream.cancel()
+                throw e
             }
-            emit(ChatStreamEvent.Done(reason = "stop").toSse())
         }.catch { e ->
             if (e is CancellationException) throw e
             logger.warn("Quick ask stream failed for user {}: {}", userId, e.message)
