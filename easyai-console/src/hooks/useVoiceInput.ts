@@ -83,12 +83,16 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
   }, []);
 
   /** A backend transcription error is not transient here — close the mic instead of retrying. */
-  const failSession = useCallback((session: Session) => {
+  const failSession = useCallback((session: Session, cause?: unknown) => {
     if (session.stopped) return;
     teardown(session);
     if (!session.draftFailureReported) {
       session.draftFailureReported = true;
-      onError(i18n('Transcription failed; voice input stopped'));
+      // The status code is the only diagnosis the backend exposes (Spring keeps
+      // ResponseStatusException reasons out of the body), so never drop it.
+      const detail = cause instanceof Error ? cause.message : '';
+      const headline = i18n('Transcription failed; voice input stopped');
+      onError(detail ? `${headline} (${detail})` : headline);
     }
     setPhase('idle');
   }, [onError, teardown]);
@@ -139,8 +143,8 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
         slot.fragments.set(seq, text);
         renderSlot(slot);
       })
-      .catch(() => {
-        failSession(session);
+      .catch((e: unknown) => {
+        failSession(session, e);
       }));
   }, [failSession, onError, renderSlot, track]);
 

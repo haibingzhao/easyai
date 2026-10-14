@@ -13,7 +13,9 @@ export const asrService = {
     if (language) form.append('language', language);
     const response = await authFetch(`${API_BASE}/transcribe`, { method: 'POST', body: form });
     if (!response.ok) {
-      throw new Error(`Transcription failed: ${response.status}`);
+      // Callers prefix their own sentence to this, so keep it to the one signal that survives
+      // the wire: Spring withholds ResponseStatusException reasons from the body.
+      throw new Error(`HTTP ${response.status}`);
     }
     const data = (await response.json()) as { text: string };
     return data.text ?? '';

@@ -648,11 +648,23 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
 
   const syncEditorValue = useCallback(() => setEditorValue(getEditorText()), [getEditorText]);
   const isRefineEnabled = useCallback(() => refineReadyRef.current, []);
+  // A dictation failure is about the mic, not about the conversation: it belongs in the composer's
+  // own notice band, so retrying four times does not leave four error cards in the transcript.
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+  const voiceNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reportVoiceError = useCallback((message: string) => {
+    setVoiceNotice(message);
+    if (voiceNoticeTimerRef.current) clearTimeout(voiceNoticeTimerRef.current);
+    voiceNoticeTimerRef.current = setTimeout(() => setVoiceNotice(null), 8_000);
+  }, []);
+  useEffect(() => () => {
+    if (voiceNoticeTimerRef.current) clearTimeout(voiceNoticeTimerRef.current);
+  }, []);
   const voice = useVoiceInput({
     editorRef,
     isRefineEnabled,
     onEditorChanged: syncEditorValue,
-    onError: (msg) => addMessage({ role: 'error', content: msg, timestamp: Date.now() }),
+    onError: reportVoiceError,
   });
 
   /** Wrap handleFiles to insert inline image chips into the editor after processing. */
@@ -1282,6 +1294,7 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
     <div className="flex flex-col gap-2 relative">
       {commandError && <div role="alert" className="text-xs text-destructive">{commandError}</div>}
       {cancelNotice && <div role="alert" className="text-xs text-destructive">{cancelNotice.text}</div>}
+      {voiceNotice && <div role="alert" className="text-xs text-destructive">{voiceNotice}</div>}
       {voice.phase === 'refining' && (
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Loader2 className="w-3 h-3 animate-spin" />

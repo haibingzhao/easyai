@@ -3,8 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <!--
-      viewport-fit=cover is what lets the shell pad itself around the notch / home indicator;
-      without it a standalone web app gets a letterboxed band instead of edge-to-edge layout.
+      iOS 26.6.1 measured: `viewport-fit=cover` + `apple-mobile-web-app-status-bar-style=black-translucent`
+      together make the layout viewport 812pt of an 874pt screen *pinned to physical y=0*, so the shell
+      runs under the status bar and strands 62pt of unreachable screen below the tab bar. Dropping either
+      one anchors the same 812pt viewport to the bottom instead ([62, 874]) — the normal look. `env()`
+      stays 0 for the top inset in that geometry, which is correct; the bottom inset is still reported
+      lazily (0 until the first keyboard interaction), see mobile.css.
     -->
     <meta
       name="viewport"
@@ -15,7 +19,6 @@
     <meta name="theme-color" content="#0f0f10" media="(prefers-color-scheme: dark)" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="EasyAI" />
     <link rel="manifest" href="/manifest.json" />
     <link rel="apple-touch-icon" href="/icons/mobile-192.png" />
