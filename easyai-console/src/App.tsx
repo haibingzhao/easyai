@@ -25,8 +25,14 @@ import { useCategoryStore } from '@/services/stores/category-store';
 import { setupService } from '@/services/setup-service';
 import { storageService } from '@/services/storage-service';
 import { setTheme } from '@/utils/theme';
+import { TOPBAR_EXTRA_ITEMS } from '@/constants/navigation';
+import { ConnectionPill } from '@/plugins/connection/ConnectionPill';
 import { Loader2 } from 'lucide-react';
 import './index.css';
+
+// The connection badge is a plugin: it mounts through the same registry a host uses for its own
+// top-bar entries, so nothing in the layout knows about it.
+if (!TOPBAR_EXTRA_ITEMS.includes(ConnectionPill)) TOPBAR_EXTRA_ITEMS.push(ConnectionPill);
 
 function App() {
   const loadSettings = useSettingsStore((state) => state.loadSettings);

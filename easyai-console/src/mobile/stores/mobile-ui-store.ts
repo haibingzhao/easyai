@@ -9,10 +9,17 @@ interface MobileUiState {
   /** Message the long-press action sheet targets (transient; the text is what got copied/quoted). */
   actionSheetTarget: { text: string; messageId?: string } | null;
   homeScreenHintDismissed: boolean;
+  /**
+   * Count badges keyed by tab id. Lives here rather than on the registry entry because the tab bar
+   * only re-renders on navigation: a `badge: () => number` would keep showing the count from the
+   * last screen change. A host that polls writes through `setTabBadge` and the bar updates live.
+   */
+  tabBadges: Record<string, number>;
   openTasksSheet: () => void;
   closeTasksSheet: () => void;
   setComposerPlusOpen: (open: boolean) => void;
   setActionSheetTarget: (target: { text: string; messageId?: string } | null) => void;
+  setTabBadge: (tabId: string, count: number) => void;
   dismissHomeScreenHint: () => void;
   /** Called on logout so the next user does not inherit an open sheet. */
   resetMobileUi: () => void;
@@ -33,16 +40,26 @@ export const useMobileUiStore = create<MobileUiState>()(
       composerPlusOpen: false,
       actionSheetTarget: null,
       homeScreenHintDismissed: false,
+      tabBadges: {},
       openTasksSheet: () => set({ tasksSheetOpen: true }),
       closeTasksSheet: () => set({ tasksSheetOpen: false }),
       setComposerPlusOpen: (open) => set({ composerPlusOpen: open }),
       setActionSheetTarget: (target) => set({ actionSheetTarget: target }),
+      setTabBadge: (tabId, count) =>
+        set((state) =>
+          // The tab bar subscribes to this object, so an unchanged count must not produce a new one
+          // — a host polling every minute would otherwise re-render the bar for nothing.
+          state.tabBadges[tabId] === count
+            ? state
+            : { tabBadges: { ...state.tabBadges, [tabId]: count } },
+        ),
       dismissHomeScreenHint: () => set({ homeScreenHintDismissed: true }),
       resetMobileUi: () =>
         set({
           tasksSheetOpen: false,
           composerPlusOpen: false,
           actionSheetTarget: null,
+          tabBadges: {},
         }),
     }),
     {
