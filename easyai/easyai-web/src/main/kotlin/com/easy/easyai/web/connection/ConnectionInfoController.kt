@@ -49,6 +49,8 @@ data class ServerNodeDto(
     val hostname: String,
     val tailscaleAvailable: Boolean,
     val backendState: String,
+    /** Why the tailscale witness is missing, when it is: the badge shows it instead of a bare dot. */
+    val tailscaleError: String?,
 )
 
 /**
@@ -110,6 +112,7 @@ class ConnectionInfoController(
                     hostname = snapshot.selfName,
                     tailscaleAvailable = snapshot.available,
                     backendState = snapshot.backendState,
+                    tailscaleError = snapshot.error.takeIf { it.isNotBlank() },
                 ),
                 generatedAt = System.currentTimeMillis(),
             )

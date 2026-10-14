@@ -4,6 +4,8 @@ import com.easy.easyai.common.util.ProcessExecutor
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
+import java.nio.file.Files
+import java.nio.file.Paths
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,6 +37,9 @@ data class TailscaleSnapshot(
     val backendState: String,
     val peers: List<TailscalePeer>,
     val takenAtMillis: Long,
+    /** Why the last refresh failed; empty when the daemon answered. Shown in the console so a
+     *  missing witness is diagnosable from the badge instead of from server logs. */
+    val error: String = "",
 ) {
     fun peerByAddress(address: String): TailscalePeer? = peers.firstOrNull { address in it.tailscaleIps }
 
@@ -43,12 +48,13 @@ data class TailscaleSnapshot(
     }
 
     companion object {
-        fun unavailable(takenAtMillis: Long) = TailscaleSnapshot(
+        fun unavailable(takenAtMillis: Long, error: String = "") = TailscaleSnapshot(
             available = false,
             selfName = "",
             backendState = "",
             peers = emptyList(),
             takenAtMillis = takenAtMillis,
+            error = error,
         )
 
         private fun hostPart(value: String): String {
@@ -98,6 +104,38 @@ class TailscaleStatusService(private val properties: ConnectionProperties) {
     @Volatile
     private var consecutiveFailures = 0
 
+    @Volatile
+    private var resolvedBinary: String? = null
+
+    /**
+     * Where to exec tailscale from.
+     *
+     * A bare name is resolved through `PATH` first; when that fails, macOS is special — the App Store
+     * build ships no CLI outside the GUI bundle, so `tailscale serve` can be running while `tailscale`
+     * is unresolvable for every process. An absolute configured path always wins.
+     */
+    private fun binary(): String {
+        resolvedBinary?.let { return it }
+        val configured = properties.tailscaleBinary
+        val resolved = when {
+            configured.contains('/') -> configured
+            else -> pathExecutable(configured)
+                ?: KNOWN_BUNDLE_PATHS.firstOrNull { Files.isExecutable(Paths.get(it)) }
+                ?: configured
+        }
+        resolvedBinary = resolved
+        return resolved
+    }
+
+    private fun pathExecutable(name: String): String? {
+        val separator = System.getProperty("path.separator") ?: ":"
+        return System.getenv("PATH").orEmpty()
+            .split(separator)
+            .map { directory -> Paths.get(directory, name) }
+            .firstOrNull { Files.isExecutable(it) }
+            ?.toString()
+    }
+
     init {
         // Warm the cache so the first badge reading already carries the witness instead of reporting
         // "inferred" for one polling interval. Hosts without a CLI pay one failed exec and then back off.
@@ -128,30 +166,32 @@ class TailscaleStatusService(private val properties: ConnectionProperties) {
     }
 
     private suspend fun read(): TailscaleSnapshot {
+        val exe = binary()
         val result = try {
             ProcessExecutor.execute(
-                command = listOf(properties.tailscaleBinary, "status", "--json"),
+                command = listOf(exe, "status", "--json"),
                 timeoutSeconds = properties.execTimeoutSeconds,
             )
         } catch (exception: Exception) {
-            // No tailscale on this host (desktop app, CI, a container): report unavailable once and back off.
-            logger.debug("{} status unavailable: {}", properties.tailscaleBinary, exception.message)
-            null
+            // No tailscale on this host (desktop app, CI, a container), or a PATH the service user
+            // cannot see — report the reason instead of a bare "unavailable".
+            logger.debug("{} status unavailable: {}", exe, exception.message)
+            consecutiveFailures++
+            return TailscaleSnapshot.unavailable(System.currentTimeMillis(), "exec failed ($exe): ${exception.message}")
         }
 
         if (result == null) {
             consecutiveFailures++
-            return TailscaleSnapshot.unavailable(System.currentTimeMillis())
+            return TailscaleSnapshot.unavailable(
+                System.currentTimeMillis(),
+                "timed out after ${properties.execTimeoutSeconds}s ($exe)",
+            )
         }
         if (result.exitCode != 0) {
             consecutiveFailures++
-            logger.debug(
-                "{} status exited {}: {}",
-                properties.tailscaleBinary,
-                result.exitCode,
-                result.stderr.take(MAX_ERROR_CHARS),
-            )
-            return TailscaleSnapshot.unavailable(System.currentTimeMillis())
+            val detail = result.stderr.take(MAX_ERROR_CHARS)
+            logger.debug("{} status exited {}: {}", exe, result.exitCode, detail)
+            return TailscaleSnapshot.unavailable(System.currentTimeMillis(), "exit ${result.exitCode} ($exe): $detail")
         }
 
         return try {
@@ -159,14 +199,21 @@ class TailscaleStatusService(private val properties: ConnectionProperties) {
             parseTailscaleStatus(result.stdout)
         } catch (exception: Exception) {
             consecutiveFailures++
-            logger.warn("Failed to parse {} status: {}", properties.tailscaleBinary, exception.message)
-            TailscaleSnapshot.unavailable(System.currentTimeMillis())
+            logger.warn("Failed to parse {} status: {}", exe, exception.message)
+            TailscaleSnapshot.unavailable(System.currentTimeMillis(), "parse failed: ${exception.message}")
         }
     }
 
     private companion object {
         const val BACKOFF_CAP = 12
         const val MAX_ERROR_CHARS = 200
+
+        /** The macOS GUI build keeps its CLI inside the app bundle; Linux/brew installs differ. */
+        val KNOWN_BUNDLE_PATHS = listOf(
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+            "/usr/local/bin/tailscale",
+            "/opt/homebrew/bin/tailscale",
+        )
     }
 }
 

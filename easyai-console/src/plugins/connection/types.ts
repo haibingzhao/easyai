@@ -44,6 +44,7 @@ export interface RouteEvidence {
   peerOnline?: boolean;
   serverHostname?: string;
   tailscaleAvailable?: boolean;
+  tailscaleError?: string;
   serverInfoAt?: number;
 }
 
@@ -102,6 +103,7 @@ export interface ConnectionInfoDto {
   server?: {
     hostname?: string | null;
     tailscaleAvailable?: boolean | null;
+    tailscaleError?: string | null;
   } | null;
   generatedAt?: number | null;
 }

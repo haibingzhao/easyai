@@ -113,7 +113,7 @@ export const ConnectionReport: React.FC = () => {
         <Row label={i18n('Witness')} value={serverInfoError ?? i18n('Not reported')} />
       </Section>
 
-      {(evidence.xff || evidence.peerRelay || evidence.peerDerpRegion || evidence.serverHostname) && (
+      {(evidence.xff || evidence.peerRelay || evidence.peerDerpRegion || evidence.serverHostname || evidence.tailscaleError) && (
         <Section title={i18n('Server observed')}>
           {evidence.remoteAddress && <Row label="remote" value={<span className="tabular-nums">{evidence.remoteAddress}</span>} />}
           {evidence.xff && evidence.xff.length > 0 && (
@@ -128,6 +128,9 @@ export const ConnectionReport: React.FC = () => {
           {evidence.serverHostname && <Row label={i18n('Server')} value={evidence.serverHostname} />}
           {evidence.tailscaleAvailable === false && (
             <Row label="tailscale" value={<span className="text-destructive">{i18n('Not available')}</span>} />
+          )}
+          {evidence.tailscaleError && (
+            <Row label="tailscale error" value={<span className="text-destructive break-all">{evidence.tailscaleError}</span>} />
           )}
           {evidence.serverInfoAt && <Row label={i18n('At')} value={<span className="tabular-nums">{timeText(evidence.serverInfoAt)}</span>} />}
         </Section>

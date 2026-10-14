@@ -12,7 +12,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 @ConfigurationProperties(prefix = "easyai.connection")
 data class ConnectionProperties(
     val enabled: Boolean = true,
-    /** Resolved through `PATH`; a missing binary degrades the adapter instead of failing it. */
+    /**
+     * Resolved through `PATH` first, then through the well-known macOS app-bundle location (the App
+     * Store build ships no CLI outside the GUI app), so a missing binary degrades the adapter instead
+     * of failing it. An absolute path here skips both lookups.
+     */
     val tailscaleBinary: String = "tailscale",
     /** Background refresh interval for `tailscale status --json`. */
     val statusCacheTtlSeconds: Long = 5,
