@@ -18,6 +18,7 @@ import { useSessionRecovery } from '@/hooks/useSessionRecovery';
 import { switchToSession } from '@/services/session-switch';
 import { unrevert } from '@/services/checkpoint-service';
 import { i18n } from '@/utils/i18n';
+import { ConnectionChip } from '@/plugins/connection/ConnectionChip';
 import { MobileHeader } from '../components/MobileHeader';
 import { MobileQuestionRail } from '../components/MobileQuestionRail';
 import { MobileSheet } from '../components/MobileSheet';
@@ -138,6 +139,7 @@ export const MobileChatPage: React.FC = () => {
         subtitle={activeUserMessage ?? undefined}
         right={
           <div className="flex items-center gap-0.5 shrink-0">
+            <ConnectionChip />
             {runningSessionId && (
               <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
                 <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />

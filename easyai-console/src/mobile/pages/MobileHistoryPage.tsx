@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, RefreshCw, Search, X } from 'lucide-react';
+import { Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { SessionItem } from '@/components/ui/SessionItem';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { MobileHeader } from '../components/MobileHeader';
@@ -184,7 +184,18 @@ export const MobileHistoryPage: React.FC = () => {
               <div key={key}>
                 <div className="mobile-section-title">{i18n(labelKey)}</div>
                 {rows.map((session) => (
-                  <MobileSwipeRow key={session.id} onDelete={() => setPendingDelete(session.id)}>
+                  <MobileSwipeRow
+                    key={session.id}
+                    actions={[
+                      {
+                        id: 'delete',
+                        labelKey: 'Delete',
+                        icon: Trash2,
+                        tone: 'destructive',
+                        onSelect: () => setPendingDelete(session.id),
+                      },
+                    ]}
+                  >
                     <SessionItem
                       session={session}
                       isSelected={chatSessionId === session.id}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Check, Globe, LogOut, Monitor, X } from 'lucide-react';
 import { UserAvatar } from '@/components/user/UserAvatar';
@@ -10,7 +10,9 @@ import { useMobileUiStore } from '../stores/mobile-ui-store';
 import { MOBILE_MORE_ITEMS, resolveMoreItems } from '../registries';
 import { MobileHeader } from '../components/MobileHeader';
 import { MobileIcon } from '../components/MobileIcon';
-import { setupService } from '@/services/setup-service';
+import { ConnectionSheet } from '@/plugins/connection/ConnectionSheet';
+import { msText, qualityDot, routeText } from '@/plugins/connection/labels';
+import { startConnectionProbe, useConnectionStatus } from '@/plugins/connection/store';
 import { i18n } from '@/utils/i18n';
 import type { Theme } from '@/utils/theme';
 
@@ -45,19 +47,14 @@ export const MobileProfilePage: React.FC = () => {
   const dismissHomeScreenHint = useMobileUiStore((s) => s.dismissHomeScreenHint);
   const resetMobileUi = useMobileUiStore((s) => s.resetMobileUi);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [connection, setConnection] = useState<'unknown' | 'ok' | 'down'>('unknown');
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const { route, quality, ewmaMs, reachable } = useConnectionStatus();
+
+  useEffect(() => {
+    startConnectionProbe();
+  }, []);
 
   const hostItems = resolveMoreItems(MOBILE_MORE_ITEMS);
-
-  const probe = async () => {
-    setConnection('unknown');
-    try {
-      await setupService.getStatus();
-      setConnection('ok');
-    } catch {
-      setConnection('down');
-    }
-  };
 
   const chooseProject = () => {
     // Clearing the active project lets `MobileGate` show the picker again — one source of truth
@@ -142,14 +139,16 @@ export const MobileProfilePage: React.FC = () => {
           )}
 
           <div className="mobile-section-title">{i18n('Connection')}</div>
-          <button className="mobile-row w-full text-left border-b border-border" onClick={() => void probe()}>
+          <button className="mobile-row w-full text-left border-b border-border" onClick={() => setDiagnosticsOpen(true)}>
             <Globe className="w-5 h-5 shrink-0 text-muted-foreground" />
             <span className="flex-1 min-w-0 text-sm truncate">{window.location.host}</span>
+            <span className="text-xs text-muted-foreground shrink-0">{routeText(route)}</span>
             <span
-              className={`w-2 h-2 rounded-full shrink-0 ${
-                connection === 'ok' ? 'bg-green-500' : connection === 'down' ? 'bg-destructive' : 'bg-muted-foreground/40'
-              }`}
-            />
+              className={`text-xs tabular-nums shrink-0 ${quality === 'bad' || quality === 'down' ? 'text-destructive' : 'text-muted-foreground'}`}
+            >
+              {msText(ewmaMs, reachable)}
+            </span>
+            <span className={`w-2 h-2 rounded-full shrink-0 ${qualityDot(quality)}`} />
           </button>
 
           <p className="px-3 py-3 text-[11px] leading-snug text-muted-foreground">
@@ -179,6 +178,7 @@ export const MobileProfilePage: React.FC = () => {
       </div>
 
       <ProfileEditDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
+      <ConnectionSheet open={diagnosticsOpen} onClose={() => setDiagnosticsOpen(false)} />
     </>
   );
 };

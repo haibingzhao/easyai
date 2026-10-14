@@ -197,6 +197,8 @@ export { MobileProjectPage } from './mobile/pages/MobileProjectPage';
 export { MobileHeader } from './mobile/components/MobileHeader';
 export { MobileTabBar } from './mobile/components/MobileTabBar';
 export { MobileSheet } from './mobile/components/MobileSheet';
+export { MobileIcon } from './mobile/components/MobileIcon';
+export { MobileSwipeRow } from './mobile/components/MobileSwipeRow';
 export { TasksSheet } from './mobile/components/TasksSheet';
 export { MessageActionSheet } from './mobile/components/MessageActionSheet';
 export { ConnectionBanner } from './mobile/components/ConnectionBanner';
@@ -205,7 +207,7 @@ export {
   MOBILE_MORE_ITEMS,
   MOBILE_SHEET_ITEMS,
   MOBILE_COMPOSER_PLUS_ITEMS,
-  BUILT_IN_TAB_ITEMS,
+  MOBILE_BUILT_IN_TAB_ITEMS,
   MOBILE_TAB_MAX,
   resolveMobileTabs,
   resolveMoreItems,
@@ -217,10 +219,36 @@ export type {
   MobileComposerPlusItem,
   MobileComposerContext,
 } from './mobile/registries';
+export type { MobileSwipeAction } from './mobile/components/MobileSwipeRow';
 export { useMobileUiStore } from './mobile/stores/mobile-ui-store';
 export { useKeyboardInset } from './mobile/hooks/useKeyboardInset';
 export { useVisibilityReconnect } from './mobile/hooks/useVisibilityReconnect';
 export { useLongPress } from './mobile/hooks/useLongPress';
+
+// === Connection plugin (business-agnostic route + latency self-diagnostics) ===
+// A host mounts the desktop badge with `TOPBAR_EXTRA_ITEMS.push(ConnectionPill)`. The mobile
+// surfaces already ride inside the exported `MobileChatPage` / `MobileProfilePage`.
+export { ConnectionPill } from './plugins/connection/ConnectionPill';
+export { ConnectionChip } from './plugins/connection/ConnectionChip';
+export { ConnectionSheet } from './plugins/connection/ConnectionSheet';
+export { ConnectionReport } from './plugins/connection/ConnectionReport';
+export { CONNECTION_CONFIG } from './plugins/connection/config';
+export { startConnectionProbe, useConnectionStore, useConnectionStatus } from './plugins/connection/store';
+export { classifyAccess, mergeRoute } from './plugins/connection/route';
+export { accessText, qualityOf, qualityDot, routeText, msText, sourceText } from './plugins/connection/labels';
+export type { ConnectionState } from './plugins/connection/store';
+export type {
+  AccessKind,
+  Confidence,
+  ConnectionInfoDto,
+  EvidenceSource,
+  ProbeSample,
+  Quality,
+  RelayInfo,
+  RouteSnapshot,
+  ServerRoute,
+  Via,
+} from './plugins/connection/types';
 
 // Transcript state hooks, shared by the desktop panel and any host building its own surface.
 export { useSessionRecovery } from './hooks/useSessionRecovery';

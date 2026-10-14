@@ -34,6 +34,7 @@ import com.easy.easyai.snapshot.SnapshotEventListener
 import com.easy.easyai.snapshot.SnapshotService
 import com.easy.easyai.tools.background.BackgroundTaskManagerRegistry
 import com.easy.easyai.tools.mcp.McpClientManager
+import com.easy.easyai.web.connection.ConnectionProperties
 import com.easy.easyai.web.controller.ChatController
 import com.easy.easyai.web.handler.BackgroundTaskCustomEventConverter
 import com.easy.easyai.web.handler.CheckpointCustomEventConverter
@@ -81,7 +82,12 @@ import java.nio.file.Path
 @ConditionalOnClass(ChatModel::class)
 @ConditionalOnProperty(prefix = "easyai.web", name = ["enabled"], havingValue = "true", matchIfMissing = true)
 @ConditionalOnProperty(prefix = "easyai.database", name = ["configured"], havingValue = "true", matchIfMissing = true)
-@EnableConfigurationProperties(WebProperties::class, AuthProperties::class, ScriptLlmProperties::class)
+@EnableConfigurationProperties(
+    WebProperties::class,
+    AuthProperties::class,
+    ScriptLlmProperties::class,
+    ConnectionProperties::class,
+)
 @ComponentScan(basePackages = ["com.easy.easyai.web"])
 open class WebAutoConfiguration {
 

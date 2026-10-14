@@ -72,9 +72,11 @@ export const MOBILE_TAB_MAX = 4;
 
 /**
  * Framework-owned tabs, always first: the conversation is the product on a phone, and
- * history needs to stay reachable no matter what a host registers.
+ * history needs to stay reachable no matter what a host registers. Mutable like
+ * `MOBILE_TAB_ITEMS` — a host that wants its own sections to own the four slots splices these out
+ * before render.
  */
-export const BUILT_IN_TAB_ITEMS: MobileTabItem[] = [
+export const MOBILE_BUILT_IN_TAB_ITEMS: MobileTabItem[] = [
   { id: 'mobile-chat', label: 'Chat', labelKey: 'Chat', icon: 'MessageSquare', path: '/chat', order: -2 },
   { id: 'mobile-history', label: 'History', labelKey: 'History', icon: 'Clock', path: '/history', order: -1 },
 ];
@@ -85,7 +87,7 @@ export const BUILT_IN_TAB_ITEMS: MobileTabItem[] = [
  * leaves ~65pt per label on a 390pt screen, which clips CJK labels.
  */
 export function resolveMobileTabs(items: MobileTabItem[]): MobileTabItem[] {
-  const all = [...BUILT_IN_TAB_ITEMS, ...items];
+  const all = [...MOBILE_BUILT_IN_TAB_ITEMS, ...items];
   const seen = new Set<string>();
   const unique = all.filter((item) => {
     if (seen.has(item.id)) return false;

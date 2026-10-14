@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { i18n } from '@/utils/i18n';
+import { useKeyboardInset } from '../hooks/useKeyboardInset';
 
 export type MobileSheetDetent = 'half' | 'full' | 'auto';
 
@@ -42,6 +43,7 @@ export const MobileSheet: React.FC<MobileSheetProps> = ({
   const [rendered, setRendered] = useState(open);
   const [dragY, setDragY] = useState(0);
   const dragStartY = useRef<number | null>(null);
+  const keyboardInset = useKeyboardInset();
 
   useEffect(() => {
     if (open) {
@@ -89,6 +91,10 @@ export const MobileSheet: React.FC<MobileSheetProps> = ({
         aria-label={title}
         style={{
           height: heightStyle,
+          // Portaled to `document.body`, so the shell's keyboard shrink never reaches a sheet:
+          // without this lift the bottom of any form inside a sheet stays under the keyboard.
+          bottom: keyboardInset || undefined,
+          maxHeight: keyboardInset ? `calc(100dvh - ${keyboardInset}px)` : undefined,
           transform: dragY > 0 ? `translateY(${dragY}px)` : undefined,
           transition: dragY > 0 ? 'none' : undefined,
         }}

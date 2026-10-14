@@ -61,6 +61,11 @@ class SecurityConfig {
                         .pathMatchers("/api/internal/llm/**").permitAll()
                         // Health check is public
                         .pathMatchers("/api/chat/health").permitAll()
+                        // Connection diagnostics is public as well: it answers only about the calling
+                        // request's own path, and the console reads a 404 here as "this backend has no
+                        // adapter". Behind auth that same absence would arrive as a 401 and look like a
+                        // fault in the network being diagnosed.
+                        .pathMatchers("/api/connection/**").permitAll()
                         // Static console shell + assets served same-origin (desktop + web server)
                         .pathMatchers(
                             "/", "/index.html", "/mobile.html", "/manifest.json",

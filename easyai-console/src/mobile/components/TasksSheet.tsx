@@ -10,6 +10,7 @@ import { ForkBranchesSection } from '@/components/chat/ForkBranchesSection';
 import { TeamMemberPanel } from '@/components/chat/team/TeamMemberPanel';
 import { i18n } from '@/utils/i18n';
 import { MobileSheet } from './MobileSheet';
+import { MOBILE_SHEET_ITEMS } from '../registries';
 import { useMobileUiStore } from '../stores/mobile-ui-store';
 
 /**
@@ -60,6 +61,12 @@ export const TasksSheet: React.FC = () => {
       <div className="border-t border-dashed border-border my-2" />
       <ReferencePanel references={references} sessionVariables={sessionVariables} />
       <ForkBranchesSection />
+      {MOBILE_SHEET_ITEMS.map((Section, index) => (
+        <React.Fragment key={index}>
+          <div className="border-t border-dashed border-border my-2" />
+          <Section />
+        </React.Fragment>
+      ))}
       <p className="mt-3 text-[11px] text-muted-foreground">
         {i18n('Review diffs, the file tree and workflow editing live on the desktop console.')}
       </p>
