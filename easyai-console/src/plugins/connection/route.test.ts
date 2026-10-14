@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyAccess, labelRelayHost, mergeRoute, parseRelayAddress } from './route';
+import { classifyAccess, labelRelayHost, mergeRoute, parseRelayAddress, witnessIdentity } from './route';
 import { isContradictory, routeText } from './labels';
 import type { ConnectionInfoDto } from './types';
 
@@ -109,5 +109,37 @@ describe('mergeRoute', () => {
     const route = mergeRoute({ access: 'TAILNET', host: HOST, ttfbMs: 480, info, infoError: null });
     expect(isContradictory(route, 480)).toBe(true);
     expect(isContradictory(route, 30)).toBe(false);
+  });
+});
+
+describe('witnessIdentity', () => {
+  it('is null for latency-only readings, so noise can never reset the sample window', () => {
+    const inferred = mergeRoute({ access: 'TAILNET', host: HOST, ttfbMs: 300, info: null, infoError: null });
+    expect(witnessIdentity(inferred)).toBeNull();
+  });
+
+  it('distinguishes a direct path from each relay kind', () => {
+    const direct = mergeRoute({ access: 'TAILNET', host: HOST, info: { route: 'TAILNET_DIRECT' }, infoError: null });
+    const peer = mergeRoute({
+      access: 'TAILNET',
+      host: HOST,
+      info: { route: 'RELAY_PEER', peer: { peerRelay: '47.121.24.5:40000:vni:23' } },
+      infoError: null,
+    });
+    const derp = mergeRoute({ access: 'TAILNET', host: HOST, info: { route: 'RELAY_DERP', relay: { kind: 'DERP', derpRegion: 'hkg' } }, infoError: null });
+
+    expect(witnessIdentity(direct)).toBe('DIRECT:');
+    expect(witnessIdentity(peer)).toBe('RELAY:47.121.24.5:40000');
+    expect(witnessIdentity(derp)).toBe('RELAY:hkg');
+    expect(witnessIdentity(direct)).not.toBe(witnessIdentity(peer));
+  });
+
+  it('carries the witness failure through to the evidence block', () => {
+    const info: ConnectionInfoDto = {
+      route: 'UNKNOWN',
+      server: { tailscaleAvailable: false, tailscaleError: 'exec failed: Cannot run program "tailscale"' },
+    };
+    const route = mergeRoute({ access: 'TAILNET', host: HOST, ttfbMs: 120, info, infoError: null });
+    expect(route.evidence.tailscaleError).toContain('Cannot run program');
   });
 });

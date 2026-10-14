@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { CONNECTION_CONFIG as CFG } from './config';
 import { qualityOf } from './labels';
 import { buildProbeUrl, probeOnce } from './probe';
-import { classifyAccess, mergeRoute } from './route';
+import { classifyAccess, mergeRoute, witnessIdentity } from './route';
 import { summariseLatency } from './stats';
 import type { ConnectionInfoDto, ProbeSample, RouteSnapshot } from './types';
 
@@ -74,23 +74,34 @@ type ProbeOutcome = { sample: ProbeSample; info: ConnectionInfoDto | null; infoE
 
 function applySample(commit: Commit, get: () => ConnectionState, result: ProbeOutcome) {
   const previous = get();
-  const samples = [...previous.samples, result.sample].slice(-CFG.historyLength);
-  const stats = summariseLatency(samples);
-  const networkFailed = result.sample.error === 'network';
-  const route = mergeRoute({
-    access,
-    host,
-    ttfbMs: stats.ewmaMs ?? result.sample.ttfbMs,
-    info: result.info ?? previous.serverInfo,
-    infoError: result.infoError,
-  });
+
+  const build = (samples: ProbeSample[]) => {
+    const stats = summariseLatency(samples);
+    const route = mergeRoute({
+      access,
+      host,
+      ttfbMs: stats.ewmaMs ?? result.sample.ttfbMs,
+      info: result.info ?? previous.serverInfo,
+      infoError: result.infoError,
+    });
+    return { samples, stats, route };
+  };
+
+  let next = build([...previous.samples, result.sample].slice(-CFG.historyLength));
+  const now = witnessIdentity(next.route);
+  const before = witnessIdentity(previous.route);
+  if (now !== null && now !== before) {
+    // The tunnel switched path (direct ↔ relay): samples from the old path would drag the average
+    // across the flip, which is exactly the blend that makes a badge untrustworthy.
+    next = build([result.sample]);
+  }
 
   commit({
-    samples,
+    samples: next.samples,
     latest: result.sample,
-    ...stats,
-    reachable: !networkFailed,
-    route,
+    ...next.stats,
+    reachable: result.sample.error !== 'network',
+    route: next.route,
     serverInfo: result.info ?? previous.serverInfo,
     serverInfoError: result.infoError ?? previous.serverInfoError,
   });

@@ -71,6 +71,11 @@
   display: flex;
   border-top: 1px solid var(--color-border);
   background-color: var(--color-background);
+  /*
+   * iOS 26.6.1 reports `env(safe-area-inset-bottom)` as 0 on the first paint of a standalone web app
+   * and only fills it in after the first keyboard interaction, so the row sits over the home indicator
+   * until then. Deliberately not floored with a constant: on home-button iPhones 0 is the truth.
+   */
   padding-bottom: env(safe-area-inset-bottom);
 }
 
@@ -161,6 +166,25 @@
   max-width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+}
+
+/*
+ * `overflow-y: auto` computes this axis to `auto` too (a `visible` value cannot pair with a
+ * scrolling one), so a single child wider than the viewport lets a horizontal swipe pan the whole
+ * transcript out of sight. Clip the axis that was never meant to scroll, and make markdown tables
+ * fit the column instead of hiding their right-hand cells behind that clip.
+ */
+.mobile-app .message-list-scroll {
+  overflow-x: hidden;
+}
+
+.mobile-app .prose table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.mobile-app .prose :is(th, td) {
+  overflow-wrap: anywhere;
 }
 
 /* iOS only zooms on focus if the control is under 16px. */

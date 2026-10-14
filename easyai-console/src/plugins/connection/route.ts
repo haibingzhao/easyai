@@ -131,6 +131,7 @@ export function mergeRoute(input: MergeInput): RouteSnapshot {
   if (input.info?.server) {
     evidence.serverHostname = input.info.server.hostname ?? undefined;
     evidence.tailscaleAvailable = input.info.server.tailscaleAvailable ?? undefined;
+    evidence.tailscaleError = input.info.server.tailscaleError ?? undefined;
   }
   if (input.info?.generatedAt) evidence.serverInfoAt = input.info.generatedAt;
 
@@ -168,6 +169,16 @@ export function mergeRoute(input: MergeInput): RouteSnapshot {
     note: via === 'RELAY' ? 'relayTypeInvisible' : undefined,
     evidence,
   };
+}
+
+/**
+ * Identity of the path as a tailscale witness reports it, or `null` when the reading came from
+ * latency alone. A change in this value means the tunnel really switched path (direct ↔ relay), so
+ * samples collected before the flip describe a different network.
+ */
+export function witnessIdentity(route: RouteSnapshot): string | null {
+  if (route.source !== 'server' && route.source !== 'device') return null;
+  return `${route.via}:${route.relay?.address ?? route.relay?.derpRegion ?? ''}`;
 }
 
 function relayFromRouteKind(route: ServerRoute, evidence: RouteEvidence): RelayInfo | undefined {
