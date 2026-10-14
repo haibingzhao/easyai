@@ -15,6 +15,9 @@ export default defineConfig({
     setupFiles: ['./src/test-setup.ts'],
   },
   server: {
+    // 经 tailscale serve 用 https://mac-mini.tailae6c41.ts.net 访问时，
+    // Vite 的 Host 头校验会拦掉该域名（防 DNS rebinding），需显式放行。
+    allowedHosts: ['mac-mini.tailae6c41.ts.net', '.tailae6c41.ts.net'],
     watch: {
       ignored: ['**/easyai/**', '**/.git/**', '**/node_modules/**', '**/.git_disabled/**'],
     },
