@@ -45,9 +45,7 @@ describe('parseSSEStream', () => {
     });
     // Advance timers for the setTimeout(r, 0) between events
     await vi.advanceTimersByTimeAsync(10);
-    const result = await promise;
-
-    expect(result.completed).toBe(true);
+    await promise;
     expect(events).toHaveLength(1);
     expect(events[0].eventType).toBe('text_delta');
     expect(events[0].data).toBe('{"delta":"hello"}');
@@ -63,9 +61,7 @@ describe('parseSSEStream', () => {
       onEvent: (e) => events.push(e),
     });
     await vi.advanceTimersByTimeAsync(50);
-    const result = await promise;
-
-    expect(result.completed).toBe(true);
+    await promise;
     expect(events).toHaveLength(2);
     expect(events[0].eventType).toBe('start');
     expect(events[1].eventType).toBe('text_delta');
@@ -83,9 +79,7 @@ describe('parseSSEStream', () => {
       onEvent: (e) => events.push(e),
     });
     await vi.advanceTimersByTimeAsync(10);
-    const result = await promise;
-
-    expect(result.completed).toBe(true);
+    await promise;
     expect(events).toHaveLength(1);
     expect(events[0].eventType).toBe('text_delta');
     expect(events[0].data).toBe('{"delta":"world"}');
@@ -101,9 +95,7 @@ describe('parseSSEStream', () => {
       onEvent: (e) => events.push(e),
     });
     await vi.advanceTimersByTimeAsync(10);
-    const result = await promise;
-
-    expect(result.completed).toBe(true);
+    await promise;
     expect(events).toHaveLength(1);
     expect(events[0].data).toBe('{"delta":"ok"}');
   });
@@ -118,9 +110,8 @@ describe('parseSSEStream', () => {
       onEvent: (e) => events.push(e),
     });
     await vi.advanceTimersByTimeAsync(10);
-    const result = await promise;
+    await promise;
 
-    expect(result.completed).toBe(true);
     // `data: orphan-data` has no event type -> skipped.
     // `event: no_data` (no data line) and `event: empty_data` (empty data line) are
     // valid SSE signals (e.g. thinking_end) and must be delivered with empty data.

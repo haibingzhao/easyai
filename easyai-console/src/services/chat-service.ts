@@ -34,8 +34,18 @@ interface SSECallbacks {
   onError: (event: ErrorEvent) => void;
 }
 
-interface SSEStreamResult {
-  completed: boolean; // Whether a 'done' event was received
+interface SSEStreamOutcome {
+  /** A `done` or `error` event arrived: the run reported its own ending, so a following EOF is normal. */
+  terminal: boolean;
+}
+
+/**
+ * The transport gave up on a run that never reported an ending. `cause` is the raw browser/transport
+ * detail, and it must not be read as a verdict: a client that leaves the foreground on iOS loses the
+ * in-flight request exactly the same way a dying backend does.
+ */
+function connectionLost(cause: string): ErrorEvent {
+  return { type: 'error', reason: 'connection_lost', cause };
 }
 
 /**
@@ -45,17 +55,18 @@ interface SSEStreamResult {
 async function parseChatSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   callbacks: SSECallbacks
-): Promise<SSEStreamResult> {
-  let receivedDone = false;
+): Promise<SSEStreamOutcome> {
+  let terminal = false;
 
-  const result = await parseSSEStream(reader, {
+  await parseSSEStream(reader, {
     onEvent: (raw: RawSSEEvent) => {
       try {
         const event: ChatStreamEvent = JSON.parse(raw.data);
         if (event.type === 'done') {
-          receivedDone = true;
+          terminal = true;
           callbacks.onDone(event as DoneEvent);
         } else if (event.type === 'error') {
+          terminal = true;
           callbacks.onError(event as ErrorEvent);
         } else {
           callbacks.onEvent(event);
@@ -66,7 +77,7 @@ async function parseChatSSEStream(
     },
   });
 
-  return { completed: receivedDone || result.completed };
+  return { terminal };
 }
 
 export class ChatService {
@@ -103,29 +114,21 @@ export class ChatService {
       const reader = response.body?.getReader();
       if (!reader) throw new Error('No response body');
 
-      const result = await parseChatSSEStream(reader, {
+      const outcome = await parseChatSSEStream(reader, {
         onEvent: this.onEvent,
         onDone: this.onDone,
         onError: this.onError,
       });
 
-      // Stream ended without receiving a 'done' event — abnormal disconnection
-      if (!result.completed) {
-        this.onError({
-          type: 'error',
-          reason: 'connection_lost',
-          errorMessage: 'Connection lost — the server may have restarted',
-        });
+      // Stream ended without the run ever reporting an ending — abnormal disconnection
+      if (!outcome.terminal) {
+        this.onError(connectionLost('stream closed before the run reported an ending'));
       }
     } catch (error) {
       if ((error as Error).name === 'AbortError') return;
 
       if (error instanceof SSEConnectionError) {
-        this.onError({
-          type: 'error',
-          reason: 'connection_lost',
-          errorMessage: 'Connection lost — the server may have restarted',
-        });
+        this.onError(connectionLost(error.detail));
       } else {
         this.onError({
           type: 'error',
@@ -216,24 +219,21 @@ function createSseStream(config: {
       const reader = response.body?.getReader();
       if (!reader) throw new Error('No response body');
 
-      const result = await parseChatSSEStream(reader, config.callbacks);
-      if (!result.completed) {
-        config.callbacks.onError({
-          type: 'error',
-          reason: 'connection_lost',
-          errorMessage: 'Connection lost — the server may have restarted',
-        });
+      const outcome = await parseChatSSEStream(reader, config.callbacks);
+      if (!outcome.terminal) {
+        config.callbacks.onError(connectionLost('stream closed before the run reported an ending'));
       }
     } catch (error) {
       if ((error as Error).name === 'AbortError') return;
-      const isConnectionLost = error instanceof SSEConnectionError;
-      config.callbacks.onError({
-        type: 'error',
-        reason: isConnectionLost ? 'connection_lost' : config.errorReason,
-        errorMessage: isConnectionLost
-          ? 'Connection lost — the server may have restarted'
-          : (error as Error).message,
-      });
+      if (error instanceof SSEConnectionError) {
+        config.callbacks.onError(connectionLost(error.detail));
+      } else {
+        config.callbacks.onError({
+          type: 'error',
+          reason: config.errorReason,
+          errorMessage: (error as Error).message,
+        });
+      }
     } finally {
       config.controllerSet?.delete(abortController);
     }

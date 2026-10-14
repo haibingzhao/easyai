@@ -171,20 +171,12 @@
 /*
  * `overflow-y: auto` computes this axis to `auto` too (a `visible` value cannot pair with a
  * scrolling one), so a single child wider than the viewport lets a horizontal swipe pan the whole
- * transcript out of sight. Clip the axis that was never meant to scroll, and make markdown tables
- * fit the column instead of hiding their right-hand cells behind that clip.
+ * transcript out of sight. Clip the axis that was never meant to scroll. Markdown tables get their
+ * own `overflow-x: auto` wrapper (see markdownCodeComponents), so a wide table scrolls inside that
+ * wrapper while the transcript itself stays put.
  */
 .mobile-app .message-list-scroll {
   overflow-x: hidden;
-}
-
-.mobile-app .prose table {
-  width: 100%;
-  table-layout: fixed;
-}
-
-.mobile-app .prose :is(th, td) {
-  overflow-wrap: anywhere;
 }
 
 /* iOS only zooms on focus if the control is under 16px. */

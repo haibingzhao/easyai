@@ -48,7 +48,7 @@ export const MobileProfilePage: React.FC = () => {
   const resetMobileUi = useMobileUiStore((s) => s.resetMobileUi);
   const [profileOpen, setProfileOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
-  const { route, quality, ewmaMs, reachable } = useConnectionStatus();
+  const { route, quality, p50Ms, reachable } = useConnectionStatus();
 
   useEffect(() => {
     startConnectionProbe();
@@ -146,7 +146,7 @@ export const MobileProfilePage: React.FC = () => {
             <span
               className={`text-xs tabular-nums shrink-0 ${quality === 'bad' || quality === 'down' ? 'text-destructive' : 'text-muted-foreground'}`}
             >
-              {msText(ewmaMs, reachable)}
+              {msText(p50Ms, reachable)}
             </span>
             <span className={`w-2 h-2 rounded-full shrink-0 ${qualityDot(quality)}`} />
           </button>

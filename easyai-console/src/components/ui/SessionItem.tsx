@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Trash2, MoreHorizontal, Tags as TagsIcon, Check, X } from 'lucide-react';
+import { Trash2, MoreHorizontal, Tags as TagsIcon, Check, X, Loader2 } from 'lucide-react';
 import type { SessionListItem } from '@/services/session-service';
 import { MultiSelectDropdown } from '@/components/chat/MultiSelectDropdown';
 import { i18n } from '@/utils/i18n';
@@ -11,6 +11,8 @@ interface SessionItemProps {
   session: SessionListItem;
   isSelected: boolean;
   showDelete?: boolean;
+  /** This session is being loaded into the chat view — show a spinner and ignore clicks. */
+  loading?: boolean;
   /** Distinct tags across sessions — used as autocomplete options in the tag editor. */
   availableTags?: string[];
   onSelect: (id: string) => void;
@@ -23,6 +25,7 @@ export const SessionItem: React.FC<SessionItemProps> = ({
   session,
   isSelected,
   showDelete = false,
+  loading = false,
   availableTags = [],
   onSelect,
   onDelete,
@@ -106,7 +109,7 @@ export const SessionItem: React.FC<SessionItemProps> = ({
       className={`flex items-start justify-between gap-2 p-3 rounded-md border border-border cursor-pointer transition-colors ${
         isSelected ? 'bg-muted' : 'hover:bg-muted'
       }`}
-      onClick={() => onSelect(session.id)}
+      onClick={() => { if (!loading) onSelect(session.id); }}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
@@ -140,7 +143,12 @@ export const SessionItem: React.FC<SessionItemProps> = ({
 
       {/* Action area: ⋯ menu + inline tag editor */}
       <div ref={actionRef} className="relative shrink-0" onClick={stop}>
-        {actionVisible && !editingTags && (
+        {loading && (
+          <span className="flex items-center justify-center p-1.5" title={i18n('Loading...')}>
+            <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+          </span>
+        )}
+        {!loading && actionVisible && !editingTags && (
           <button
             type="button"
             onClick={toggleMenu}

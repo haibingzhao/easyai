@@ -63,4 +63,14 @@ export const markdownCodeComponents = {
     // Block code should be handled by pre, but just in case
     return <>{children}</>;
   },
+
+  // Wide tables scroll sideways inside their own wrapper instead of squeezing every column
+  // down to a few characters (the transcript container itself clips horizontal overflow).
+  table({ children, node: _node, ...props }: React.ComponentPropsWithoutRef<'table'> & { node?: unknown }) {
+    return (
+      <div className="overflow-x-auto">
+        <table {...props}>{children}</table>
+      </div>
+    );
+  },
 };

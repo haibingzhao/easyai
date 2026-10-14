@@ -51,6 +51,7 @@ export const MobileChatPage: React.FC = () => {
     isAwaitingPermission,
     revertState,
     setRevertState,
+    liveStreamDropped,
   } = useChatStore();
   const resetTeam = useTeamStore((s) => s.resetTeam);
   const selectedExecutionId = useTeamStore((s) => s.selectedExecutionId);
@@ -183,9 +184,14 @@ export const MobileChatPage: React.FC = () => {
           <div ref={containerRef} className="h-full overflow-y-auto message-list-scroll px-3" onScroll={onScroll}>
             {showWelcome ? <WelcomeScreen /> : <MessageList messages={messages} isStreaming={isStreaming} />}
             {runningSessionId && (
-              <div className="px-1 py-2 flex items-center gap-2 text-sm text-muted-foreground">
-                <Clock className="w-4 h-4 animate-pulse" />
-                <span>{i18n('Session is running...')}</span>
+              <div className="px-1 py-2 flex flex-col gap-0.5 text-sm text-muted-foreground">
+                <span className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 animate-pulse" />
+                  {i18n('Session is running...')}
+                </span>
+                {liveStreamDropped && (
+                  <span className="pl-6 text-xs">{i18n('Real-time stream dropped; updates arrive by polling')}</span>
+                )}
               </div>
             )}
           </div>

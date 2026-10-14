@@ -21,6 +21,7 @@ import type { TodoInfo, SubAgentTodoGroup } from '@/types/todo';
 import type { CheckpointInfo, RevertStateInfo } from '@/types/checkpoint';
 import type { PermissionRequestEvent } from '@/types/socket-event';
 import { TOOL_NAMES } from '@/constants/tools';
+import { i18n } from '@/utils/i18n';
 import {
   type StreamingBlock,
   type ThinkingBlockData,
@@ -64,6 +65,10 @@ export interface ChatStateShape {
   backgroundTasks: Record<string, BackgroundTaskEvent>;
   /** Latest tool_fold event of the current session; null when this run has not folded anything */
   toolFoldInfo: ToolFoldEvent | null;
+  /** Session the backend still reports as running; its presence means a recovery poll owns the state */
+  runningSessionId: string | null;
+  /** The live stream for the running session dropped, while the run continues under the recovery poll */
+  liveStreamDropped: boolean;
 
   // Actions
   appendToTextBlock: (delta: string, messageId?: string) => void;
@@ -80,6 +85,8 @@ export interface ChatStateShape {
   setIsFileWriting: (v: boolean) => void;
   refreshGoal: (sessionId: string) => Promise<void>;
   applyVariableUpdate: (variables: Record<string, string>, deleteKeys?: string[]) => void;
+  /** Adopt the session as the recovery poll's; also establishes the incremental merge baseline. */
+  setRunningSessionId: (id: string | null) => void;
 }
 
 type SetFn = (partial: Partial<ChatStateShape> | ((state: ChatStateShape) => Partial<ChatStateShape>)) => void;
@@ -659,22 +666,40 @@ function handleStreamError(
   // Commit any partial streaming content before clearing state
   state.commitStreamingMessage();
   const isConnectionLost = event.reason === 'connection_lost';
+  const cause = event.cause ?? event.errorMessage;
+
+  // iOS suspends an in-flight `fetch` the moment the page leaves the foreground, and the run lives in
+  // a backend scope no client disconnect can cancel — so a dropped stream is not evidence that the
+  // agent stopped. Hand the session to the recovery poll (the same adoption an unconfirmed stop
+  // uses): turns keep arriving, and the session's own end state decides when the run is over instead
+  // of this reader's guess. A live send has no `runningSessionId` yet because the stream was the only
+  // receiver, so without this the transcript would freeze behind an error bubble.
+  if (isConnectionLost && state.sessionId) {
+    console.warn('[SSE] Live stream dropped, handing the session to the recovery poll:', cause);
+    if (state.runningSessionId !== state.sessionId) state.setRunningSessionId(state.sessionId);
+    set({ liveStreamDropped: true });
+    return;
+  }
+
   set({
     isStreaming: false,
     isFileWriting: false,
     retryInfo: null,
+    liveStreamDropped: false,
     pendingPermission: isConnectionLost ? state.pendingPermission : null,
     // Mark the session resumable on any terminal error so the Resume button appears
     // live, matching the historical-load path (session-loader Scenario 0). The error
     // bubble above already carries the specific reason.
     cancelReason: isConnectionLost ? 'Connection Lost' : 'Session Interrupted',
-    // Backend abort clears queues on any terminal error; frontend must match.
-    // For connection_lost the backend SSE-drop handler also aborts, clearing queues.
+    // A run that is still going was handed to the poll above; reaching here means it is over, and the
+    // backend clears the queue when its run ends.
     queuedMessages: [],
   });
   state.addMessage({
     role: 'error',
-    content: event.errorMessage || 'Unknown error',
+    content: isConnectionLost
+      ? `${i18n('Live connection interrupted before the run finished')}${cause ? `: ${cause}` : ''}`
+      : event.errorMessage || 'Unknown error',
     timestamp: Date.now(),
     messageId: event.messageId,
   });

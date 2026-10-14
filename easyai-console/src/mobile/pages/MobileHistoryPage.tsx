@@ -48,6 +48,7 @@ export const MobileHistoryPage: React.FC = () => {
 
   const [query, setQuery] = useState('');
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [switchingId, setSwitchingId] = useState<string | null>(null);
 
   // A temporary workspace belongs to one session only, so filtering by it would show exactly that
   // session; project-less mode instead lists the sessions that carry no project.
@@ -73,11 +74,15 @@ export const MobileHistoryPage: React.FC = () => {
   const grouped = useMemo(() => groupSessionsByTime(filtered), [filtered]);
 
   const openSession = async (id: string) => {
+    if (switchingId) return;
+    setSwitchingId(id);
     try {
       await switchToSession(id);
       navigate('/chat');
     } catch (e) {
       console.error('Failed to load session:', e);
+    } finally {
+      setSwitchingId(null);
     }
   };
 
@@ -199,6 +204,7 @@ export const MobileHistoryPage: React.FC = () => {
                     <SessionItem
                       session={session}
                       isSelected={chatSessionId === session.id}
+                      loading={switchingId === session.id}
                       showDelete={false}
                       onSelect={(id) => void openSession(id)}
                     />

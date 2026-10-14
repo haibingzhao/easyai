@@ -14,7 +14,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Code2, Copy, Download, Eye, ImageDown, MoreHorizontal, Shapes } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { AlertTriangle, Code2, Copy, Download, Eye, ImageDown, Maximize2, MoreHorizontal, Shapes, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ToolMessageProps } from './types';
 import { CodeBlock } from '../CodeBlock';
@@ -63,7 +64,9 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
   const [loadingIndex, setLoadingIndex] = useState(0);
   const [actionError, setActionError] = useState<string | null>(null);
   const [rowExpanded, setRowExpanded] = useState(false);
+  const [fullscreenOpen, setFullscreenOpen] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const fullscreenFrameRef = useRef<HTMLIFrameElement | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const { copyToClipboard, toast } = useCopyToast();
   const markRowTouched = useStreamingRowExpand(status, setRowExpanded, result !== undefined);
@@ -72,6 +75,11 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
   /** Without a renderable fragment a sandbox is pointless — those cases stay in source view. */
   const sandboxUsable = args !== null && !tooLarge && !toolFailed && !noFragment;
   const srcdoc = useMemo(() => buildShellSrcdoc(sandboxId, tokensCssForMode(currentMode())), [sandboxId]);
+  // The fullscreen view is a second, independent sandbox: a distinct id keeps its height/error
+  // messages from colliding with the inline card's listener (it fills the viewport, so it reports
+  // no height we care about).
+  const fullscreenId = `${sandboxId}:fullscreen`;
+  const fullscreenSrcdoc = useMemo(() => buildShellSrcdoc(fullscreenId, tokensCssForMode(currentMode())), [fullscreenId]);
   const sanitized = useMemo(
     () => (sandboxUsable ? sanitizeFragment(code) : ''),
     [sandboxUsable, code]
@@ -108,11 +116,22 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
   }, [actionError]);
 
   useEffect(() => subscribeTheme((mode) => {
-    iframeRef.current?.contentWindow?.postMessage(
-      { type: RV_MSG.THEME, id: sandboxId, css: tokensCssForMode(mode) },
-      '*'
-    );
-  }), [sandboxId]);
+    const css = tokensCssForMode(mode);
+    iframeRef.current?.contentWindow?.postMessage({ type: RV_MSG.THEME, id: sandboxId, css }, '*');
+    fullscreenFrameRef.current?.contentWindow?.postMessage({ type: RV_MSG.THEME, id: fullscreenId, css }, '*');
+  }), [sandboxId, fullscreenId]);
+
+  useEffect(() => {
+    if (!fullscreenOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        setFullscreenOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [fullscreenOpen]);
 
   useEffect(() => {
     const listener = (event: MessageEvent) => {
@@ -136,6 +155,13 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
     frame.postMessage({ type: RV_MSG.MOUNT, id: sandboxId, html: sanitized }, '*');
     frame.postMessage({ type: RV_MSG.THEME, id: sandboxId, css: tokensCssForMode(currentMode()) }, '*');
   }, [sandboxId, sanitized]);
+
+  const handleFullscreenLoad = useCallback(() => {
+    const frame = fullscreenFrameRef.current?.contentWindow;
+    if (!frame) return;
+    frame.postMessage({ type: RV_MSG.MOUNT, id: fullscreenId, html: sanitized }, '*');
+    frame.postMessage({ type: RV_MSG.THEME, id: fullscreenId, css: tokensCssForMode(currentMode()) }, '*');
+  }, [fullscreenId, sanitized]);
 
   const handleDownload = useCallback(() => {
     setMenuOpen(false);
@@ -214,11 +240,22 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
   }
 
   return (
+    <>
     <CardShell
       title={args?.title || i18n('Visual')}
       toolbar={
         args !== null ? (
           <div ref={toolbarRef} className="absolute right-2 top-1.5 flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setFullscreenOpen(true)}
+              disabled={!sandboxUsable}
+              aria-label={i18n('Fullscreen')}
+              title={i18n('Fullscreen')}
+              className="rounded-md border border-border bg-background/80 p-1 text-muted-foreground backdrop-blur transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Maximize2 className="size-4" />
+            </button>
             <button
               type="button"
               onClick={handleDownload}
@@ -290,6 +327,35 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
 
       {toast}
     </CardShell>
+    {fullscreenOpen && sandboxUsable && createPortal(
+      <div
+        className="fixed inset-0 z-50 flex flex-col bg-background"
+        role="dialog"
+        aria-label={args?.title || i18n('Visual')}
+      >
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
+          <span className="truncate text-sm font-medium">{args?.title || i18n('Visual')}</span>
+          <button
+            type="button"
+            onClick={() => setFullscreenOpen(false)}
+            aria-label={i18n('Close')}
+            className="mobile-hit rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <X className="size-5" />
+          </button>
+        </div>
+        <iframe
+          ref={fullscreenFrameRef}
+          title={args?.title || 'render_visual'}
+          srcDoc={fullscreenSrcdoc}
+          sandbox="allow-scripts"
+          onLoad={handleFullscreenLoad}
+          className="w-full flex-1 border-0 bg-transparent"
+        />
+      </div>,
+      document.body
+    )}
+    </>
   );
 }
 

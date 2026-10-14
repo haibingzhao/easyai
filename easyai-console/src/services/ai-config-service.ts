@@ -151,7 +151,7 @@ class AiConfigService {
       } catch (error) {
         if ((error as Error).name === 'AbortError') return;
         if (error instanceof SSEConnectionError) {
-          callbacks.onError('Connection lost — the server may have restarted');
+          callbacks.onError(`Connection lost: ${error.detail}`);
         } else {
           callbacks.onError((error as Error).message);
         }

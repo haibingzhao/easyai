@@ -10,7 +10,7 @@ import { startConnectionProbe, useConnectionStatus } from './store';
  * actually relayed — a header this crowded should spend its width on what needs acting on.
  */
 export const ConnectionChip: React.FC = () => {
-  const { route, quality, ewmaMs, reachable } = useConnectionStatus();
+  const { route, quality, p50Ms, reachable } = useConnectionStatus();
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -31,7 +31,7 @@ export const ConnectionChip: React.FC = () => {
         <span
           className={`text-[11px] tabular-nums ${quality === 'bad' || quality === 'down' ? 'text-destructive' : 'text-muted-foreground'}`}
         >
-          {msText(ewmaMs, reachable)}
+          {msText(p50Ms, reachable)}
         </span>
       </button>
 

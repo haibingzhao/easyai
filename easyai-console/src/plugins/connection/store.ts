@@ -12,8 +12,8 @@ const host = window.location.host;
 export interface ConnectionState {
   samples: ProbeSample[];
   latest: ProbeSample | null;
-  /** Exponentially weighted TTFB — the number shown in the badge. */
-  ewmaMs: number | null;
+  /** Median TTFB over the recent window — the number shown in the badge. */
+  p50Ms: number | null;
   minMs: number | null;
   maxMs: number | null;
   /** False only when the path itself failed; an HTTP 401/404 is still a working connection. */
@@ -29,7 +29,7 @@ export interface ConnectionState {
 export const useConnectionStore = create<ConnectionState>((commit, get) => ({
   samples: [],
   latest: null,
-  ewmaMs: null,
+  p50Ms: null,
   minMs: null,
   maxMs: null,
   reachable: true,
@@ -80,7 +80,7 @@ function applySample(commit: Commit, get: () => ConnectionState, result: ProbeOu
     const route = mergeRoute({
       access,
       host,
-      ttfbMs: stats.ewmaMs ?? result.sample.ttfbMs,
+      ttfbMs: stats.p50Ms ?? result.sample.ttfbMs,
       info: result.info ?? previous.serverInfo,
       infoError: result.infoError,
     });
@@ -103,7 +103,9 @@ function applySample(commit: Commit, get: () => ConnectionState, result: ProbeOu
     reachable: result.sample.error !== 'network',
     route: next.route,
     serverInfo: result.info ?? previous.serverInfo,
-    serverInfoError: result.infoError ?? previous.serverInfoError,
+    // A fallback-path probe parses no body, so it reports neither info nor an error: it cannot clear
+    // a verdict it never asked for. Only a round that actually returned the witness clears it.
+    serverInfoError: result.infoError ?? (result.info !== null ? null : previous.serverInfoError),
   });
 }
 
@@ -154,7 +156,7 @@ export function startConnectionProbe(): void {
 
 export function useConnectionStatus() {
   const reachable = useConnectionStore((s) => s.reachable);
-  const ewmaMs = useConnectionStore((s) => s.ewmaMs);
+  const p50Ms = useConnectionStore((s) => s.p50Ms);
   const minMs = useConnectionStore((s) => s.minMs);
   const maxMs = useConnectionStore((s) => s.maxMs);
   const latest = useConnectionStore((s) => s.latest);
@@ -168,9 +170,9 @@ export function useConnectionStatus() {
 
   return {
     route,
-    quality: qualityOf(reachable, ewmaMs, latest?.error, latest?.status),
+    quality: qualityOf(reachable, p50Ms, latest?.error, latest?.status),
     reachable,
-    ewmaMs,
+    p50Ms,
     minMs,
     maxMs,
     latest,
