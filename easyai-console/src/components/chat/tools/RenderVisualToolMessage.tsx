@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, Code2, Copy, Download, Eye, ImageDown, Maximize2, MoreHorizontal, Shapes, X } from 'lucide-react';
+import { AlertTriangle, Code2, Copy, Download, Eye, ImageDown, Maximize2, MoreHorizontal, Scan, Shapes, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ToolMessageProps } from './types';
 import { CodeBlock } from '../CodeBlock';
@@ -34,6 +34,12 @@ import { downloadBlob, exportSvgFragmentAsImage, requestSandboxExport, safeFileN
 
 const ROTATE_INTERVAL_MS = 1400;
 const ACTION_ERROR_TIMEOUT_MS = 4000;
+const MIN_SCALE = 0.2;
+const MAX_SCALE = 4;
+
+function clampScale(value: number): number {
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, value));
+}
 
 /** Prefix of the prose placeholder an older backend persisted in place of an elided fragment. */
 const ELIDED_PREFIX = '[fragment elided from context:';
@@ -65,8 +71,13 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
   const [actionError, setActionError] = useState<string | null>(null);
   const [rowExpanded, setRowExpanded] = useState(false);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
+  const [fullscreenSize, setFullscreenSize] = useState<{ width: number; height: number } | null>(null);
+  const [view, setView] = useState({ scale: 1, tx: 0, ty: 0 });
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const fullscreenFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchRef = useRef<{ distance: number; scale: number } | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const { copyToClipboard, toast } = useCopyToast();
   const markRowTouched = useStreamingRowExpand(status, setRowExpanded, result !== undefined);
@@ -136,18 +147,24 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
   useEffect(() => {
     const listener = (event: MessageEvent) => {
       const data: unknown = event.data;
-      if (!isRenderVisualSandboxMessage(data, sandboxId)) return;
-      if (data.type === RV_MSG.HEIGHT) setFrameHeight(clampHeight(data.height));
-      else if (data.type === RV_MSG.ERROR) {
-        setFrameError(data.message);
-        // Degrade to source view, but keep the sandbox mounted so the user can
-        // toggle back and still export the partially rendered fragment.
-        setViewMode('code');
+      if (isRenderVisualSandboxMessage(data, sandboxId)) {
+        if (data.type === RV_MSG.HEIGHT) setFrameHeight(clampHeight(data.height));
+        else if (data.type === RV_MSG.ERROR) {
+          setFrameError(data.message);
+          // Degrade to source view, but keep the sandbox mounted so the user can
+          // toggle back and still export the partially rendered fragment.
+          setViewMode('code');
+        }
+        return;
+      }
+      // The fullscreen sandbox reports its true content box so the viewer can scale-to-fit.
+      if (isRenderVisualSandboxMessage(data, fullscreenId) && data.type === RV_MSG.HEIGHT) {
+        setFullscreenSize({ width: data.width, height: data.height });
       }
     };
     window.addEventListener('message', listener);
     return () => window.removeEventListener('message', listener);
-  }, [sandboxId]);
+  }, [sandboxId, fullscreenId]);
 
   const handleFrameLoad = useCallback(() => {
     const frame = iframeRef.current?.contentWindow;
@@ -162,6 +179,72 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
     frame.postMessage({ type: RV_MSG.MOUNT, id: fullscreenId, html: sanitized }, '*');
     frame.postMessage({ type: RV_MSG.THEME, id: fullscreenId, css: tokensCssForMode(currentMode()) }, '*');
   }, [fullscreenId, sanitized]);
+
+  // Scale the fragment to the viewport width on open so wide desktop-sized visuals are never
+  // clipped; pinch then zooms around the gesture midpoint and a single finger pans.
+  const fittedRef = useRef(false);
+
+  const resetView = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || !fullscreenSize || fullscreenSize.width <= 0) return;
+    const scale = Math.min(1, viewport.clientWidth / fullscreenSize.width);
+    const scaledHeight = fullscreenSize.height * scale;
+    setView({
+      scale,
+      tx: (viewport.clientWidth - fullscreenSize.width * scale) / 2,
+      // Center when it fits; top-align when taller than the viewport so nothing above is cut off.
+      ty: scaledHeight <= viewport.clientHeight ? (viewport.clientHeight - scaledHeight) / 2 : 0,
+    });
+  }, [fullscreenSize]);
+
+  useEffect(() => {
+    if (!fullscreenOpen) return;
+    fittedRef.current = false;
+    setFullscreenSize(null);
+  }, [fullscreenOpen]);
+
+  useEffect(() => {
+    if (!fullscreenOpen || !fullscreenSize || fittedRef.current) return;
+    fittedRef.current = true;
+    resetView();
+  }, [fullscreenOpen, fullscreenSize, resetView]);
+
+  const onPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointersRef.current.size === 2) {
+      const [a, b] = [...pointersRef.current.values()];
+      pinchRef.current = { distance: Math.hypot(a.x - b.x, a.y - b.y), scale: view.scale };
+    }
+  }, [view.scale]);
+
+  const onPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const prev = pointersRef.current.get(event.pointerId);
+    if (!prev) return;
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointersRef.current.size >= 2 && pinchRef.current && pinchRef.current.distance > 0) {
+      const [a, b] = [...pointersRef.current.values()];
+      const viewport = viewportRef.current;
+      if (!viewport) return;
+      const rect = viewport.getBoundingClientRect();
+      const cx = (a.x + b.x) / 2 - rect.left;
+      const cy = (a.y + b.y) / 2 - rect.top;
+      const next = clampScale(pinchRef.current.scale * (Math.hypot(a.x - b.x, a.y - b.y) / pinchRef.current.distance));
+      setView((current) => {
+        const ratio = next / current.scale;
+        return { scale: next, tx: cx - (cx - current.tx) * ratio, ty: cy - (cy - current.ty) * ratio };
+      });
+    } else if (pointersRef.current.size === 1) {
+      const dx = event.clientX - prev.x;
+      const dy = event.clientY - prev.y;
+      setView((current) => ({ ...current, tx: current.tx + dx, ty: current.ty + dy }));
+    }
+  }, []);
+
+  const onPointerEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    pointersRef.current.delete(event.pointerId);
+    if (pointersRef.current.size < 2) pinchRef.current = null;
+  }, []);
 
   const handleDownload = useCallback(() => {
     setMenuOpen(false);
@@ -333,25 +416,65 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
         role="dialog"
         aria-label={args?.title || i18n('Visual')}
       >
-        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
+        <div
+          className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 pb-2"
+          style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 0.5rem)' }}
+        >
           <span className="truncate text-sm font-medium">{args?.title || i18n('Visual')}</span>
-          <button
-            type="button"
-            onClick={() => setFullscreenOpen(false)}
-            aria-label={i18n('Close')}
-            className="mobile-hit rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <X className="size-5" />
-          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              onClick={resetView}
+              aria-label={i18n('Fit')}
+              title={i18n('Fit')}
+              className="mobile-hit rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Scan className="size-5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setFullscreenOpen(false)}
+              aria-label={i18n('Close')}
+              className="mobile-hit rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <X className="size-5" />
+            </button>
+          </div>
         </div>
-        <iframe
-          ref={fullscreenFrameRef}
-          title={args?.title || 'render_visual'}
-          srcDoc={fullscreenSrcdoc}
-          sandbox="allow-scripts"
-          onLoad={handleFullscreenLoad}
-          className="w-full flex-1 border-0 bg-transparent"
-        />
+        <div
+          ref={viewportRef}
+          className="relative min-h-0 flex-1 overflow-hidden"
+          style={{ touchAction: 'none' }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerEnd}
+          onPointerCancel={onPointerEnd}
+        >
+          <div
+            className="absolute left-0 top-0"
+            style={{
+              width: fullscreenSize?.width ?? '100%',
+              height: fullscreenSize?.height ?? '100%',
+              transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`,
+              transformOrigin: '0 0',
+            }}
+          >
+            <iframe
+              ref={fullscreenFrameRef}
+              title={args?.title || 'render_visual'}
+              srcDoc={fullscreenSrcdoc}
+              sandbox="allow-scripts"
+              onLoad={handleFullscreenLoad}
+              className="h-full w-full border-0 bg-transparent"
+            />
+          </div>
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 text-center text-xs text-muted-foreground"
+            style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.5rem)' }}
+          >
+            {i18n('Pinch to zoom, drag to pan')}
+          </div>
+        </div>
       </div>,
       document.body
     )}

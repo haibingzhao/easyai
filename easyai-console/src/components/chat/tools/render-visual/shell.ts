@@ -21,6 +21,8 @@ export interface RenderVisualHeightMessage {
   type: typeof RV_MSG.HEIGHT;
   id: string;
   height: number;
+  /** Content width after left-overflow compensation; lets the host scale-to-fit wide fragments. */
+  width: number;
 }
 
 export interface RenderVisualErrorMessage {
@@ -73,7 +75,8 @@ const SHELL_SCRIPT_BODY = [
   '  function send(msg) { parent.postMessage(msg, "*"); }',
   '  new ResizeObserver(function (entries) {',
   '    fitSvgs();',
-  '    send({ type: "' + RV_MSG.HEIGHT + '", id: ID_PLACEHOLDER, height: entries[0].contentRect.height });',
+  '    fitLeft();',
+  '    send({ type: "' + RV_MSG.HEIGHT + '", id: ID_PLACEHOLDER, height: entries[0].contentRect.height, width: root.scrollWidth });',
   '  }).observe(root);',
   '  window.onerror = function (message) {',
   '    send({ type: "' + RV_MSG.ERROR + '", id: ID_PLACEHOLDER, message: String(message) });',
@@ -102,6 +105,7 @@ const SHELL_SCRIPT_BODY = [
   '      old.parentNode.replaceChild(live, old);',
   '    });',
   '    fitSvgs();',
+  '    fitLeft();',
   '  }',
   // A viewBox narrower than its drawn content clips at the SVG viewport at any
   // render size (the overflow scales proportionally), so expand it to the bbox.
@@ -119,6 +123,19 @@ const SHELL_SCRIPT_BODY = [
   '      var h = Math.max(vb.y + vb.height, bb.y + bb.height) - y;',
   '      vb.x = x; vb.y = y; vb.width = w; vb.height = h;',
   '    }',
+  '  }',
+  // Fragments that draw left of their origin (e.g. negative bars with labels) put that content at
+  // a negative x the host can never scroll to, so pad it back into view and report the true width.
+  '  function fitLeft() {',
+  '    var pad = parseFloat(root.style.paddingLeft) || 0;',
+  '    var left = root.getBoundingClientRect().left + pad;',
+  '    var minX = 0;',
+  '    var nodes = root.querySelectorAll("*");',
+  '    for (var i = 0; i < nodes.length; i++) {',
+  '      var dx = nodes[i].getBoundingClientRect().left - left;',
+  '      if (dx < minX) minX = dx;',
+  '    }',
+  '    if (minX < -1) root.style.paddingLeft = (pad - minX) + "px";',
   '  }',
   '  function exportImage() {',
   '    try {',

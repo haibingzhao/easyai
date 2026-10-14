@@ -19,6 +19,7 @@ import { pauseGoal, resumeGoal, deleteGoal } from '@/services/goal-service';
 import { i18n } from '@/utils/i18n';
 import { formatDurationSeconds } from '@/utils/format';
 import { GoalEditDialog } from './GoalEditDialog';
+import { markdownCodeComponents } from './markdownCodeComponents';
 
 interface GoalCardProps {
   goal: GoalStatusEvent;
@@ -186,7 +187,9 @@ export const GoalCard: React.FC<GoalCardProps> = ({ goal }) => {
           <div className="pb-2 px-2 space-y-1.5">
             {/* Goal objective */}
             <div className="text-xs text-foreground bg-muted/40 rounded px-2 py-1.5 prose prose-xs dark:prose-invert max-w-none">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{goal.objective}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
+                {goal.objective}
+              </ReactMarkdown>
             </div>
 
             {/* Progress info */}
@@ -204,7 +207,9 @@ export const GoalCard: React.FC<GoalCardProps> = ({ goal }) => {
             {isCompleted && goal.evidence && (
               <div className="text-xs text-green-600 dark:text-green-400 prose prose-xs dark:prose-invert max-w-none">
                 <span className="font-medium">{i18n('Evidence')}:</span>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{goal.evidence}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
+                  {goal.evidence}
+                </ReactMarkdown>
               </div>
             )}
 
@@ -212,7 +217,9 @@ export const GoalCard: React.FC<GoalCardProps> = ({ goal }) => {
             {isBlocked && goal.blockedReason && (
               <div className="text-xs text-amber-600 dark:text-amber-400 prose prose-xs dark:prose-invert max-w-none">
                 <span className="font-medium">{i18n('Blocked')}:</span>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{goal.blockedReason}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
+                  {goal.blockedReason}
+                </ReactMarkdown>
               </div>
             )}
 
