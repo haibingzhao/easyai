@@ -77,12 +77,11 @@ class RenderVisualTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
         /** Max fragment size: 2MB — matches the client-side rendering cap. */
         const val MAX_FRAGMENT_BYTES = 2L * 1024L * 1024L
 
-        /** Placeholder the context projector substitutes for elided fragments; never renderable. */
-        fun elidedPlaceholder(bytes: Int) =
-            "[fragment elided from context: $bytes bytes, rendered inline in the UI; " +
-                "never copy this placeholder into a new call — author the fragment from scratch]"
-
-        /** Matches [elidedPlaceholder] output so a parroted placeholder fails loudly instead of rendering. */
+        /**
+         * Matches the prose placeholder that older sessions persisted in place of an elided
+         * fragment, so a replayed or parroted one fails loudly instead of rendering. The
+         * render_visual context projector no longer emits it.
+         */
         val ELIDED_PLACEHOLDER = Regex("""^\[fragment elided from context: \d+ bytes.*]$""")
     }
 }

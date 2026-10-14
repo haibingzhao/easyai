@@ -71,24 +71,37 @@ where you resume (or a closing corrections section) and continue from there.
  * re-read its own markup, so replaying it every turn wastes context (up to 2MB per call) and
  * can trigger premature compaction. Only the send-to-LLM path is affected — the persisted
  * message keeps the full arguments, so the UI still renders the card on history load. The
- * title is preserved so the model retains awareness of what it produced.
+ * title is preserved so the model retains awareness of what it produced, and the fragment
+ * size stays readable in the tool result the call was acknowledged with.
  *
- * Arguments shorter than `ELIDE_THRESHOLD_CHARS` are returned without being parsed: this runs
- * once per historical render_visual call on every LLM turn, so small calls are cheaper to
- * replay verbatim than to parse, and their context cost is negligible anyway.
+ * The elided value is the empty string, deliberately not a prose marker: a placeholder
+ * sentence sitting in a required string argument reads to the model as a valid value, and it
+ * has been observed imitating the shape — with fabricated byte counts — into brand new
+ * `render_visual` calls. Nothing is imitable in `""`, and the tool's blank-argument check
+ * rejects the call if the model does emit it anyway.
+ *
+ * Legacy sessions still hold the old prose placeholder in persisted arguments; those are
+ * normalized to `""` here as well, otherwise replaying them would keep feeding the model a
+ * pattern to copy.
+ *
+ * Arguments are only parsed when they are either oversized or carry a legacy placeholder:
+ * this runs once per historical render_visual call on every LLM turn, so small calls are
+ * cheaper to replay verbatim than to parse, and their context cost is negligible anyway.
  */
 private class RenderVisualContextProjector : ToolContextProjector {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper = SharedObjectMapper.instance
 
     override fun project(argumentsJson: String): String {
-        if (argumentsJson.length <= ELIDE_THRESHOLD_CHARS) return argumentsJson
+        val oversized = argumentsJson.length > ELIDE_THRESHOLD_CHARS
+        if (!oversized && !argumentsJson.contains(ELIDED_PREFIX)) return argumentsJson
         return try {
             val node = objectMapper.readTree(argumentsJson)
             val code = node.get(CODE_ARG)
-            if (node is ObjectNode && code != null && code.isString) {
-                val bytes = code.stringValue().toByteArray(Charsets.UTF_8).size
-                node.put(CODE_ARG, RenderVisualTool.elidedPlaceholder(bytes))
+            if (node is ObjectNode && code != null && code.isString &&
+                (oversized || RenderVisualTool.ELIDED_PLACEHOLDER.matches(code.stringValue()))
+            ) {
+                node.put(CODE_ARG, "")
                 objectMapper.writeValueAsString(node)
             } else {
                 argumentsJson
@@ -101,6 +114,9 @@ private class RenderVisualContextProjector : ToolContextProjector {
 
     private companion object {
         const val CODE_ARG = "code"
+
+        /** Head of every string [RenderVisualTool.ELIDED_PLACEHOLDER] matches, used as a cheap pre-filter. */
+        const val ELIDED_PREFIX = "[fragment elided from context:"
         const val ELIDE_THRESHOLD_CHARS = 4 * 1024
     }
 }
