@@ -80,6 +80,8 @@ interface ChatState {
   toolFoldInfo: ToolFoldEvent | null;
   /** ID of a session detected as still running on the backend */
   runningSessionId: string | null;
+  /** The live SSE stream dropped while the run continues under the recovery poll — renders where updates come from, not an error */
+  liveStreamDropped: boolean;
   /** Internal: raw MessageSnapshot[] from last full/incremental load, used for incremental merge. */
   _lastSnapshots: MessageSnapshot[];
   /** Root main session the currently viewed session belongs to (own id for a main session; null before a session exists) */
@@ -180,6 +182,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   currentGoal: null,
   queuedMessages: [],
   runningSessionId: null,
+  liveStreamDropped: false,
   _lastSnapshots: [],
   forkRootId: null,
   snapshotEnabled: true,
@@ -203,7 +206,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     backgroundTasks: {},
     snapshotEnabled: true,
   })),
-  setRunningSessionId: (id) => set({ runningSessionId: id, ...(id !== null ? { _lastSnapshots: [] } : {}) }),
+  setRunningSessionId: (id) => set({ runningSessionId: id, liveStreamDropped: false, ...(id !== null ? { _lastSnapshots: [] } : {}) }),
   setForkRootId: (id) => set({ forkRootId: id }),
   setSnapshotEnabled: (enabled) => set({ snapshotEnabled: enabled }),
   setSnapshotCapability: (enabled) => set({ snapshotCapability: enabled }),
@@ -501,6 +504,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     currentGoal: null,
     queuedMessages: [],
     runningSessionId: null,
+    liveStreamDropped: false,
     _lastSnapshots: [],
     forkRootId: null,
     snapshotEnabled: true,

@@ -30,7 +30,7 @@ import { useChatBootstrap } from '@/hooks/useChatBootstrap';
 const BREAKPOINT = 800;
 
 export const ChatPanel: React.FC = () => {
-  const { messages, isStreaming, hasArtifacts, artifactCount, clearChat, todos, subAgentTodos, swarmRuns, isAwaitingPermission, revertState, setRevertState, sessionId, runningSessionId, currentGoal, sessionVariables } = useChatStore();
+  const { messages, isStreaming, hasArtifacts, artifactCount, clearChat, todos, subAgentTodos, swarmRuns, isAwaitingPermission, revertState, setRevertState, sessionId, runningSessionId, liveStreamDropped, currentGoal, sessionVariables } = useChatStore();
   const { agents, selectedAgentId } = useAgentStore();
   const [showArtifactPanel, setShowArtifactPanel] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
@@ -243,6 +243,9 @@ export const ChatPanel: React.FC = () => {
                 <div className="px-4 py-2 flex items-center gap-2 text-sm text-muted-foreground">
                   <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
                   <span>{i18n('Session is running...')}</span>
+                  {liveStreamDropped && (
+                    <span className="text-xs">{i18n('Real-time stream dropped; updates arrive by polling')}</span>
+                  )}
                 </div>
               )}
             </div>

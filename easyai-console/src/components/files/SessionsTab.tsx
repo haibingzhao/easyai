@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { SessionItem } from '../ui/SessionItem';
 import { useSessionStore } from '@/services/stores/session-store';
 import { useChatStore } from '@/services/stores/chat-store';
@@ -22,6 +22,7 @@ export const SessionsTab: React.FC = () => {
   } = useSessionStore();
   const { clearChat, sessionId: chatSessionId } = useChatStore();
   const { currentProject } = useProjectStore();
+  const [switchingId, setSwitchingId] = useState<string | null>(null);
 
   // A temporary workspace belongs to one session only, so filtering the list by it would show
   // exactly that session. Project-less mode instead lists the project-less sessions: those
@@ -44,10 +45,14 @@ export const SessionsTab: React.FC = () => {
   const displaySessions = useDisplaySessions();
 
   const handleSelectSession = async (sessionId: string) => {
+    if (switchingId) return;
+    setSwitchingId(sessionId);
     try {
       await switchToSession(sessionId);
     } catch (e) {
       console.error('Failed to load session:', e);
+    } finally {
+      setSwitchingId(null);
     }
   };
 
@@ -83,6 +88,7 @@ export const SessionsTab: React.FC = () => {
               key={session.id}
               session={session}
               isSelected={chatSessionId === session.id}
+              loading={switchingId === session.id}
               showDelete={true}
               availableTags={availableTags}
               onSelect={handleSelectSession}

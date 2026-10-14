@@ -33,7 +33,7 @@ export const ConnectionReport: React.FC = () => {
     route,
     quality,
     reachable,
-    ewmaMs,
+    p50Ms,
     minMs,
     maxMs,
     latest,
@@ -68,12 +68,12 @@ export const ConnectionReport: React.FC = () => {
         {i18n('Evidence')}: {sourceText(route.source, route.confidence)}
       </div>
       {noteText(route.note) && <p className="text-[11px] leading-snug text-muted-foreground mt-1">{noteText(route.note)}</p>}
-      {isContradictory(route, ewmaMs) && (
+      {isContradictory(route, p50Ms) && (
         <p className="text-[11px] leading-snug text-destructive mt-1">{i18n('Reported direct, but latency is relay-shaped — check for an unnoticed hop.')}</p>
       )}
 
       <Section title={i18n('Latency')}>
-        <Row label={i18n('Average')} value={<span className="tabular-nums">{msText(ewmaMs, reachable)}</span>} />
+        <Row label={i18n('Median')} value={<span className="tabular-nums">{msText(p50Ms, reachable)}</span>} />
         <Row label={i18n('Last')} value={<span className="tabular-nums">{msText(latest?.ttfbMs, reachable)}</span>} />
         <Row label={i18n('Min')} value={<span className="tabular-nums">{msText(minMs, reachable)}</span>} />
         <Row label={i18n('Max')} value={<span className="tabular-nums">{msText(maxMs, reachable)}</span>} />
@@ -110,7 +110,9 @@ export const ConnectionReport: React.FC = () => {
           label={i18n('Probe endpoint')}
           value={<span className="break-all">{usingFallbackPath ? CFG.fallbackProbePath : CFG.probePath}</span>}
         />
-        <Row label={i18n('Witness')} value={serverInfoError ?? i18n('Not reported')} />
+        {serverInfoError && (
+          <Row label={i18n('Witness')} value={<span className="text-destructive break-all">{serverInfoError}</span>} />
+        )}
       </Section>
 
       {(evidence.xff || evidence.peerRelay || evidence.peerDerpRegion || evidence.serverHostname || evidence.tailscaleError) && (

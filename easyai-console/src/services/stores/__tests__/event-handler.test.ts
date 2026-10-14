@@ -40,6 +40,8 @@ function createMockState(overrides: Partial<ChatStateShape> = {}): ChatStateShap
     currentGoal: null,
     queuedMessages: [],
     backgroundTasks: {},
+    runningSessionId: null,
+    liveStreamDropped: false,
     appendToTextBlock: vi.fn(),
     appendToThinkingBlock: vi.fn(),
     finishThinkingBlock: vi.fn(),
@@ -54,6 +56,7 @@ function createMockState(overrides: Partial<ChatStateShape> = {}): ChatStateShap
     setIsFileWriting: vi.fn(),
     refreshGoal: vi.fn().mockResolvedValue(undefined),
     applyVariableUpdate: vi.fn(),
+    setRunningSessionId: vi.fn(),
     ...overrides,
   };
 }
@@ -332,6 +335,44 @@ describe('handleChatEvent', () => {
           pendingPermission: mockState.pendingPermission,
         })
       );
+    });
+
+    it('should hand a dropped live stream to the recovery poll instead of reporting an error', () => {
+      mockState.sessionId = 'sess-1';
+      mockState.queuedMessages = [{ id: 'q1', content: 'steer me', type: 'steer', status: 'synced' }];
+      const event: SocketEvent = {
+        type: 'error',
+        reason: 'connection_lost',
+        cause: 'Load failed',
+      };
+
+      handleChatEvent(event, get, set);
+
+      // The send had no poll yet — the stream was the only receiver, so adopting is what keeps the
+      // transcript moving after the phone returns from the background.
+      expect(mockState.setRunningSessionId).toHaveBeenCalledWith('sess-1');
+      expect(set).toHaveBeenCalledWith(expect.objectContaining({ liveStreamDropped: true }));
+      expect(mockState.addMessage).not.toHaveBeenCalled();
+      expect(mockState.isStreaming).toBe(true);
+      expect(mockState.cancelReason).toBeNull();
+      // The run is still alive server-side and its queue lives in that run, so the queue must stay.
+      expect(mockState.queuedMessages).toHaveLength(1);
+    });
+
+    it('should keep the existing poll baseline when the session is already adopted', () => {
+      mockState.sessionId = 'sess-1';
+      mockState.runningSessionId = 'sess-1';
+      const event: SocketEvent = {
+        type: 'error',
+        reason: 'connection_lost',
+        cause: 'Load failed',
+      };
+
+      handleChatEvent(event, get, set);
+
+      // Re-adopting would clear the incremental merge baseline and refetch the whole transcript.
+      expect(mockState.setRunningSessionId).not.toHaveBeenCalled();
+      expect(set).toHaveBeenCalledWith(expect.objectContaining({ liveStreamDropped: true }));
     });
   });
 

@@ -14,7 +14,6 @@ export const CONNECTION_CONFIG = {
   /** Sampling periods are desynchronised by up to this fraction so several devices do not align. */
   jitterRatio: 0.2,
   historyLength: 60,
-  ewmaAlpha: 0.3,
   /** `.ts.net` + a TTFB under this cannot be a relayed hop — the relay always adds more. */
   directMaxTtfbMs: 40,
   /** A sample claiming DIRECT above this is contradictory and gets flagged in the report. */

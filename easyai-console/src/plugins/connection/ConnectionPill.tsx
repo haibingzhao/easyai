@@ -10,7 +10,7 @@ import { startConnectionProbe, useConnectionStatus } from './store';
  * `TOPBAR_EXTRA_ITEMS.push(ConnectionPill)`.
  */
 export const ConnectionPill: React.FC = () => {
-  const { route, quality, ewmaMs, reachable } = useConnectionStatus();
+  const { route, quality, p50Ms, reachable } = useConnectionStatus();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -36,7 +36,7 @@ export const ConnectionPill: React.FC = () => {
 
   if (!CFG.enabled || route.access === 'LOCAL') return null;
 
-  const summary = `${routeText(route)} · ${msText(ewmaMs, reachable)}`;
+  const summary = `${routeText(route)} · ${msText(p50Ms, reachable)}`;
 
   return (
     <div className="relative shrink-0" ref={containerRef}>
@@ -52,7 +52,7 @@ export const ConnectionPill: React.FC = () => {
         <span
           className={`text-xs tabular-nums ${quality === 'bad' || quality === 'down' ? 'text-destructive' : 'text-muted-foreground'}`}
         >
-          {msText(ewmaMs, reachable)}
+          {msText(p50Ms, reachable)}
         </span>
       </button>
 

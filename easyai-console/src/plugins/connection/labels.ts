@@ -66,7 +66,7 @@ export function noteText(note: string | undefined): string | undefined {
 
 export function qualityOf(
   reachable: boolean,
-  ewmaMs: number | null,
+  p50Ms: number | null,
   lastError?: string,
   lastStatus?: number,
 ): Quality {
@@ -75,10 +75,10 @@ export function qualityOf(
   if (lastError === 'timeout') return 'bad';
   if (lastStatus !== undefined && lastStatus >= 500) return 'bad';
   // Nothing measured yet is not "fair": the badge must not claim a quality it has no evidence for.
-  if (ewmaMs === null) return 'unknown';
-  if (ewmaMs <= CFG.quality.goodMs) return 'good';
-  if (ewmaMs <= CFG.quality.fairMs) return 'fair';
-  if (ewmaMs <= CFG.quality.slowMs) return 'slow';
+  if (p50Ms === null) return 'unknown';
+  if (p50Ms <= CFG.quality.goodMs) return 'good';
+  if (p50Ms <= CFG.quality.fairMs) return 'fair';
+  if (p50Ms <= CFG.quality.slowMs) return 'slow';
   return 'bad';
 }
 
@@ -102,6 +102,6 @@ export function msText(value: number | null | undefined, reachable = true): stri
 }
 
 /** A DIRECT reading riding on a relay-shaped latency is worth a line of doubt. */
-export function isContradictory(route: RouteSnapshot, ewmaMs: number | null): boolean {
-  return route.via === 'DIRECT' && route.access !== 'LAN' && ewmaMs !== null && ewmaMs > CFG.suspectTtfbMs;
+export function isContradictory(route: RouteSnapshot, p50Ms: number | null): boolean {
+  return route.via === 'DIRECT' && route.access !== 'LAN' && p50Ms !== null && p50Ms > CFG.suspectTtfbMs;
 }

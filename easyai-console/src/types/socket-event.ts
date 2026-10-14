@@ -184,6 +184,12 @@ export interface ErrorEvent extends BaseEvent {
   type: 'error';
   reason: string;
   errorMessage?: string;
+  /**
+   * Raw transport detail for `reason: 'connection_lost'` (e.g. `Load failed`). It is a cause, not a
+   * verdict: it says nothing about whether the run is still going, so the handler hands the session
+   * to the recovery poll and shows the detail only when there is no session to hand over.
+   */
+  cause?: string;
   messageId?: string;
   usage?: UsageInfo;
 }

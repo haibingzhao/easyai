@@ -78,7 +78,9 @@ body {
 /* Markdown table styling */
 .prose table {
   border-collapse: collapse;
-  width: 100%;
+  /* Fill the column when narrow, grow to natural width when wide so the wrapper scrolls. */
+  width: max-content;
+  min-width: 100%;
   margin: 1rem 0;
 }
 
