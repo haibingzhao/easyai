@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Send, Square, Loader2, Paperclip, ShieldCheck, Clock, Mic } from 'lucide-react';
+import { Send, Square, Loader2, Paperclip, ShieldCheck, Clock, Mic, Plus } from 'lucide-react';
 import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { useSideAskStore } from '@/services/stores/side-ask-store';
@@ -18,6 +18,8 @@ import { AutoApprovePanel } from './AutoApprovePanel';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { useSlashCommand } from '@/hooks/useSlashCommand';
 import { useAttachmentManager } from '@/hooks/useAttachmentManager';
+import { ComposerPlusMenu } from '@/mobile/components/ComposerPlusMenu';
+import type { MobileComposerContext } from '@/mobile/registries';
 import { useVoiceInput } from '@/hooks/useVoiceInput';
 import { auxModelConfigService } from '@/services/aux-model-config-service';
 import { AttachmentPreviewBar } from './AttachmentPreviewBar';
@@ -79,7 +81,16 @@ async function reconcileQueueAfterUnconfirmedStop(
   useChatStore.setState({ queuedMessages: [...synced, ...drafts] });
 }
 
-export const MessageEditor: React.FC = () => {
+export interface MessageEditorProps {
+  /**
+   * `mobile` swaps the paperclip for a "+" menu, moves the mic beside the input, and gives the
+   * send/stop control a 44pt target. The send/stop/queue logic itself is shared.
+   */
+  variant?: 'desktop' | 'mobile';
+}
+
+export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop' }) => {
+  const isMobile = variant === 'mobile';
   const [editorValue, setEditorValue] = useState('');
   const [selectedCommand, setSelectedCommand] = useState<CommandIdentity | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -89,6 +100,9 @@ export const MessageEditor: React.FC = () => {
   const [currentCapabilities, setCurrentCapabilities] = useState<ModelCapabilities | undefined>();
   const [isModelLoading, setIsModelLoading] = useState(true);
   const [showAutoApprove, setShowAutoApprove] = useState(false);
+  const [showPlusMenu, setShowPlusMenu] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const toolbarRowRef = useRef<HTMLDivElement>(null);
   const [toolbarHeight, setToolbarHeight] = useState(0);
   // Tracks whether the user has dismissed the green clock to reveal the Stop button
@@ -1160,6 +1174,110 @@ export const MessageEditor: React.FC = () => {
   );
   const showClockButton = hasQueuedInput && !clockDismissed;
 
+  // ── Shared controls, composed differently per variant ──────────────────────────────
+  // The mic and the send/stop cluster are separate constants because the mobile row puts the mic
+  // beside the input (a thumb-reachable spot) while the toolbar keeps only send/stop. Desktop
+  // renders them in one group, exactly as before.
+
+  /** iOS refuses `getUserMedia` outside a secure context, so the mic must not even appear there. */
+  const micHidden = isMobile && !window.isSecureContext;
+
+  const voiceRecordingControls = (
+    <>
+      <VoiceWaveform analyserRef={voice.analyserRef} />
+      <button
+        className={isMobile ? 'mobile-hit rounded-md bg-destructive text-destructive-foreground' : 'p-1.5 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors'}
+        title={i18n('Stop voice input')}
+        onClick={() => { void voice.stopAndFinish(); }}
+      >
+        <Square className="w-4 h-4" />
+      </button>
+    </>
+  );
+
+  const micButton = micHidden ? null : (
+    <button
+      onClick={() => { void voice.start(); }}
+      disabled={!asrReady || isStreaming || voice.phase !== 'idle' || isSubmitting}
+      className={isMobile ? 'mobile-hit rounded-md text-muted-foreground disabled:opacity-40' : 'p-1.5 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40'}
+      title={
+        !asrReady
+          ? i18n('Please configure an ASR model in Settings → Task Models')
+          : isStreaming
+            ? i18n('Wait for the current response to finish')
+            : i18n('Start voice input')
+      }
+    >
+      <Mic className="w-4 h-4" />
+    </button>
+  );
+
+  const sendCluster = voice.phase === 'refining' ? (
+    <button
+      className="p-1.5 rounded-md bg-primary text-primary-foreground opacity-60"
+      title={i18n('Polishing your dictation, please wait…')}
+      disabled
+    >
+      <Loader2 className="w-4 h-4 animate-spin" />
+    </button>
+  ) : isStreaming ? (
+    <>
+      {showStopButton && (
+        <button
+          className={isMobile ? 'mobile-hit !min-w-[44px] rounded-md bg-destructive text-destructive-foreground disabled:opacity-60' : 'p-1.5 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors disabled:opacity-60'}
+          title={i18n('Stop')}
+          disabled={isCancelling}
+          onClick={() => { void handleStop(); }}
+        >
+          <Square className="w-4 h-4" />
+        </button>
+      )}
+      {showClockButton && (
+        <button
+          className="p-1.5 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+          title={hasQueuedMessages ? i18n('Cancel queued messages') : i18n('Show stop button')}
+          onClick={handleClockClick}
+        >
+          <Clock className="w-4 h-4" />
+        </button>
+      )}
+    </>
+  ) : (
+    <button
+      className={isMobile ? 'mobile-hit rounded-xl bg-primary text-primary-foreground disabled:opacity-50' : 'p-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50'}
+      disabled={!hasContent || processingFiles || isSubmitting || isAwaitingAskQuestion() || isAwaitingPermission() || isModelLoading}
+      onClick={handleSend}
+      title={isModelLoading ? i18n('Loading models...') : isAwaitingAskQuestion() ? i18n('Answer the question first') : i18n('Send')}
+    >
+      {processingFiles || isSubmitting ? (
+        <Loader2 className="w-4 h-4 animate-spin" />
+      ) : (
+        <Send className="w-4 h-4" />
+      )}
+    </button>
+  );
+
+  /** The "+" menu and host items can only reach the editor through these two primitives. */
+  const composerCtx: MobileComposerContext = {
+    addText: (text) => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      editor.focus();
+      // execCommand keeps the browser undo stack alive and fires the input event the
+      // slash/mention detectors listen to — setting textContent would silently skip both.
+      document.execCommand('insertText', false, text);
+    },
+    addAttachment: (file) => {
+      void handleFilesWithChips([file]);
+    },
+  };
+
+  const pickFilesForMobile = (files: FileList | null) => {
+    if (files && !submittingRef.current) {
+      void handleFilesWithChips(Array.from(files));
+    }
+  };
+
   return (
     <div className="flex flex-col gap-2 relative">
       {commandError && <div role="alert" className="text-xs text-destructive">{commandError}</div>}
@@ -1208,7 +1326,7 @@ export const MessageEditor: React.FC = () => {
         </div>
       )}
 
-      <div className="flex gap-2">
+      <div className={isMobile ? 'flex items-end gap-2' : 'flex gap-2'}>
         <input
           type="file"
           ref={fileInputRef}
@@ -1223,6 +1341,34 @@ export const MessageEditor: React.FC = () => {
           }}
         />
 
+        {isMobile && (
+          <>
+            {/* No `capture`: iOS then offers the library *and* the camera, which is what "相册" should mean. */}
+            <input
+              type="file"
+              ref={photoInputRef}
+              className="hidden"
+              multiple
+              accept="image/*"
+              onChange={(e) => {
+                pickFilesForMobile(e.target.files);
+                e.target.value = '';
+              }}
+            />
+            <input
+              type="file"
+              ref={cameraInputRef}
+              className="hidden"
+              accept="image/*"
+              capture="environment"
+              onChange={(e) => {
+                pickFilesForMobile(e.target.files);
+                e.target.value = '';
+              }}
+            />
+          </>
+        )}
+
         <div
           ref={editorRef}
           onInput={handleEditorInput}
@@ -1232,115 +1378,75 @@ export const MessageEditor: React.FC = () => {
           onCut={(e) => handleClipboard(e, true)}
           onClick={handleEditorClick}
           onFocus={handleEditorFocus}
-          data-placeholder={i18n('Plan, @ for context, / for commands')}
+          enterKeyHint={isMobile ? 'send' : undefined}
+          data-placeholder={isMobile ? i18n('Plan, / for commands, + to add context') : i18n('Plan, @ for context, / for commands')}
           className="message-editor flex-1 w-full px-3 pt-0 pb-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring overflow-y-auto whitespace-pre-wrap break-words"
           style={{
-            minHeight: 'calc(3 * 1.5em + 1rem)',
-            maxHeight: 'calc(7 * 1.5em + 1rem)',
+            minHeight: isMobile ? 'calc(1.5em + 1rem)' : 'calc(3 * 1.5em + 1rem)',
+            maxHeight: isMobile ? 'calc(5 * 1.5em + 1rem)' : 'calc(7 * 1.5em + 1rem)',
           }}
           contentEditable={!isSubmitting && !isAwaitingAskQuestion() && !isAwaitingPermission() && voice.phase !== 'refining'}
         />
+
+        {isMobile &&
+          (voice.phase === 'recording' ? voiceRecordingControls : micButton)}
       </div>
 
       <div ref={toolbarRowRef} className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isSubmitting || processingFiles}
-            className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
-            title={visionSupported ? 'Attach files' : i18n('Images not supported; text files only')}
-          >
-            <Paperclip className="w-4 h-4" />
-          </button>
-          <div className="relative">
+          {isMobile ? (
             <button
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={() => setShowAutoApprove((prev) => !prev)}
-              className={`p-1.5 transition-colors ${showAutoApprove ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
-              title={i18n('自动审批')}
+              onClick={() => setShowPlusMenu(true)}
+              disabled={isSubmitting || processingFiles}
+              className="mobile-hit rounded-md text-muted-foreground disabled:opacity-40"
+              title={i18n('Add')}
             >
-              <ShieldCheck className="w-4 h-4" />
+              <Plus className="w-5 h-5" />
             </button>
-          </div>
+          ) : (
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isSubmitting || processingFiles}
+              className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
+              title={visionSupported ? 'Attach files' : i18n('Images not supported; text files only')}
+            >
+              <Paperclip className="w-4 h-4" />
+            </button>
+          )}
+          {!isMobile && (
+            <div className="relative">
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => setShowAutoApprove((prev) => !prev)}
+                className={`p-1.5 transition-colors ${showAutoApprove ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                title={i18n('自动审批')}
+              >
+                <ShieldCheck className="w-4 h-4" />
+              </button>
+            </div>
+          )}
           <AgentSelector onSelect={handleAgentSelect} />
           <ModelSelector onModelChange={handleModelChange} />
         </div>
         <div className="flex items-center gap-0.5">
-          {voice.phase === 'recording' ? (
-            <>
-              <VoiceWaveform analyserRef={voice.analyserRef} />
-              <button
-                className="p-1.5 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
-                title={i18n('Stop voice input')}
-                onClick={() => { void voice.stopAndFinish(); }}
-              >
-                <Square className="w-4 h-4" />
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                onClick={() => { void voice.start(); }}
-                disabled={!asrReady || isStreaming || voice.phase !== 'idle' || isSubmitting}
-                className="p-1.5 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
-                title={
-                  !asrReady
-                    ? i18n('Please configure an ASR model in Settings → Task Models')
-                    : isStreaming
-                      ? i18n('Wait for the current response to finish')
-                      : i18n('Start voice input')
-                }
-              >
-                <Mic className="w-4 h-4" />
-              </button>
-              {voice.phase === 'refining' ? (
-                <button
-                  className="p-1.5 rounded-md bg-primary text-primary-foreground opacity-60"
-                  title={i18n('Polishing your dictation, please wait…')}
-                  disabled
-                >
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                </button>
-              ) : isStreaming ? (
-                <>
-                  {showStopButton && (
-                    <button
-                      className="p-1.5 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors disabled:opacity-60"
-                      title={i18n('Stop')}
-                      disabled={isCancelling}
-                      onClick={() => { void handleStop(); }}
-                    >
-                      <Square className="w-4 h-4" />
-                    </button>
-                  )}
-                  {showClockButton && (
-                    <button
-                      className="p-1.5 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
-                      title={hasQueuedMessages ? i18n('Cancel queued messages') : i18n('Show stop button')}
-                      onClick={handleClockClick}
-                    >
-                      <Clock className="w-4 h-4" />
-                    </button>
-                  )}
-                </>
-              ) : (
-                <button
-                  className="p-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-                  disabled={!hasContent || processingFiles || isSubmitting || isAwaitingAskQuestion() || isAwaitingPermission() || isModelLoading}
-                  onClick={handleSend}
-                  title={isModelLoading ? i18n('Loading models...') : isAwaitingAskQuestion() ? i18n('Answer the question first') : i18n('Send')}
-                >
-                  {processingFiles || isSubmitting ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Send className="w-4 h-4" />
-                  )}
-                </button>
-              )}
-            </>
-          )}
+          {isMobile
+            ? (voice.phase === 'recording' ? null : sendCluster)
+            : (voice.phase === 'recording' ? voiceRecordingControls : (<>{micButton}{sendCluster}</>))}
         </div>
       </div>
+
+      {isMobile && (
+        <ComposerPlusMenu
+          open={showPlusMenu}
+          onClose={() => setShowPlusMenu(false)}
+          ctx={composerCtx}
+          onPickPhotos={() => photoInputRef.current?.click()}
+          onPickCamera={() => cameraInputRef.current?.click()}
+          onPickFiles={() => fileInputRef.current?.click()}
+          onMention={() => composerCtx.addText('@')}
+          onCommands={() => composerCtx.addText('/')}
+        />
+      )}
 
       {/* AutoApprovePanel overlay - full width, bottom aligned with textarea */}
       {showAutoApprove && (

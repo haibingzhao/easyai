@@ -4,10 +4,12 @@ import com.easy.easyai.auth.jwt.JwtTokenProvider
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpMethod
+import org.springframework.http.HttpStatus
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity
 import org.springframework.security.config.web.server.SecurityWebFiltersOrder
 import org.springframework.security.config.web.server.ServerHttpSecurity
 import org.springframework.security.web.server.SecurityWebFilterChain
+import org.springframework.security.web.server.authentication.HttpStatusServerEntryPoint
 import org.springframework.web.cors.CorsConfiguration
 import org.springframework.web.cors.reactive.CorsConfigurationSource
 import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource
@@ -40,6 +42,10 @@ class SecurityConfig {
             .csrf { it.disable() }
             .httpBasic { it.disable() }
             .formLogin { it.disable() }
+            // ExceptionTranslationWebFilter's built-in entry point is Basic (realm="Realm"), and
+            // performBuild only replaces it when the chain supplies one — without this browsers pop
+            // a native login dialog on same-origin 401s. JWT clients only read the status code.
+            .exceptionHandling { it.authenticationEntryPoint(HttpStatusServerEntryPoint(HttpStatus.UNAUTHORIZED)) }
             .cors { it.configurationSource(corsConfigurationSource(authProperties)) }
             .authorizeExchange { exchanges ->
                 if (!authProperties.enabled) {
@@ -55,8 +61,11 @@ class SecurityConfig {
                         .pathMatchers("/api/internal/llm/**").permitAll()
                         // Health check is public
                         .pathMatchers("/api/chat/health").permitAll()
-                        // Static console assets served same-origin (desktop client)
-                        .pathMatchers("/", "/index.html", "/assets/**", "/favicon.ico", "/favicon.svg").permitAll()
+                        // Static console shell + assets served same-origin (desktop + web server)
+                        .pathMatchers(
+                            "/", "/index.html", "/mobile.html", "/manifest.json",
+                            "/assets/**", "/icons/**", "/favicon.ico", "/favicon.svg"
+                        ).permitAll()
                         // OPTIONS preflight
                         .pathMatchers(HttpMethod.OPTIONS).permitAll()
                         // Everything else requires authentication

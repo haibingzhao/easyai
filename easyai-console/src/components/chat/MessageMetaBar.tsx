@@ -73,7 +73,11 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
 
   return (
     <>
-      <div className="max-h-0 overflow-hidden group-hover:max-h-8 transition-[max-height] duration-200 ease-out">
+      {/*
+        `data-meta-bar` 是移动层的钩子：触屏没有 hover，所以 mobile.css 用它把这条
+        信息栏直接展开，而不必把 variant 参数钻到 MessageList 底下。
+      */}
+      <div data-meta-bar className="max-h-0 overflow-hidden group-hover:max-h-8 transition-[max-height] duration-200 ease-out">
         <div className="flex items-center gap-2 text-[11px] text-muted-foreground/60 tabular-nums pt-1">
           {showUsage && (
             <>

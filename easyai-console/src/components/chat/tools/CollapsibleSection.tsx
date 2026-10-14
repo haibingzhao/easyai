@@ -18,6 +18,7 @@ export function CollapsibleSection({
     <div className={`border border-border rounded-lg overflow-hidden ${className}`}>
       <button 
         type="button"
+        data-collapse-header
         onClick={() => setIsCollapsed(!isCollapsed)}
         className="w-full flex items-center gap-2 p-2 hover:bg-muted/50 text-left"
       >

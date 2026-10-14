@@ -54,7 +54,7 @@ class RenderVisualToolTest {
 
         @Test
         fun `parroted context-elision placeholder is rejected`() {
-            val result = execute(mapOf("title" to "diagram", "code" to RenderVisualTool.elidedPlaceholder(6443)))
+            val result = execute(mapOf("title" to "diagram", "code" to LEGACY_PLACEHOLDER))
             assertTrue(result.isError)
             assertTrue((result.content.first() as TextContent).text.contains("placeholder"))
         }
@@ -99,7 +99,7 @@ class RenderVisualToolTest {
     inner class ContextProjection {
         private val projector = RenderVisualToolBuilder().metadata.contextProjector!!
 
-        /** Any fragment above the elision threshold; the exact size is asserted in the placeholder. */
+        /** Any fragment above the elision threshold. */
         private val bulkyFragment = "<svg>" + "x".repeat(8 * 1024) + "</svg>"
 
         @Test
@@ -107,11 +107,16 @@ class RenderVisualToolTest {
             val arguments = """{"title":"My Chart","code":"$bulkyFragment"}"""
             val projected = projector.project(arguments)
             assertTrue(projected.contains("\"title\":\"My Chart\""), projected)
-            assertTrue(
-                projected.contains(RenderVisualTool.elidedPlaceholder(bulkyFragment.length)),
-                projected
-            )
+            assertTrue(projected.contains("\"code\":\"\""), projected)
             assertFalse(projected.contains("<svg>"), projected)
+        }
+
+        @Test
+        fun `normalizes a legacy placeholder persisted in an earlier session`() {
+            val arguments = """{"title":"My Chart","code":"$LEGACY_PLACEHOLDER"}"""
+            val projected = projector.project(arguments)
+            assertTrue(projected.contains("\"code\":\"\""), projected)
+            assertFalse(projected.contains("fragment elided"), projected)
         }
 
         @Test
@@ -134,3 +139,8 @@ class RenderVisualToolTest {
         }
     }
 }
+
+/** The prose placeholder the context projector used to substitute; still present in old sessions. */
+private const val LEGACY_PLACEHOLDER =
+    "[fragment elided from context: 6443 bytes, rendered inline in the UI; " +
+        "never copy this placeholder into a new call — author the fragment from scratch]"

@@ -144,6 +144,7 @@ export function getToolDisplayName(toolName: string): string {
     calc: 'Calculator',
     webfetch: 'Web Fetch',
     load_skill: 'Load Skill',
+    render_visual: 'Render Visual',
     delegate_to_member: 'Delegate to Member',
     wait_for_member_events: 'Wait for Member Events',
     resume_member: 'Resume Member',

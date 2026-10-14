@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./mobile/mobile.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
 

@@ -11,6 +11,17 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  build: {
+    // Two entries into one dist/ so the whole-directory copy of the console build
+    // (`copy-console-dist` in the easyai-apps poms) serves both same-origin
+    // with no backend change.
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+        mobile: path.resolve(__dirname, 'mobile.html'),
+      },
+    },
+  },
   test: {
     setupFiles: ['./src/test-setup.ts'],
   },

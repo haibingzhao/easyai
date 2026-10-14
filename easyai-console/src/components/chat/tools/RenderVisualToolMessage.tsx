@@ -1,9 +1,12 @@
 /**
  * render_visual card renderer.
  *
- * The fragment is the deliverable, so this card never collapses: the `compact`
+ * The fragment is the deliverable, so a card with one never collapses: the `compact`
  * prop is deliberately ignored and no collapsible wrapper is used — a folded
  * visual would hide exactly what the model asked the user to look at.
+ *
+ * A call that carried no fragment at all is a different story: it has nothing to
+ * show, so it degrades to a plain tool row whose body is the reason it failed.
  *
  * The sandbox iframe stays mounted in code view (hidden, zero height) so the
  * live DOM survives a view toggle and "save as image" can rasterize what the
@@ -17,6 +20,9 @@ import type { ToolMessageProps } from './types';
 import { CodeBlock } from '../CodeBlock';
 import { useCopyToast } from './useCopyToast';
 import { extractOutput } from './parsers';
+import { ToolRowHeader } from './ToolRowHeader';
+import { ToolSection } from './ToolSection';
+import { useStreamingRowExpand } from './useStreamingRowExpand';
 import { i18n } from '@/utils/i18n';
 import { MAX_FRAGMENT_BYTES, byteLength, extractPartialArgs, isSvgFragment, parseArgs } from './render-visual/params';
 import { sanitizeFragment } from './render-visual/sanitize';
@@ -27,6 +33,9 @@ import { downloadBlob, exportSvgFragmentAsImage, requestSandboxExport, safeFileN
 
 const ROTATE_INTERVAL_MS = 1400;
 const ACTION_ERROR_TIMEOUT_MS = 4000;
+
+/** Prefix of the prose placeholder an older backend persisted in place of an elided fragment. */
+const ELIDED_PREFIX = '[fragment elided from context:';
 
 type ViewMode = 'ui' | 'code';
 
@@ -41,9 +50,11 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
   const code = args?.code ?? '';
   const tooLarge = args !== null && byteLength(code) > MAX_FRAGMENT_BYTES;
   const emptyFragment = args !== null && code.trim() === '';
-  /** Persisted calls whose code is the backend's context-elision placeholder have nothing to render. */
-  const elidedPlaceholder = args !== null && code.trimStart().startsWith('[fragment elided from context:');
+  /** Calls where the model wrote the elision placeholder instead of a fragment. */
+  const elidedPlaceholder = args !== null && code.trimStart().startsWith(ELIDED_PREFIX);
   const toolFailed = result?.isError === true || status === 'FAILED';
+  /** No markup was ever delivered, so there is nothing a card could show. */
+  const noFragment = args !== null && (emptyFragment || elidedPlaceholder);
 
   const [viewMode, setViewMode] = useState<ViewMode>('ui');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -51,13 +62,15 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
   const [frameError, setFrameError] = useState<string | null>(null);
   const [loadingIndex, setLoadingIndex] = useState(0);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [rowExpanded, setRowExpanded] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const { copyToClipboard, toast } = useCopyToast();
+  const markRowTouched = useStreamingRowExpand(status, setRowExpanded, result !== undefined);
 
   const sandboxId = toolCall.id;
   /** Without a renderable fragment a sandbox is pointless — those cases stay in source view. */
-  const sandboxUsable = args !== null && !tooLarge && !emptyFragment && !elidedPlaceholder && !toolFailed;
+  const sandboxUsable = args !== null && !tooLarge && !toolFailed && !noFragment;
   const srcdoc = useMemo(() => buildShellSrcdoc(sandboxId, tokensCssForMode(currentMode())), [sandboxId]);
   const sanitized = useMemo(
     () => (sandboxUsable ? sanitizeFragment(code) : ''),
@@ -174,11 +187,37 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
 
   const notice = noticeText({ tooLarge, emptyFragment, elidedPlaceholder, toolFailed, frameError, result, streamingOutput });
 
+  if (noFragment) {
+    return (
+      <div>
+        <ToolRowHeader
+          toolName={toolCall.toolName}
+          status={status ?? 'PENDING'}
+          summary={args?.title.trim() || i18n('Visual')}
+          expanded={rowExpanded}
+          expandable={!!notice}
+          onToggle={() => { markRowTouched(); setRowExpanded(prev => !prev); }}
+        />
+        {rowExpanded && notice && (
+          <div className="px-3 pb-2">
+            <ToolSection
+              title={i18n('Result')}
+              text={notice}
+              tone={toolFailed ? 'error' : 'default'}
+              maxHeightClass="max-h-[15em]"
+            />
+          </div>
+        )}
+        {toast}
+      </div>
+    );
+  }
+
   return (
     <CardShell
       title={args?.title || i18n('Visual')}
       toolbar={
-        args !== null && code.trim() ? (
+        args !== null ? (
           <div ref={toolbarRef} className="absolute right-2 top-1.5 flex items-center gap-1">
             <button
               type="button"
@@ -245,7 +284,7 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
               />
             </div>
           )}
-          {showCode && code.trim() !== '' && <CodeBlock className={`language-${language}`}>{code}</CodeBlock>}
+          {showCode && <CodeBlock className={`language-${language}`}>{code}</CodeBlock>}
         </div>
       )}
 
@@ -271,12 +310,13 @@ interface NoticeInput {
 
 function noticeText(input: NoticeInput): string | null {
   if (input.tooLarge) return i18n('Fragment too large, shown as source');
-  if (input.emptyFragment) return i18n('Empty fragment');
-  if (input.elidedPlaceholder) return i18n('Fragment missing: only a context-elision placeholder was stored');
   if (input.frameError !== null) return i18n('Render failed, shown as source');
+  // The tool's own rejection says what the model did wrong, so it beats generic wording.
   if (input.toolFailed) {
     return extractOutput({ result: input.result, streamingOutput: input.streamingOutput }) || i18n('Render failed, shown as source');
   }
+  if (input.elidedPlaceholder) return i18n('No fragment: the elision placeholder was sent as the code');
+  if (input.emptyFragment) return i18n('Empty fragment');
   return null;
 }
 
