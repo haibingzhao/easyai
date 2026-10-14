@@ -24,6 +24,7 @@ import type { ToolMessageProps } from './types';
 import { getToolRowSummary } from './parsers';
 import { ToolRowHeader } from './ToolRowHeader';
 import { useStreamingRowExpand } from './useStreamingRowExpand';
+import { markdownCodeComponents } from '../markdownCodeComponents';
 
 // ---------------------------------------------------------------------------
 // Argument parsing
@@ -234,7 +235,7 @@ export function GoalToolMessage({ toolCall, result, status, compact }: ToolMessa
 
             {/* Main text */}
             <div className="text-sm bg-muted/40 rounded px-3 py-2 prose prose-sm dark:prose-invert max-w-none">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
                 {detailText.length > 500 ? detailText.slice(0, 500) + '…' : detailText}
               </ReactMarkdown>
             </div>
@@ -244,11 +245,15 @@ export function GoalToolMessage({ toolCall, result, status, compact }: ToolMessa
               <div className="text-xs text-muted-foreground space-y-1">
                 <div className="prose prose-xs dark:prose-invert max-w-none">
                   <span className="font-medium">Reason: </span>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{parsed.reason}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
+                    {parsed.reason}
+                  </ReactMarkdown>
                 </div>
                 <div className="prose prose-xs dark:prose-invert max-w-none">
                   <span className="font-medium">Evidence: </span>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{parsed.evidence}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
+                    {parsed.evidence}
+                  </ReactMarkdown>
                 </div>
               </div>
             )}
