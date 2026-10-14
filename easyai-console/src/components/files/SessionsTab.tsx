@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect } from 'react';
 import { SessionItem } from '../ui/SessionItem';
 import { useSessionStore } from '@/services/stores/session-store';
 import { useChatStore } from '@/services/stores/chat-store';
 import { useProjectStore } from '@/services/stores/project-store';
 import { useNavStore } from '@/services/stores/nav-store';
+import { useDisplaySessions } from '@/hooks/useDisplaySessions';
 import { switchToSession } from '@/services/session-switch';
 import type { SessionListItem } from '@/services/session-service';
 import { groupSessionsByTime } from '@/utils/session-time';
@@ -15,11 +16,11 @@ import { i18n } from '@/utils/i18n';
  */
 export const SessionsTab: React.FC = () => {
   const {
-    remoteSessions, remoteSessionHasMore, remoteSessionLoading,
+    remoteSessionHasMore, remoteSessionLoading,
     setCurrentSessionId, loadRemoteSessions, loadMoreRemoteSessions, deleteRemoteSession,
     availableTags, activeTagFilter, setTagFilter, loadSessionTags, updateRemoteSessionTags,
   } = useSessionStore();
-  const { clearChat, sessionId: chatSessionId, isStreaming, messages } = useChatStore();
+  const { clearChat, sessionId: chatSessionId } = useChatStore();
   const { currentProject } = useProjectStore();
 
   // A temporary workspace belongs to one session only, so filtering the list by it would show
@@ -38,51 +39,9 @@ export const SessionsTab: React.FC = () => {
     loadSessionTags(listProjectId, tempWorkspaceOnly);
   }, [listProjectId]);
 
-  // Overlay the active chat session's live streaming state onto the list so the
-  // "Running" indicator appears on send and clears on completion — without waiting
-  // for a backend refetch. A brand-new session (not yet in remoteSessions) is
-  // synthesized at the top from the first user message so it shows up immediately.
-  const displaySessions = useMemo<SessionListItem[]>(() => {
-    if (!chatSessionId) return remoteSessions;
-
-    const exists = remoteSessions.some((s) => s.id === chatSessionId);
-    let list = remoteSessions.map((s) =>
-      s.id === chatSessionId ? { ...s, streaming: isStreaming } : s
-    );
-
-    // While a tag filter is active, don't inject an untagged brand-new session that
-    // the server-side filter would have excluded.
-    if (!exists && !filterActive) {
-      const firstUser = messages.find(
-        (m) => m.role === 'user' || m.role === 'user-with-attachments'
-      );
-      const rawTitle =
-        firstUser && 'content' in firstUser
-          ? firstUser.content.replace(/\s+/g, ' ').trim().slice(0, 40)
-          : '';
-      const now = Date.now();
-      list = [
-        {
-          id: chatSessionId,
-          title: rawTitle || null,
-          createdAt: now,
-          updatedAt: now,
-          messageCount: messages.length,
-          streaming: isStreaming,
-        },
-        ...list,
-      ];
-    } else if (isStreaming) {
-      // Pin the actively running session to the top so its state is immediately visible.
-      const idx = list.findIndex((s) => s.id === chatSessionId);
-      if (idx > 0) {
-        const [active] = list.splice(idx, 1);
-        list = [active, ...list];
-      }
-    }
-
-    return list;
-  }, [remoteSessions, chatSessionId, isStreaming, messages, filterActive]);
+  // Overlay the active chat session's live streaming state onto the list, and synthesize a
+  // brand-new session row so it shows up immediately (shared with the mobile history page).
+  const displaySessions = useDisplaySessions();
 
   const handleSelectSession = async (sessionId: string) => {
     try {

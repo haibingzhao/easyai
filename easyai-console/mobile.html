@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      viewport-fit=cover is what lets the shell pad itself around the notch / home indicator;
+      without it a standalone web app gets a letterboxed band instead of edge-to-edge layout.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover"
+    />
+    <!-- A theme-color with alpha is dropped by every browser, so each scheme names its own surface. -->
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0f0f10" media="(prefers-color-scheme: dark)" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="EasyAI" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/icons/mobile-192.png" />
+    <title>EasyAI</title>
+    <style>
+      /*
+       * The shell sizes its own layout box (100dvh minus the keyboard), so the document must never
+       * scroll. Leaving this on lets iOS pan the page when an input near the bottom is focused,
+       * which strands the composer above a blank band.
+       */
+      html,
+      body,
+      #root {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        overscroll-behavior: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/mobile/main-mobile.tsx"></script>
+  </body>
+</html>

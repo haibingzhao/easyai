@@ -61,6 +61,7 @@ export function ToolRowHeader({ toolName, status, summary, expanded, onToggle, e
   return (
     <button
       type="button"
+      data-collapse-header
       onClick={expandable ? onToggle : undefined}
       className={`w-full flex items-center gap-2 py-0.5 text-left transition-colors ${expandable ? 'hover:bg-muted/30 rounded' : 'cursor-default'}`}
     >

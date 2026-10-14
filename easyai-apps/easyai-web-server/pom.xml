@@ -14,6 +14,8 @@
 
     <properties>
         <kotlin.version>2.3.10</kotlin.version>
+        <!-- Frontend build output injected into the jar as static resources -->
+        <console.dist.dir>${project.basedir}/../../easyai-console/dist</console.dist.dir>
     </properties>
 
     <dependencies>
@@ -102,6 +104,33 @@
     </dependencies>
     <build>
         <plugins>
+            <!--
+              Inject the easyai-console build output (npm run build in easyai-console/)
+              into the jar as classpath:/static so the backend serves the frontend
+              same-origin. Run `npm run build` in easyai-console before packaging.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>${maven-resources-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>copy-console-dist</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}/static</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${console.dist.dir}</directory>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
@@ -110,6 +139,14 @@
                     <mainClass>com.easy.easyai.apps.web.WebApplicationKt</mainClass>
                     <skip>false</skip>
                 </configuration>
+                <executions>
+                    <execution>
+                        <id>repackage</id>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

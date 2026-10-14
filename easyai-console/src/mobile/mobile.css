@@ -1,0 +1,296 @@
+/*
+ * Mobile (iPhone) layer styles.
+ *
+ * Imported from src/index.css — never from a .tsx file. The lib build names every CSS
+ * asset `style.[ext]` (vite.lib.config.ts), so a second stylesheet emitted from a component
+ * import would overwrite the first one.
+ *
+ * Everything is scoped under `.mobile-app` so the same stylesheet can ship to desktop hosts
+ * without touching a single desktop rule.
+ */
+
+/*
+ * The shell owns the status-bar inset, not the page header: the reachability banner can be the
+ * first child of this box, and an inset that lived on the header would push that banner under
+ * the status bar. box-sizing is border-box, so 100dvh already contains the padding.
+ */
+.mobile-app {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: env(safe-area-inset-top);
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+}
+
+/* The band above the header is painted by `.mobile-app`, so the header only carries its own rule. */
+.mobile-app-header {
+  flex-shrink: 0;
+  background-color: var(--color-background);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.mobile-app-header-bar {
+  height: 44pt;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.mobile-app-main {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-app-composer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--color-border);
+  background-color: var(--color-background);
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+}
+
+/* With the tab bar visible the composer must not also eat the inset — the bar already does. */
+.mobile-app-composer--above-tabbar {
+  padding-bottom: 8px;
+}
+
+/* ===== Bottom tab bar ===== */
+
+.mobile-tabbar {
+  flex-shrink: 0;
+  display: flex;
+  border-top: 1px solid var(--color-border);
+  background-color: var(--color-background);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.mobile-tabbar-item {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 49pt;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--color-muted-foreground);
+  background: none;
+  border: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-tabbar-item[data-active='true'] {
+  color: var(--color-primary);
+}
+
+.mobile-tabbar-item:active {
+  opacity: 0.55;
+}
+
+/* ===== 44pt hit targets ===== */
+
+/*
+ * Desktop renders ~28px buttons and relies on hover to reveal the rest. On touch there is
+ * no hover, so every control the mobile layer reuses gets padded up to 44×44 rather than
+ * being rewritten per component.
+ */
+.mobile-hit {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-hit:active {
+  background-color: var(--color-muted);
+}
+
+/*
+ * Collapse headers inside the message list: the tap area is the whole row.
+ * `data-collapse-header` is marked on every toggle the reused transcript renders
+ * (`ToolRowHeader`, `CollapsibleSection`, `ProcessGroup`, `ThinkingBlock`, `SubAgentRow`), because
+ * touch needs a 44pt row and those headers are ~22px with `py-0.5` on desktop.
+ */
+.mobile-app details > summary,
+.mobile-app [data-collapse-header] {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+/*
+ * Token/latency meta bar and the fork action are hover-revealed on desktop, where a pointer can
+ * rest on a message. Touch has no equivalent state, so the bar is simply always visible here.
+ */
+.mobile-app [data-meta-bar] {
+  max-height: none;
+  overflow: visible;
+}
+
+/* ===== Message density ===== */
+
+.mobile-app .user-message-container {
+  max-width: 78%;
+  font-size: 15px;
+}
+
+.mobile-app .message-list-scroll {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* Long tokens (paths, base64 fragments) must not force the whole list to scroll sideways. */
+.mobile-app .whitespace-pre-wrap {
+  overflow-wrap: anywhere;
+}
+
+.mobile-app pre {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* iOS only zooms on focus if the control is under 16px. */
+.mobile-app input,
+.mobile-app textarea,
+.mobile-app select,
+.mobile-app [contenteditable] {
+  font-size: 16px;
+}
+
+/* Smaller controls keep their desktop look but lose the 12px type that becomes unreadable here. */
+.mobile-app .text-\[10px\],
+.mobile-app .text-\[11px\] {
+  font-size: 11px;
+}
+
+/* ===== Sheet ===== */
+
+.mobile-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.mobile-sheet-backdrop[data-open='true'] {
+  opacity: 1;
+}
+
+.mobile-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - env(safe-area-inset-top) - 44px);
+  background-color: var(--color-background);
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+  transform: translateY(100%);
+  transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.16);
+}
+
+.mobile-sheet[data-open='true'] {
+  transform: translateY(0);
+}
+
+.mobile-sheet-grabber {
+  width: 32px;
+  height: 5px;
+  border-radius: 999px;
+  background-color: var(--color-border);
+  margin: 8px auto 4px;
+  flex-shrink: 0;
+}
+
+.mobile-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 12px 8px;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+/* The drag-to-close band: touch gestures here must not be stolen by inner scrolling. */
+.mobile-sheet-drag-area {
+  touch-action: none;
+  cursor: grab;
+}
+
+.mobile-sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+
+/* ===== Rows ===== */
+
+.mobile-row {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-row:active {
+  background-color: var(--color-muted);
+}
+
+.mobile-section-title {
+  font-size: 12px;
+  color: var(--color-muted-foreground);
+  padding: 12px 12px 4px;
+}
+
+/* ===== Full-bleed pages (tool detail / artifact) ===== */
+
+.mobile-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background-color: var(--color-background);
+}
+
+.mobile-page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* A media preview must never nest a second scroller inside the page scroller. */
+.mobile-iframe {
+  width: 100%;
+  height: min(70vh, 560px);
+  border: none;
+  display: block;
+  background: #fff;
+}

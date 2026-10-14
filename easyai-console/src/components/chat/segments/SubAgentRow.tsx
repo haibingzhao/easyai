@@ -148,6 +148,7 @@ export function SubAgentRow({ segment, isLive, streamingToolOutputs, workDir }: 
     <div>
       <button
         type="button"
+        data-collapse-header
         onClick={toggle}
         className="w-full flex items-center gap-2 py-0.5 text-left text-sm hover:bg-muted/30 rounded transition-colors"
       >

@@ -109,6 +109,7 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({ content, isStreami
   return (
     <div className="overflow-hidden">
       <button
+        data-collapse-header
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 py-0.5 text-left text-sm text-muted-foreground hover:text-foreground hover:bg-muted/30 rounded transition-colors"
       >

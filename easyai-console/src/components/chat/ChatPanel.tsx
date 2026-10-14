@@ -1,24 +1,18 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { MessageList } from './MessageList';
 import { MessageEditor } from './MessageEditor';
 import { QuestionNavigator } from './QuestionNavigator';
 import { ArtifactPanel } from '../artifacts/ArtifactPanel';
 import { WelcomeScreen } from './WelcomeScreen';
 import { useChatStore } from '@/services/stores/chat-store';
-import { adoptSessionWorkspace } from '@/services/stores/project-store';
 import { useAgentStore } from '@/services/stores/agent-store';
-import { getStreamingStatus } from '@/services/chat-service';
-import { sessionService } from '@/services/session-service';
-import { getCheckpoints, getFileReviewState, getSnapshotCapability } from '@/services/checkpoint-service';
 import { Badge } from '../ui/Badge';
 import { TokenContextBar } from './TokenContextBar';
 import { PermissionBar } from './PermissionBar';
 import { RevertBanner } from './RevertBanner';
 import { UserMessagePreview } from './UserMessagePreview';
-import type { CheckpointInfo } from '../../types/checkpoint';
-import type { ContextReferences, AssistantMessage as AssistantMessageType } from '../../types/message';
-import { revertToMessage, unrevert } from '@/services/checkpoint-service';
 import { Plus, PanelRight, PanelRightClose } from 'lucide-react';
+import { revertToMessage, unrevert } from '@/services/checkpoint-service';
 import { i18n } from '../../utils/i18n';
 import { RightPanel } from '../files/RightPanel';
 import { TeamMemberDetail } from './team/TeamMemberDetail';
@@ -28,15 +22,16 @@ import { useNavStore } from '@/services/stores/nav-store';
 import { useSideAskStore } from '@/services/stores/side-ask-store';
 import { useTeamStore } from '@/services/stores/team-store';
 import { useResizable } from '@/hooks/useResizable';
+import { useMessageAutoScroll } from '@/hooks/useMessageAutoScroll';
+import { useSessionRecovery } from '@/hooks/useSessionRecovery';
+import { useAggregatedReferences } from '@/hooks/useAggregatedReferences';
+import { useChatBootstrap } from '@/hooks/useChatBootstrap';
 
 const BREAKPOINT = 800;
 
-/** Threshold (px) to determine if an element is at the bottom */
-const SCROLL_BOTTOM_THRESHOLD = 50;
-
 export const ChatPanel: React.FC = () => {
-  const { messages, isStreaming, hasArtifacts, artifactCount, clearChat, streamingBlocks, todos, subAgentTodos, swarmRuns, isAwaitingPermission, revertState, setRevertState, sessionId, runningSessionId, setRunningSessionId, setStreaming, loadSessionMessages, loadSessionMessagesIncremental, setTodos, setAllSubAgentTodos, setFileReviewOverrides, refreshGoal, currentGoal, pendingMessageData, sessionVariables } = useChatStore();
-  const { loadAgents, loadTools, agents, selectedAgentId } = useAgentStore();
+  const { messages, isStreaming, hasArtifacts, artifactCount, clearChat, todos, subAgentTodos, swarmRuns, isAwaitingPermission, revertState, setRevertState, sessionId, runningSessionId, currentGoal, sessionVariables } = useChatStore();
+  const { agents, selectedAgentId } = useAgentStore();
   const [showArtifactPanel, setShowArtifactPanel] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const { rightPanelOpen, toggleRightPanel, setRightPanelOpen, rightPanelWidth, setRightPanelWidth } = useNavStore();
@@ -57,11 +52,6 @@ export const ChatPanel: React.FC = () => {
     clearSelectedMember();
   }, [sessionId, clearSelectedMember]);
 
-  // Active user message preview — tracks the user message currently visible at the top of the scroll container
-  const [activeUserMessage, setActiveUserMessage] = useState<string | null>(null);
-  const activeMsgRafRef = useRef<number | null>(null);
-
-  // Right panel resizable drag
   const rightPanelResizer = useResizable({
     minWidth: 250,
     maxWidth: 800,
@@ -100,142 +90,12 @@ export const ChatPanel: React.FC = () => {
     }
   }, [rightPanelOpen, abortSideAsk]);
 
-  // Auto-scroll related
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const autoScrollEnabledRef = useRef(true);
-  const prevScrollTopRef = useRef(0);
-
-  /** Check if the messages container is at the bottom */
-  const isMessagesAtBottom = useCallback(() => {
-    const el = messagesContainerRef.current;
-    if (!el) return true;
-    return el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_BOTTOM_THRESHOLD;
-  }, []);
-
-  /** Scroll messages to the bottom */
-  const scrollMessagesToBottom = useCallback(() => {
-    const el = messagesContainerRef.current;
-    if (!el || !autoScrollEnabledRef.current) return;
-    prevScrollTopRef.current = el.scrollTop;
-    el.scrollTo({
-      top: el.scrollHeight,
-      behavior: 'auto'
-    });
-  }, []);
-
-  /**
-   * Detect the nearest user message at or above the top of the visible viewport.
-   * This shows the user message that initiated the currently visible assistant response,
-   * not necessarily the one scrolled into view.
-   */
-  const updateActiveUserMessage = useCallback(() => {
-    const container = messagesContainerRef.current;
-    if (!container) return;
-
-    const containerRect = container.getBoundingClientRect();
-    const viewportTop = containerRect.top;
-
-    // Collect all user message elements inside the scroll container
-    const userMsgElements = container.querySelectorAll<HTMLElement>('[data-user-message="true"]');
-    if (userMsgElements.length === 0) {
-      setActiveUserMessage((prev) => (prev === null ? prev : null));
-      return;
-    }
-
-    // Find the last user message whose top is at or above the viewport top
-    let foundText: string | null = null;
-    for (const el of userMsgElements) {
-      const elRect = el.getBoundingClientRect();
-      if (elRect.top <= viewportTop) {
-        const contentDiv = el.querySelector('.whitespace-pre-wrap');
-        const text = contentDiv?.getAttribute('data-message-content') ?? contentDiv?.textContent?.trim() ?? '';
-        if (text) foundText = text;
-      } else {
-        // Elements are in DOM order; once we pass the viewport top, stop
-        break;
-      }
-    }
-
-    // Fallback: if scrolled to the very top and no message is above viewport,
-    // use the first user message
-    if (!foundText) {
-      const first = userMsgElements[0];
-      const contentDiv = first.querySelector('.whitespace-pre-wrap');
-      foundText = contentDiv?.getAttribute('data-message-content') ?? contentDiv?.textContent?.trim() ?? null;
-    }
-
-    setActiveUserMessage((prev) => (prev === foundText ? prev : foundText));
-  }, []);
-
-  /**
-   * Handle messages container scroll event:
-   * - Non-streaming: toggle auto-scroll based on scroll position
-   * - Streaming: detect user scroll-up via scrollTop decrease (wheel event handled separately below)
-   */
-  const handleMessagesScroll = useCallback(() => {
-    const el = messagesContainerRef.current;
-    if (!el) return;
-
-    const currentScrollTop = el.scrollTop;
-    const prevScrollTop = prevScrollTopRef.current;
-    prevScrollTopRef.current = currentScrollTop;
-
-    if (isStreaming) {
-      // scrollTop decrease = user scrolled up (programmatic scrollTo only increases scrollTop)
-      if (currentScrollTop < prevScrollTop - 5) {
-        autoScrollEnabledRef.current = false;
-      } else if (isMessagesAtBottom() && !autoScrollEnabledRef.current) {
-        // Re-enable auto-scroll when user manually scrolls back to bottom
-        autoScrollEnabledRef.current = true;
-      }
-      return;
-    }
-
-    autoScrollEnabledRef.current = isMessagesAtBottom();
-    // Also update toolbar preview on scroll
-    updateActiveUserMessage();
-  }, [isStreaming, isMessagesAtBottom, updateActiveUserMessage]);
-
-  // Wheel event: immediately disable auto-scroll when user scrolls up during streaming (fires before scroll event, most reliable)
-  useEffect(() => {
-    const el = messagesContainerRef.current;
-    if (!el) return;
-    const handleWheel = (e: WheelEvent) => {
-      if (isStreaming && e.deltaY < 0) {
-        autoScrollEnabledRef.current = false;
-      }
-    };
-    el.addEventListener('wheel', handleWheel, { passive: true });
-    return () => el.removeEventListener('wheel', handleWheel);
-  }, [isStreaming]);
-
-  // Auto-scroll to bottom during streaming
-  useEffect(() => {
-    if (isStreaming && autoScrollEnabledRef.current) {
-      requestAnimationFrame(() => {
-        scrollMessagesToBottom();
-      });
-    }
-  }, [messages, streamingBlocks, isStreaming, scrollMessagesToBottom]);
-
-  // Update toolbar preview when messages change (session load, new message, etc.)
-  useEffect(() => {
-    // Use rAF to ensure DOM has rendered before detecting
-    if (activeMsgRafRef.current) cancelAnimationFrame(activeMsgRafRef.current);
-    activeMsgRafRef.current = requestAnimationFrame(() => {
-      updateActiveUserMessage();
-    });
-    return () => {
-      if (activeMsgRafRef.current) cancelAnimationFrame(activeMsgRafRef.current);
-    };
-  }, [messages, updateActiveUserMessage]);
-
-  // When streaming ends, re-evaluate whether to enable auto-scroll based on current position
-  useEffect(() => {
-    if (!isStreaming) {
-      autoScrollEnabledRef.current = isMessagesAtBottom();
-    }
-  }, [isStreaming, isMessagesAtBottom]);
+  // Auto-scroll related (shared with the mobile shell)
+  const {
+    containerRef: messagesContainerRef,
+    onScroll: handleMessagesScroll,
+    activeUserMessage,
+  } = useMessageAutoScroll();
 
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout>;
@@ -250,200 +110,10 @@ export const ChatPanel: React.FC = () => {
     };
   }, []);
 
-  useEffect(() => {
-    loadAgents();
-    loadTools();
-  }, [loadAgents, loadTools]);
-
-  // Fetch the global snapshot capability once at mount — gates the Review panel
-  // at startup, before any session detail is loaded (false for no-op backends).
-  useEffect(() => {
-    getSnapshotCapability()
-      .then((v) => useChatStore.getState().setSnapshotCapability(v))
-      .catch(() => { /* probe unavailable — keep the optimistic default */ });
-  }, []);
-
-  // Restore goal state when switching sessions
-  useEffect(() => {
-    if (sessionId) {
-      refreshGoal(sessionId).catch(() => {
-        // Silently ignore — no goal for this session
-      });
-    }
-  }, [sessionId, refreshGoal]);
-
-  // SSE-first with polling fallback when a running session is detected
-  useEffect(() => {
-    if (!runningSessionId) return;
-
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-
-    /**
-     * Fetch incremental messages from the server.
-     * Tries incremental fetch first; falls back to full reload if compaction,
-     * in-place message updates, or errors are detected.
-     * @param finalize If true, clears running state after recovery.
-     * @returns true if a pending permission request is active (caller should keep polling).
-     */
-    const fetchMessagesIncremental = async (finalize: boolean): Promise<boolean> => {
-      const lastTimestamp = useChatStore.getState()._lastSnapshots.reduce(
-        (max, s) => Math.max(max, s.timestamp), 0
-      );
-      const [checkpoints, groupedTodos, reviewState] = await Promise.all([
-        getCheckpoints(runningSessionId).catch(() => [] as CheckpointInfo[]),
-        sessionService.getGroupedTodos(runningSessionId).catch(() => ({ main: [], subAgents: [] })),
-        getFileReviewState(runningSessionId).catch(() => null),
-      ]);
-      if (cancelled) return false;
-
-      let hasPendingPermission = false;
-      try {
-        const afterResponse = await sessionService.getSessionMessagesAfter(runningSessionId, lastTimestamp);
-        if (cancelled) return false;
-
-        hasPendingPermission = !!afterResponse.pendingPermission;
-
-        if (
-          afterResponse.compactionOccurredAfter ||
-          afterResponse.contentUpdatedAt > lastTimestamp
-        ) {
-          // Compaction or in-place message update detected — fall back to full reload
-          const detail = await sessionService.getSessionDetail(runningSessionId);
-          if (cancelled) return false;
-          hasPendingPermission = !!detail?.pendingPermission;
-          if (detail) {
-            loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, runningSessionId);
-            useChatStore.getState().setSnapshotEnabled(detail.snapshotEnabled !== false);
-            adoptSessionWorkspace(detail);
-          }
-        } else {
-          // Safe to use incremental merge — pass pendingPermission from backend
-          loadSessionMessagesIncremental(afterResponse.messages, afterResponse.pendingPermission ?? null, checkpoints, afterResponse.endReason, undefined, undefined, runningSessionId);
-        }
-      } catch {
-        // Incremental fetch failed — fall back to full reload
-        const detail = await sessionService.getSessionDetail(runningSessionId);
-        if (cancelled) return false;
-        hasPendingPermission = !!detail?.pendingPermission;
-        if (detail) {
-          loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, runningSessionId);
-          useChatStore.getState().setSnapshotEnabled(detail.snapshotEnabled !== false);
-          adoptSessionWorkspace(detail);
-        }
-      }
-
-      setTodos(groupedTodos.main);
-      setAllSubAgentTodos(
-        Object.fromEntries(groupedTodos.subAgents.map((g) => [g.agentName, { todos: g.todos, toolCallId: g.agentName }]))
-      );
-      if (reviewState?.reviews) {
-        setFileReviewOverrides(reviewState.reviews);
-      }
-      if (finalize && !hasPendingPermission) {
-        // Only finalize when there is no pending permission.
-        // When the SSE stream ended but the agent is paused for a permission request,
-        // we must keep polling so the PermissionBar stays interactive.
-        setRunningSessionId(null);
-        setStreaming(false);
-      }
-      return hasPendingPermission;
-    };
-
-    const poll = async () => {
-      try {
-        const status = await getStreamingStatus(runningSessionId);
-        if (cancelled) return;
-
-        if (!status.streaming && !status.local) {
-          // Session is completely done — final fetch and stop polling
-          await fetchMessagesIncremental(true);
-          return;
-        }
-
-        if (status.local && status.streaming) {
-          // Still running — fetch incremental messages and poll again in 3 seconds
-          await fetchMessagesIncremental(false);
-          if (!cancelled) timer = setTimeout(poll, 3000);
-          return;
-        }
-
-        // e.g. local but not streaming (permission pause) —
-        // fetch final messages, keep polling only if there's a pending permission
-        const hasPendingPermission = await fetchMessagesIncremental(true);
-        if (hasPendingPermission && !cancelled) {
-          // Agent is paused for permission — keep polling to detect state changes
-          timer = setTimeout(poll, 3000);
-        }
-      } catch (e) {
-        console.warn('[SSE Recovery] Poll failed:', e);
-        if (!cancelled) timer = setTimeout(poll, 5000);
-      }
-    };
-
-    // Ownership guard: once the user switches sessions, the store's runningSessionId no
-    // longer matches the session polled by this effect.
-    const isStalePoll = () => cancelled || useChatStore.getState().runningSessionId !== runningSessionId;
-
-    // Polling-only recovery: the DB snapshot + incremental merges are the single
-    // source of truth while a session runs in the background. A watch SSE attach
-    // here would double-render committed turns (messages copy + streaming copy).
-    void poll();
-
-    // Periodic checkpoint refresh — surfaces team member file changes
-    // that don't flow through the parent's stream (members use isolated session IDs).
-    const checkpointTimer = setInterval(async () => {
-      if (isStalePoll()) return;
-      try {
-        const checkpoints = await getCheckpoints(runningSessionId);
-        if (cancelled) return;
-        const state = useChatStore.getState();
-        for (const cp of checkpoints) {
-          const key = cp.assistantMessageId || cp.messageId;
-          if (!key) continue;
-          // Upsert synthetic member checkpoints (their content grows as members write more files);
-          // only add genuinely new keys for real checkpoints.
-          if (!state.checkpointsByMessageId[key] || key.startsWith('member:')) {
-            state.addCheckpoint(key, cp);
-          }
-        }
-      } catch { /* best-effort */ }
-    }, 8000);
-
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-      clearInterval(checkpointTimer);
-    };
-  }, [runningSessionId, loadSessionMessages, loadSessionMessagesIncremental, setRunningSessionId, setStreaming]);
-
-  // Auto-scroll to bottom when entering a running session
-  useEffect(() => {
-    if (runningSessionId) {
-      const el = messagesContainerRef.current;
-      if (el) {
-        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
-      }
-    }
-  }, [runningSessionId]);
-
-  // Scroll to bottom when switching sessions (history load, fork navigation, startup restore)
-  const prevSessionIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    const prev = prevSessionIdRef.current;
-    prevSessionIdRef.current = sessionId;
-    if (!sessionId || sessionId === prev) return;
-    const el = messagesContainerRef.current;
-    if (!el) return;
-    // This jump is ours, not the user's: reset the scroll-up heuristic first, or switching into a
-    // shorter session (a smaller scrollTop than the one we left) would read as "user scrolled up"
-    // in handleMessagesScroll and switch auto-follow off for the whole new session.
-    autoScrollEnabledRef.current = true;
-    prevScrollTopRef.current = 0;
-    requestAnimationFrame(() => {
-      el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
-    });
-  }, [sessionId]);
+  // Agents / tools / snapshot capability / goal, then running-session recovery and the
+  // transcript auto-follow. All shared with the mobile shell.
+  useChatBootstrap();
+  useSessionRecovery(runningSessionId);
 
   // Undo/Redo keyboard shortcuts (Cmd+Z / Cmd+Shift+Z)
   useEffect(() => {
@@ -499,41 +169,8 @@ export const ChatPanel: React.FC = () => {
   const awaitingPermission = isAwaitingPermission();
   const isLocked = isStreaming;
 
-  // Aggregate references from all assistant messages in the current conversation,
-  // plus any pending references from message_end events not yet committed.
-  const aggregatedReferences = useMemo<ContextReferences>(() => {
-    const memoryMap = new Map<string, ContextReferences['memories'][0]>();
-    const ruleMap = new Map<string, ContextReferences['rules'][0]>();
-
-    const addRefs = (refs: ContextReferences) => {
-      for (const mem of refs.memories) {
-        const key = `${mem.scope}:${mem.name}`;
-        if (!memoryMap.has(key)) memoryMap.set(key, mem);
-      }
-      for (const rule of refs.rules) {
-        const key = `${rule.source}:${rule.name}`;
-        if (!ruleMap.has(key)) ruleMap.set(key, rule);
-      }
-    };
-
-    // From committed messages
-    for (const msg of messages) {
-      if (msg.role === 'assistant') {
-        const refs = (msg as AssistantMessageType).references;
-        if (refs) addRefs(refs);
-      }
-    }
-
-    // From pendingMessageData (references received via message_end but not yet committed)
-    for (const data of Object.values(pendingMessageData)) {
-      if (data.references) addRefs(data.references);
-    }
-
-    return {
-      memories: Array.from(memoryMap.values()),
-      rules: Array.from(ruleMap.values()),
-    };
-  }, [messages, pendingMessageData]);
+  // References the conversation pulled into context (shared with the mobile tasks sheet)
+  const aggregatedReferences = useAggregatedReferences();
 
   const handleNewSession = () => {
     clearChat();

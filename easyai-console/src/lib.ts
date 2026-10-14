@@ -179,5 +179,55 @@ export { useProjectStore } from './services/stores/project-store';
 export { useFeatureStore } from './services/stores/feature-store';
 export { useNavStore } from './services/stores/nav-store';
 
+// === Mobile (iPhone web / PWA / WKWebView shell) ===
+// The shell a host app mounts at its own `mobile.html`: same services, same stores, same
+// transcript renderers, phone layout. Hosts add tabs and composer entries through the mutable
+// registries below — the same idiom as EXTRA_NAV_ITEMS.
+export { MobileAppLayout } from './mobile/MobileAppLayout';
+export { MobileGate } from './mobile/MobileGate';
+export { MobileApp } from './mobile/MobileApp';
+export { MobileChatPage } from './mobile/pages/MobileChatPage';
+export { MobileHistoryPage } from './mobile/pages/MobileHistoryPage';
+export { MobileProfilePage } from './mobile/pages/MobileProfilePage';
+export { MobileMorePage } from './mobile/pages/MobileMorePage';
+export { MobileToolDetailPage } from './mobile/pages/MobileToolDetailPage';
+export { MobileArtifactPage } from './mobile/pages/MobileArtifactPage';
+export { MobileLoginPage } from './mobile/pages/MobileLoginPage';
+export { MobileProjectPage } from './mobile/pages/MobileProjectPage';
+export { MobileHeader } from './mobile/components/MobileHeader';
+export { MobileTabBar } from './mobile/components/MobileTabBar';
+export { MobileSheet } from './mobile/components/MobileSheet';
+export { TasksSheet } from './mobile/components/TasksSheet';
+export { MessageActionSheet } from './mobile/components/MessageActionSheet';
+export { ConnectionBanner } from './mobile/components/ConnectionBanner';
+export {
+  MOBILE_TAB_ITEMS,
+  MOBILE_MORE_ITEMS,
+  MOBILE_SHEET_ITEMS,
+  MOBILE_COMPOSER_PLUS_ITEMS,
+  BUILT_IN_TAB_ITEMS,
+  MOBILE_TAB_MAX,
+  resolveMobileTabs,
+  resolveMoreItems,
+} from './mobile/registries';
+export type {
+  MobileTabItem,
+  MobileMoreItem,
+  MobileSheetItem,
+  MobileComposerPlusItem,
+  MobileComposerContext,
+} from './mobile/registries';
+export { useMobileUiStore } from './mobile/stores/mobile-ui-store';
+export { useKeyboardInset } from './mobile/hooks/useKeyboardInset';
+export { useVisibilityReconnect } from './mobile/hooks/useVisibilityReconnect';
+export { useLongPress } from './mobile/hooks/useLongPress';
+
+// Transcript state hooks, shared by the desktop panel and any host building its own surface.
+export { useSessionRecovery } from './hooks/useSessionRecovery';
+export { useMessageAutoScroll } from './hooks/useMessageAutoScroll';
+export { useDisplaySessions } from './hooks/useDisplaySessions';
+export { useAggregatedReferences } from './hooks/useAggregatedReferences';
+export { useChatBootstrap } from './hooks/useChatBootstrap';
+
 // === Full App (for embedding the complete easyai-console experience) ===
 export { default as EasyAiApp } from './App';
