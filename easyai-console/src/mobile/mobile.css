@@ -139,8 +139,8 @@
 /*
  * Token/latency meta bar and the fork action are hover-revealed on desktop, where a pointer can
  * rest on a message. Touch has no equivalent state, so the bar is simply always visible here.
- * Phone width is scarce: keep only model + in/out tokens + duration, dropping the cache
- * breakdown, the wall-clock time and the fork action, and wrap between whole items rather
+ * Phone width is scarce: keep only model + in/out tokens + duration + wall-clock time,
+ * dropping the cache breakdown and the fork action, and wrap between whole items rather
  * than breaking a token like "qwen3.8-" mid-word.
  */
 .mobile-app [data-meta-bar] {
@@ -149,7 +149,6 @@
 }
 
 .mobile-app [data-meta-cache],
-.mobile-app [data-meta-time],
 .mobile-app [data-meta-fork] {
   display: none;
 }
