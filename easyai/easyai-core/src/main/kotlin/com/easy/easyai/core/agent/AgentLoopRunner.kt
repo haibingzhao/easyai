@@ -329,6 +329,16 @@ internal class AgentLoopRunner(
                         "模型端点暂时不可用（连续失败已进入熔断保护）$retryHint", e
                     )
                 }
+                // A spent quota fails identically on every attempt until it resets, and the
+                // gateway answers it immediately (no partial stream to save). Checked before the
+                // outage counter so a healthy-but-unfunded endpoint never trips the breaker.
+                if (LlmErrorClassifier.isQuotaExhausted(e)) {
+                    val reset = LlmErrorClassifier.quotaResetHint(e)
+                    val retryHint = if (reset != null) "，配额将在 $reset 重置" else "，请检查套餐额度或购买用量包"
+                    logger.warn("${logPrefix}[Turn {}] LLM quota exhausted, failing fast (no retry): {}",
+                        turnId, e.message)
+                    throw QuotaExhaustedException("模型额度已耗尽$retryHint", e)
+                }
                 // Report outage-class failures (connection errors, stalls, 5xx) to the
                 // endpoint circuit breaker. Rate limits and client errors are filtered
                 // out by isEndpointOutage and never count.

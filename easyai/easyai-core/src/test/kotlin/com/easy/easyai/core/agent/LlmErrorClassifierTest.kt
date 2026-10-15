@@ -8,7 +8,9 @@ import org.springframework.web.client.ResourceAccessException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeoutException
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -199,6 +201,58 @@ class LlmErrorClassifierTest {
         fun `returns false for unrelated RuntimeException`() {
             val exception = RuntimeException("Some random error")
             assertFalse(LlmErrorClassifier.isRetryable(exception))
+        }
+    }
+
+    @Nested
+    inner class `isQuotaExhausted` {
+
+        // Verbatim shape of the Bailian Token Plan answer once the subscription credits are spent.
+        // The adapters prefix the status, so this is exactly what reaches the classifier.
+        private val spentQuota = TransientAiException(
+            "429: Your token-plan 1-month quota has been exhausted. The quota will reset at 10-19 16:00:00 UTC."
+        )
+
+        @Test
+        fun `detects a spent token-plan quota`() {
+            assertTrue(LlmErrorClassifier.isQuotaExhausted(spentQuota))
+        }
+
+        @Test
+        fun `detects the OpenAI insufficient_quota code`() {
+            val exception = TransientAiException(
+                "429: {\"error\":{\"message\":\"You exceeded your current quota, please check your plan and billing details\",\"type\":\"insufficient_quota\",\"code\":\"insufficient_quota\"}}"
+            )
+            assertTrue(LlmErrorClassifier.isQuotaExhausted(exception))
+        }
+
+        @Test
+        fun `detects it through the cause chain`() {
+            val exception = RuntimeException("stream failed", spentQuota)
+            assertTrue(LlmErrorClassifier.isQuotaExhausted(exception))
+        }
+
+        @Test
+        fun `never retries a spent quota`() {
+            // Without the guard these would be true, because 429 is mapped as transient.
+            assertFalse(LlmErrorClassifier.isTimeout(spentQuota))
+            assertFalse(LlmErrorClassifier.isRetryable(spentQuota))
+            assertFalse(LlmErrorClassifier.isEndpointOutage(spentQuota))
+        }
+
+        @Test
+        fun `keeps a per-minute throttle retryable`() {
+            // DashScope reports QPM/TPM caps with "quota" in the message too; those clear on
+            // their own and must stay on the retry path.
+            val throttle = TransientAiException("429: Allocated quota exceeded, please try again later")
+            assertFalse(LlmErrorClassifier.isQuotaExhausted(throttle))
+            assertTrue(LlmErrorClassifier.isRetryable(throttle))
+        }
+
+        @Test
+        fun `extracts the reset instant when the provider prints one`() {
+            assertEquals("10-19 16:00:00 UTC", LlmErrorClassifier.quotaResetHint(spentQuota))
+            assertNull(LlmErrorClassifier.quotaResetHint(TransientAiException("429: insufficient_quota")))
         }
     }
 

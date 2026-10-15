@@ -30,6 +30,9 @@ internal object LlmErrorClassifier {
     /** Whole-word "429" so incidental digits are not mistaken for the status code. */
     private val RATE_LIMIT_STATUS_REGEX = Regex("\\b429\\b")
 
+    /** Reset instant as printed by Bailian/OpenAI: "The quota will reset at 10-19 16:00:00 UTC." */
+    private val QUOTA_RESET_REGEX = Regex("reset at ([^.,;\\n]+)", RegexOption.IGNORE_CASE)
+
     /**
      * Check if the error indicates context length exceeded.
      * This is a non-transient error that requires context compaction.
@@ -87,6 +90,11 @@ internal object LlmErrorClassifier {
      * 4. Fall back to message-based detection
      */
     fun isTimeout(e: Throwable): Boolean {
+        // A spent quota is deterministic until it resets: the 429 it carries would
+        // otherwise be read as a transient status and retried for nothing.
+        if (isQuotaExhausted(e)) {
+            return false
+        }
         var current: Throwable? = e
         while (current != null) {
             // Strategy 1: Spring AI transient exception (retryable)
@@ -125,6 +133,9 @@ internal object LlmErrorClassifier {
      * - Timeout exceptions
      */
     fun isRetryable(e: Throwable): Boolean {
+        if (isQuotaExhausted(e)) {
+            return false
+        }
         var current: Throwable? = e
         while (current != null) {
             if (current is TransientAiException) {
@@ -139,6 +150,44 @@ internal object LlmErrorClassifier {
             current = current.cause
         }
         return false
+    }
+
+    /**
+     * Check if the error means the account's purchased quota is spent (as opposed to a
+     * per-minute rate limit). Bailian's Token Plan answers a spent subscription with
+     * `429 insufficient_quota` + "Your token-plan 1-month quota has been exhausted",
+     * and OpenAI uses the same code for "You exceeded your current quota".
+     *
+     * Retrying cannot help: the call keeps failing identically until the quota resets,
+     * so each attempt only adds latency. Distinct from rate limiting, which clears on
+     * its own and stays retryable.
+     */
+    fun isQuotaExhausted(e: Throwable): Boolean {
+        var current: Throwable? = e
+        var depth = 0
+        while (current != null && depth++ < MAX_CAUSE_DEPTH) {
+            if (isQuotaExhaustedMessage(current.message?.lowercase() ?: "")) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
+    }
+
+    /**
+     * The reset instant carried by the provider message, e.g. `10-19 16:00:00 UTC`.
+     * It is the one actionable fact in a spent-quota error, so surface it when present.
+     */
+    fun quotaResetHint(e: Throwable): String? {
+        var current: Throwable? = e
+        var depth = 0
+        while (current != null && depth++ < MAX_CAUSE_DEPTH) {
+            QUOTA_RESET_REGEX.find(current.message ?: "")?.groupValues?.get(1)?.let {
+                return it.trim()
+            }
+            current = current.cause
+        }
+        return null
     }
 
     /**
@@ -182,6 +231,11 @@ internal object LlmErrorClassifier {
         if (isContentFiltered(e)) {
             return false
         }
+        // A spent quota answers 429 from a perfectly healthy endpoint; counting it would
+        // trip the breaker and mask the real reason behind "endpoint unavailable".
+        if (isQuotaExhausted(e)) {
+            return false
+        }
         var current: Throwable? = e
         var depth = 0
         // Depth guard: a pathological (circular) cause chain would otherwise
@@ -219,6 +273,18 @@ internal object LlmErrorClassifier {
         return RATE_LIMIT_STATUS_REGEX.containsMatchIn(message) ||
             message.contains("rate limit") ||
             message.contains("too many requests")
+    }
+
+    /**
+     * Check if the message carries spent-quota indicators. Deliberately narrow: a bare
+     * "quota" also appears in Bailian's "Allocated quota exceeded", which is a per-minute
+     * throughput cap and genuinely retryable.
+     */
+    private fun isQuotaExhaustedMessage(message: String): Boolean {
+        return message.contains("insufficient_quota") ||
+            message.contains("quota has been exhausted") ||
+            message.contains("quota exhausted") ||
+            message.contains("exceeded your current quota")
     }
 
     /**
@@ -313,6 +379,17 @@ internal class ContentFilteredException(
  * by the agent loop — retrying would only be rejected by the same open breaker.
  */
 internal class LlmEndpointUnavailableException(
+    message: String,
+    cause: Throwable?,
+) : RuntimeException(message, cause)
+
+/**
+ * Thrown when the LLM call is refused because the account's quota is spent
+ * (see [LlmErrorClassifier.isQuotaExhausted]). Deterministic until the quota resets, so the
+ * agent loop never retries it and the frontend offers no retry affordance. Carries the
+ * provider's reset instant when it printed one.
+ */
+internal class QuotaExhaustedException(
     message: String,
     cause: Throwable?,
 ) : RuntimeException(message, cause)

@@ -1,7 +1,9 @@
 package com.easy.easyai.core.util
 
+import com.easy.easyai.api.llm.TransientAiException
 import com.easy.easyai.core.agent.ContentFilteredException
 import com.easy.easyai.core.agent.LlmEndpointUnavailableException
+import com.easy.easyai.core.agent.QuotaExhaustedException
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import kotlin.test.assertFalse
@@ -32,6 +34,15 @@ class ErrorUtilsTest {
         fun `content safety rejection is never retryable`() {
             // Deterministic: replaying the same prompt re-triggers the same filter.
             val e = ContentFilteredException("输出被内容安全策略截断", null)
+            assertFalse(isRetryableError(e))
+        }
+
+        @Test
+        fun `spent quota is never retryable`() {
+            // The user-facing message is Chinese and matches none of the text checks, so without the
+            // type guard the "default to retryable" fallback would offer a retry that cannot succeed.
+            val gateway = TransientAiException("429: Your token-plan 1-month quota has been exhausted.")
+            val e = QuotaExhaustedException("模型额度已耗尽，配额将在 10-19 16:00:00 UTC 重置", gateway)
             assertFalse(isRetryableError(e))
         }
     }
