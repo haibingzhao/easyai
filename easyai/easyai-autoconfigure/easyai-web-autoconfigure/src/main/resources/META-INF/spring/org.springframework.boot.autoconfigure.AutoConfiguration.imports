@@ -1,2 +1,3 @@
 com.easy.easyai.autoconfigure.web.WebAutoConfiguration
 com.easy.easyai.autoconfigure.web.SetupModeAutoConfiguration
+com.easy.easyai.autoconfigure.web.ConsoleResourcesAutoConfiguration

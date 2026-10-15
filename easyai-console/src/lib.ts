@@ -222,7 +222,6 @@ export type {
 export type { MobileSwipeAction } from './mobile/components/MobileSwipeRow';
 export { useMobileUiStore } from './mobile/stores/mobile-ui-store';
 export { useKeyboardInset } from './mobile/hooks/useKeyboardInset';
-export { useVisibilityReconnect } from './mobile/hooks/useVisibilityReconnect';
 export { useLongPress } from './mobile/hooks/useLongPress';
 
 // === Connection plugin (business-agnostic route + latency self-diagnostics) ===
@@ -256,6 +255,14 @@ export { useMessageAutoScroll } from './hooks/useMessageAutoScroll';
 export { useDisplaySessions } from './hooks/useDisplaySessions';
 export { useAggregatedReferences } from './hooks/useAggregatedReferences';
 export { useChatBootstrap } from './hooks/useChatBootstrap';
+export { useVisibilityReconnect } from './hooks/useVisibilityReconnect';
+
+// Deploy freshness. `AppLayout` and `MobileAppLayout` mount the prompt themselves, so a host only
+// reaches for these when it builds its own root instead of using either layout.
+export { useAppUpdate, applyBuildUpdate } from './hooks/useAppUpdate';
+export type { AppUpdateState } from './hooks/useAppUpdate';
+export { AppUpdateBanner } from './components/layout/AppUpdateBanner';
+export { AppUpdateDialog } from './mobile/components/AppUpdateDialog';
 
 // === Full App (for embedding the complete easyai-console experience) ===
 export { default as EasyAiApp } from './App';

@@ -2,8 +2,10 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
+import { AppUpdateBanner } from './AppUpdateBanner';
 import { useNavStore } from '@/services/stores/nav-store';
 import { useResizable } from '@/hooks/useResizable';
+import { useAppUpdate } from '@/hooks/useAppUpdate';
 
 const SIDEBAR_MIN = 160;
 const SIDEBAR_MAX = 400;
@@ -16,6 +18,9 @@ export const AppLayout: React.FC = () => {
   const setSidebarWidth = useNavStore((s) => s.setSidebarWidth);
   const [resizing, setResizing] = useState(false);
   const prevWidthRef = useRef(window.innerWidth);
+  // Mounted in the layout rather than in a page so every host shell (console, trading, home) gets
+  // the deploy notice without wiring anything — the phone equivalent lives in `MobileAppLayout`.
+  const { updateAvailable, dismiss } = useAppUpdate();
 
   const effectiveWidth = sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarWidth;
 
@@ -87,6 +92,7 @@ export const AppLayout: React.FC = () => {
       <div style={{ gridArea: 'main', minHeight: 0 }} className="overflow-hidden">
         <Outlet />
       </div>
+      {updateAvailable && <AppUpdateBanner onDismiss={dismiss} />}
     </div>
   );
 };

@@ -5,7 +5,8 @@ import { useEffect } from 'react';
  *
  * iOS suspends in-flight `fetch` as soon as the app leaves the foreground, so a stream that was
  * mid-response is simply gone when the user comes back — the recovery poll must be kicked
- * immediately rather than waiting out its 3s tick.
+ * immediately rather than waiting out its 3s tick. A build left open for days on a desktop hits
+ * the same event for a different reason: it is the moment a deploy would otherwise go unnoticed.
  */
 export function useVisibilityReconnect(onVisible: () => void): void {
   useEffect(() => {
