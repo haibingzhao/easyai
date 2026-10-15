@@ -28,6 +28,7 @@ import com.easy.easyai.skills.command.CommandService
 import com.easy.easyai.skills.selection.SkillTurnRouter
 import com.easy.easyai.snapshot.SnapshotService
 import com.easy.easyai.tools.background.BackgroundTaskManagerRegistry
+import com.easy.easyai.tools.background.BackgroundTaskStatus
 import java.nio.file.Files
 import java.nio.file.Path
 import com.easy.easyai.web.handler.ChatEventConverter
@@ -105,6 +106,7 @@ class ChatStreamService(
     override fun destroy() {
         backgroundScope.cancel()
         sessionTaps.clear()
+        sessionBridges.clear()
     }
 
     /**
@@ -120,6 +122,14 @@ class ChatStreamService(
      * Config mirrors SwarmEventBridge: replay=0, buffer=256, DROP_OLDEST.
      */
     private val sessionTaps = ConcurrentHashMap<String, MutableSharedFlow<ServerSentEvent<ChatStreamEvent>>>()
+
+    /**
+     * Per-session primary SSE bridge (the current execution's HTTP consumer channel).
+     * Background task events are published by a per-session manager that outlives any
+     * single SSE flow, so they must route to whichever bridge is current at publish
+     * time instead of the bridge captured when the manager was created.
+     */
+    private val sessionBridges = ConcurrentHashMap<String, Channel<ServerSentEvent<ChatStreamEvent>>>()
 
     /**
      * Check if a session has an active SSE stream.
@@ -152,10 +162,41 @@ class ChatStreamService(
         executionService.getActiveSession(sessionId)?.let { session ->
             emit(sessionContextSse(session))
         }
+        // Attach-time replay of settled background tasks: their lifecycle events were
+        // emitted before this subscriber existed (tap replay=0), so without the replay
+        // the watcher would render already-finished tasks as still running.
+        backgroundTaskReplaySses(sessionId).forEach { emit(it) }
         tap.transformWhile { sse ->
             emit(sse)
             sse.event() != "done" && sse.event() != "error"
         }.collect { emit(it) }
+    }
+
+    /**
+     * Snapshot the session's settled background tasks as SSE lifecycle events.
+     * Background task events are transient (tap replay=0, in-memory manager), so a
+     * client attaching after a task settled — new turn flow, watch attach, page
+     * refresh — would otherwise keep rendering it as running.
+     */
+    private fun backgroundTaskReplaySses(sessionId: String): List<ServerSentEvent<ChatStreamEvent>> {
+        val manager = backgroundTaskManagerRegistry?.get(sessionId) ?: return emptyList()
+        return manager.listTasks().mapNotNull { task ->
+            val eventType = when (task.status) {
+                BackgroundTaskStatus.COMPLETED -> "completed"
+                BackgroundTaskStatus.FAILED -> "failed"
+                BackgroundTaskStatus.CANCELLED -> "cancelled"
+                BackgroundTaskStatus.RUNNING -> null
+            }
+            if (eventType == null) return@mapNotNull null
+            ChatStreamEvent.BackgroundTaskEvent(
+                event = eventType,
+                taskId = task.taskId,
+                toolName = task.toolName,
+                result = task.result?.take(500),
+                error = task.error?.take(500),
+                durationMs = task.completedAt?.let { it - task.startedAt }
+            ).toSse()
+        }
     }
 
     /**
@@ -1072,6 +1113,7 @@ class ChatStreamService(
         // Bridge channel: background pump -> this HTTP consumer. UNLIMITED so the pump never
         // blocks while the client is disconnected (events are bounded by the execution itself).
         val bridge = Channel<ServerSentEvent<ChatStreamEvent>>(Channel.UNLIMITED)
+        sessionBridges[session.id] = bridge
 
         backgroundTaskManagerRegistry?.getOrCreate(
             sessionId = session.id,
@@ -1081,14 +1123,25 @@ class ChatStreamService(
                 val chatEvents = ChatEventConverter.convert(event, customEventConverters)
                 chatEvents.forEach { chatEvent ->
                     val sse = chatEvent.toSse()
-                    bridge.trySend(sse)
-                    tap.tryEmit(sse)
+                    // Resolve bridge/tap at publish time: this manager lives for the whole
+                    // session while each SSE flow (turn, retry, auto-resume) owns a fresh
+                    // bridge+tap. Capturing the creating flow's sinks would silently drop
+                    // every event published by later turns.
+                    sessionBridges[session.id]?.trySend(sse)
+                    sessionTaps[session.id]?.tryEmit(sse)
                 }
             },
             autoResumeTrigger = { sessionId, uid ->
                 autoResumeForBackgroundTask(sessionId, uid)
             }
         )
+
+        // Replay tasks that already settled before this flow attached, so the client's
+        // task cards start from the real state instead of the RUNNING default.
+        backgroundTaskReplaySses(session.id).forEach { sse ->
+            bridge.trySend(sse)
+            tap.tryEmit(sse)
+        }
 
         // SSE handshake: push the session context (active model's context window) before
         // any agent event, so the frontend token bar uses the real window size from the
@@ -1175,6 +1228,9 @@ class ChatStreamService(
                 tap.tryEmit(errSse)
             } finally {
                 sessionTaps.remove(session.id)
+                // Two-arg remove: never unregister a newer flow's bridge if this flow's
+                // finally races behind the next execution's registration.
+                sessionBridges.remove(session.id, bridge)
                 goalListener?.let { goalStatusNotifier?.removeListener(it) }
                 goalChannel.close()
                 bridge.close()

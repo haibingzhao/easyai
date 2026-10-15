@@ -2,6 +2,7 @@ package com.easy.easyai.core.util
 
 import com.easy.easyai.core.agent.ContentFilteredException
 import com.easy.easyai.core.agent.LlmEndpointUnavailableException
+import com.easy.easyai.core.agent.QuotaExhaustedException
 import java.net.SocketException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeoutException
@@ -15,6 +16,12 @@ fun isRetryableError(e: Exception): Boolean {
     // Content-safety rejection is deterministic: replaying the same prompt re-triggers
     // the same filter, so it must never be presented as retryable.
     if (e is ContentFilteredException) {
+        return false
+    }
+    // A spent quota is deterministic until it resets. Its user-facing message is Chinese, so it
+    // matches none of the text checks below and the "retryable unless clearly a client error"
+    // fallback would offer a retry that cannot succeed.
+    if (e is QuotaExhaustedException) {
         return false
     }
     // An open circuit means the endpoint kept failing, not that this request is doomed:

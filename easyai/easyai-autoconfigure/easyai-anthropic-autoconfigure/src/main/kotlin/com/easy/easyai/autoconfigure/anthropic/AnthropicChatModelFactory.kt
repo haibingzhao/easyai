@@ -41,7 +41,10 @@ class AnthropicChatModelFactory : ChatModelFactory {
             .apiKey(apiKey)
             .baseUrl(baseUrl)
             .timeout(timeout)
-            .maxRetries(2)
+            // Same as the OpenAI factory: the SDK's retry sleep follows Retry-After on a timer
+            // outside the call timeout, so a spent quota stalls the turn indefinitely. Retries
+            // belong to the agent loop, which classifies the failure first.
+            .maxRetries(0)
             .addInterceptor(errorInterceptor)
             .build()
 
@@ -49,7 +52,7 @@ class AnthropicChatModelFactory : ChatModelFactory {
             .apiKey(apiKey)
             .baseUrl(baseUrl)
             .timeout(timeout)
-            .maxRetries(2)
+            .maxRetries(0)
             .addInterceptor(errorInterceptor)
             .build()
 

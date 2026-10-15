@@ -31,7 +31,12 @@ class OpenAiChatModelFactory : ChatModelFactory {
             .apiKey(apiKey)
             .baseUrl(baseUrl)
             .timeout(timeout)
-            .maxRetries(3)
+            // No SDK-level retries. On a retryable status the SDK sleeps for whatever
+            // Retry-After demands on its own java.util.Timer, which sits outside the call
+            // timeout above — a spent quota (429) can stall a turn for as long as the
+            // provider says. The agent loop owns retries instead: it classifies the failure,
+            // surfaces a RetryEvent, and refuses to retry what can never succeed.
+            .maxRetries(0)
             .build()
 
         // timeoutSeconds travels into per-request RequestOptions; otherwise the mapper's

@@ -28,14 +28,24 @@ import java.util.concurrent.ConcurrentHashMap
  * - Uses McpAsyncClient for non-blocking MCP communication (Reactor Mono → coroutine await)
  * - Maintains per-user-per-server tool caches using composite keys (userId:serverName)
  */
-class McpClientManager(
+class McpClientManager @JvmOverloads constructor(
     private val mcpServerStore: AsyncMcpServerStore,
+    /** Overridable for tests; production always uses [FAILED_RETRY_COOLDOWN_MS]. */
+    private val failedRetryCooldownMs: Long = FAILED_RETRY_COOLDOWN_MS,
 ) : SmartInitializingSingleton, DisposableBean, McpPromptProvider {
     private val logger = LoggerFactory.getLogger(javaClass)
 
     companion object {
         /** System user ID for default/shared MCP servers visible to all users. */
         const val SYSTEM_USER_ID = "system"
+
+        /**
+         * How long an owner stays "do not retry yet" after a connect round left a server in
+         * [McpServerStatus.Failed]. Without this, every authenticated request's pre-warm queues on the
+         * owner mutex and re-pays a full handshake timeout — a server that only failed because the
+         * machine was busy at startup would then stall every following attempt behind it.
+         */
+        const val FAILED_RETRY_COOLDOWN_MS = 60_000L
 
         /**
          * Keeps only the highest-priority bucket's server per name, ordered by [owners] priority.
@@ -81,6 +91,12 @@ class McpClientManager(
     /** Tracks users whose MCP servers have been lazily initialized. */
     private val initializedUsers = ConcurrentHashMap.newKeySet<String>()
 
+    /** Owner → epoch ms before which another connect round is allowed after a failure. */
+    private val retryAt = ConcurrentHashMap<String, Long>()
+
+    /** Owners with a background retry round already running, so requests do not queue duplicates. */
+    private val retryInFlight = ConcurrentHashMap.newKeySet<String>()
+
     /** Per-user mutex to prevent concurrent lazy initialization races. */
     private val userInitLocks = ConcurrentHashMap<String, Mutex>()
 
@@ -98,12 +114,10 @@ class McpClientManager(
                     return@launch
                 }
                 logger.info("Initializing {} system-level MCP server connections", configs.size)
-                for (config in configs) {
-                    connect(config, SYSTEM_USER_ID)
-                }
-                initializedUsers.add(SYSTEM_USER_ID)
+                completeOwnerRound(SYSTEM_USER_ID, connectAll(configs, SYSTEM_USER_ID))
             } catch (e: Exception) {
                 logger.error("Failed to initialize system MCP servers", e)
+                armRetry(SYSTEM_USER_ID)
             }
         }
     }
@@ -120,7 +134,8 @@ class McpClientManager(
      * Ensures every owner's enabled MCP servers are connected. Owners are the request's visibility set
      * `{self, group, system}`; a group bucket is connected once and shared by every member (the per-owner
      * init guard means the first member to touch it pays the connect cost, the rest skip). System servers
-     * are already connected at startup, so the `system` owner is a no-op here.
+     * are already connected at startup, so for the `system` owner this only re-offers — in the background —
+     * the ones startup left failed.
      */
     suspend fun ensureOwnersConnected(owners: Collection<String>) {
         for (owner in owners) {
@@ -130,26 +145,87 @@ class McpClientManager(
 
     private suspend fun ensureOwnerConnected(userId: String) {
         if (userId in initializedUsers) return
+        // Recovery of an owner whose last round failed runs off the caller's path: the caller is
+        // normally a chat request resolving its tools, and re-attempting inline would make one
+        // unreachable server cost a full handshake timeout on a request every cooldown.
+        if (retryAt.containsKey(userId)) {
+            launchRetryRound(userId)
+            return
+        }
+        runOwnerRound(userId)
+    }
+
+    private fun launchRetryRound(userId: String) {
+        if (!retryInFlight.add(userId)) return
+        scope.launch {
+            try {
+                runOwnerRound(userId)
+            } finally {
+                retryInFlight.remove(userId)
+            }
+        }
+    }
+
+    private suspend fun runOwnerRound(userId: String) {
         val mutex = userInitLocks.computeIfAbsent(userId) { Mutex() }
         mutex.withLock {
             // Double-check after acquiring lock
             if (userId in initializedUsers) return
+            val cooldownLeft = (retryAt[userId] ?: 0L) - System.currentTimeMillis()
+            if (cooldownLeft > 0) {
+                logger.debug("MCP retry for user '{}' suppressed for another {}ms", userId, cooldownLeft)
+                return
+            }
             try {
                 val configs = mcpServerStore.findAllEnabled(userId)
                 if (configs.isNotEmpty()) {
                     logger.info("Lazily initializing {} MCP server connections for user '{}'", configs.size, userId)
-                    for (config in configs) {
-                        connect(config, userId)
-                    }
+                    completeOwnerRound(userId, connectAll(configs, userId))
+                } else {
+                    completeOwnerRound(userId, 0)
                 }
-                initializedUsers.add(userId)
-                logger.debug("MCP lazy initialization complete for user '{}'", userId)
             } catch (e: Exception) {
                 logger.error("Failed to lazily initialize MCP servers for user '{}'", userId, e)
-                // Mark as initialized even on failure to avoid repeated attempts
-                initializedUsers.add(userId)
+                armRetry(userId)
             }
         }
+    }
+
+    /**
+     * Connect every server of one round and return how many of them ended in [McpServerStatus.Failed].
+     * [McpServerStatus.Connected] rows are skipped because a retry round exists to recover the failed
+     * server, not to close a client an agent may be calling right now; [McpServerStatus.Disabled] rows
+     * are skipped because [disconnect] writes it without persisting `enabled=false`, so reconnecting it
+     * here would undo a deliberate disconnect. Never-connected rows have no entry at all and are attempted.
+     */
+    private suspend fun connectAll(configs: List<McpServerConfig>, owner: String): Int {
+        var failed = 0
+        for (config in configs) {
+            val current = statuses[key(owner, config.name)]
+            if (current == McpServerStatus.Connected || current == McpServerStatus.Disabled) continue
+            if (connect(config, owner) is McpServerStatus.Failed) failed++
+        }
+        return failed
+    }
+
+    /**
+     * Records the outcome of a connect round: only a round with no failed server closes the owner's
+     * initialization for good, so a transient handshake failure (typically a server started while the
+     * JVM was still booting) is retried later instead of leaving its tools missing until a restart.
+     */
+    private fun completeOwnerRound(userId: String, failed: Int) {
+        if (failed > 0) {
+            armRetry(userId)
+            logger.warn("MCP initialization for user '{}' left {} failed server(s); retry allowed in {}ms", userId, failed, failedRetryCooldownMs)
+            return
+        }
+        retryAt.remove(userId)
+        initializedUsers.add(userId)
+        logger.debug("MCP lazy initialization complete for user '{}'", userId)
+    }
+
+    private fun armRetry(userId: String) {
+        retryAt[userId] = System.currentTimeMillis() + failedRetryCooldownMs
     }
 
     /**
@@ -166,6 +242,7 @@ class McpClientManager(
     private suspend fun connectInternal(config: McpServerConfig, userId: String): McpServerStatus {
         val k = key(userId, config.name)
         statuses[k] = McpServerStatus.Connecting
+        var client: McpAsyncClient? = null
         try {
             // Disconnect existing client if any
             clients[k]?.let { old ->
@@ -173,9 +250,12 @@ class McpClientManager(
             }
 
             val transport = createTransport(config)
-            val client = McpClient.async(transport)
+            client = McpClient.async(transport)
                 .clientInfo(McpSchema.Implementation.builder("easyai", "1.0.0").build())
                 .requestTimeout(Duration.ofSeconds(config.timeoutSeconds))
+                // The SDK caps the handshake with its own 20s initializationTimeout, so the configured
+                // timeout only reaches it if it is applied here too.
+                .initializationTimeout(Duration.ofSeconds(config.timeoutSeconds))
                 .build()
 
             client.initialize().awaitSingle()
@@ -213,6 +293,9 @@ class McpClientManager(
             clients.remove(k)
             toolCache.remove(k)
             promptCache.remove(k)
+            // A client whose handshake failed is not in `clients`, so nothing else can reach it. Left
+            // unclosed it keeps owning the spawned child of a `local` server, which then idles forever.
+            try { client?.close() } catch (_: Exception) {}
             return status
         }
     }
