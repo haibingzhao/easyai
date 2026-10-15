@@ -76,9 +76,10 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
       {/*
         `data-meta-bar` 是移动层的钩子：触屏没有 hover，所以 mobile.css 用它把这条
         信息栏直接展开，而不必把 variant 参数钻到 MessageList 底下。
+        行内各 `data-meta-*` 钩子供 mobile.css 在窄屏裁剪条目（见 mobile.css）。
       */}
       <div data-meta-bar className="max-h-0 overflow-hidden group-hover:max-h-8 transition-[max-height] duration-200 ease-out">
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground/60 tabular-nums pt-1">
+        <div data-meta-row className="flex items-center gap-2 text-[11px] text-muted-foreground/60 tabular-nums pt-1">
           {showUsage && (
             <>
               {modelName && (
@@ -87,16 +88,17 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
               <span>↑ {formatTokenCount(inputTokens)}</span>
               <span>↓ {formatTokenCount(outputTokens)}</span>
               {totalCache > 0 && (
-                <span>cache {formatTokenCount(totalCache)}</span>
+                <span data-meta-cache>cache {formatTokenCount(totalCache)}</span>
               )}
               {durationText && (
                 <span>· {durationText}</span>
               )}
-              <span>· {callTime}</span>
+              <span data-meta-time>· {callTime}</span>
             </>
           )}
           {canFork && (
             <button
+              data-meta-fork
               onClick={() => setForkConfirmOpen(true)}
               disabled={forking}
               className="p-1 -my-1 rounded hover:bg-muted hover:text-foreground transition-colors disabled:opacity-50"
