@@ -67,6 +67,31 @@ function parseTaskListArgs(args: string): TaskListArgs | null {
 }
 
 // ---------------------------------------------------------------------------
+// Persisted task outcome (history fallback)
+// ---------------------------------------------------------------------------
+
+/**
+ * Final outcome of a background task as recorded in the transcript: the manager injects
+ * a steering message ("[System: Background ... (id=<taskId>, tool=<name>) failed.]")
+ * once the task settles. SSE lifecycle events are transient and the backend task map is
+ * in-memory, so for finished sessions this is the only durable source of truth.
+ */
+function usePersistedTaskOutcome(taskId: string | undefined): 'completed' | 'failed' | 'cancelled' | null {
+  const messages = useChatStore((s) => s.messages);
+  if (!taskId) return null;
+  const pattern = new RegExp(`\\(id=${taskId}, tool=[^)]*\\) (completed successfully|failed|was cancelled)\\.`);
+  for (const message of messages) {
+    if (message.role !== 'user' || message.metadata?.systemOrigin !== 'background_task') continue;
+    const match = message.content.match(pattern);
+    if (!match) continue;
+    if (match[1] === 'failed') return 'failed';
+    if (match[1] === 'was cancelled') return 'cancelled';
+    return 'completed';
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Status badge
 // ---------------------------------------------------------------------------
 
@@ -130,6 +155,9 @@ function RunBackgroundRenderer({ toolCall, result, status, compact }: ToolMessag
   const parsed = parseRunBackgroundArgs(toolCall.args);
   const backgroundTasks = useChatStore((s) => s.backgroundTasks);
   const isStreaming = useChatStore((s) => s.isStreaming);
+  // Extract taskId from result text (format: "Task ID: <uuid>")
+  const taskId = result?.result?.match(/Task ID:\s*([a-f0-9-]+)/i)?.[1];
+  const persistedOutcome = usePersistedTaskOutcome(taskId);
 
   if (!parsed) {
     return (
@@ -143,14 +171,16 @@ function RunBackgroundRenderer({ toolCall, result, status, compact }: ToolMessag
     );
   }
 
-  // Extract taskId from result text (format: "Task ID: <uuid>")
-  const taskIdMatch = result?.result?.match(/Task ID:\s*([a-f0-9-]+)/i);
-  const taskId = taskIdMatch?.[1];
   const taskEvent = taskId ? backgroundTasks[taskId] : null;
-  // For historical sessions (not streaming), infer completed status since session has ended
+  // Priority: live SSE lifecycle event > persisted steering message > session-ended
+  // default. The persisted outcome also self-heals live views that missed the terminal
+  // event (client attached after it was published).
   const taskStatus = taskEvent?.event === 'completed' ? 'COMPLETED'
     : taskEvent?.event === 'failed' ? 'FAILED'
     : taskEvent?.event === 'cancelled' ? 'CANCELLED'
+    : persistedOutcome === 'failed' ? 'FAILED'
+    : persistedOutcome === 'cancelled' ? 'CANCELLED'
+    : persistedOutcome === 'completed' ? 'COMPLETED'
     : !isStreaming ? 'COMPLETED'
     : 'RUNNING';
   // Override tool call status for historical sessions: run_background returns immediately
@@ -265,6 +295,7 @@ function TaskStatusRenderer({ toolCall, result, status, compact }: ToolMessagePr
   const parsed = parseTaskStatusArgs(toolCall.args);
   const backgroundTasks = useChatStore((s) => s.backgroundTasks);
   const isStreaming = useChatStore((s) => s.isStreaming);
+  const persistedOutcome = usePersistedTaskOutcome(parsed?.taskId);
 
   if (!parsed) {
     return (
@@ -278,8 +309,7 @@ function TaskStatusRenderer({ toolCall, result, status, compact }: ToolMessagePr
   }
 
   const taskEvent = backgroundTasks[parsed.taskId];
-  // For historical sessions (not streaming), infer completed status since session has ended
-  const inferredStatus = !taskEvent && !isStreaming ? 'completed' : taskEvent?.event;
+  const inferredStatus = taskEvent?.event ?? persistedOutcome ?? (!isStreaming ? 'completed' : null);
 
   const rowHeader = (
     <ToolRowHeader
