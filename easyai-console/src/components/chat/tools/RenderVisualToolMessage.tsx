@@ -466,6 +466,10 @@ export function RenderVisualToolMessage({ toolCall, result, status, streamingOut
               sandbox="allow-scripts"
               onLoad={handleFullscreenLoad}
               className="h-full w-full border-0 bg-transparent"
+              // Touches that land on the iframe go to the sandbox document and never bubble to the
+              // host viewport, which would swallow every pinch/pan gesture; the fullscreen view is
+              // panned and zoomed from outside, so it needs no inner interactivity.
+              style={{ pointerEvents: 'none' }}
             />
           </div>
           <div
