@@ -1,4 +1,4 @@
-import type { ModelProviderInfo, ModelProviderConfig, ModelConfigGroup, SaveModelProviderConfigRequest, SaveModelConfigGroupRequest, ModelType, ModelConfigTestResult } from '@/types/settings';
+import type { ModelProviderInfo, ModelProviderConfig, ModelConfigGroup, SaveModelProviderConfigRequest, SaveModelConfigGroupRequest, ModelType, ModelConfigTestResult, ModelCatalogEntry, CatalogRefreshResult } from '@/types/settings';
 import { fetchJson, fetchVoid, scopeQuery, JSON_HEADERS } from '@/services/api-client';
 import type { AssetScope } from '@/services/api-client';
 
@@ -94,5 +94,31 @@ export const modelConfigService = {
    */
   async deleteGroup(id: string, scope?: AssetScope): Promise<void> {
     return fetchVoid(`${API_BASE}/model-groups/${id}${scopeQuery(scope)}`, { method: 'DELETE' });
+  },
+
+  // ─── Model Catalog (global, vendor-published facts) ───────────────────────────
+
+  /**
+   * Exact catalog lookup for add-model prefill; null when the catalog does not carry the id.
+   */
+  async lookupModelCatalog(modelId: string): Promise<ModelCatalogEntry | null> {
+    const data = await fetchJson<{ entry?: ModelCatalogEntry }>(
+      `${API_BASE}/model-catalog/lookup?modelId=${encodeURIComponent(modelId)}`
+    );
+    return data.entry ?? null;
+  },
+
+  /**
+   * Every catalog row, for the Model Catalog management page.
+   */
+  async listModelCatalog(): Promise<ModelCatalogEntry[]> {
+    return fetchJson<ModelCatalogEntry[]>(`${API_BASE}/model-catalog`);
+  },
+
+  /**
+   * Pull the full Bailian model marketplace into the catalog (initializes it on first use).
+   */
+  async refreshModelCatalog(): Promise<CatalogRefreshResult> {
+    return fetchJson<CatalogRefreshResult>(`${API_BASE}/model-catalog/refresh`, { method: 'POST' });
   },
 };

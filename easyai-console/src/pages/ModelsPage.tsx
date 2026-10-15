@@ -2,21 +2,25 @@ import React, { useState } from 'react';
 import { useSettingsStore } from '@/services/stores/settings-store';
 import { ModelProviderSelector } from '@/components/dialogs/ModelProviderSelector';
 import { GenerationModelsSection } from '@/components/models/GenerationModelsSection';
+import { ModelCatalogSection } from '@/components/models/ModelCatalogSection';
 import { i18n } from '@/utils/i18n';
 import type { ModelProviderConfig, ModelType } from '@/types/settings';
 
-const SECTIONS: Array<{ type: ModelType; label: string }> = [
+type TabKey = ModelType | 'CATALOG';
+
+const SECTIONS: Array<{ type: TabKey; label: string }> = [
   { type: 'CHAT', label: 'Text' },
   { type: 'IMAGE', label: 'Image' },
   { type: 'VIDEO', label: 'Video' },
   { type: 'SPEECH', label: 'Speech' },
   { type: 'MUSIC', label: 'Music' },
   { type: 'ASR', label: 'Transcription' },
+  { type: 'CATALOG', label: 'Model Catalog' },
 ];
 
 export const ModelsPage: React.FC = () => {
   const settings = useSettingsStore();
-  const [activeType, setActiveType] = useState<ModelType>('CHAT');
+  const [activeType, setActiveType] = useState<TabKey>('CHAT');
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -58,6 +62,8 @@ export const ModelsPage: React.FC = () => {
               settings.saveSettings();
             }}
           />
+        ) : activeType === 'CATALOG' ? (
+          <ModelCatalogSection />
         ) : (
           <GenerationModelsSection modelType={activeType} />
         )}

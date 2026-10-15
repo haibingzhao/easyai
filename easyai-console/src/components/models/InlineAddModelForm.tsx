@@ -1,10 +1,12 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { i18n } from '../../utils/i18n';
 import { TokenInput } from '../TokenInput';
 import { modelConfigService } from '@/services/model-config-service';
 import { ChevronRight, ChevronDown, Trash2 } from 'lucide-react';
 import { ToolCallingToggle } from '@/components/ui/ToolCallingToggle';
 import { MODEL_FIELD_HINTS, validateContextTokenBounds } from '@/constants/model-options';
+import { useModelCatalogPrefill } from './useModelCatalogPrefill';
+import { ModelCatalogHint } from './ModelCatalogHint';
 import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, ModelConfigGroup, Protocol, SaveModelProviderConfigRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
 
 interface InlineAddModelFormProps {
@@ -29,15 +31,31 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
   const [isCustomModel, setIsCustomModel] = useState(false);
   const [customModelName, setCustomModelName] = useState('');
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
-  const [options, setOptions] = useState<ModelOptions>({});
   const [showOptions, setShowOptions] = useState(true);
-  const [capabilities, setCapabilities] = useState<ModelCapabilities>({});
+
+  // Catalog prefill owns options + capabilities so a cataloged model id fills them once.
+  const effectiveModelId = !isCustomProvider && selectedModelId ? selectedModelId : customModelName;
+  const {
+    state: catalogState,
+    entry: catalogEntry,
+    options,
+    setOptions,
+    capabilities,
+    setCapabilities,
+  } = useModelCatalogPrefill(effectiveModelId);
 
   // ─── State ─────────────────────────────────────────────────────────────────
   const [loading, setLoading] = useState(false);
   const [addedCount, setAddedCount] = useState(0);
   const [groupId, setGroupId] = useState<string | undefined>(undefined);
   const modelNameRef = useRef<HTMLInputElement>(null);
+
+  // A catalog hit names the config after the vendor display name, unless the user typed one.
+  useEffect(() => {
+    if (catalogEntry) {
+      setConfigName(prev => (prev.trim() ? prev : catalogEntry.displayName));
+    }
+  }, [catalogEntry]);
 
   const loadModels = useCallback(async (providerId: string) => {
     if (!providerId) {
@@ -367,6 +385,7 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
               placeholder={i18n('Enter Model Name')}
               className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
             />
+            <ModelCatalogHint state={catalogState} entry={catalogEntry} />
           </div>
 
           <div className="flex items-center justify-between">

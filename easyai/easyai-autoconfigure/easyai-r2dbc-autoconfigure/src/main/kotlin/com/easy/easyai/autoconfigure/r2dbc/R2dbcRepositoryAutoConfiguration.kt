@@ -25,6 +25,7 @@ import com.easy.easyai.core.tool.ToolFactory
 import com.easy.easyai.repository.agent.R2dbcAgentStore
 import com.easy.easyai.repository.auth.R2dbcRefreshTokenStore
 import com.easy.easyai.repository.command.R2dbcAsyncUserCommandStore
+import com.easy.easyai.repository.config.R2dbcModelCatalogStore
 import com.easy.easyai.repository.config.R2dbcModelConfigGroupStore
 import com.easy.easyai.repository.config.R2dbcModelConfigStore
 import com.easy.easyai.repository.database.DatabaseMigration
@@ -285,6 +286,14 @@ class R2dbcRepositoryAutoConfiguration(
     @ConditionalOnMissingBean(ModelConfigGroupStore::class)
     fun modelConfigGroupStore(initializer: R2dbcDatabaseInitializer): ModelConfigGroupStore {
         return R2dbcModelConfigGroupStore(
+            db = initializer.getDatabase()
+        )
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(ModelCatalogStore::class)
+    fun modelCatalogStore(initializer: R2dbcDatabaseInitializer): ModelCatalogStore {
+        return R2dbcModelCatalogStore(
             db = initializer.getDatabase()
         )
     }
