@@ -33,7 +33,7 @@ function isUserQuestion(message: Message): message is UserMessageType {
   );
 }
 
-function extractQuestions(messages: Message[]): QuestionMark[] {
+export function extractQuestionMarks(messages: Message[]): QuestionMark[] {
   const marks: QuestionMark[] = [];
   messages.forEach((message, index) => {
     if (!isUserQuestion(message)) return;
@@ -51,7 +51,7 @@ function extractQuestions(messages: Message[]): QuestionMark[] {
 }
 
 export const QuestionNavigator: React.FC<QuestionNavigatorProps> = ({ messages, containerRef }) => {
-  const questions = useMemo(() => extractQuestions(messages), [messages]);
+  const questions = useMemo(() => extractQuestionMarks(messages), [messages]);
 
   // The dash geometry is derived from the viewport, so it has to be recomputed on resize — keyed on
   // the question count alone it would keep the old layout after the window changes shape.
