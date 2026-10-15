@@ -6,6 +6,13 @@
       "description": "Whether the console offers project selection. When false the UI hides the project picker and every chat runs in a per-session temporary workspace; the API still accepts an explicit projectId.",
       "sourceType": "com.easy.easyai.web.setup.SetupController",
       "defaultValue": true
+    },
+    {
+      "name": "easyai.web.console.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the console bundle's HTTP policy applies: immutable caching for the hashed /assets/** tree, plus a Content-Type whitelist for Netty response compression that deliberately leaves text/event-stream uncompressed. Set false in a backend that serves no console.",
+      "sourceType": "com.easy.easyai.autoconfigure.web.ConsoleResourcesAutoConfiguration",
+      "defaultValue": true
     }
   ]
 }

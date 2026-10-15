@@ -2,7 +2,9 @@ import React from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { MobileTabBar } from './components/MobileTabBar';
 import { ConnectionBanner } from './components/ConnectionBanner';
+import { AppUpdateDialog } from './components/AppUpdateDialog';
 import { useKeyboardInset } from './hooks/useKeyboardInset';
+import { useAppUpdate } from '@/hooks/useAppUpdate';
 
 /** Routes that own the whole viewport: they bring their own header and must lose the tab bar. */
 const CHROMELESS_PREFIXES = ['/tool', '/artifact'];
@@ -19,6 +21,8 @@ const CHROMELESS_PREFIXES = ['/tool', '/artifact'];
 export const MobileAppLayout: React.FC = () => {
   const location = useLocation();
   const keyboardInset = useKeyboardInset();
+  // In the layout so the prompt also covers the chromeless pages, which own the whole viewport.
+  const { updateAvailable, dismiss } = useAppUpdate();
 
   const chromeless = CHROMELESS_PREFIXES.some((prefix) => location.pathname.startsWith(prefix));
   const keyboardOpen = keyboardInset > 0;
@@ -33,6 +37,7 @@ export const MobileAppLayout: React.FC = () => {
         <Outlet />
       </main>
       {!chromeless && !keyboardOpen && <MobileTabBar />}
+      {updateAvailable && <AppUpdateDialog onDismiss={dismiss} />}
     </div>
   );
 };

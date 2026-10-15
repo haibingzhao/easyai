@@ -9,6 +9,7 @@ WebFlux auto-configuration: SSE endpoints, reactive beans, web properties.
 ```
 easyai-web-autoconfigure/
 ├── WebAutoConfiguration    # WebFlux/SSE bean wiring
+├── ConsoleResourcesAutoConfiguration # HTTP policy for the console bundle in classpath:/static
 └── WebProperties           # @ConfigurationProperties("easyai.web.*")
 ```
 
@@ -17,6 +18,7 @@ easyai-web-autoconfigure/
 |------|----------|-------|
 | Web beans | `WebAutoConfiguration` | WebFlux + SSE setup |
 | Properties | `WebProperties` | `easyai.web.*` config prefix |
+| Console bundle serving | `ConsoleResourcesAutoConfiguration` | `/assets/**` immutable caching + compression whitelist; `easyai.web.console.enabled=false` turns it off |
 
 ## CONVENTIONS
 - Follows parent `easyai-autoconfigure/AGENTS.md` patterns

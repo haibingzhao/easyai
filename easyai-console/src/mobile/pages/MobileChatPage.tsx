@@ -15,6 +15,7 @@ import { useDisplaySessions } from '@/hooks/useDisplaySessions';
 import { useChatBootstrap } from '@/hooks/useChatBootstrap';
 import { useMessageAutoScroll } from '@/hooks/useMessageAutoScroll';
 import { useSessionRecovery } from '@/hooks/useSessionRecovery';
+import { useVisibilityReconnect } from '@/hooks/useVisibilityReconnect';
 import { switchToSession } from '@/services/session-switch';
 import { unrevert } from '@/services/checkpoint-service';
 import { i18n } from '@/utils/i18n';
@@ -25,7 +26,6 @@ import { MobileSheet } from '../components/MobileSheet';
 import { TasksSheet } from '../components/TasksSheet';
 import { MessageActionSheet } from '../components/MessageActionSheet';
 import { useKeyboardInset } from '../hooks/useKeyboardInset';
-import { useVisibilityReconnect } from '../hooks/useVisibilityReconnect';
 import { useLongPress } from '../hooks/useLongPress';
 import { useMobileUiStore } from '../stores/mobile-ui-store';
 
