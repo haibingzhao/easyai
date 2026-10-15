@@ -291,6 +291,28 @@ object Tables {
     }
 
     /**
+     * Global model catalog: vendor-published facts (capabilities, token limits, pricing, description)
+     * keyed by the API model id, used to prefill the add-model form and for future cost-aware model
+     * selection. Shared across users — no user_id partition; rows are written only by catalog
+     * refreshes (see `source`), and rows upstream retired are intentionally kept.
+     */
+    object ModelCatalogTable : Table("model_catalog") {
+        val modelId = varchar("model_id", 255)
+        val vendor = varchar("vendor", 64)
+        val displayName = varchar("display_name", 255)
+        val description = text("description").nullable()
+        val capabilities = text("capabilities").nullable()       // JSON CatalogCapabilities
+        val defaultOptions = text("default_options").nullable()  // JSON CatalogOptions
+        val pricing = text("pricing").nullable()                 // JSON ModelPricing
+        val catalogSource = varchar("source", 64)
+        val rawPayload = text("raw_payload").nullable()          // vendor item JSON as fetched
+        val createdAt = long("created_at")
+        val updatedAt = long("updated_at")
+
+        override val primaryKey = PrimaryKey(modelId)
+    }
+
+    /**
      * Todo items for session task tracking.
      * position is auto-maintained (equals list index).
      * agentRunId isolates todos per sub-agent invocation; null means the main agent's session-level todos.

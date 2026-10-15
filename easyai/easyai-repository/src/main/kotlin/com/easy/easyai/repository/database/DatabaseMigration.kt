@@ -46,6 +46,7 @@ class DatabaseMigration(
                 Tables.Message,
                 Tables.ModelConfigGroupTable,
                 Tables.ModelProviderConfigTable,
+                Tables.ModelCatalogTable,
                 Tables.TodoTable,
                 Tables.PermissionRuleTable,
                 Tables.McpServerConfigTable,

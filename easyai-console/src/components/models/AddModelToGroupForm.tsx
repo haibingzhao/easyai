@@ -1,10 +1,12 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { i18n } from '../../utils/i18n';
 import { TokenInput } from '../TokenInput';
 import { modelConfigService } from '@/services/model-config-service';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import { ToolCallingToggle } from '@/components/ui/ToolCallingToggle';
 import { MODEL_FIELD_HINTS, validateContextTokenBounds } from '@/constants/model-options';
+import { useModelCatalogPrefill } from './useModelCatalogPrefill';
+import { ModelCatalogHint } from './ModelCatalogHint';
 import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, ModelConfigGroup, SaveModelProviderConfigRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
 
 interface AddModelToGroupFormProps {
@@ -26,13 +28,29 @@ export const AddModelToGroupForm: React.FC<AddModelToGroupFormProps> = ({ group,
   const [selectedModelId, setSelectedModelId] = useState('');
   const [isCustomModel, setIsCustomModel] = useState(group.isCustom);
   const [customModelName, setCustomModelName] = useState('');
-  const [options, setOptions] = useState<ModelOptions>({});
   const [showOptions, setShowOptions] = useState(true);
-  const [capabilities, setCapabilities] = useState<ModelCapabilities>({});
+
+  // Catalog prefill owns options + capabilities so a cataloged model id fills them once.
+  const effectiveModelId = !group.isCustom && selectedModelId ? selectedModelId : customModelName;
+  const {
+    state: catalogState,
+    entry: catalogEntry,
+    options,
+    setOptions,
+    capabilities,
+    setCapabilities,
+  } = useModelCatalogPrefill(effectiveModelId);
 
   const [loading, setLoading] = useState(false);
   const [addedCount, setAddedCount] = useState(0);
   const configNameRef = useRef<HTMLInputElement>(null);
+
+  // A catalog hit names the config after the vendor display name, unless the user typed one.
+  useEffect(() => {
+    if (catalogEntry) {
+      setConfigName(prev => (prev.trim() ? prev : catalogEntry.displayName));
+    }
+  }, [catalogEntry]);
 
   const loadModels = useCallback(async (providerId: string) => {
     if (!providerId) {
@@ -213,6 +231,7 @@ export const AddModelToGroupForm: React.FC<AddModelToGroupFormProps> = ({ group,
             placeholder={i18n('Enter Model Name')}
             className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
           />
+          <ModelCatalogHint state={catalogState} entry={catalogEntry} />
         </div>
 
         <div className="flex items-center justify-between">

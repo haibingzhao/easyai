@@ -123,6 +123,55 @@ export interface SaveModelConfigGroupRequest {
   timeoutSeconds?: number;
 }
 
+// Model catalog types (global, vendor-published facts — Models page "Model Catalog" tab)
+
+/** Capability flags as published by the vendor; mirrors the backend CatalogCapabilities. */
+export interface CatalogCapabilities {
+  vision?: boolean;
+  structuredOutput?: StructuredOutputSupport;
+  supportsToolCalling?: boolean;
+  /** Whether the model supports reasoning/thinking; a selection hint, never auto-enabled on prefills. */
+  thinking?: boolean;
+}
+
+/** Suggested token limits from the vendor for a fresh model config. */
+export interface CatalogOptions {
+  maxTokens?: number;
+  maxContextTokens?: number;
+}
+
+/** Vendor pricing per one million tokens in `currency`, for cost-aware model selection. */
+export interface ModelPricing {
+  currency: string;
+  inputPerMTok?: number;
+  outputPerMTok?: number;
+  cachedInputPerMTok?: number;
+}
+
+export interface ModelCatalogEntry {
+  modelId: string;
+  vendor: string;
+  displayName: string;
+  description?: string;
+  capabilities?: CatalogCapabilities;
+  defaultOptions?: CatalogOptions;
+  pricing?: ModelPricing;
+  /** Which pipeline wrote the row: 'bailian-refresh' today. */
+  source: string;
+  /** Vendor item JSON verbatim (unmapped fields like maxInputTokens live here). */
+  rawPayload?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CatalogRefreshResult {
+  /** Failures ride a 200 with the upstream message — the gateway answers HTTP 200 even on business errors. */
+  success: boolean;
+  message: string;
+  inserted: number;
+  updated: number;
+}
+
 // Object-storage settings types (Settings → Storage)
 
 /**
