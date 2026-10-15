@@ -80,20 +80,26 @@ export const AuxModelsTab: React.FC = () => {
   }, [load]);
 
   // Mirror the Chat model picker: group options by group name, ungrouped configs last.
-  const grouped = useMemo(() => {
-    const byGroup = new Map<string, ModelProviderConfig[]>();
-    const ungrouped: ModelProviderConfig[] = [];
-    for (const config of models) {
-      if (config.groupId && groupNames[config.groupId]) {
-        const list = byGroup.get(config.groupId) || [];
-        list.push(config);
-        byGroup.set(config.groupId, list);
-      } else {
-        ungrouped.push(config);
+  const groupByGroupName = useCallback(
+    (list: ModelProviderConfig[]) => {
+      const byGroup = new Map<string, ModelProviderConfig[]>();
+      const ungrouped: ModelProviderConfig[] = [];
+      for (const config of list) {
+        if (config.groupId && groupNames[config.groupId]) {
+          const group = byGroup.get(config.groupId) || [];
+          group.push(config);
+          byGroup.set(config.groupId, group);
+        } else {
+          ungrouped.push(config);
+        }
       }
-    }
-    return { byGroup, ungrouped };
-  }, [models, groupNames]);
+      return { byGroup, ungrouped };
+    },
+    [groupNames],
+  );
+
+  const grouped = useMemo(() => groupByGroupName(models), [groupByGroupName, models]);
+  const groupedAsr = useMemo(() => groupByGroupName(asrModels), [groupByGroupName, asrModels]);
 
   const optionLabel = (config: ModelProviderConfig): string => {
     const displayName = config.name || config.modelName || config.modelId;
@@ -170,9 +176,20 @@ export const AuxModelsTab: React.FC = () => {
                 >
                   <option value="">{i18n(optInLabel ?? 'Follow chat model (default)')}</option>
                   {isAsrTask
-                    ? asrModels.map((m) => (
-                        <option key={m.id} value={m.id}>{`${m.name || m.modelName || m.modelId} (${m.modelId})`}</option>
-                      ))
+                    ? (
+                      <>
+                        {[...groupedAsr.byGroup.entries()].map(([groupId, groupModels]) => (
+                          <optgroup key={groupId} label={groupNames[groupId]}>
+                            {groupModels.map((m) => (
+                              <option key={m.id} value={m.id}>{`${m.name || m.modelName || m.modelId} (${m.modelId})`}</option>
+                            ))}
+                          </optgroup>
+                        ))}
+                        {groupedAsr.ungrouped.map((m) => (
+                          <option key={m.id} value={m.id}>{`${m.name || m.modelName || m.modelId} (${m.modelId})`}</option>
+                        ))}
+                      </>
+                    )
                     : (
                       <>
                         {[...grouped.byGroup.entries()].map(([groupId, groupModels]) => (

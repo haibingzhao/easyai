@@ -93,7 +93,7 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
               {durationText && (
                 <span>· {durationText}</span>
               )}
-              <span data-meta-time>· {callTime}</span>
+              <span>· {callTime}</span>
             </>
           )}
           {canFork && (
