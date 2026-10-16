@@ -4,7 +4,7 @@ import { encodeWav, downmixTo16k } from '@/utils/wav-encoder';
 import { readMessageEditorText } from '@/utils/attachment-utils';
 import { i18n } from '@/utils/i18n';
 
-export type VoicePhase = 'idle' | 'recording' | 'refining';
+export type VoicePhase = 'idle' | 'recording' | 'processing';
 
 /** Draft flush cadence: a fresh chunk of this many 16k samples is transcribed right away. */
 const DRAFT_SAMPLES = 32_000;
@@ -19,6 +19,13 @@ const SILENCE_MS = 600;
 /** Refine is pointless (and rude to the model) for fragments. */
 const REFINE_MIN_CHARS = 6;
 const REFINE_TIMEOUT_MS = 20_000;
+/**
+ * Upper bound on waiting for the final-sentence retranscription at stop. The draft
+ * text is already on screen, so this pass is only a correction — on a slow network
+ * it must not hold the composer hostage for seconds. Late results still land via the
+ * slot's conflict check.
+ */
+const FINALIZE_TIMEOUT_MS = 2_500;
 /** Context handed to the refine model, both sides. */
 const CONTEXT_WINDOW_CHARS = 2_000;
 
@@ -50,7 +57,7 @@ interface Session {
 
 interface UseVoiceInputOptions {
   editorRef: React.RefObject<HTMLDivElement>;
-  /** Whether the dictation-refine task model is configured; read live at stop time. */
+  /** Whether the dictation-refine task model is configured; read live at stop time to decide whether to offer polish. */
   isRefineEnabled: () => boolean;
   /** Re-sync the caller's editorValue state after every DOM write. */
   onEditorChanged: () => void;
@@ -59,7 +66,9 @@ interface UseVoiceInputOptions {
 
 /**
  * Chat-composer dictation: near-real-time draft transcription plus per-pause
- * whole-sentence retranscription, and one context-aware LLM rewrite at stop.
+ * whole-sentence retranscription. The context-aware LLM rewrite is manual — after
+ * a round ends the composer offers a polish action the user triggers on demand,
+ * so a slow network never blocks stopping.
  *
  * Text lands in `<span data-dict-slot>` elements appended to the editor end —
  * one slot per sentence, never character offsets — so sentence replacement,
@@ -72,6 +81,12 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
   // start() awaits getUserMedia/addModule before sessionRef exists — without this
   // guard a second click during that window creates a second, unstoppable session.
   const startingRef = useRef(false);
+  /** Manual polish in flight; drives the spinner on the polish action. */
+  const [refining, setRefining] = useState(false);
+  /** Whether to offer the manual polish action for the last completed round. */
+  const [canRefine, setCanRefine] = useState(false);
+  /** Slots of the last completed round — the region the manual polish rewrites. */
+  const lastRoundRef = useRef<Slot[]>([]);
 
   const teardown = useCallback((session: Session) => {
     session.stopped = true;
@@ -204,6 +219,8 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
     if (sessionRef.current || startingRef.current) return;
     const editor = editorRef.current;
     if (!editor) return;
+    // A new round supersedes the previous one's polish offer.
+    setCanRefine(false);
     startingRef.current = true;
     let stream: MediaStream;
     try {
@@ -244,11 +261,11 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
     }
   }, [editorRef, onError, onFrame, openSlot]);
 
-  /** Editor text strictly outside the current round's slot range, via scratch clones. */
-  const contextAround = useCallback((session: Session): { before: string; after: string } => {
+  /** Editor text strictly outside the given slot range, via scratch clones. */
+  const contextAround = useCallback((slots: Slot[]): { before: string; after: string } => {
     const editor = editorRef.current;
-    const first = session.slots[0]?.el;
-    const last = session.slots[session.slots.length - 1]?.el;
+    const first = slots[0]?.el;
+    const last = slots[slots.length - 1]?.el;
     if (!editor || !first || !last) return { before: '', after: '' };
     const head = document.createElement('div');
     const tail = document.createElement('div');
@@ -256,7 +273,7 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
     for (const node of Array.from(editor.childNodes)) {
       if (node === first) {
         // A single-slot round ends at `first`; there is no middle to skip.
-        walk = session.slots.length === 1 ? 'tail' : 'skip';
+        walk = slots.length === 1 ? 'tail' : 'skip';
         continue;
       }
       if (node === last) { walk = 'tail'; continue; }
@@ -272,6 +289,11 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
   const stopAndFinish = useCallback(async () => {
     const session = sessionRef.current;
     if (!session || session.stopped) return;
+    // Flip to the processing state the instant stop is pressed. The final-sentence
+    // transcription below is network-bound; leaving the UI in `recording` through it
+    // kept the dead stop button + waveform on screen with zero feedback, which read
+    // as a frozen tab.
+    setPhase('processing');
     // Release the mic first: every sample is already captured in buffers, and
     // awaiting in-flight transcriptions before teardown kept the tab in
     // recording state (and the worklet feeding frames) for no reason.
@@ -279,32 +301,62 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
     // closeSentence covers all audio since the last sentence boundary,
     // including whatever the draft window had not flushed yet.
     closeSentence(session, false);
-    await Promise.allSettled([...session.inFlight]);
+    // Bound the wait: the last-sentence correction is nice-to-have, the draft is
+    // already visible. On a bad network this would otherwise lock the composer for
+    // seconds; after the budget we proceed with the draft and let any late
+    // correction land in the background (its conflict check protects current text).
+    let finalizeTimer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.allSettled([...session.inFlight]),
+      new Promise<void>((resolve) => { finalizeTimer = setTimeout(resolve, FINALIZE_TIMEOUT_MS); }),
+    ]);
+    if (finalizeTimer) clearTimeout(finalizeTimer);
 
+    // Offer a manual polish of this round instead of blocking on an LLM rewrite —
+    // the composer is usable immediately, and the user decides whether to spend it.
+    lastRoundRef.current = session.slots;
     const roundText = session.slots.map((s) => s.el.textContent ?? '').join('');
-    if (isRefineEnabled() && roundText.trim().length >= REFINE_MIN_CHARS) {
-      setPhase('refining');
-      const { before, after } = contextAround(session);
-      try {
-        const refined = await Promise.race([
-          asrService.refineText(roundText, before, after),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('refine timeout')), REFINE_TIMEOUT_MS)),
-        ]);
-        // If the user edited or deleted the region meanwhile, keep their text.
-        const current = session.slots.map((s) => s.el.textContent ?? '').join('');
-        if (refined && current === roundText) {
-          session.slots.forEach((s, i) => {
-            if (!s.el.isConnected) editorRef.current?.appendChild(s.el);
-            s.el.textContent = i === 0 ? refined : '';
-          });
-          onEditorChanged();
-        }
-      } catch {
-        // raw transcription stands
-      }
-    }
+    if (isRefineEnabled() && roundText.trim().length >= REFINE_MIN_CHARS) setCanRefine(true);
     setPhase('idle');
-  }, [closeSentence, contextAround, editorRef, isRefineEnabled, onEditorChanged, teardown]);
+  }, [closeSentence, isRefineEnabled, teardown]);
+
+  /**
+   * Manual polish: LLM-rewrite the last dictation round in place, using surrounding
+   * editor text as context. Reads the slots' current text so edits made after stopping
+   * are honored; if the region changes during the call, the user's text wins.
+   */
+  const refine = useCallback(async () => {
+    if (refining) return;
+    const editor = editorRef.current;
+    const slots = lastRoundRef.current.filter((s) => s.el.isConnected);
+    if (!editor || slots.length === 0) { setCanRefine(false); return; }
+    const roundText = slots.map((s) => s.el.textContent ?? '').join('');
+    if (roundText.trim().length < REFINE_MIN_CHARS) return;
+    setRefining(true);
+    const { before, after } = contextAround(slots);
+    try {
+      const refined = await Promise.race([
+        asrService.refineText(roundText, before, after),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('refine timeout')), REFINE_TIMEOUT_MS)),
+      ]);
+      const current = slots.map((s) => s.el.textContent ?? '').join('');
+      if (refined && current === roundText) {
+        slots.forEach((s, i) => { s.el.textContent = i === 0 ? refined : ''; });
+        onEditorChanged();
+      }
+    } catch {
+      // raw transcription stands
+    } finally {
+      setRefining(false);
+      setCanRefine(false);
+    }
+  }, [contextAround, editorRef, onEditorChanged, refining]);
+
+  /** Drop the polish offer — used when the editor is cleared (sent or deleted). */
+  const dismissRefine = useCallback(() => {
+    setCanRefine(false);
+    lastRoundRef.current = [];
+  }, []);
 
   // Release the microphone if the composer unmounts mid-recording.
   useEffect(() => () => {
@@ -312,5 +364,5 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
     if (session) teardown(session);
   }, [teardown]);
 
-  return { phase, start, stopAndFinish, analyserRef };
+  return { phase, refining, canRefine, start, stopAndFinish, refine, dismissRefine, analyserRef };
 }

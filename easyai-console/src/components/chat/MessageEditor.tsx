@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Send, Square, Loader2, Paperclip, ShieldCheck, Clock, Mic, Plus } from 'lucide-react';
+import { Send, Square, Loader2, Paperclip, ShieldCheck, Clock, Mic, Plus, Sparkles } from 'lucide-react';
 import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { useSideAskStore } from '@/services/stores/side-ask-store';
@@ -666,6 +666,12 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
     onEditorChanged: syncEditorValue,
     onError: reportVoiceError,
   });
+  const dismissRefine = voice.dismissRefine;
+  // Any path that empties the composer (send, follow-up, manual delete) invalidates
+  // the last dictation round, so retract the polish offer without wiring each caller.
+  useEffect(() => {
+    if (editorValue.trim() === '') dismissRefine();
+  }, [editorValue, dismissRefine]);
 
   /** Wrap handleFiles to insert inline image chips into the editor after processing. */
   const handleFilesWithChips = useCallback(async (files: File[]) => {
@@ -1224,10 +1230,22 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
     </button>
   );
 
-  const sendCluster = voice.phase === 'refining' ? (
+  /** Manual polish of the last dictation round; offered only right after voice input ends. */
+  const refineButton = voice.canRefine && voice.phase === 'idle' && !isStreaming && !isSubmitting ? (
+    <button
+      onClick={() => { void voice.refine(); }}
+      disabled={voice.refining}
+      className={isMobile ? 'mobile-hit rounded-md text-muted-foreground disabled:opacity-40' : 'p-1.5 rounded-md text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40'}
+      title={i18n('Polish dictation')}
+    >
+      {voice.refining ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+    </button>
+  ) : null;
+
+  const sendCluster = voice.phase === 'processing' ? (
     <button
       className="p-1.5 rounded-md bg-primary text-primary-foreground opacity-60"
-      title={i18n('Polishing your dictation, please wait…')}
+      title={i18n('Finishing transcription…')}
       disabled
     >
       <Loader2 className="w-4 h-4 animate-spin" />
@@ -1295,10 +1313,10 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
       {commandError && <div role="alert" className="text-xs text-destructive">{commandError}</div>}
       {cancelNotice && <div role="alert" className="text-xs text-destructive">{cancelNotice.text}</div>}
       {voiceNotice && <div role="alert" className="text-xs text-destructive">{voiceNotice}</div>}
-      {voice.phase === 'refining' && (
+      {(voice.phase === 'processing' || voice.refining) && (
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Loader2 className="w-3 h-3 animate-spin" />
-          {i18n('Polishing your dictation, please wait…')}
+          {voice.refining ? i18n('Polishing your dictation, please wait…') : i18n('Finishing transcription…')}
         </div>
       )}
       {/* Queued messages panel */}
@@ -1398,7 +1416,7 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
             minHeight: isMobile ? 'calc(1.5em + 1rem)' : 'calc(3 * 1.5em + 1rem)',
             maxHeight: isMobile ? 'calc(5 * 1.5em + 1rem)' : 'calc(7 * 1.5em + 1rem)',
           }}
-          contentEditable={!isSubmitting && !isAwaitingAskQuestion() && !isAwaitingPermission() && voice.phase !== 'refining'}
+          contentEditable={!isSubmitting && !isAwaitingAskQuestion() && !isAwaitingPermission() && voice.phase !== 'processing'}
         />
 
         {isMobile &&
@@ -1443,8 +1461,8 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
         </div>
         <div className="flex items-center gap-0.5">
           {isMobile
-            ? (voice.phase === 'recording' ? null : sendCluster)
-            : (voice.phase === 'recording' ? voiceRecordingControls : (<>{micButton}{sendCluster}</>))}
+            ? (voice.phase === 'recording' ? null : (<>{refineButton}{sendCluster}</>))
+            : (voice.phase === 'recording' ? voiceRecordingControls : (<>{micButton}{refineButton}{sendCluster}</>))}
         </div>
       </div>
 
