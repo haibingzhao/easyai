@@ -48,7 +48,7 @@ internal class MemorySearchTool(
         val timeRangeEnd = parseEpochSeconds(args["timeRangeEnd"])
         val owner = MemoryOwnerContext(agentContext.userId, agentContext.projectPath)
 
-        val results = mutableListOf<String>()
+        val hits = mutableListOf<Pair<MemoryScope, MemoryEntry>>()
         for (scope in listOf(MemoryScope.PROJECT, MemoryScope.GLOBAL)) {
             val entries = store.search(query, scope, owner, timeRangeStart = timeRangeStart, timeRangeEnd = timeRangeEnd)
             entries.forEachIndexed { index, entry ->
@@ -60,16 +60,41 @@ internal class MemorySearchTool(
                     runCatching { store.touch(entry.path, scope, owner) }
                         .onFailure { logger.debug("Failed to record access for memory: {}", entry.path, it) }
                 }
-                results.add(formatHit(scope, entry))
+                hits.add(scope to entry)
             }
         }
 
-        val text = if (results.isEmpty()) {
+        val text = if (hits.isEmpty()) {
             "No memories found matching '$query'."
         } else {
-            "Found ${results.size} memories:\n\n${results.joinToString("\n\n")}"
+            "Found ${hits.size} memories:\n\n${hits.joinToString("\n\n") { (scope, entry) -> formatHit(scope, entry) }}"
         }
-        return ToolResult(content = listOf(TextContent(text)))
+        return ToolResult(
+            content = listOf(TextContent(text)),
+            details = if (hits.isEmpty()) emptyMap() else mapOf("hits" to hits.map { (scope, entry) -> hitDetails(scope, entry) })
+        )
+    }
+
+    /**
+     * The same facts the prose carries, addressed to the renderer. [formatHit]'s text is what the
+     * model reads and may be reworded or localized at will; this map is the UI's contract, so the
+     * frontend never has to parse display text back into data. Freshness arrives as a date plus a
+     * day count rather than `"2026-01-15 (3 days ago)"` so a label can be composed in the viewer's
+     * own language.
+     */
+    private fun hitDetails(scope: MemoryScope, entry: MemoryEntry): Map<String, Any?> {
+        val updated = entry.updated
+        return mapOf(
+            "scope" to scope.name.lowercase(),
+            "path" to entry.path,
+            "name" to entry.name,
+            "description" to entry.description,
+            "level" to entry.level,
+            "updated" to updated?.toString(),
+            "daysSinceUpdate" to updated?.let { ChronoUnit.DAYS.between(it, LocalDate.now()) },
+            "maturity" to entry.maturity?.apiName,
+            "contentPreview" to entry.content.take(CONTENT_PREVIEW_LIMIT)
+        )
     }
 
     /**

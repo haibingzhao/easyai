@@ -77,7 +77,7 @@ export interface ChatStateShape {
   startToolBlock: (id: string, toolName: string, args?: Record<string, unknown>) => void;
   appendToolArgs: (id: string, delta: string) => void;
   appendToolOutput: (id: string, output: string) => void;
-  commitToolResult: (id: string, result: string | undefined, isError: boolean, exitCode?: number | null, mimeType?: string | null, truncated?: boolean, usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }, durationMs?: number) => void;
+  commitToolResult: (id: string, result: string | undefined, isError: boolean, exitCode?: number | null, mimeType?: string | null, truncated?: boolean, usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }, durationMs?: number, details?: Record<string, unknown>) => void;
   addMessage: (message: Message) => void;
   setLastUserMessageId: (messageId: string) => void;
   commitStreamingMessage: () => void;
@@ -478,9 +478,9 @@ export function handleChatEvent(
       break;
     }
     case 'background_task': {
-      // Background task lifecycle events (launched, progress, completed, failed, cancelled).
-      // Store in a map keyed by taskId so the UI can update task cards in real-time.
       const bgEvent = event as BackgroundTaskEvent;
+      // run_background lifecycle events (launched, progress, completed, failed, cancelled): store in
+      // a map keyed by taskId so the tool-call-anchored task cards update in real time.
       const tasks = { ...get().backgroundTasks };
       tasks[bgEvent.taskId] = bgEvent;
       set({ backgroundTasks: tasks });
@@ -560,6 +560,7 @@ function handleToolExecutionEnd(
       toolName: toolCall?.toolName ?? event.toolName,
       result: rawResult,
       contentBlocks,
+      details: (event as ToolExecutionEndEvent).details,
       isError: event.isError,
       exitCode: event.exitCode,
       mimeType: event.mimeType,
@@ -604,7 +605,7 @@ function handleToolExecutionEnd(
   // Extract toolUsage before commitToolResult so we can pass it
   const toolEndEvent = event as ToolExecutionEndEvent;
   const toolUsage = toolEndEvent.toolUsage;
-  state.commitToolResult(event.toolCallId, event.result, event.isError, event.exitCode, event.mimeType, event.truncated, toolUsage, toolUsage?.durationMs);
+  state.commitToolResult(event.toolCallId, event.result, event.isError, event.exitCode, event.mimeType, event.truncated, toolUsage, toolUsage?.durationMs, toolEndEvent.details);
   // Handle sub-agent completion: mark as finished
   const afterCommitBlocks = [...get().streamingBlocks];
   const toolIdx = afterCommitBlocks.findIndex(b => b.type === 'tool' && b.toolCall.id === event.toolCallId);

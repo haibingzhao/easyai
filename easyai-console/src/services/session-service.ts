@@ -101,6 +101,8 @@ export interface ToolResultContentBlock {
   mimeType?: string;
   isError?: boolean;
   truncated?: boolean;
+  /** Structured render payload the tool attached for the UI (never model input). */
+  details?: Record<string, unknown>;
   /** Token usage from this tool execution (e.g., sub-agent LLM calls) */
   usage?: UsageSnapshot;
 }

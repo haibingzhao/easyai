@@ -32,7 +32,9 @@ data class ToolCallResult(
     val usage: Usage? = null,
     /** True when the tool declared an identical repeat call as expected work, not a stuck loop. */
     @get:JsonIgnore
-    val repetitionExpected: Boolean = false
+    val repetitionExpected: Boolean = false,
+    /** Structured render payload from [ToolResult.details], carried to the transcript and the UI. */
+    val details: Map<String, Any?> = emptyMap()
 )
 
 interface ToolExecutionEngine {
@@ -191,7 +193,8 @@ class DefaultToolExecutionEngine: ToolExecutionEngine {
             mimeType = guardedResult.content.filterIsInstance<ToolResultContent>().firstOrNull()?.mimeType ?: "text/plain",
             isError = guardedResult.isError,
             usage = toolUsage,
-            repetitionExpected = guardedResult.repetitionExpected
+            repetitionExpected = guardedResult.repetitionExpected,
+            details = guardedResult.details
         )
     }
 

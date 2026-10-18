@@ -16,9 +16,30 @@ data class MemoryOwnerContext(
 )
 
 /**
+ * Archive-related fields applied to an existing entry without rewriting its content.
+ *
+ * Only non-null fields are written by [MemoryStore.archive]; content and vectors are untouched,
+ * so archiving never re-indexes.
+ *
+ * @property archived mark the entry as history (excluded from normal retrieval)
+ * @property level consolidation depth to set
+ * @property refs consolidated-entry source docIds
+ * @property mergedInto docId of the consolidated entry that absorbed this source
+ */
+data class MemoryArchiveUpdate(
+    val archived: Boolean? = null,
+    val level: Int? = null,
+    val refs: List<String>? = null,
+    val mergedInto: String? = null
+)
+
+/**
  * Storage interface for the memory system.
  *
  * All operations are scope-aware: callers specify [MemoryScope.GLOBAL] or [MemoryScope.PROJECT].
+ *
+ * Retrieval operations ([loadAll], [search], [list]) only see **active** entries; archived
+ * entries are reachable exclusively through [findByIds].
  *
  * Implementations must be thread-safe for concurrent read access.
  */
@@ -72,6 +93,44 @@ interface MemoryStore {
     suspend fun write(entry: MemoryEntry, scope: MemoryScope, owner: MemoryOwnerContext = MemoryOwnerContext()): Path
 
     /**
+     * Write (create or update) a memory entry and return it with backend-populated identity
+     * (at minimum [MemoryEntry.id], the stable docId used by consolidation references).
+     *
+     * The default implementation delegates to [write] and only enriches [MemoryEntry.path], for
+     * backends without document ids.
+     */
+    suspend fun writeEntry(
+        entry: MemoryEntry,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext = MemoryOwnerContext()
+    ): MemoryEntry = entry.copy(path = write(entry, scope, owner).toString())
+
+    /**
+     * Read entries by backend document id, **including archived ones**. Missing ids are simply
+     * absent from the result. This is the only retrieval path that exposes history entries.
+     *
+     * The default returns an empty list.
+     */
+    suspend fun findByIds(
+        docIds: List<String>,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext = MemoryOwnerContext()
+    ): List<MemoryEntry> = emptyList()
+
+    /**
+     * Apply archive metadata to existing entries without rewriting content or re-indexing.
+     * This is how consolidated sources are marked as history.
+     *
+     * @return number of entries actually updated.
+     */
+    suspend fun archive(
+        docIds: List<String>,
+        update: MemoryArchiveUpdate,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext = MemoryOwnerContext()
+    ): Int = 0
+
+    /**
      * Read a specific memory entry by relative path.
      *
      * @param path Relative path from memory root, e.g. "feedback/testing.md".
@@ -112,6 +171,19 @@ interface MemoryStore {
         owner: MemoryOwnerContext = MemoryOwnerContext(),
         type: MemoryType? = null
     ): List<MemoryEntry>
+
+    /**
+     * Count active entries per [MemoryType] for the given scope, without materializing any body.
+     *
+     * A scheduler that only compares counts against thresholds should use this instead of [list]:
+     * a listing may fetch the full stored document per entry, and repeating that on every tick reads
+     * the entire store to answer a question the backend can count. Implementations that can count at
+     * the source override this; the default measures a full listing, which is correct but costly.
+     */
+    suspend fun countActiveByType(
+        scope: MemoryScope,
+        owner: MemoryOwnerContext = MemoryOwnerContext()
+    ): Map<MemoryType, Int> = list(scope, owner).groupBy { it.type }.mapValues { it.value.size }
 
     /**
      * Read a specific memory entry by relative path, fully materialized.
@@ -172,13 +244,18 @@ interface MemoryStore {
      * @param owner Ownership context for backend isolation.
      * @param type Known category of the entry; null searches across all types of the
      *   active domain.
+     * @param includeArchived Also resolve an entry absorbed by a consolidation run. Callers that
+     *   write must set it: a history document lives at the same key, so a name that only matches it
+     *   would otherwise be treated as free and the write would revive it as an active duplicate of
+     *   the merged entry above it.
      * @return The entry if found, or null.
      */
     suspend fun findByName(
         name: String,
         scope: MemoryScope,
         owner: MemoryOwnerContext = MemoryOwnerContext(),
-        type: MemoryType? = null
+        type: MemoryType? = null,
+        includeArchived: Boolean = false
     ): MemoryEntry?
 
     /**

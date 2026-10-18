@@ -12,12 +12,14 @@ const TASK_LABEL: Record<AuxModelTaskKey, string> = {
   skill_selection: 'Skill Selection Model',
   asr: 'ASR Model',
   dictation_refine: 'Dictation Refine Model',
+  memory_curation: 'Memory Curation Model',
 };
 
 /** Tasks whose blank choice disables a feature outright, instead of following the chat model. */
 const OPT_IN_TASKS: Partial<Record<AuxModelTaskKey, string>> = {
   asr: 'Not configured (voice input off)',
   dictation_refine: 'Not configured (no rewrite)',
+  memory_curation: 'Not configured (consolidation off)',
 };
 
 /** Extra hint rendered under a specific task's picker. */
@@ -28,6 +30,8 @@ const TASK_HINT: Partial<Record<AuxModelTaskKey, string>> = {
     'Powers the microphone button in the chat composer. The referenced model must expose an OpenAI-compatible audio transcriptions endpoint.',
   dictation_refine:
     'Rewrites a finished dictation round against its surrounding context to fix homophones and punctuation. Leave unset to keep raw transcriptions.',
+  memory_curation:
+    'Required for memory consolidation. The model merges related memories into higher-level entries; absorbed sources are archived, never deleted. Leave unset to keep consolidation disabled.',
 };
 
 const SOURCE_BADGE: Record<AuxModelConfig['effectiveSource'], { label: string; tone: string }> = {

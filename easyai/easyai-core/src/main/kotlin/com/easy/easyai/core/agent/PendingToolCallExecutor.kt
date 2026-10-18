@@ -163,7 +163,8 @@ internal class PendingToolCallExecutor(
                         exitCode = r.exitCode,
                         mimeType = r.mimeType,
                         isSkipped = r.isSkipped,
-                        usage = r.usage
+                        usage = r.usage,
+                        details = r.details
                     )
                     toolResultEntries.add(entry)
                 }

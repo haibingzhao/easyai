@@ -49,6 +49,7 @@ tools/
 - Use `CollapsibleSection.tsx` for expandable details
 - Icons from `icons.tsx`, not inline Lucide imports
 - `parsers.ts` handles arg parsing — keep UI components pure
+- Structured tool output comes from `result.details`: set by the tool as `ToolResult.details`, carried on the `tool_execution_end` SSE event and on the persisted `toolResult` content block. Text output is prose addressed to the model, so render it only as a fallback (no `details` → show the text).
 - TypeScript strict: no `any` types
 
 ## ANTI-PATTERNS
@@ -56,3 +57,4 @@ tools/
 - No inline imports — standard top-level imports only
 - Don't add switch statements in router — use component map pattern
 - Don't duplicate parsing logic — use `parsers.ts`
+- Never regex a tool's text output back into data. Wording changes silently and punctuation inside a description breaks the split; ask the tool to send `details` instead.

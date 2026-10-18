@@ -2,6 +2,7 @@ package com.easy.easyai.tools.memory
 
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.domain.DomainCatalog
+import com.easy.easyai.core.memory.MemoryContentLimits
 import com.easy.easyai.core.memory.MemoryEntry
 import com.easy.easyai.core.memory.MemoryMaturity
 import com.easy.easyai.core.memory.MemoryOwnerContext
@@ -143,7 +144,13 @@ internal class MemoryWriteTool(
         val validTypes = MemoryType.entriesFor(DomainCatalog.activeDomain)
 
         // Report every violated parameter at once so the caller can fix them all in a single retry.
-        if (type.isNullOrBlank() || description.isNullOrBlank() || content.isNullOrBlank() || !isValidMemoryName(name)) {
+        val contentLength = content?.length ?: 0
+        val descriptionLength = description?.length ?: 0
+        val contentTooLong = contentLength > MemoryContentLimits.CONTENT_HARD_CAP_CHARS
+        val descriptionTooLong = descriptionLength > MemoryContentLimits.DESCRIPTION_CAP_CHARS
+        if (type.isNullOrBlank() || description.isNullOrBlank() || content.isNullOrBlank() ||
+            !isValidMemoryName(name) || contentTooLong || descriptionTooLong
+        ) {
             val problems = mutableListOf<String>()
             if (type.isNullOrBlank()) problems.add("- 'type' is required for add; valid values: ${validTypes.joinToString(", ") { it.dirName }}")
             if (description.isNullOrBlank()) problems.add("- 'description' is required for add")
@@ -152,6 +159,17 @@ internal class MemoryWriteTool(
                 problems.add(
                     "- 'name' must be a bare file name without directory separators ('/') and without '.md'; " +
                         "the category belongs in 'type', not in the name"
+                )
+            }
+            if (contentTooLong) {
+                problems.add(
+                    "- 'content' is $contentLength characters, over the ${MemoryContentLimits.CONTENT_HARD_CAP_CHARS} limit; " +
+                        "distill it to ~${MemoryContentLimits.CONTENT_TARGET_CHARS} or split the material into multiple focused entries"
+                )
+            }
+            if (descriptionTooLong) {
+                problems.add(
+                    "- 'description' must be a one-line summary of at most ${MemoryContentLimits.DESCRIPTION_CAP_CHARS} characters"
                 )
             }
             return errorResult("Error: invalid parameters for add:\n${problems.joinToString("\n")}")
@@ -208,6 +226,13 @@ internal class MemoryWriteTool(
             }
         } else {
             content
+        }
+
+        if (updatedContent.length > MemoryContentLimits.CONTENT_HARD_CAP_CHARS) {
+            return errorResult(
+                "Error: resulting 'content' would be ${updatedContent.length} characters, over the " +
+                    "${MemoryContentLimits.CONTENT_HARD_CAP_CHARS} limit; distill the entry or split it instead."
+            )
         }
 
         val entry = existing.copy(

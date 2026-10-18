@@ -1,7 +1,10 @@
 package com.easy.easyai.autoconfigure.rag
 
+import com.easy.easyai.core.memory.MemoryConsolidationAgent
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.skill.SkillStore
+import com.easy.easyai.rag.RagArchiveResult
+import com.easy.easyai.rag.RagArchiveUpdate
 import com.easy.easyai.rag.RagChunk
 import com.easy.easyai.rag.RagClient
 import com.easy.easyai.rag.RagDocInfo
@@ -103,6 +106,22 @@ class RagAutoConfigurationTest {
     }
 
     @Test
+    fun `memory consolidation beans exist by default even without session infrastructure`() {
+        contextRunner.run { context ->
+            assertEquals(1, context.getBeanNamesForType(MemoryConsolidationAgent::class.java).size)
+        }
+    }
+
+    @Test
+    fun `memory consolidation kill switch removes the agent`() {
+        contextRunner
+            .withPropertyValues("easyai.memory.consolidation.available=false")
+            .run { context ->
+                assertEquals(0, context.getBeanNamesForType(MemoryConsolidationAgent::class.java).size)
+            }
+    }
+
+    @Test
     fun `the skill flag alone cannot conjure a store without the RAG client`() {
         contextRunner
             .withPropertyValues("easyai.rag.enabled=false", "easyai.skills.rag.enabled=true")
@@ -116,13 +135,28 @@ class RagAutoConfigurationTest {
 private class FakeRagClient : RagClient {
     override suspend fun isEnabled(): Boolean = true
     override suspend fun healthCheck(): Boolean = true
-    override suspend fun upsert(doc: RagDocument, bizId: String?, awaitIndexing: Boolean): RagUpsertResult =
+    override suspend fun upsert(
+        doc: RagDocument,
+        bizId: String?,
+        awaitIndexing: Boolean
+    ): RagUpsertResult =
         RagUpsertResult(docId = "fake", indexed = true)
     override suspend fun delete(externalId: String, bizId: String?): Boolean = true
     override suspend fun batchDelete(docIds: List<String>, bizId: String?): Int = 0
     override suspend fun readByExternalId(externalId: String, bizId: String?): RagDocumentDetail? = null
     override suspend fun inspectByExternalId(externalId: String, bizId: String?): RagDocumentDetail? = null
-    override suspend fun list(pathPrefix: String, bizId: String?): List<RagDocInfo> = emptyList()
+    override suspend fun list(pathPrefix: String, bizId: String?, excludeArchived: Boolean): List<RagDocInfo> =
+        emptyList()
+
+    override suspend fun readByDocIds(docIds: List<String>, bizId: String?): List<RagDocumentDetail> =
+        emptyList()
+
+    override suspend fun archiveDocIds(
+        docIds: List<String>,
+        update: RagArchiveUpdate,
+        bizId: String?
+    ): RagArchiveResult = RagArchiveResult(updated = docIds.size)
+
     override suspend fun search(
         query: String,
         filters: Map<String, String>,
@@ -130,7 +164,8 @@ private class FakeRagClient : RagClient {
         timeRangeStart: Long?,
         timeRangeEnd: Long?,
         bizId: String?,
-        bizIds: List<String>?
+        bizIds: List<String>?,
+        excludeArchived: Boolean
     ): List<RagChunk> = emptyList()
 
     override suspend fun getWorkspaceConfig(workspace: String): RagWorkspaceConfig? = null

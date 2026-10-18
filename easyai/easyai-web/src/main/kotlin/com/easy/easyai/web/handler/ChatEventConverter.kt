@@ -105,7 +105,8 @@ object ChatEventConverter {
                     subAgentToolCallId = event.subAgentToolCallId,
                     subAgentName = event.subAgentName,
                     toolUsage = event.usage?.toUsageInfo(),
-                    tracksFileChanges = event.tracksFileChanges
+                    tracksFileChanges = event.tracksFileChanges,
+                    details = event.result.details.takeIf { it.isNotEmpty() }
                 )
             )
         }

@@ -20,12 +20,14 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import java.nio.file.Path
 import java.time.LocalDate
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Tests [MemorySearchTool] rendering: each hit must expose the freshness tail the memory
- * governance rules in the system prompt rely on, while the header format the console parses
- * with /Found (\d+) memories/ stays intact.
+ * Tests [MemorySearchTool] output: every hit must carry the freshness tail the memory governance
+ * rules in the system prompt rely on, and the same facts as a structured payload the console renders
+ * from. The prose has no contract — the UI never parses it — so the payload is what the tests pin.
  */
 class MemorySearchToolTest {
 
@@ -57,16 +59,20 @@ class MemorySearchToolTest {
     private fun output(result: ToolResult): String =
         result.content.filterIsInstance<TextContent>().joinToString("") { it.text }
 
-    private fun executeSearch(): String = runBlocking {
-        output(
-            tool.execute(
-                agentContext = AgentContext(agentId = "test", userId = "u", projectPath = Path.of("/proj")),
-                toolCallId = "call-test",
-                args = mapOf("query" to "frp"),
-                coroutineScope = CoroutineScope(Job())
-            )
+    private fun execute(): ToolResult = runBlocking {
+        tool.execute(
+            agentContext = AgentContext(agentId = "test", userId = "u", projectPath = Path.of("/proj")),
+            toolCallId = "call-test",
+            args = mapOf("query" to "frp"),
+            coroutineScope = CoroutineScope(Job())
         )
     }
+
+    private fun executeSearch(): String = output(execute())
+
+    @Suppress("UNCHECKED_CAST")
+    private fun detailHits(result: ToolResult): List<Map<String, Any?>> =
+        result.details["hits"] as List<Map<String, Any?>>
 
     @Nested
     inner class `freshness on every hit` {
@@ -98,6 +104,46 @@ class MemorySearchToolTest {
             val text = executeSearch()
 
             assertTrue(Regex("Found (\\d+) memories").containsMatchIn(text), text)
+        }
+    }
+
+    @Nested
+    inner class `structured render payload` {
+
+        @Test
+        fun `hits carry every field the card renders`() {
+            val updated = LocalDate.now().minusDays(3)
+            stubProjectHits(listOf(entry("frp-setup", updated, MemoryMaturity.MEDIUM)))
+
+            val hit = detailHits(execute()).single()
+
+            assertEquals("project", hit["scope"])
+            assertEquals("experience_lessons/frp-setup.md", hit["path"])
+            assertEquals("frp-setup", hit["name"])
+            assertEquals("description of frp-setup", hit["description"])
+            assertEquals(updated.toString(), hit["updated"])
+            assertEquals(3L, hit["daysSinceUpdate"])
+            assertEquals("medium", hit["maturity"])
+            assertEquals(0, hit["level"])
+            assertEquals("body of frp-setup", hit["contentPreview"])
+        }
+
+        @Test
+        fun `an unknown timestamp stays null`() {
+            stubProjectHits(listOf(entry("mystery", updated = null, maturity = null)))
+
+            val hit = detailHits(execute()).single()
+
+            assertNull(hit["updated"])
+            assertNull(hit["daysSinceUpdate"])
+            assertNull(hit["maturity"])
+        }
+
+        @Test
+        fun `no hits leaves the payload empty`() {
+            stubProjectHits(emptyList())
+
+            assertTrue(execute().details.isEmpty())
         }
     }
 

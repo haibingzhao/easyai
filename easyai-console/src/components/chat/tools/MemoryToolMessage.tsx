@@ -18,11 +18,15 @@ import {
   List,
   ChevronDown,
   AlertTriangle,
+  Clock,
+  History,
+  CheckCircle2,
 } from 'lucide-react';
 import type { ToolMessageProps } from './types';
-import { getToolRowSummary } from './parsers';
+import { getToolRowSummary, parseMemoryDocument } from './parsers';
 import { ToolRowHeader } from './ToolRowHeader';
 import { useStreamingRowExpand } from './useStreamingRowExpand';
+import { TextMarkdown } from '../segments/TextMarkdown';
 import { i18n } from '@/utils/i18n';
 
 // ---------------------------------------------------------------------------
@@ -245,17 +249,157 @@ function MemoryCard({ toolName, summary, rowSummary, status, expandable, isExpan
 }
 
 // ---------------------------------------------------------------------------
-// memory_search
+// Structured tool output (ToolResult.details)
 // ---------------------------------------------------------------------------
+
+/**
+ * Memory tools answer the model in prose and the UI in `details`. The prose carries no contract — it
+ * can be reworded or localized at any time — so nothing here parses it; a result without details just
+ * renders as text.
+ */
+type UnknownRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): UnknownRecord | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as UnknownRecord)
+    : null;
+}
+
+function recordsOf(value: unknown): UnknownRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(asRecord).filter((item): item is UnknownRecord => item !== null);
+}
+
+function readString(rec: UnknownRecord, key: string): string {
+  const value = rec[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function readStringOrNull(rec: UnknownRecord, key: string): string | null {
+  const value = rec[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function readNumberOrNull(rec: UnknownRecord, key: string): number | null {
+  const value = rec[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/** `{n} days`, or a literal "unknown" — the backend sends a count, never a precomposed tail. */
+function formatDays(count: number | null): string {
+  return count == null ? i18n('unknown') : `${count} ${i18n('days')}`;
+}
+
+/** Freshness tail shared by the search hit and the list row: `2026-01-15 (3 days ago)`. */
+function formatFreshness(updated: string | null, daysSince: number | null): string {
+  if (!updated) return i18n('unknown');
+  if (daysSince == null) return updated;
+  return `${updated} (${daysSince} ${i18n('days ago')})`;
+}
+
+interface MemorySearchHit {
+  scope: string;
+  path: string;
+  name: string;
+  description: string;
+  updated: string | null;
+  daysSinceUpdate: number | null;
+  maturity: string | null;
+  level: number | null;
+  content: string;
+}
+
+function toSearchHit(rec: UnknownRecord): MemorySearchHit {
+  return {
+    scope: readString(rec, 'scope').toLowerCase(),
+    path: readString(rec, 'path'),
+    name: readString(rec, 'name'),
+    description: readString(rec, 'description'),
+    updated: readStringOrNull(rec, 'updated'),
+    daysSinceUpdate: readNumberOrNull(rec, 'daysSinceUpdate'),
+    maturity: readStringOrNull(rec, 'maturity'),
+    level: readNumberOrNull(rec, 'level'),
+    content: readString(rec, 'contentPreview'),
+  };
+}
+
+/** Structured hits, or null when this result predates the detail channel / the store returned none. */
+function readSearchHits(result?: ToolMessageProps['result']): MemorySearchHit[] | null {
+  const hits = recordsOf(result?.details?.hits);
+  return hits.length > 0 ? hits.map(toSearchHit) : null;
+}
+
+const SCOPE_BADGE: Record<string, string> = {
+  project: 'bg-teal-50 text-teal-700 dark:bg-teal-950/40 dark:text-teal-300',
+  global: 'bg-violet-50 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300',
+};
+
+const MATURITY_DOT: Record<string, string> = {
+  low: 'bg-orange-400',
+  medium: 'bg-amber-400',
+  high: 'bg-green-500',
+};
+
+function scopeLabel(scope: string): string {
+  if (scope === 'project') return i18n('Project');
+  if (scope === 'global') return i18n('Global');
+  return scope;
+}
+
+function maturityLabel(maturity: string | null): string {
+  if (!maturity) return i18n('Unset');
+  return i18n(maturity.charAt(0).toUpperCase() + maturity.slice(1));
+}
+
+function MemoryHitCard({ hit }: { hit: MemorySearchHit }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/30 overflow-hidden">
+      <div className="px-3 pt-2 pb-1.5 space-y-1">
+        <div className="flex items-baseline gap-1.5 flex-wrap min-w-0">
+          <span
+            className={`self-center shrink-0 px-1.5 py-px rounded text-[11px] font-medium ${SCOPE_BADGE[hit.scope] ?? 'bg-muted text-muted-foreground'}`}
+          >
+            {scopeLabel(hit.scope)}
+          </span>
+          <span className="text-sm font-medium text-foreground break-words">{hit.name}</span>
+          {(hit.level ?? 0) > 0 && (
+            <span className="shrink-0 text-[10px] text-violet-600 dark:text-violet-400">
+              {i18n('Level')} {hit.level}
+            </span>
+          )}
+        </div>
+        <code className="block text-[11px] text-muted-foreground truncate" title={hit.path}>
+          {hit.path}
+        </code>
+        {hit.description && (
+          <div className="text-xs text-muted-foreground break-words">{hit.description}</div>
+        )}
+        <div className="flex items-center gap-3 flex-wrap text-[11px] text-muted-foreground pt-0.5">
+          <span className="inline-flex items-center gap-1">
+            <Clock className="size-3" />
+            {i18n('Updated')}: {formatFreshness(hit.updated, hit.daysSinceUpdate)}
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className={`size-1.5 rounded-full ${MATURITY_DOT[hit.maturity ?? ''] ?? 'bg-muted-foreground/50'}`} />
+            {i18n('Maturity')}: {maturityLabel(hit.maturity)}
+          </span>
+        </div>
+      </div>
+      {hit.content && (
+        <div className="px-3 py-2 border-t border-border/60 text-foreground/90 max-h-[16em] overflow-y-auto">
+          <TextMarkdown content={hit.content} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 function MemorySearchView({ toolCall, result, status, streamingOutput, compact }: ToolMessageProps) {
   const [expanded, setExpanded] = useState(false);
   const markTouched = useStreamingRowExpand(status, setExpanded);
   const parsed = parseArgs<{ query: string }>(toolCall.args);
   const output = extractResultOutput(result, streamingOutput);
-
-  // Parse search result count from output text
-  const matchCount = output.match(/Found (\d+) memories/)?.[1];
+  const hits = readSearchHits(result);
 
   return (
     <MemoryCard
@@ -264,8 +408,8 @@ function MemorySearchView({ toolCall, result, status, streamingOutput, compact }
       summary={
         <span className="flex items-center gap-1">
           <span className="text-foreground/70">"{parsed?.query ?? '?'}"</span>
-          {matchCount && !expanded && (
-            <span className="text-teal-600 dark:text-teal-400 font-medium">· {matchCount} found</span>
+          {hits && !expanded && (
+            <span className="text-teal-600 dark:text-teal-400 font-medium">· {hits.length} {i18n('found')}</span>
           )}
         </span>
       }
@@ -278,11 +422,17 @@ function MemorySearchView({ toolCall, result, status, streamingOutput, compact }
       compact={compact}
     >
       {output && (
-        <div className="p-3">
-          <div className="text-sm font-mono whitespace-pre-wrap break-all text-foreground max-h-[20em] overflow-y-auto">
+        hits ? (
+          <div className="p-3 space-y-2 max-h-[24em] overflow-y-auto">
+            {hits.map((hit, i) => (
+              <MemoryHitCard key={`${hit.scope}:${hit.path}:${i}`} hit={hit} />
+            ))}
+          </div>
+        ) : (
+          <div className="p-3 text-sm whitespace-pre-wrap break-words text-muted-foreground">
             {output}
           </div>
-        </div>
+        )
       )}
     </MemoryCard>
   );
@@ -297,6 +447,8 @@ function MemoryReadView({ toolCall, result, status, streamingOutput, compact }: 
   const markTouched = useStreamingRowExpand(status, setExpanded);
   const parsed = parseArgs<{ path: string }>(toolCall.args);
   const output = extractResultOutput(result, streamingOutput);
+  const { fields, tags, body } = parseMemoryDocument(output);
+  const hasMeta = Object.keys(fields).length > 0;
 
   return (
     <MemoryCard
@@ -318,10 +470,50 @@ function MemoryReadView({ toolCall, result, status, streamingOutput, compact }: 
       compact={compact}
     >
       {output && (
-        <div className="p-3">
-          <div className="text-sm whitespace-pre-wrap break-words text-foreground bg-muted/40 rounded px-3 py-2 max-h-[20em] overflow-y-auto">
-            {truncate(output, 2000)}
-          </div>
+        <div className="p-3 max-h-[24em] overflow-y-auto space-y-2">
+          {hasMeta && (
+            <div className="rounded-md border border-border bg-muted/30 px-3 py-2 space-y-1">
+              {fields.name && (
+                <div className="text-sm font-medium text-foreground break-words">{fields.name}</div>
+              )}
+              {fields.description && (
+                <div className="text-xs text-muted-foreground break-words">{fields.description}</div>
+              )}
+              <div className="flex items-center gap-3 flex-wrap text-[11px] text-muted-foreground pt-0.5">
+                {fields.type && (
+                  <span className="px-1.5 py-px rounded bg-muted text-muted-foreground">{fields.type}</span>
+                )}
+                {fields.maturity && (
+                  <span className="inline-flex items-center gap-1">
+                    <span className={`size-1.5 rounded-full ${MATURITY_DOT[fields.maturity] ?? 'bg-muted-foreground/50'}`} />
+                    {i18n('Maturity')}: {maturityLabel(fields.maturity)}
+                  </span>
+                )}
+                {fields.updated && (
+                  <span className="inline-flex items-center gap-1">
+                    <Clock className="size-3" />
+                    {i18n('Updated')}: {fields.updated}
+                  </span>
+                )}
+                {fields.last_accessed && (
+                  <span className="inline-flex items-center gap-1">
+                    <History className="size-3" />
+                    {i18n('Last accessed')}: {fields.last_accessed}
+                  </span>
+                )}
+              </div>
+              {tags.length > 0 && (
+                <div className="flex items-center gap-1 flex-wrap pt-0.5">
+                  {tags.map((tag, i) => (
+                    <span key={i} className="px-1.5 py-px rounded text-[11px] bg-muted text-muted-foreground">
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {body.trim() && <TextMarkdown content={body} />}
         </div>
       )}
     </MemoryCard>
@@ -385,16 +577,21 @@ function MemoryWriteView({ toolCall, result, status, streamingOutput, compact }:
         </span>
       }
       status={status}
-      expandable={isFailed ? !!output : !!detailContent}
+      expandable={!!output || !!detailContent}
       isExpanded={expanded}
       onToggle={() => { markTouched(); setExpanded(prev => !prev); }}
       result={result}
       streamingOutput={streamingOutput}
       compact={compact}
     >
-      {expanded && (
-        <div className="p-3 space-y-2">
-          {isBatch ? (
+      <div className="p-3 space-y-2">
+        {output && !isFailed && (
+          <div className="flex items-start gap-1.5 text-xs text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/30 rounded px-2.5 py-1.5 whitespace-pre-wrap break-words">
+            <CheckCircle2 className="size-3.5 mt-px shrink-0" />
+            <span>{output}</span>
+          </div>
+        )}
+        {isBatch ? (
             /* Batch operations list */
             <div className="space-y-1.5">
               {ops.map((op, i) => {
@@ -453,9 +650,8 @@ function MemoryWriteView({ toolCall, result, status, streamingOutput, compact }:
                 </div>
               )}
             </>
-          )}
-        </div>
-      )}
+        )}
+      </div>
     </MemoryCard>
   );
 }
@@ -464,17 +660,111 @@ function MemoryWriteView({ toolCall, result, status, streamingOutput, compact }:
 // memory_list
 // ---------------------------------------------------------------------------
 
+interface MemoryListEntry {
+  name: string;
+  type: string;
+  description: string;
+  path: string;
+  updated: string | null;
+  maturity: string | null;
+  level: number | null;
+  unusedDays: number | null;
+}
+
+interface MemoryListReviewItem {
+  name: string;
+  type: string;
+  unusedDays: number | null;
+}
+
+interface MemoryListScope {
+  scope: string;
+  count: number;
+  entries: MemoryListEntry[];
+  reviewItems: MemoryListReviewItem[];
+  staleAfterDays: number | null;
+}
+
+function toListEntry(rec: UnknownRecord): MemoryListEntry {
+  return {
+    name: readString(rec, 'name'),
+    type: readString(rec, 'type'),
+    description: readString(rec, 'description'),
+    path: readString(rec, 'path'),
+    updated: readStringOrNull(rec, 'updated'),
+    maturity: readStringOrNull(rec, 'maturity'),
+    level: readNumberOrNull(rec, 'level'),
+    unusedDays: readNumberOrNull(rec, 'unusedDays'),
+  };
+}
+
+function toListScope(rec: UnknownRecord): MemoryListScope {
+  return {
+    scope: readString(rec, 'scope').toLowerCase(),
+    count: readNumberOrNull(rec, 'count') ?? 0,
+    entries: recordsOf(rec['entries']).map(toListEntry),
+    reviewItems: recordsOf(rec['reviewCandidates']).map((item) => ({
+      name: readString(item, 'name'),
+      type: readString(item, 'type'),
+      unusedDays: readNumberOrNull(item, 'unusedDays'),
+    })),
+    staleAfterDays: readNumberOrNull(rec, 'staleAfterDays'),
+  };
+}
+
+/** Structured scopes, or null when this result predates the detail channel / listed nothing. */
+function readListScopes(result?: ToolMessageProps['result']): MemoryListScope[] | null {
+  const scopes = recordsOf(result?.details?.scopes).map(toListScope);
+  return scopes.length > 0 ? scopes : null;
+}
+
+function MemoryListRow({ entry }: { entry: MemoryListEntry }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/30 px-3 py-2 space-y-0.5">
+      <div className="flex items-baseline gap-1.5 flex-wrap min-w-0">
+        <span className="text-sm font-medium text-foreground break-words">{entry.name}</span>
+        <span className="shrink-0 px-1.5 py-px rounded text-[11px] bg-muted text-muted-foreground">{entry.type}</span>
+        {(entry.level ?? 0) > 0 && (
+          <span className="shrink-0 text-[10px] text-violet-600 dark:text-violet-400">
+            {i18n('Level')} {entry.level}
+          </span>
+        )}
+      </div>
+      {entry.description && (
+        <div className="text-xs text-muted-foreground break-words">{entry.description}</div>
+      )}
+      <div className="flex items-center gap-3 flex-wrap text-[11px] text-muted-foreground pt-0.5">
+        {entry.path && (
+          <code className="truncate max-w-[45%]" title={entry.path}>{entry.path}</code>
+        )}
+        {entry.updated && (
+          <span className="inline-flex items-center gap-1">
+            <Clock className="size-3" />
+            {i18n('Updated')}: {entry.updated}
+          </span>
+        )}
+        {entry.maturity && (
+          <span className="inline-flex items-center gap-1">
+            <span className={`size-1.5 rounded-full ${MATURITY_DOT[entry.maturity] ?? 'bg-muted-foreground/50'}`} />
+            {i18n('Maturity')}: {maturityLabel(entry.maturity)}
+          </span>
+        )}
+        <span className="inline-flex items-center gap-1">
+          <History className="size-3" />
+          {i18n('Unused for')}: {formatDays(entry.unusedDays)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function MemoryListView({ toolCall, result, status, streamingOutput, compact }: ToolMessageProps) {
   const [expanded, setExpanded] = useState(false);
   const markTouched = useStreamingRowExpand(status, setExpanded);
   const parsed = parseArgs<{ type?: string }>(toolCall.args);
   const output = extractResultOutput(result, streamingOutput);
-
-  // Parse total entry count from output
-  const scopeMatches = output.match(/\((\d+) entries\)/g);
-  const totalEntries = scopeMatches
-    ? scopeMatches.reduce((sum, m) => sum + (parseInt(m.match(/\d+/)?.[0] ?? '0', 10)), 0)
-    : 0;
+  const scopes = readListScopes(result);
+  const totalEntries = scopes?.reduce((sum, scope) => sum + scope.count, 0) ?? 0;
 
   return (
     <MemoryCard
@@ -489,7 +779,7 @@ function MemoryListView({ toolCall, result, status, streamingOutput, compact }: 
           )}
           {totalEntries > 0 && !expanded && (
             <span className="text-teal-600 dark:text-teal-400 text-xs font-medium">
-              {totalEntries} entries
+              {totalEntries} {i18n('entries')}
             </span>
           )}
         </span>
@@ -503,11 +793,52 @@ function MemoryListView({ toolCall, result, status, streamingOutput, compact }: 
       compact={compact}
     >
       {output && (
-        <div className="p-3">
-          <div className="text-sm font-mono whitespace-pre-wrap break-all text-foreground max-h-[20em] overflow-y-auto">
+        scopes ? (
+          <div className="p-3 space-y-3 max-h-[24em] overflow-y-auto">
+            {scopes.map((scope, i) => (
+              <div key={i} className="space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <span className={`shrink-0 px-1.5 py-px rounded text-[11px] font-medium ${SCOPE_BADGE[scope.scope] ?? 'bg-muted text-muted-foreground'}`}>
+                    {scopeLabel(scope.scope)}
+                  </span>
+                  <span className="text-xs text-muted-foreground">{scope.count} {i18n('entries')}</span>
+                </div>
+                {scope.entries.map((entry, j) => (
+                  <MemoryListRow key={`${entry.path}:${j}`} entry={entry} />
+                ))}
+                {scope.reviewItems.length > 0 && (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 space-y-1">
+                    <div className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                      <AlertTriangle className="size-3.5 shrink-0" />
+                      <span>
+                        {i18n('Review candidates')}
+                        {scope.staleAfterDays != null && (
+                          <span className="ml-1 font-normal">≥{scope.staleAfterDays} {i18n('days')}</span>
+                        )}
+                      </span>
+                    </div>
+                    <ul className="space-y-0.5 text-xs text-foreground/80">
+                      {scope.reviewItems.map((item, k) => (
+                        <li key={`${item.name}:${k}`} className="break-words">
+                          <span className="font-medium">{item.name}</span>
+                          {item.type && <span className="text-muted-foreground"> [{item.type}]</span>}
+                          <span className="text-muted-foreground"> · {i18n('Unused for')}: {formatDays(item.unusedDays)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="text-[11px] text-amber-700/80 dark:text-amber-400/80 break-words">
+                      {i18n('Low-maturity entries nobody has retrieved for a long time. Verify each one before updating or removing it.')}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="p-3 text-sm whitespace-pre-wrap break-words text-muted-foreground">
             {output}
           </div>
-        </div>
+        )
       )}
     </MemoryCard>
   );

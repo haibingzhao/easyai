@@ -1,11 +1,21 @@
 import React, { useMemo, useState } from 'react';
-import { Search, ChevronDown, ChevronRight, FileText, FolderOpen, Globe } from 'lucide-react';
-import type { MemoryEntry } from '@/types/memory';
+import {
+  Search,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  FolderOpen,
+  Globe,
+  AlertCircle,
+  Settings2,
+} from 'lucide-react';
+import type { MemoryConsolidationSettings, MemoryEntry } from '@/types/memory';
 import { maturityLabelKey } from '@/types/memory';
 import { useCategoryStore } from '@/services/stores/category-store';
 import { i18n } from '@/utils/i18n';
 import type { Project } from '@/services/project-service';
 import { ToolTooltip } from '@/components/agent/ToolItem';
+import { ConsolidationSwitch } from '@/components/memories/ConsolidationSwitch';
 
 export interface SelectedMemory {
   scope: 'global' | 'project';
@@ -21,6 +31,10 @@ interface MemorySidebarProps {
   autoGeneration: boolean;
   onToggleAutoGeneration: (enabled: boolean) => void;
   onSelect: (sel: SelectedMemory) => void;
+  /** Per-user consolidation preferences; null hides the whole consolidation section. */
+  consolidation: MemoryConsolidationSettings | null;
+  onToggleConsolidation: (enabled: boolean) => void;
+  onOpenConsolidation: () => void;
 }
 
 const FILTER_ANY = 'all';
@@ -33,6 +47,9 @@ export const MemorySidebar: React.FC<MemorySidebarProps> = ({
   autoGeneration,
   onToggleAutoGeneration,
   onSelect,
+  consolidation,
+  onToggleConsolidation,
+  onOpenConsolidation,
 }) => {
   const memoryCategories = useCategoryStore((s) => s.memoryCategories);
   const [query, setQuery] = useState('');
@@ -89,6 +106,51 @@ export const MemorySidebar: React.FC<MemorySidebarProps> = ({
 
   return (
     <div className="flex flex-col h-full min-h-0">
+      {/* Memory consolidation toggle (per-user preference, shown only when the deployment wires it) */}
+      {consolidation?.available && (
+        <div className="px-3 pt-3 pb-2 border-b border-border">
+          <div className="flex items-center justify-between gap-2">
+            <ToolTooltip
+              name={i18n('Memory Consolidation')}
+              description={i18n('Scheduled merge of related memories')}
+              className="min-w-0 flex-1"
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-1">
+                  <span className="text-xs font-medium text-foreground truncate">
+                    {i18n('Memory Consolidation')}
+                  </span>
+                  <button
+                    onClick={onOpenConsolidation}
+                    className="p-0.5 rounded hover:bg-muted text-muted-foreground transition-colors shrink-0"
+                    title={i18n('Settings')}
+                  >
+                    <Settings2 className="size-3.5" />
+                  </button>
+                </div>
+                <div className="text-[11px] text-muted-foreground truncate">
+                  {i18n('Scheduled merge of related memories')}
+                </div>
+              </div>
+            </ToolTooltip>
+            <ConsolidationSwitch
+              enabled={consolidation.enabled}
+              modelConfigured={consolidation.curationModelConfigured}
+              onChange={onToggleConsolidation}
+            />
+          </div>
+          {!consolidation.curationModelConfigured && (
+            <button
+              onClick={onOpenConsolidation}
+              className="mt-1.5 flex items-start gap-1 text-[11px] text-amber-600 hover:opacity-80 transition-opacity text-left"
+            >
+              <AlertCircle className="size-3 shrink-0 mt-0.5" />
+              <span>{i18n('Memory curation model not configured')}</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Automatic generation toggle */}
       {currentProject && (
         <div className="px-3 pt-3 pb-2 border-b border-border">

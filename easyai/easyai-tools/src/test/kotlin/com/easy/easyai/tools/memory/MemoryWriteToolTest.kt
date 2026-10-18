@@ -1,6 +1,7 @@
 package com.easy.easyai.tools.memory
 
 import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.memory.MemoryContentLimits
 import com.easy.easyai.core.memory.MemoryEntry
 import com.easy.easyai.core.memory.MemoryOwnerContext
 import com.easy.easyai.core.memory.MemoryScope
@@ -84,7 +85,8 @@ class MemoryWriteToolTest {
             name: String,
             scope: MemoryScope,
             owner: MemoryOwnerContext,
-            type: MemoryType?
+            type: MemoryType?,
+            includeArchived: Boolean
         ): MemoryEntry? {
             lookups.add(type)
             return entriesByName[name]
@@ -192,6 +194,51 @@ class MemoryWriteToolTest {
             val result = execute(addArgs())
             assertFalse(result.isError)
             assertEquals(MemoryType.OTHER, store.written.single().type)
+        }
+    }
+
+    @Nested
+    inner class `entry size budget` {
+
+        @Test
+        fun `add rejects content over the hard cap`() {
+            val result = execute(addArgs("content" to "x".repeat(MemoryContentLimits.CONTENT_HARD_CAP_CHARS + 1)))
+            assertTrue(result.isError)
+            val message = output(result)
+            assertTrue(message.contains("'content'"), message)
+            assertTrue(message.contains("split"), message)
+            assertTrue(store.written.isEmpty())
+        }
+
+        @Test
+        fun `add rejects a description over its cap`() {
+            val result = execute(addArgs("description" to "d".repeat(MemoryContentLimits.DESCRIPTION_CAP_CHARS + 1)))
+            assertTrue(result.isError)
+            assertTrue(output(result).contains("'description'"))
+            assertTrue(store.written.isEmpty())
+        }
+
+        @Test
+        fun `update rejects a resulting body over the hard cap`() {
+            store.entriesByName = mapOf(
+                "test_entry" to MemoryEntry(
+                    name = "test_entry",
+                    description = "d",
+                    type = MemoryType.OTHER,
+                    content = "old body",
+                    path = "other/test_entry.md"
+                )
+            )
+            val result = execute(
+                mapOf(
+                    "action" to "update",
+                    "name" to "test_entry",
+                    "content" to "x".repeat(MemoryContentLimits.CONTENT_HARD_CAP_CHARS + 1)
+                )
+            )
+            assertTrue(result.isError)
+            assertTrue(output(result).contains("'content'"))
+            assertTrue(store.written.isEmpty())
         }
     }
 

@@ -73,6 +73,8 @@ export interface ToolResultContentBlockData {
   mimeType?: string;
   isError?: boolean;
   truncated?: boolean;
+  /** Structured render payload the tool attached for the UI (never model input). */
+  details?: Record<string, unknown>;
   /** Token usage from this tool execution (e.g., sub-agent LLM calls) */
   usage?: {
     inputTokens: number;
@@ -94,6 +96,11 @@ export interface ToolResult {
   result: string;
   /** Parsed content blocks from JSON result string */
   contentBlocks?: ToolResultContentBlock[];
+  /**
+   * Structured render payload from the tool, carried through SSE and the persisted transcript.
+   * Renderers read this instead of parsing `result`, which is prose addressed to the model.
+   */
+  details?: Record<string, unknown>;
   isError: boolean;
   exitCode?: number | null;
   durationMs?: number | null;

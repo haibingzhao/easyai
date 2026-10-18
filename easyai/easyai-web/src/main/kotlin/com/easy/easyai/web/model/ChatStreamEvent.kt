@@ -206,7 +206,9 @@ sealed interface ChatStreamEvent {
         /** Token usage from this tool execution (e.g., sub-agent LLM calls) */
         val toolUsage: UsageInfo? = null,
         /** Whether this tool modifies files on disk (triggers snapshot tracking). */
-        val tracksFileChanges: Boolean = false
+        val tracksFileChanges: Boolean = false,
+        /** Structured render payload; present only when the tool attached one. Never model input. */
+        val details: Map<String, Any?>? = null
     ) : ChatStreamEvent {
         override val type: String get() = "tool_execution_end"
     }

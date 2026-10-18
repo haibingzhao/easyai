@@ -19,13 +19,15 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import java.nio.file.Path
 import java.time.LocalDate
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Tests [MemoryListTool]: the listing is the governance view, so it has to report how long an
- * entry went unused and surface review candidates — while keeping the "(N entries)" header the
- * console parses with /\((\d+) entries\)/g.
+ * Tests [MemoryListTool]: the listing is the governance view, so it has to report how long an entry
+ * went unused and surface review candidates — in prose for the model and as a structured payload for
+ * the console, which never parses the prose.
  */
 class MemoryListToolTest {
 
@@ -60,16 +62,24 @@ class MemoryListToolTest {
         coEvery { store.list(MemoryScope.GLOBAL, any(), any()) } returns emptyList()
     }
 
-    private fun execute(): String = runBlocking {
-        val result: ToolResult = tool.execute(
+    private fun executeResult(): ToolResult = runBlocking {
+        tool.execute(
             agentContext = AgentContext(agentId = "test", userId = "u", projectPath = Path.of("/proj")),
             toolCallId = "call-test",
             args = emptyMap(),
             coroutineScope = CoroutineScope(Job())
         )
-        assertFalse(result.isError)
-        result.content.filterIsInstance<TextContent>().joinToString("") { it.text }
     }
+
+    private fun execute(): String {
+        val result = executeResult()
+        assertFalse(result.isError)
+        return result.content.filterIsInstance<TextContent>().joinToString("") { it.text }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun detailScopes(): List<Map<String, Any?>> =
+        executeResult().details["scopes"] as List<Map<String, Any?>>
 
     @Nested
     inner class `staleness review` {
@@ -140,7 +150,61 @@ class MemoryListToolTest {
     }
 
     @Nested
-    inner class `console compatible header` {
+    inner class `structured render payload` {
+
+        @Test
+        fun `a scope carries counts, entries and review candidates`() {
+            val staleUpdated = LocalDate.now().minusDays(120)
+            stubProjectEntries(
+                entry("stale", LocalDate.of(2025, 1, 1), staleUpdated, null, MemoryMaturity.LOW),
+                entry("fresh", LocalDate.now(), LocalDate.now(), null, MemoryMaturity.HIGH)
+            )
+
+            val scope = detailScopes().single()
+            assertEquals("project", scope["scope"])
+            assertEquals(2, scope["count"])
+            assertEquals(90L, scope["staleAfterDays"])
+
+            @Suppress("UNCHECKED_CAST")
+            val entries = scope["entries"] as List<Map<String, Any?>>
+            val stale = entries.first { it["name"] == "stale" }
+            assertEquals("experience_lessons", stale["type"])
+            assertEquals("description of stale", stale["description"])
+            assertEquals("experience_lessons/stale.md", stale["path"])
+            assertEquals(staleUpdated.toString(), stale["updated"])
+            assertEquals("low", stale["maturity"])
+            assertEquals(120L, stale["unusedDays"])
+
+            @Suppress("UNCHECKED_CAST")
+            val candidates = scope["reviewCandidates"] as List<Map<String, Any?>>
+            assertEquals(listOf("stale"), candidates.map { it["name"] })
+            assertEquals(120L, candidates.single()["unusedDays"])
+        }
+
+        @Test
+        fun `an undated entry carries nulls, not a guessed date`() {
+            stubProjectEntries(
+                entry("undated", created = null, updated = null, lastAccessed = null, maturity = null)
+            )
+
+            @Suppress("UNCHECKED_CAST")
+            val detail = (detailScopes().single()["entries"] as List<Map<String, Any?>>).single()
+
+            assertNull(detail["updated"])
+            assertNull(detail["maturity"])
+            assertNull(detail["unusedDays"])
+        }
+
+        @Test
+        fun `an empty listing leaves the payload empty`() {
+            stubProjectEntries()
+
+            assertTrue(executeResult().details.isEmpty())
+        }
+    }
+
+    @Nested
+    inner class `prose addressed to the model` {
 
         @Test
         fun `scope header keeps the entries count format`() {

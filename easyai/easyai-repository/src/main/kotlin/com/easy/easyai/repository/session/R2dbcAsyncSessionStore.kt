@@ -104,6 +104,16 @@ class R2dbcAsyncSessionStore(
     private fun notForkSession(): Op<Boolean> = Tables.Session.forkRootSessionId.isNull()
 
     /**
+     * Condition excluding sessions the system opened for background work (a memory-consolidation run,
+     * a future task type) from session listings. The marker is a column on the session row, written
+     * when the row is created — deliberately not a reverse lookup into `async_task`, whose deletion is
+     * a normal user action on the Tasks page and would otherwise reveal every hidden transcript.
+     * Such sessions are opened from the Tasks page / Memories page deep link, never Chat History.
+     * Mirrors [notTeamMemberSession] and [notForkSession].
+     */
+    private fun notSystemSession(): Op<Boolean> = Tables.Session.systemKind.isNull()
+
+    /**
      * Condition matching project-less sessions: those running in a system-managed temporary
      * workspace, those carrying no project id, and those whose workspace row is already gone
      * (released while the session outlived it). Only a registered project anchors a session
@@ -137,7 +147,7 @@ class R2dbcAsyncSessionStore(
                     } else {
                         baseFilter
                     }
-                    swarmFilter and notTeamMemberSession() and notForkSession()
+                    swarmFilter and notTeamMemberSession() and notForkSession() and notSystemSession()
                 }
                 .orderBy(Tables.Session.createdAt to SortOrder.DESC)
                 .limit(fetchSize)
@@ -179,7 +189,7 @@ class R2dbcAsyncSessionStore(
                     } else {
                         scopeFilter
                     }
-                    val listFilter = swarmFilter and notTeamMemberSession() and notForkSession()
+                    val listFilter = swarmFilter and notTeamMemberSession() and notForkSession() and notSystemSession()
                     // Optional OR tag filter: keep sessions carrying at least one of [tags].
                     if (!tags.isNullOrEmpty()) {
                         val tagSubQuery = Tables.SessionTag
@@ -500,6 +510,10 @@ class R2dbcAsyncSessionStore(
      * Without this, session lookups ([findById]) fail with "Session not found" even
      * though messages exist. Uses insertIgnore so pre-existing sessions (main chat,
      * swarm, sub-agent) are left untouched.
+     *
+     * A [AgentContext.systemKind] is applied to an existing unmarked row too: whichever
+     * write path creates the row first (this, or [save]) decides whether the marker lands
+     * with the insert, and a background run must be hidden either way.
      */
     suspend fun ensureSessionExists(sessionId: String, context: AgentContext) {
         suspendTransaction(db) {
@@ -512,6 +526,12 @@ class R2dbcAsyncSessionStore(
                 it[Tables.Session.userId] = userId
                 it[Tables.Session.createdAt] = now
                 it[Tables.Session.updatedAt] = now
+                it[Tables.Session.systemKind] = context.systemKind
+            }
+            context.systemKind?.let { kind ->
+                Tables.Session.update(
+                    where = { (Tables.Session.id eq sessionId) and Tables.Session.systemKind.isNull() }
+                ) { it[Tables.Session.systemKind] = kind }
             }
         }
     }
@@ -1032,7 +1052,8 @@ class R2dbcAsyncSessionStore(
                                 isError = trc.isError,
                                 truncated = trc.truncated,
                                 isSkipped = trc.isSkipped,
-                                usage = trc.usage
+                                usage = trc.usage,
+                                details = trc.details
                             )
                         }
                     )
@@ -1370,6 +1391,21 @@ class R2dbcAsyncSessionStore(
                 }
             }
             logger.info("Updated {} tag(s) for session {}", normalized.size, sessionId)
+        }
+    }
+
+    override suspend fun updateTitle(sessionId: String, title: String, userId: String) {
+        suspendTransaction(db) {
+            val updated = Tables.Session.update(
+                where = {
+                    (Tables.Session.id eq sessionId) and UserScope.filterStrict(Tables.Session.userId, userId)
+                }
+            ) { row ->
+                row[Tables.Session.title] = title.take(255)
+            }
+            if (updated == 0) {
+                logger.debug("Session {} title update matched no row for user {}", sessionId, userId)
+            }
         }
     }
 

@@ -151,6 +151,11 @@ data class ToolCallContent(
  * Content block representing the result of a tool execution.
  * Used in [ToolResultMessage] to pass tool results back to the LLM.
  * [toolCallId] and [toolName] are required — they identify which tool call this result belongs to.
+ *
+ * [details] is the renderer's channel: a tool that answers the model in prose can attach the same
+ * facts as structure for the UI, so a frontend never has to parse display text back into data.
+ * It is persisted with the block and streamed to clients, but the LLM mapping reads only [output],
+ * so it never costs prompt tokens.
  */
 data class ToolResultContent(
     val toolCallId: String = "",
@@ -162,7 +167,8 @@ data class ToolResultContent(
     val isError: Boolean = false,
     val truncated: Boolean = false,
     val isSkipped: Boolean = false,
-    val usage: Usage? = null
+    val usage: Usage? = null,
+    val details: Map<String, Any?> = emptyMap()
 ) : ContentBlock {
     @get:JsonIgnore
     override val type: String get() = "toolResult"
@@ -239,7 +245,8 @@ data class ToolResultMessage(
             isError = entry.isError,
             truncated = entry.truncated,
             isSkipped = entry.isSkipped,
-            usage = entry.usage
+            usage = entry.usage,
+            details = entry.details
         )
     }
 }
@@ -254,7 +261,9 @@ data class ToolResultEntry(
     val isError: Boolean = false,
     val truncated: Boolean = false,
     val isSkipped: Boolean = false,
-    val usage: Usage? = null
+    val usage: Usage? = null,
+    /** Structured render payload carried alongside [result]; see [ToolResultContent.details]. */
+    val details: Map<String, Any?> = emptyMap()
 )
 
 data class UserMessage(

@@ -119,6 +119,12 @@ interface AsyncSessionStore {
     suspend fun updateTags(sessionId: String, tags: List<String>, userId: String = "system")
 
     /**
+     * Overwrite a session's display title (strictly scoped to its owner). Used by internal runs
+     * (e.g. memory consolidation) to give their hidden session a stable label in task deep links.
+     */
+    suspend fun updateTitle(sessionId: String, title: String, userId: String = "system") {}
+
+    /**
      * Batch-load tags for a set of sessions.
      * @return Map of sessionId → its tag list (sessions without tags are omitted).
      */

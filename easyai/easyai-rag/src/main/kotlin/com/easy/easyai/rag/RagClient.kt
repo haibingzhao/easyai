@@ -38,7 +38,11 @@ interface RagClient {
      *   right after the indexing submission is accepted (fire-and-forget), unless the
      *   server already reports a terminal status synchronously.
      */
-    suspend fun upsert(doc: RagDocument, bizId: String? = null, awaitIndexing: Boolean = true): RagUpsertResult
+    suspend fun upsert(
+        doc: RagDocument,
+        bizId: String? = null,
+        awaitIndexing: Boolean = true
+    ): RagUpsertResult
 
     /**
      * Delete the document bound to [externalId].
@@ -60,8 +64,33 @@ interface RagClient {
     /**
      * List documents whose logical file path starts with [pathPrefix].
      * Fetches all pages transparently.
+     *
+     * @param excludeArchived when true, archived documents are excluded at the storage layer
+     *   (hit set and `total` both count active documents only)
      */
-    suspend fun list(pathPrefix: String, bizId: String? = null): List<RagDocInfo>
+    suspend fun list(
+        pathPrefix: String,
+        bizId: String? = null,
+        excludeArchived: Boolean = false
+    ): List<RagDocInfo>
+
+    /**
+     * Batch-read full documents by docId, **including archived ones** (history drill-down).
+     * Missing/unauthorised ids are simply absent from the result. Batching above the backend's
+     * per-request cap is the implementation's responsibility.
+     */
+    suspend fun readByDocIds(docIds: List<String>, bizId: String? = null): List<RagDocumentDetail>
+
+    /**
+     * Flag-only archive update: writes `archived`/`level`/`refIds`/`mergedInto` **without**
+     * re-chunking or re-embedding. Missing ids are reported per id, never as a whole-request
+     * failure.
+     */
+    suspend fun archiveDocIds(
+        docIds: List<String>,
+        update: RagArchiveUpdate,
+        bizId: String? = null
+    ): RagArchiveResult
 
     /**
      * Semantic retrieval via `POST /api/query/data` (naive mode, no LLM).
@@ -78,6 +107,7 @@ interface RagClient {
      *   union — callers wanting a per-slice quota must over-fetch and re-quota themselves.
      *   Takes precedence over [bizId]; blank/duplicate entries are dropped, and an empty
      *   result set restores the single-slice contract.
+     * @param excludeArchived when true, archived documents are excluded at the storage layer
      */
     suspend fun search(
         query: String,
@@ -86,7 +116,8 @@ interface RagClient {
         timeRangeStart: Long? = null,
         timeRangeEnd: Long? = null,
         bizId: String? = null,
-        bizIds: List<String>? = null
+        bizIds: List<String>? = null,
+        excludeArchived: Boolean = false
     ): List<RagChunk>
 
     /**

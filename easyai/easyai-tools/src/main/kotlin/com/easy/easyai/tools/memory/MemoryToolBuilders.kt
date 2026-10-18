@@ -1,6 +1,7 @@
 package com.easy.easyai.tools.memory
 
 import com.easy.easyai.core.domain.DomainCatalog
+import com.easy.easyai.core.memory.MemoryContentLimits
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.memory.MemoryType
 import com.easy.easyai.core.tool.ToolDefinition
@@ -94,7 +95,9 @@ class MemoryWriteToolBuilder : AbstractMemoryToolBuilder() {
 Parameter rules (violating any of these is the most common call failure):
 - 'type': must be exactly one of: $validTypes. Never invent aliases such as 'project' or 'user'.
 - 'name': bare file name only - no directory segments (no '/'), no '.md' suffix. The category goes into 'type', NOT into 'name'.
-- 'scenarios': a real JSON array of strings like ["scenario one"]. Never pass it as a single JSON-encoded string."""
+- 'scenarios': a real JSON array of strings like ["scenario one"]. Never pass it as a single JSON-encoded string.
+- 'content': distilled facts, target ~${MemoryContentLimits.CONTENT_TARGET_CHARS} characters; calls over ${MemoryContentLimits.CONTENT_HARD_CAP_CHARS} characters are rejected. Split broader material into multiple focused entries instead of one giant entry.
+- 'description': a one-line summary of at most ${MemoryContentLimits.DESCRIPTION_CAP_CHARS} characters."""
         return MemoryWriteTool(metadata.copy(description = metadata.description + parameterRules), store)
     }
 }
@@ -104,7 +107,7 @@ class MemoryListToolBuilder : AbstractMemoryToolBuilder() {
     override val metadata = ToolMetadata(
         name = "memory_list",
         description = "List all memory entries. Optionally filter by type (user/feedback/project/reference). " +
-            "Shows name, type, description, path, dates, maturity and staleness hints for governance review.",
+            "Shows docId, name, type, description, path, level, dates, maturity and staleness hints for governance review.",
         permissionCategory = "memory"
     )
 

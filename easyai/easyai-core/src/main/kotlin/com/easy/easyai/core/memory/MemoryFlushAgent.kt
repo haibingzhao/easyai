@@ -110,7 +110,7 @@ class MemoryFlushAgent(
         val content = response.result?.output?.text ?: return null
         if (content.isBlank()) return null
 
-        val entries = parseEntries(content)
+        val entries = parseEntries(content).map(::capEntrySize)
         if (entries.isEmpty()) {
             logger.warn("Memory flush produced no parseable entries; skipping")
             // Mark the hash so the same context is not retried on every subsequent turn.
@@ -256,6 +256,11 @@ class MemoryFlushAgent(
             """{"memories": [{"title": "short unique title", "description": "one-line summary", "category": "$categoryList", "keywords": ["keyword"], "scenarios": ["when this applies"], "maturity": "low|medium|high", "action": "add|update|remove", "reason": "why this change is needed", "content": "markdown body with the full fact"}]}"""
         )
         appendLine("Each entry in \"memories\" must be self-contained. \"category\" must be one of the $categoryCount values listed. \"maturity\" must be one of low/medium/high. If no durable facts exist, return {\"memories\": []}.")
+        appendLine(
+            "Size budget: keep each \"content\" to distilled facts of ~${MemoryContentLimits.CONTENT_TARGET_CHARS} characters " +
+                "(hard cap ${MemoryContentLimits.CONTENT_HARD_CAP_CHARS}, over which it is truncated); split broader material " +
+                "across separate entries. \"description\" stays a one-line summary (≤${MemoryContentLimits.DESCRIPTION_CAP_CHARS} characters)."
+        )
         appendLine()
         appendLine("Reconcile against the existing entries listed below instead of accumulating duplicates:")
         appendLine("- An existing entry already covering the same fact: return \"action\": \"update\" and copy that entry's name EXACTLY into \"title\".")
@@ -317,6 +322,34 @@ class MemoryFlushAgent(
             logger.warn("Memory flush JSON parse failed: {}", e.message)
             emptyList()
         }
+    }
+
+    /**
+     * Enforce the entry size budget on one parsed item. This path has no retry loop, so an
+     * over-long body is truncated with a marker (and a warn) rather than dropped or rejected; the
+     * marker is paid for out of the cap, so a flushed entry lands inside the same limit every other
+     * write path enforces and stays editable on the Memories page. The description is a summary line,
+     * so it is silently capped.
+     */
+    private fun capEntrySize(item: FlushEntry): FlushEntry {
+        var capped = item
+        val content = item.content?.trim()
+        if (content != null && content.length > MemoryContentLimits.CONTENT_HARD_CAP_CHARS) {
+            logger.warn(
+                "Memory flush entry '{}' content {} chars exceeds hard cap {}; truncating",
+                item.title, content.length, MemoryContentLimits.CONTENT_HARD_CAP_CHARS
+            )
+            capped = capped.copy(
+                content = content.take(
+                    MemoryContentLimits.CONTENT_HARD_CAP_CHARS - TRUNCATION_MARKER.length
+                ) + TRUNCATION_MARKER
+            )
+        }
+        val description = capped.description?.trim()
+        if (description != null && description.length > MemoryContentLimits.DESCRIPTION_CAP_CHARS) {
+            capped = capped.copy(description = description.take(MemoryContentLimits.DESCRIPTION_CAP_CHARS))
+        }
+        return capped
     }
 
     /** Locate the outermost JSON object; tolerates stray prose around the payload. */
@@ -403,6 +436,9 @@ class MemoryFlushAgent(
 
     private companion object {
         const val MAX_NAME_LENGTH = 64
+
+        /** Appended to a truncated body; [MemoryContentLimits.CONTENT_HARD_CAP_CHARS] includes it. */
+        const val TRUNCATION_MARKER = "\n…(truncated)"
 
         /** Cap on how many stored entries the flush prompt lists. */
         const val MAX_EXISTING_IN_PROMPT = 50

@@ -60,6 +60,13 @@ data class AgentContext(
     val projectPath: Path? = null,
     /** Kind of the bound project. [ProjectKind.TEMP] marks a per-session scratch workspace, which disables project-scoped memory. */
     val projectKind: ProjectKind = ProjectKind.USER,
+    /**
+     * Provenance written onto the session row when the system opened it for background work instead
+     * of a user starting a chat ([SYSTEM_KIND_ASYNC_TASK]). Null means an ordinary interactive
+     * session, which is the only kind Chat History lists. Persisted, so hiding a run's transcript
+     * does not depend on the task row that points at it still existing.
+     */
+    val systemKind: String? = null,
     /** Whether automatic memory generation (MemoryFlushAgent) is enabled for the current project. */
     val memoryAutoGeneration: Boolean = true,
     /** Calling agent ID. Null = top-level (user-selected). Tracks call chain depth. */
@@ -179,8 +186,21 @@ data class AgentContext(
             }
         }
 
-    private companion object {
+    /**
+     * The owner set for auxiliary-model resolution. By contract aux choices never fold in the shared
+     * `system` layer (see `AuxModelSettingsStore`), so this is [effectiveOwners] without the `system`
+     * entry — mirroring the web boundary's `currentGroupOwners()` (self + group bucket) and keeping
+     * the two memory-consolidation entry points on one set. `system` is retained only when it *is* the
+     * caller (auth-disabled deployments run as `system`), so those still resolve their own choice.
+     */
+    val auxOwners: Set<String>
+        get() = effectiveOwners.filterNot { it == SYSTEM_OWNER && it != userId }.toSet()
+
+    companion object {
+        /** [systemKind] value for a session opened to host a background async-task run. */
+        const val SYSTEM_KIND_ASYNC_TASK = "async_task"
+
         /** The shared read-only layer, matching `UserScope.SYSTEM_USER_ID` / the `user_id` default. */
-        const val SYSTEM_OWNER = "system"
+        private const val SYSTEM_OWNER = "system"
     }
 }

@@ -27,19 +27,23 @@ import java.util.concurrent.atomic.AtomicReference
  * Key design:
  * - History messages are passed directly as the agent's transcript (preserving structure)
  * - The agent has a single tool: update_variable (for variable extraction)
- * - AgentCompletionCheck ensures the tool is called before the agent finishes
- * - maxIterations=2 for bounded execution (summary + tool call in one turn, nudge as fallback)
+ * - maxIterations=1: the model must emit the summary and (when extracting) call update_variable in
+ *   the same turn — there is no second iteration to nudge a missing tool call
  *
  * @param agentServiceProvider Lazy provider for AgentService (avoids circular dependency)
  * @param fallbackChatModel ChatModel to use as fallback when no session-specific model is provided
  * @param contextProjectors Per-tool argument projectors (ToolDefinition.contextProjector) keyed by
  *   tool name. Applied to tool-call arguments before file-path scanning so display-only payloads
  *   (e.g. HTML/SVG fragments) do not surface bogus file references in fallback summaries.
+ * @param extractVariables When true, the compaction agent also extracts session variables via the
+ *   update_variable tool. Disabled by default: compaction then only produces the summary and never
+ *   touches the session variable store.
  */
 class CompactionAgentStrategy(
     private val agentServiceProvider: () -> AgentService,
     private val fallbackChatModel: ChatModel? = null,
-    private val contextProjectors: Map<String, ToolContextProjector> = emptyMap()
+    private val contextProjectors: Map<String, ToolContextProjector> = emptyMap(),
+    private val extractVariables: Boolean = false
 ) : CompactionStrategy {
 
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -47,7 +51,7 @@ class CompactionAgentStrategy(
     companion object {
         private const val MAX_ITERATIONS = 1
 
-        private const val COMPACTION_SYSTEM_PROMPT = """
+        private const val SUMMARY_SYSTEM_PROMPT = """
 You are an expert conversation summarizer. Your task is to condense a conversation
 between a user and an AI assistant into a structured summary that preserves all
 critical context needed to continue the conversation seamlessly.
@@ -89,6 +93,9 @@ Output your summary in this structure:
 
 ## Relevant Files
 - [Relevant file paths or directories]
+"""
+
+        private const val VARIABLE_EXTRACTION_PROMPT = """
 
 ## Variable Extraction
 After generating the summary, you MUST call the update_variable tool EXACTLY ONCE.
@@ -148,12 +155,16 @@ Rules:
     ): StrategyOutput {
         val agentService = agentServiceProvider()
 
-        // Tracking state
+        // Tracking state (only used when variable extraction is enabled)
         val toolCalled = AtomicBoolean(false)
         val extractedVariables = AtomicReference<Map<String, String>>(emptyMap())
 
-        // Build lightweight variable extraction tool
-        val variableTool = CompactionVariableTool(toolCalled, extractedVariables)
+        // Build lightweight variable extraction tool only when enabled
+        val tools = if (extractVariables) {
+            listOf(CompactionVariableTool(toolCalled, extractedVariables))
+        } else {
+            emptyList()
+        }
 
         // Build agent context (dry-run: no persistence, no default system prompt)
         // Disable thinking mode for compaction: summarization is a structured task that
@@ -162,7 +173,7 @@ Rules:
             agentId = "compaction-agent",
             modelConfig = disableThinking(context.modelConfig),
             sessionId = null,
-            tools = listOf(variableTool),
+            tools = tools,
             maxIterations = MAX_ITERATIONS,
             promptTemplate = "",  // Suppress default system prompt; we provide our own
             dryRun = true
@@ -174,17 +185,26 @@ Rules:
         val resolvedChatModel = chatModel ?: fallbackChatModel
         val dryRunServices = CompactionDryRunAgentService(agentService, resolvedChatModel)
 
-        // Wrap with completion check to enforce variable tool call
-        val completionCheck = CompactionVariableCompletionCheck(toolCalled)
-        val wrappedServices = wrapServiceWithCompletionChecks(dryRunServices, listOf(completionCheck))
+        // Wrap with completion check to enforce variable tool call (only when extracting variables)
+        val wrappedServices = if (extractVariables) {
+            val completionCheck = CompactionVariableCompletionCheck(toolCalled)
+            wrapServiceWithCompletionChecks(dryRunServices, listOf(completionCheck))
+        } else {
+            dryRunServices
+        }
 
         // Create Agent and AgentRunner
         val agent = Agent(context = agentContext, services = wrappedServices)
         val runner = AgentRunner(agent = agent, messages = mutableListOf())
 
         // Build initial messages: system prompt + history + instruction
+        val systemPrompt = if (extractVariables) {
+            SUMMARY_SYSTEM_PROMPT + VARIABLE_EXTRACTION_PROMPT
+        } else {
+            SUMMARY_SYSTEM_PROMPT
+        }
         val initialMessages = buildList {
-            add(SystemMessage(text = COMPACTION_SYSTEM_PROMPT))
+            add(SystemMessage(text = systemPrompt))
             // History messages directly as transcript (preserves original structure)
             // May include previous compaction summary (isCompactionSummary=true)
             addAll(messages)
@@ -239,6 +259,7 @@ Rules:
         } else {
             appendLine("Create a new structured summary from the conversation history above.")
         }
+        if (!extractVariables) return@buildString
         appendLine()
         if (context.existingVariables.isNotEmpty()) {
             appendLine("CURRENT SESSION VARIABLES (from previous rounds):")

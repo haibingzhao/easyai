@@ -48,6 +48,14 @@ data class CompactionProperties(
     var strategy: String = "llm",
 
     /**
+     * Whether the compaction agent also extracts session variables (numeric/data facts)
+     * via the update_variable tool during summarization.
+     * Disabled by default: compaction only produces the summary and never touches the
+     * session variable store.
+     */
+    var extractVariables: Boolean = false,
+
+    /**
      * Context usage ratio that triggers memory flush before compaction (0.75 = 75%).
      * Only used when a MemoryStore is available.
      */

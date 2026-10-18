@@ -39,8 +39,16 @@ export async function switchToSession(sessionId: string): Promise<void> {
   useNavStore.getState().setSelectedFile(null);
 
   // Restore Agent and Model selectors from the last message's config
-  if (detail!.lastAgentId) {
-    useAgentStore.getState().selectAgent(detail!.lastAgentId);
+  const lastAgentId = detail!.lastAgentId;
+  const knownAgents = useAgentStore.getState().agents;
+  // A background task's transcript runs under an agent with no row of its own (`memory-consolidation`);
+  // selecting it would point the composer at an agent the user can neither see nor pick. An empty list
+  // means the agents have not loaded yet, so that case keeps the previous behaviour.
+  if (
+    lastAgentId &&
+    (knownAgents.length === 0 || knownAgents.some((agent) => agent.id === lastAgentId))
+  ) {
+    useAgentStore.getState().selectAgent(lastAgentId);
   }
   if (detail!.lastConfigId) {
     useSettingsStore.getState().setSelectedModelConfig(detail!.lastConfigId);

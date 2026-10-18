@@ -178,6 +178,13 @@ object Tables {
         val forkedFromMessageId = varchar("forked_from_message_id", 255).nullable()
         /** Root main session this fork descends from (source's root, or source id when source is main). */
         val forkRootSessionId = varchar("fork_root_session_id", 255).nullable()
+        /**
+         * Provenance of a session the system opened for background work rather than for a user chat
+         * (see `AgentContext.SYSTEM_KIND_ASYNC_TASK`). Null = ordinary interactive chat. Chat History
+         * filters every non-null value out, so the marker survives whatever the run's own bookkeeping
+         * (an `async_task` row) being deleted.
+         */
+        val systemKind = varchar("system_kind", 32).nullable()
 
         override val primaryKey = PrimaryKey(id)
 
@@ -465,6 +472,65 @@ object Tables {
 
         init {
             uniqueIndex(userId, taskKey)  // one row per user+task
+        }
+    }
+
+    /**
+     * Per-user scheduled-task opt-in — one row per `(user, task_type)`, the configuration side of
+     * [AsyncTaskTable]. Mirrors the user-scoped [AuxModelSettingsTable] precedent. `params` is a JSON
+     * blob owned by that type's planner, so a new schedulable type adds neither a column nor a table;
+     * `schedule_cron` optionally overrides the planner's default scan cron.
+     * Ownership is `user_id` strict (no shared `system` fold-in).
+     */
+    object ScheduledTaskSettingTable : Table("scheduled_task_setting") {
+        val userId = varchar("user_id", 255)
+        val taskType = varchar("task_type", 64)
+        val enabled = bool("enabled").default(false)
+        val scheduleCron = varchar("schedule_cron", 64).nullable()
+        val params = text("params").nullable()  // JSON: type-specific configuration
+        val updatedAt = long("updated_at")
+
+        override val primaryKey = PrimaryKey(userId, taskType)
+
+        init {
+            index(false, taskType, enabled)  // the scan reads every enabled row of one type
+        }
+    }
+
+    /**
+     * App-scoped asynchronous task table — the durable record of work that outlives a chat session.
+     *
+     * One row is one unit of background work (this iteration: memory consolidation). Execution runs
+     * on an app-level executor, so `session_id` is only a *reference* (the session that triggered it,
+     * nullable for scheduled work) and never a lifecycle owner: closing/aborting that session or
+     * restarting the process does not cancel the task. `status` is the single source of truth the
+     * global Tasks page and the Session Summary read back; `payload`/`result` are type-specific JSON.
+     * Ownership is `user_id` strict (no shared `system` fold-in).
+     */
+    object AsyncTaskTable : Table("async_task") {
+        val id = varchar("id", 255)
+        val userId = varchar("user_id", 255)
+        val type = varchar("type", 64)
+        val status = varchar("status", 32)
+        val triggerSource = varchar("trigger_source", 32)
+        val sessionId = varchar("session_id", 255).nullable()
+        val title = varchar("title", 255)
+        val payload = text("payload").nullable()   // JSON: type-specific inputs
+        val result = text("result").nullable()      // JSON: type-specific outputs
+        val error = text("error").nullable()
+        val retryCount = integer("retry_count").default(0)
+        val retriedAt = long("retried_at").nullable()
+        val createdAt = long("created_at")
+        val startedAt = long("started_at").nullable()
+        val completedAt = long("completed_at").nullable()
+        val updatedAt = long("updated_at")
+
+        override val primaryKey = PrimaryKey(id)
+
+        init {
+            index(false, userId, createdAt)
+            index(false, userId, type, status)
+            index(false, sessionId)
         }
     }
 

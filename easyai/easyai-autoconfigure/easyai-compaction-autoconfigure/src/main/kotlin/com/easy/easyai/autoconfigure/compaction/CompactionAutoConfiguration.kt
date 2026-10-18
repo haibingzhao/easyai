@@ -50,13 +50,15 @@ class CompactionAutoConfiguration(
         @Autowired(required = false) chatModel: ChatModel?,
         toolBuilders: ObjectProvider<ToolBuilder>
     ): CompactionStrategy {
-        // Agent-based compaction: uses a lightweight Agent loop with update_variable tool.
+        // Agent-based compaction: uses a lightweight Agent loop to produce the summary.
+        // Variable extraction via the update_variable tool is opt-in (extractVariables).
         // ObjectProvider resolves AgentService lazily to avoid circular dependency:
         // AgentService -> TransformContextService -> CompactionStrategy -> AgentService
         return CompactionAgentStrategy(
             agentServiceProvider = { agentServiceProvider.getObject() },
             fallbackChatModel = chatModel,
-            contextProjectors = ToolContextProjector.registryFrom(toolBuilders.orderedStream().toList())
+            contextProjectors = ToolContextProjector.registryFrom(toolBuilders.orderedStream().toList()),
+            extractVariables = properties.extractVariables
         )
     }
 

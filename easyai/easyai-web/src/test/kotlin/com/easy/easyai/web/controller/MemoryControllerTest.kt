@@ -115,7 +115,7 @@ class MemoryControllerTest {
     fun `create parses maturity and scenarios into the entry`() = runTest {
         val store = mockk<MemoryStore>()
         val controller = MemoryController(store)
-        coEvery { store.findByName(any(), any(), any()) } returns null
+        coEvery { store.findByName(any(), any(), any(), any(), any()) } returns null
         coEvery { store.write(any(), any(), any()) } returns Path.of("experience_lessons/frp.md")
 
         val dto = controller.createOrUpdateMemory(
@@ -139,7 +139,7 @@ class MemoryControllerTest {
     fun `create ignores invalid maturity`() = runTest {
         val store = mockk<MemoryStore>()
         val controller = MemoryController(store)
-        coEvery { store.findByName(any(), any(), any()) } returns null
+        coEvery { store.findByName(any(), any(), any(), any(), any()) } returns null
         coEvery { store.write(any(), any(), any()) } returns Path.of("x")
 
         val dto = controller.createOrUpdateMemory(
@@ -154,6 +154,76 @@ class MemoryControllerTest {
         ).block()
 
         assertNull(dto?.maturity)
+    }
+
+    @Test
+    fun `create over a merged entry keeps its place in the consolidation graph`() = runTest {
+        // The manual edit form carries none of these, and the write replaces the whole stored document:
+        // dropping them would erase the "merged from N entries" drill-down the entry was built with.
+        val store = mockk<MemoryStore>()
+        val controller = MemoryController(store)
+        val merged = MemoryEntry(
+            name = "frp",
+            description = "old",
+            type = MemoryType.EXPERIENCE_LESSONS,
+            content = "old body",
+            path = "experience_lessons/frp.md",
+            id = "doc-merged",
+            level = 2,
+            refs = listOf("doc-a", "doc-b")
+        )
+        coEvery { store.findByName(any(), any(), any(), any(), any()) } returns merged
+        coEvery { store.write(any(), any(), any()) } returns Path.of("experience_lessons/frp.md")
+
+        controller.createOrUpdateMemory(
+            CreateMemoryRequest(
+                name = "frp",
+                description = "new",
+                type = "experience_lessons",
+                scope = "global",
+                content = "new body"
+            )
+        ).block()
+
+        coVerify {
+            store.write(
+                match { it.level == 2 && it.refs == listOf("doc-a", "doc-b") && !it.archived },
+                any(),
+                any()
+            )
+        }
+    }
+
+    @Test
+    fun `create rejects a name that belongs to an archived source`() = runTest {
+        // Reviving an absorbed source as an active entry would put a live duplicate under the merged
+        // entry that references it — the exact state consolidation exists to remove.
+        val store = mockk<MemoryStore>()
+        val controller = MemoryController(store)
+        coEvery { store.findByName(any(), any(), any(), any(), any()) } returns MemoryEntry(
+            name = "frp",
+            description = "old",
+            type = MemoryType.EXPERIENCE_LESSONS,
+            content = "old body",
+            path = "experience_lessons/frp.md",
+            id = "doc-source",
+            archived = true
+        )
+
+        val error = assertFailsWith<ResponseStatusException> {
+            controller.createOrUpdateMemory(
+                CreateMemoryRequest(
+                    name = "frp",
+                    description = "new",
+                    type = "experience_lessons",
+                    scope = "global",
+                    content = "new body"
+                )
+            ).block()
+        }
+
+        assertEquals(HttpStatus.CONFLICT, error.statusCode)
+        coVerify(exactly = 0) { store.write(any(), any(), any()) }
     }
 
     @Test

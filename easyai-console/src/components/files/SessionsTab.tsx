@@ -105,7 +105,7 @@ export const SessionsTab: React.FC = () => {
     <div className="h-full flex flex-col overflow-hidden">
       {/* Tag filter chip row */}
       {availableTags.length > 0 && (
-        <div className="shrink-0 px-3 pb-2 flex flex-wrap gap-1.5 border-b border-border">
+        <div className="shrink-0 px-3 py-2 flex flex-wrap gap-1.5 border-b border-border">
           <button
             type="button"
             onClick={() => setTagFilter([])}

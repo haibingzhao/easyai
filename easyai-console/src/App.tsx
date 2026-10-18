@@ -9,6 +9,7 @@ import { AgentsPage } from './pages/AgentsPage';
 import { ModelsPage } from './pages/ModelsPage';
 import { McpPage } from './pages/McpPage';
 import { MemoriesPage } from './pages/MemoriesPage';
+import { TasksPage } from './pages/TasksPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { CommandsPage } from './pages/CommandsPage';
 import { SkillsPage } from './pages/SkillsPage';
@@ -157,6 +158,10 @@ function App() {
           <Route
             path="/memories"
             element={<MemoriesPage />}
+          />
+          <Route
+            path="/tasks"
+            element={<TasksPage />}
           />
           <Route
             path="/knowledge"

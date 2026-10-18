@@ -166,7 +166,7 @@ class CompactionAgentStrategyTest {
             ))
             val messages = listOf(previousSummary, command)
             val context = CompactionContext(range = CompactedRange(messages.map { it.id }, 1000), currentTurnId = 2)
-            val output = CompactionAgentStrategy({ services }).compactWithUsage(messages, context, model)
+            val output = CompactionAgentStrategy({ services }, extractVariables = true).compactWithUsage(messages, context, model)
 
             assertEquals("Summary with captured command constraints", output.summary)
             val prompt = prompts.single()

@@ -2,11 +2,6 @@ package com.easy.easyai.rag
 
 import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.memory.*
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
 import java.time.Instant
@@ -128,7 +123,8 @@ internal class RagMemoryStore(
             topK = limit,
             timeRangeStart = timeRangeStart,
             timeRangeEnd = timeRangeEnd,
-            bizId = bizId
+            bizId = bizId,
+            excludeArchived = true
         )
         chunks.mapNotNull { entryFromChunk(it) }
             .distinctBy { "${it.type.dirName}/${it.name}" }
@@ -141,7 +137,15 @@ internal class RagMemoryStore(
      * chunk's business create time (which [createTimeOf] sets to `updated`).
      */
     private fun entryFromChunk(chunk: RagChunk): MemoryEntry? {
-        val parsed = parseChunkToEntry(chunk.content, chunk.filePath) ?: return null
+        val parsed = parseChunkToEntry(
+            content = chunk.content,
+            filePath = chunk.filePath,
+            docId = chunk.docId,
+            archived = chunk.archived,
+            level = chunk.level,
+            refs = chunk.refIds,
+            mergedInto = chunk.mergedInto
+        ) ?: return null
         val maturity = parsed.maturity
             ?: (chunk.metadata["maturity"] as? String)?.let { MemoryMaturity.fromApiName(it) }
         val description = parsed.description.ifBlank { chunk.metadata["description"] as? String ?: "" }
@@ -161,39 +165,97 @@ internal class RagMemoryStore(
     override suspend fun write(entry: MemoryEntry, scope: MemoryScope, owner: MemoryOwnerContext): Path =
         translateBackendErrors("write") {
             val bizId = requireBizId(scope, owner, "write")
-            val key = keyOf(entry.path)
-            val doc = RagDocument(
-                key = key,
-                content = buildFileContent(entry),
-                metadata = buildMap {
-                    put("type", entry.type.dirName)
-                    put("name", entry.name)
-                    put("description", entry.description)
-                    entry.maturity?.let { put("maturity", it.apiName) }
-                    // Redundant freshness copy: chunks after the first one carry no
-                    // frontmatter, and retrieval needs these dates to judge staleness.
-                    entry.created?.let { put("created", it.format(DATE_FMT)) }
-                    entry.updated?.let { put("updated", it.format(DATE_FMT)) }
-                },
-                createTime = createTimeOf(entry),
-                // Memory entries are short Markdown documents retrieved as raw chunks:
-                // heading-aligned chunking keeps frontmatter + body inside one chunk so
-                // parseChunkToEntry can rebuild a complete entry, while KG extraction and
-                // the structure index are skipped — memory_search queries with mode=naive,
-                // which never reads entities/relations or the structure index, so both
-                // would only add per-write LLM cost.
-                options = RagProcessingOptions(
-                    chunkMethod = CHUNK_METHOD_STRUCTURE_AWARE,
-                    skipKg = true,
-                    buildStructure = false
-                )
-            )
+            val doc = buildRagDocument(entry)
             // Fire-and-forget: memory writes must not block on indexing confirmation;
             // chunking and vectorization continue server-side.
             client.upsert(doc, bizId, awaitIndexing = false)
             logger.debug("Memory entry written to RAG (indexing submitted): {} (bizId={})", doc.externalId, bizId)
             Path.of(doc.filePath)
         }
+
+    override suspend fun writeEntry(
+        entry: MemoryEntry,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext
+    ): MemoryEntry = translateBackendErrors("writeEntry") {
+        val bizId = requireBizId(scope, owner, "writeEntry")
+        val doc = buildRagDocument(entry)
+        val result = client.upsert(doc, bizId, awaitIndexing = false)
+        logger.debug("Memory entry written to RAG: {} -> docId={} (bizId={})", doc.externalId, result.docId, bizId)
+        entry.copy(id = result.docId)
+    }
+
+    override suspend fun findByIds(
+        docIds: List<String>,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext
+    ): List<MemoryEntry> = translateBackendErrors("findByIds") {
+        val bizId = bizIdOf(scope, owner) ?: return@translateBackendErrors emptyList()
+        if (docIds.isEmpty()) return@translateBackendErrors emptyList()
+        client.readByDocIds(docIds, bizId).mapNotNull { entryFromDocument(it) }
+    }
+
+    override suspend fun archive(
+        docIds: List<String>,
+        update: MemoryArchiveUpdate,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext
+    ): Int = translateBackendErrors("archive") {
+        val bizId = requireBizId(scope, owner, "archive")
+        if (docIds.isEmpty()) return@translateBackendErrors 0
+        val result = client.archiveDocIds(
+            docIds = docIds,
+            update = RagArchiveUpdate(
+                archived = update.archived,
+                level = update.level,
+                refIds = update.refs,
+                mergedInto = update.mergedInto
+            ),
+            bizId = bizId
+        )
+        if (result.notFound.isNotEmpty() || result.errors.isNotEmpty()) {
+            logger.warn(
+                "Memory archive partially applied: updated={}, notFound={}, errors={}",
+                result.updated, result.notFound.size, result.errors.size
+            )
+        }
+        result.updated
+    }
+
+    /** Build the EasyRAG document (frontmatter Markdown + metadata) for [entry]. */
+    private fun buildRagDocument(entry: MemoryEntry): RagDocument {
+        val key = keyOf(entry.path)
+        return RagDocument(
+            key = key,
+            content = buildFileContent(entry),
+            metadata = buildMap {
+                put("type", entry.type.dirName)
+                put("name", entry.name)
+                put("description", entry.description)
+                entry.maturity?.let { put("maturity", it.apiName) }
+                // Redundant freshness copy: chunks after the first one carry no
+                // frontmatter, and retrieval needs these dates to judge staleness.
+                entry.created?.let { put("created", it.format(DATE_FMT)) }
+                entry.updated?.let { put("updated", it.format(DATE_FMT)) }
+            },
+            createTime = createTimeOf(entry),
+            // Memory entries are short Markdown documents retrieved as raw chunks:
+            // heading-aligned chunking keeps frontmatter + body inside one chunk so
+            // parseChunkToEntry can rebuild a complete entry, while KG extraction and
+            // the structure index are skipped — memory_search queries with mode=naive,
+            // which never reads entities/relations or the structure index, so both
+            // would only add per-write LLM cost.
+            options = RagProcessingOptions(
+                chunkMethod = CHUNK_METHOD_STRUCTURE_AWARE,
+                skipKg = true,
+                buildStructure = false
+            ),
+            archived = entry.archived,
+            level = entry.level,
+            refIds = entry.refs,
+            mergedInto = entry.mergedInto
+        )
+    }
 
     // ── read ───────────────────────────────────────────────────────────
 
@@ -203,7 +265,10 @@ internal class RagMemoryStore(
             val detail = client.readByExternalId(
                 RagConstants.externalIdOf(keyOf(path)), bizId
             )
-            detail?.content
+            // Archived entries are reachable only through findByIds, matching readEntry: a caller
+            // that guesses a superseded key must not read history through the raw-content path.
+            if (detail == null || detail.archived) return@translateBackendErrors null
+            detail.content
         }
 
     override suspend fun readEntry(path: String, scope: MemoryScope, owner: MemoryOwnerContext): MemoryEntry? =
@@ -213,10 +278,30 @@ internal class RagMemoryStore(
         }
 
     /** Read one document by externalId and materialize it; one request, no type probing. */
-    private suspend fun readEntryByExternalId(externalId: String, bizId: String): MemoryEntry? {
+    private suspend fun readEntryByExternalId(
+        externalId: String,
+        bizId: String,
+        includeArchived: Boolean = false
+    ): MemoryEntry? {
         val detail = client.readByExternalId(externalId, bizId) ?: return null
+        // Archived entries are reachable only through findByIds (the drill-down path) and through
+        // findByName when the caller is about to write and must know the key is taken by history.
+        if (detail.archived && !includeArchived) return null
+        return entryFromDocument(detail)
+    }
+
+    /** Materialize a full document payload, carrying the archive/reference columns over. */
+    private fun entryFromDocument(detail: RagDocumentDetail): MemoryEntry? {
         val content = detail.content ?: return null
-        return parseChunkToEntry(content, detail.filePath)
+        return parseChunkToEntry(
+            content = content,
+            filePath = detail.filePath,
+            docId = detail.docId,
+            archived = detail.archived,
+            level = detail.level,
+            refs = detail.refIds,
+            mergedInto = detail.mergedInto
+        )
     }
 
     // ── delete / deleteAll ─────────────────────────────────────────────
@@ -250,21 +335,35 @@ internal class RagMemoryStore(
     override suspend fun list(scope: MemoryScope, owner: MemoryOwnerContext, type: MemoryType?): List<MemoryEntry> =
         translateBackendErrors("list") {
             val bizId = bizIdOf(scope, owner) ?: return@translateBackendErrors emptyList()
-            val docs = client.list(listPrefix(type), bizId)
-            val externalIds = docs.mapNotNull { it.externalId }.distinct()
-            val semaphore = Semaphore(MAX_CONCURRENT_READS)
-            coroutineScope {
-                externalIds.map { externalId ->
-                    async { semaphore.withPermit { client.readByExternalId(externalId, bizId) } }
-                }.awaitAll()
-            }.mapNotNull { detail ->
-                val content = detail?.content ?: return@mapNotNull null
-                parseChunkToEntry(content, detail.filePath)
-            }
+            // Retrieval/listing only sees active entries; archived ones are excluded in the DB.
+            val docs = client.list(listPrefix(type), bizId, excludeArchived = true)
+            val docIds = docs.map { it.docId }.filter { it.isNotEmpty() }.distinct()
+            if (docIds.isEmpty()) return@translateBackendErrors emptyList()
+            val details = client.readByDocIds(docIds, bizId).associateBy { it.docId }
+            docIds.mapNotNull { docId -> details[docId]?.let { entryFromDocument(it) } }
         }
 
-    // ── exists / findByName ────────────────────────────────────────────
+    /**
+     * Count from the document listing alone: one paginated series of paths, no body fetched.
+     * [list] has to read every document because callers want the materialized entry, and a scheduler
+     * that only compares a count against a threshold must not pay for that on every tick.
+     */
+    override suspend fun countActiveByType(
+        scope: MemoryScope,
+        owner: MemoryOwnerContext
+    ): Map<MemoryType, Int> = translateBackendErrors("countActiveByType") {
+        val bizId = bizIdOf(scope, owner) ?: return@translateBackendErrors emptyMap()
+        client.list(listPrefix(null), bizId, excludeArchived = true)
+            .mapNotNull { typeOfListedPath(it.filePath) }
+            .groupingBy { it }
+            .eachCount()
+    }
 
+    /** The type directory of a listed document's `{type}/{name}.md` path; null for a foreign path. */
+    private fun typeOfListedPath(filePath: String): MemoryType? =
+        relativePathOf(filePath)?.substringBefore('/')?.let { MemoryType.fromDirName(it) }
+
+    // ── exists / findByName ────────────────────────────────────────────
     override suspend fun exists(
         name: String,
         scope: MemoryScope,
@@ -276,7 +375,8 @@ internal class RagMemoryStore(
         name: String,
         scope: MemoryScope,
         owner: MemoryOwnerContext,
-        type: MemoryType?
+        type: MemoryType?,
+        includeArchived: Boolean
     ): MemoryEntry? = translateBackendErrors("findByName") {
         val bizId = bizIdOf(scope, owner) ?: return@translateBackendErrors null
         // Resolve through documents (written synchronously server-side, so a fresh write is
@@ -286,12 +386,12 @@ internal class RagMemoryStore(
             RagConstants.externalIdOf("${type.dirName}/$name.md")
         } else {
             val candidates = candidateExternalIds(name)
-            client.list(listPrefix(null), bizId)
+            client.list(listPrefix(null), bizId, excludeArchived = !includeArchived)
                 .firstOrNull { it.externalId in candidates }
                 ?.externalId
                 ?: return@translateBackendErrors null
         }
-        readEntryByExternalId(externalId, bizId)
+        readEntryByExternalId(externalId, bizId, includeArchived)
     }
 
     /** Possible externalIds for [name] across the types of the active domain. */
@@ -353,7 +453,15 @@ internal class RagMemoryStore(
      * [filePath] is the EasyRAG logical path `easyai/{type}/{name}.md`,
      * used as fallback source for type/name when frontmatter is missing.
      */
-    private fun parseChunkToEntry(content: String, filePath: String?): MemoryEntry? {
+    private fun parseChunkToEntry(
+        content: String,
+        filePath: String?,
+        docId: String? = null,
+        archived: Boolean = false,
+        level: Int = 0,
+        refs: List<String> = emptyList(),
+        mergedInto: String? = null
+    ): MemoryEntry? {
         val relativePath = relativePathOf(filePath)
         val (frontmatter, body) = splitFrontmatter(content)
         val meta = parseFrontmatter(frontmatter)
@@ -365,15 +473,9 @@ internal class RagMemoryStore(
         val fallbackType = relativePath?.substringBefore('/')?.let { MemoryType.fromDirName(it) }
         val fallbackName = relativePath?.substringAfterLast('/')?.removeSuffix(".md")
         val type = meta["type"]?.let { MemoryType.fromDirName(it) } ?: fallbackType ?: MemoryType.OTHER
-        val name = meta["name"] ?: fallbackName ?: return null
-        val keywords = meta["keywords"]?.split(",")
-            ?.map { it.trim() }
-            ?.filter { it.isNotEmpty() }
-            ?: emptyList()
-        val scenarios = meta["scenarios"]?.split(",")
-            ?.map { it.trim() }
-            ?.filter { it.isNotEmpty() }
-            ?: emptyList()
+        val name = unquoteYamlScalar(meta["name"]) ?: fallbackName ?: return null
+        val keywords = parseYamlList(meta["keywords"])
+        val scenarios = parseYamlList(meta["scenarios"])
         val maturity = meta["maturity"]?.let { MemoryMaturity.fromApiName(it) }
         val created = meta["created"]?.let { runCatching { LocalDate.parse(it, DATE_FMT) }.getOrNull() }
         val updated = meta["updated"]?.let { runCatching { LocalDate.parse(it, DATE_FMT) }.getOrNull() }
@@ -381,7 +483,7 @@ internal class RagMemoryStore(
 
         return MemoryEntry(
             name = name,
-            description = meta["description"] ?: "",
+            description = unquoteYamlScalar(meta["description"]) ?: "",
             type = type,
             content = body.trim(),
             path = "${type.dirName}/$name.md",
@@ -390,7 +492,12 @@ internal class RagMemoryStore(
             updated = updated,
             maturity = maturity,
             scenarios = scenarios,
-            lastAccessed = lastAccessed
+            lastAccessed = lastAccessed,
+            id = docId,
+            archived = archived,
+            level = level,
+            refs = refs,
+            mergedInto = mergedInto
         )
     }
 
@@ -416,24 +523,68 @@ internal class RagMemoryStore(
         return frontmatter to body
     }
 
-    /** Parse simple flat `key: value` YAML frontmatter, stripping surrounding quotes. */
+    /**
+     * Parse flat `key: value` YAML frontmatter into raw value strings.
+     *
+     * Quotes are kept so each caller decodes by kind: a scalar through [unquoteYamlScalar], a flow list
+     * through [parseYamlList]. Stripping them here is what mangled multi-item lists, whose items are each
+     * quoted and therefore leave the line starting and ending with a quote that is not a pair.
+     */
     private fun parseFrontmatter(frontmatter: String): Map<String, String> {
         if (frontmatter.isBlank()) return emptyMap()
         return frontmatter.lines()
             .filter { it.contains(':') }
             .associate { line ->
                 val colonIndex = line.indexOf(':')
-                val key = line.substring(0, colonIndex).trim()
-                var value = line.substring(colonIndex + 1).trim()
-                if (value.length >= 2 &&
-                    ((value.startsWith("\"") && value.endsWith("\"")) ||
-                        (value.startsWith("'") && value.endsWith("'")))
-                ) {
-                    value = value.substring(1, value.length - 1)
-                        .replace("\\\"", "\"")
-                }
-                key to value
+                line.substring(0, colonIndex).trim() to line.substring(colonIndex + 1).trim()
             }
+    }
+
+    /** Decode a scalar written by [quoteYamlValue]; an unquoted value is returned as-is. */
+    private fun unquoteYamlScalar(value: String?): String? {
+        if (value == null) return null
+        if (value.length < 2) return value
+        val wrapped = (value.startsWith("\"") && value.endsWith("\"")) ||
+            (value.startsWith("'") && value.endsWith("'"))
+        if (!wrapped) return value
+        return value.substring(1, value.length - 1).replace("\\\"", "\"")
+    }
+
+    /**
+     * Decode a flow list written by [quoteYamlListItem]: comma-separated items, each double-quoted with
+     * `\\` and `\"` escapes. Quoting every item is what makes an item containing a comma survive the
+     * round trip, so the split must ignore a comma inside quotes rather than break the item in two.
+     * Items written before every element was quoted still read back unchanged.
+     */
+    private fun parseYamlList(raw: String?): List<String> {
+        if (raw.isNullOrBlank()) return emptyList()
+        val items = mutableListOf<String>()
+        val current = StringBuilder()
+        var quoted = false
+        var escaped = false
+        for (c in raw) {
+            if (escaped) {
+                current.append(c)
+                escaped = false
+                continue
+            }
+            if (quoted && c == '\\') {
+                escaped = true
+                continue
+            }
+            if (c == '"') {
+                quoted = !quoted
+                continue
+            }
+            if (c == ',' && !quoted) {
+                items.add(current.toString())
+                current.setLength(0)
+                continue
+            }
+            current.append(c)
+        }
+        items.add(current.toString())
+        return items.map { it.trim() }.filter { it.isNotEmpty() }
     }
 
     /** Build the stored document: YAML frontmatter + Markdown body (same as file store). */
@@ -443,10 +594,10 @@ internal class RagMemoryStore(
         appendLine("description: ${quoteYamlValue(entry.description)}")
         appendLine("type: ${entry.type.dirName}")
         if (entry.keywords.isNotEmpty()) {
-            appendLine("keywords: ${entry.keywords.joinToString(", ") { quoteYamlValue(it) }}")
+            appendLine("keywords: ${entry.keywords.joinToString(", ") { quoteYamlListItem(it) }}")
         }
         if (entry.scenarios.isNotEmpty()) {
-            appendLine("scenarios: ${entry.scenarios.joinToString(", ") { quoteYamlValue(it) }}")
+            appendLine("scenarios: ${entry.scenarios.joinToString(", ") { quoteYamlListItem(it) }}")
         }
         entry.maturity?.let { appendLine("maturity: ${it.apiName}") }
         appendLine("created: ${(entry.created ?: LocalDate.now()).format(DATE_FMT)}")
@@ -461,11 +612,21 @@ internal class RagMemoryStore(
         val sanitized = value.replace("\n", " ").replace("\r", "")
         val needsQuoting = sanitized.any { it in ":#\"{}[]&*!|>%@" }
         return if (needsQuoting) {
-            "\"${sanitized.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+            "\"${escapeYamlDoubleQuoted(sanitized)}\""
         } else {
             sanitized
         }
     }
+
+    /**
+     * A list item, always double-quoted: comma is the item separator, so an item that contains one is
+     * only distinguishable from two items by its quotes. [parseYamlList] reads this back.
+     */
+    private fun quoteYamlListItem(value: String): String =
+        "\"${escapeYamlDoubleQuoted(value.replace("\n", " ").replace("\r", ""))}\""
+
+    private fun escapeYamlDoubleQuoted(value: String): String =
+        value.replace("\\", "\\\\").replace("\"", "\\\"")
 
     private inline fun <T> translateBackendErrors(operation: String, block: () -> T): T {
         return try {
@@ -479,8 +640,6 @@ internal class RagMemoryStore(
         const val FRONTMATTER_DELIMITER = "---"
         /** Markdown heading-based chunking: no LLM cost, keeps entry sections intact. */
         const val CHUNK_METHOD_STRUCTURE_AWARE = "structure_aware"
-        /** Caps the per-document read fan-out of [list] so large scopes cannot starve the pool. */
-        const val MAX_CONCURRENT_READS = 16
         val DATE_FMT: DateTimeFormatter = DateTimeFormatter.ISO_LOCAL_DATE
     }
 }

@@ -110,7 +110,7 @@ interface ChatState {
   appendToolArgs: (id: string, delta: string) => void;
   appendToolOutput: (id: string, output: string) => void;
   getStreamingToolOutput: (id: string) => string | undefined;
-  commitToolResult: (id: string, result: string | undefined, isError: boolean, exitCode?: number | null, mimeType?: string | null, truncated?: boolean, usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }, durationMs?: number) => void;
+  commitToolResult: (id: string, result: string | undefined, isError: boolean, exitCode?: number | null, mimeType?: string | null, truncated?: boolean, usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }, durationMs?: number, details?: Record<string, unknown>) => void;
   setUsage: (usage: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number }) => void;
   setCumulativeUsage: (usage: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number } | null) => void;
   setContextWindow: (size: number) => void;
@@ -316,7 +316,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     return get().streamingToolOutputs[id];
   },
 
-  commitToolResult: (id, result, isError, exitCode?, mimeType?, truncated?, usage?, durationMs?) => set((state) => {
+  commitToolResult: (id, result, isError, exitCode?, mimeType?, truncated?, usage?, durationMs?, details?) => set((state) => {
     const rawResult = result ?? state.streamingToolOutputs[id] ?? '';
     // Try to parse JSON result into content blocks
     let contentBlocks: ToolResultContentBlock[] | undefined;
@@ -336,6 +336,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       toolName,
       result: rawResult, 
       contentBlocks, 
+      details,
       isError, 
       exitCode, 
       mimeType, 

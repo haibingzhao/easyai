@@ -84,6 +84,10 @@ export type { AuthResponse, UserProfile } from './services/auth-service';
 
 export { storageService } from './services/storage-service';
 
+// Durable async-task plane (global Tasks page). Exported so a host can mount
+// its own tasks surface or drive task control directly.
+export { taskService } from './services/task-service';
+
 // Group-sharing capability probe (`GET /api/capabilities`): warmed by auth-store on every auth
 // transition, read by host apps to gate their group-configuration screens.
 export { capabilityService } from './services/capability-service';
@@ -96,6 +100,7 @@ export { useSettingsStore } from './services/stores/settings-store';
 export { useSessionStore } from './services/stores/session-store';
 export { useAgentStore } from './services/stores/agent-store';
 export { useCategoryStore } from './services/stores/category-store';
+export { useTaskStore } from './services/stores/task-store';
 export { useCapabilityStore, selectCanManage } from './services/stores/capability-store';
 export { convertSnapshot } from './services/stores/chat/message-converter';
 export { mergeToolResults } from './services/stores/chat/session-loader';
@@ -151,6 +156,24 @@ export {
   resolveActiveNavItem,
 } from './constants/navigation';
 
+// === Async task registry + types (extensible task presentation) ===
+// A host registers its own backend task types by adding an entry to TASK_TYPE_REGISTRY, so the
+// Tasks page renders them without a page change.
+export {
+  TASK_TYPE_REGISTRY,
+  DEFAULT_TASK_DESCRIPTOR,
+  getTaskDescriptor,
+  taskTypeLabel,
+} from './constants/task-types';
+export type {
+  AsyncTask,
+  AsyncTaskType,
+  AsyncTaskStatus,
+  TaskTrigger,
+  TaskFilters,
+  TaskTypeDescriptor,
+} from './types/task';
+
 // === Page components (for external routing) ===
 export { WorkflowPage } from './pages/WorkflowPage';
 export { AgentsPage } from './pages/AgentsPage';
@@ -158,6 +181,7 @@ export { AgentCreatePage } from './pages/AgentCreatePage';
 export { ModelsPage } from './pages/ModelsPage';
 export { McpPage } from './pages/McpPage';
 export { MemoriesPage } from './pages/MemoriesPage';
+export { TasksPage } from './pages/TasksPage';
 export { KnowledgePage } from './pages/KnowledgePage';
 export { CommandsPage } from './pages/CommandsPage';
 export { SkillsPage } from './pages/SkillsPage';

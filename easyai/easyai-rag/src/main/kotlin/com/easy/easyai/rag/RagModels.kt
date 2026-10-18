@@ -28,13 +28,21 @@ data class RagProcessingOptions(
  * @param metadata string metadata passed through to chunks, filterable at query time
  * @param createTime business time in epoch seconds (typically the "updated" moment)
  * @param options document processing options
+ * @param archived archive flag (history entry); excluded from retrieval when the query asks for it
+ * @param level consolidation depth (source = 0)
+ * @param refIds consolidated-entry source docIds
+ * @param mergedInto docId of the consolidated entry that absorbed this source
  */
 data class RagDocument(
     val key: String,
     val content: String,
     val metadata: Map<String, String> = emptyMap(),
     val createTime: Long,
-    val options: RagProcessingOptions = RagProcessingOptions()
+    val options: RagProcessingOptions = RagProcessingOptions(),
+    val archived: Boolean = false,
+    val level: Int = 0,
+    val refIds: List<String> = emptyList(),
+    val mergedInto: String? = null
 ) {
     /** Deterministic external id: `easyai:{key}`. */
     val externalId: String get() = RagConstants.externalIdOf(key)
@@ -72,11 +80,15 @@ data class RagDocInfo(
     val contentLength: Int?,
     val chunksCount: Int?,
     val createdAt: Long?,
-    val updatedAt: Long?
+    val updatedAt: Long?,
+    val archived: Boolean = false,
+    val level: Int = 0,
+    val refIds: List<String> = emptyList(),
+    val mergedInto: String? = null
 )
 
 /**
- * Full document detail returned by read-by-external-id.
+ * Full document detail returned by read-by-external-id / read-by-doc-ids.
  */
 data class RagDocumentDetail(
     val docId: String,
@@ -86,7 +98,11 @@ data class RagDocumentDetail(
     val status: String?,
     val createTime: Long?,
     val chunksCount: Int?,
-    val metadata: Map<String, Any?> = emptyMap()
+    val metadata: Map<String, Any?> = emptyMap(),
+    val archived: Boolean = false,
+    val level: Int = 0,
+    val refIds: List<String> = emptyList(),
+    val mergedInto: String? = null
 )
 
 /**
@@ -97,8 +113,15 @@ data class RagDocumentDetail(
  * @param score relevance score
  * @param createTime business time of the source document in epoch seconds
  * @param metadata metadata passed through from the source document
+ * @param docId id of the source document, when the retrieval projection carries one (R16). It becomes
+ *   `MemoryEntry.id` and is what the consolidation writer and the console's archive drill-down address
+ *   entries by; no chat tool takes a docId argument.
  * @param bizId slice the chunk came from. Always echoed by the server, which is what makes
  *   a single multi-slice (`bizIds`) query resolvable back to its scope client-side.
+ * @param archived archive flag echoed from the source document
+ * @param level consolidation depth echoed from the source document
+ * @param refIds consolidated-entry source docIds echoed from the source document
+ * @param mergedInto parent consolidated docId echoed from the source document
  */
 data class RagChunk(
     val content: String,
@@ -106,7 +129,36 @@ data class RagChunk(
     val score: Double?,
     val createTime: Long?,
     val metadata: Map<String, Any?>,
-    val bizId: String? = null
+    val docId: String? = null,
+    val bizId: String? = null,
+    val archived: Boolean = false,
+    val level: Int = 0,
+    val refIds: List<String> = emptyList(),
+    val mergedInto: String? = null
+)
+
+/**
+ * Archive-related fields sent to the flag-only update endpoint. Only non-null fields are written;
+ * content and vectors are untouched, so no re-index happens.
+ */
+data class RagArchiveUpdate(
+    val archived: Boolean? = null,
+    val level: Int? = null,
+    val refIds: List<String>? = null,
+    val mergedInto: String? = null
+)
+
+/**
+ * Outcome of a batch archive call.
+ *
+ * @param updated number of documents whose archive fields were written
+ * @param notFound docIds the server did not know in this slice
+ * @param errors docId → failure message for writes that failed
+ */
+data class RagArchiveResult(
+    val updated: Int,
+    val notFound: List<String> = emptyList(),
+    val errors: Map<String, String> = emptyMap()
 )
 
 /**

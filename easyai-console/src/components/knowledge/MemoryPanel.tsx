@@ -1,11 +1,13 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useMemoryStore } from '@/services/stores/memory-store';
 import { useProjectStore } from '@/services/stores/project-store';
 import { memoryService } from '@/services/memory-service';
 import { MemorySidebar, type SelectedMemory } from '@/components/memories/MemorySidebar';
 import { MemoryDocumentViewer } from '@/components/memories/MemoryDocumentViewer';
 import { EditMemoryDialog } from '@/components/memories/EditMemoryDialog';
-import { Plus, X, AlertCircle } from 'lucide-react';
+import { MemoryConsolidationDialog } from '@/components/memories/MemoryConsolidationDialog';
+import { Layers, Plus, X, AlertCircle } from 'lucide-react';
 import type { MemoryEntry, CreateMemoryRequest, UpdateMemoryRequest } from '@/types/memory';
 import { useResizable } from '@/hooks/useResizable';
 import { i18n } from '@/utils/i18n';
@@ -19,6 +21,7 @@ interface MemoryPanelProps {
 }
 
 export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
+  const navigate = useNavigate();
   const entries = useMemoryStore((s) => s.entries);
   const loading = useMemoryStore((s) => s.loading);
   const error = useMemoryStore((s) => s.error);
@@ -26,6 +29,10 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
   const loadAll = useMemoryStore((s) => s.loadAll);
   const loadConfig = useMemoryStore((s) => s.loadConfig);
   const config = useMemoryStore((s) => s.config);
+  const consolidation = useMemoryStore((s) => s.consolidation);
+  const loadConsolidation = useMemoryStore((s) => s.loadConsolidation);
+  const saveConsolidation = useMemoryStore((s) => s.saveConsolidation);
+  const loadArchived = useMemoryStore((s) => s.loadArchived);
   const createOrUpdate = useMemoryStore((s) => s.createOrUpdate);
   const updateMemory = useMemoryStore((s) => s.updateMemory);
   const deleteMemory = useMemoryStore((s) => s.deleteMemory);
@@ -40,6 +47,7 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
   const [fetchedEntry, setFetchedEntry] = useState<MemoryEntry | null>(null);
   const [editingMemory, setEditingMemory] = useState<MemoryEntry | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [consolidationOpen, setConsolidationOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(288);
 
   const resizable = useResizable({
@@ -52,7 +60,8 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
   useEffect(() => {
     loadAll();
     loadConfig();
-  }, [loadAll, loadConfig]);
+    loadConsolidation();
+  }, [loadAll, loadConfig, loadConsolidation]);
 
   const localEntry = useMemo(() => {
     if (!selected) return null;
@@ -148,6 +157,46 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
     }
   };
 
+  const handleToggleConsolidation = async (enabled: boolean) => {
+    try {
+      await saveConsolidation({ enabled });
+    } catch {
+      // error already set in store
+    }
+  };
+
+  const handleLoadRefs = useCallback(
+    (ids: string[]) => {
+      if (!displayEntry) return Promise.resolve([]);
+      return loadArchived(ids, displayEntry.scope as 'global' | 'project', displayEntry.projectPath ?? null);
+    },
+    [displayEntry, loadArchived]
+  );
+
+  // Following an archive chain keeps the same scope slice: a docId is only meaningful inside the
+  // bizId it was written under, and `displayEntry` is the one reference we have to it.
+  const handleOpenById = useCallback(
+    async (docId: string): Promise<boolean> => {
+      if (!displayEntry) return false;
+      const scope = displayEntry.scope as 'global' | 'project';
+      const projectPath = displayEntry.projectPath ?? null;
+      const [entry] = await loadArchived([docId], scope, projectPath);
+      if (!entry) return false;
+      setSelected({ scope, projectPath, name: entry.name });
+      setFetchedEntry(entry);
+      return true;
+    },
+    [displayEntry, loadArchived]
+  );
+
+  // The absorbing entry is normally still active, so its title is already in the list — show that
+  // instead of the raw docId the chain stores.
+  const mergedIntoName = useMemo(() => {
+    const id = displayEntry?.mergedInto;
+    if (!id) return null;
+    return entries.find((e) => e.id === id)?.name ?? null;
+  }, [entries, displayEntry?.mergedInto]);
+
   return (
     <div className="h-full flex min-h-0">
       {/* Left sidebar */}
@@ -160,6 +209,9 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
           autoGeneration={projectForMemory?.memoryAutoGeneration ?? false}
           onToggleAutoGeneration={handleToggleAutoGen}
           onSelect={handleSelect}
+          consolidation={consolidation}
+          onToggleConsolidation={handleToggleConsolidation}
+          onOpenConsolidation={() => setConsolidationOpen(true)}
         />
       </div>
 
@@ -182,13 +234,24 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
         {/* Toolbar */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
           <div className="flex items-center gap-2">{header}</div>
-          <button
-            onClick={handleCreate}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            {i18n('Create Memory')}
-          </button>
+          <div className="flex items-center gap-2">
+            {consolidation?.available && (
+              <button
+                onClick={() => setConsolidationOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs border border-border hover:bg-muted transition-colors"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                {i18n('Consolidate')}
+              </button>
+            )}
+            <button
+              onClick={handleCreate}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              {i18n('Create Memory')}
+            </button>
+          </div>
         </div>
 
         {/* Error banner */}
@@ -218,6 +281,9 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
             onEdit={() => displayEntry && handleEdit(displayEntry)}
             onDelete={() => displayEntry && handleDelete(displayEntry)}
             onClearScope={() => displayEntry && handleClearScope(displayEntry)}
+            onLoadRefs={handleLoadRefs}
+            onOpenById={handleOpenById}
+            mergedIntoName={mergedIntoName}
           />
         </div>
       </div>
@@ -230,6 +296,20 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
         onUpdate={handleSaveUpdate}
         memory={editingMemory}
         currentProjectPath={projectForMemory?.path ?? null}
+      />
+
+      {/* Consolidation settings + manual run */}
+      <MemoryConsolidationDialog
+        open={consolidationOpen}
+        onClose={() => {
+          setConsolidationOpen(false);
+          void loadAll();
+        }}
+        currentProjectPath={projectForMemory?.path ?? null}
+        onViewTasks={() => {
+          setConsolidationOpen(false);
+          navigate('/tasks');
+        }}
       />
     </div>
   );

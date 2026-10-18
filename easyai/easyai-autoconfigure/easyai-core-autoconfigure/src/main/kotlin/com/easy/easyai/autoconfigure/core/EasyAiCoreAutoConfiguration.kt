@@ -21,6 +21,9 @@ import com.easy.easyai.core.prompt.SystemPromptBuilder
 import com.easy.easyai.core.skill.AsyncSkillCatalogStore
 import com.easy.easyai.core.skill.SkillStore
 import com.easy.easyai.core.storage.ObjectStorageResolver
+import com.easy.easyai.core.task.AsyncTaskRunner
+import com.easy.easyai.core.task.AsyncTaskStore
+import com.easy.easyai.core.task.TaskHandler
 import com.easy.easyai.core.tool.DefaultToolExecutionEngine
 import com.easy.easyai.core.tool.ToolBuilder
 import com.easy.easyai.core.tool.ToolContextProjector
@@ -131,8 +134,28 @@ open class EasyAiCoreAutoConfiguration(
         chatModelFactories: List<ChatModelFactory>
     ): AuxModelResolver = DefaultAuxModelResolver(settingsStore, configStore, chatModelFactories)
 
-    // ========== Agent System Prompt Beans ==========
+    // ========== Async Task Beans ==========
 
+    /**
+     * App-scoped executor for durable async tasks (memory consolidation now). The store and handlers
+     * are resolved through [ObjectProvider] so the runner builds regardless of load order and
+     * degrades to a no-op when the R2DBC store is absent (`easyai.r2dbc.enabled=false`).
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    open fun asyncTaskRunner(
+        storeProvider: ObjectProvider<AsyncTaskStore>,
+        handlers: ObjectProvider<TaskHandler>
+    ): AsyncTaskRunner = AsyncTaskRunner(
+        store = storeProvider.getIfAvailable(),
+        handlers = handlers.orderedStream().toList()
+    )
+
+    @Bean
+    @ConditionalOnMissingBean
+    open fun asyncTaskLifecycle(runner: AsyncTaskRunner): AsyncTaskLifecycle = AsyncTaskLifecycle(runner)
+
+    // ========== Agent System Prompt Beans ==========
     @Bean
     @ConditionalOnMissingBean
     open fun providerPromptLoader(): ProviderPromptLoader = DefaultProviderPromptLoader()

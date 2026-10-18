@@ -122,6 +122,32 @@ class MemoryFlushAgentTest {
     }
 
     @Test
+    fun `over-long extracted fields are capped at the hard limits`() = runTest {
+        val entries = mutableListOf<MemoryEntry>()
+        coEvery { store.write(capture(entries), any(), any()) } returns Path.of("x")
+        val longBody = "x".repeat(MemoryContentLimits.CONTENT_HARD_CAP_CHARS + 500)
+        val longDesc = "d".repeat(MemoryContentLimits.DESCRIPTION_CAP_CHARS + 80)
+        val json = """{"memories": [{"title": "big fact", "description": "$longDesc", """ +
+            """"category": "experience_lessons", "content": "$longBody"}]}"""
+
+        val result = MemoryFlushAgent(store).maybeFlush(
+            agentContext = agentContext,
+            messages = messages,
+            modelContextLength = 100_000,
+            estimatedTokenCount = 90_000,
+            chatModel = chatModelReturning(json)
+        )
+
+        assertEquals(1, result?.written)
+        val written = entries.single()
+        assertTrue(written.content.endsWith("…(truncated)"))
+        // The marker is paid for out of the cap: an entry a character over it cannot be saved from the
+        // Memories page, whose write endpoint applies the same limit.
+        assertEquals(MemoryContentLimits.CONTENT_HARD_CAP_CHARS, written.content.length)
+        assertEquals(MemoryContentLimits.DESCRIPTION_CAP_CHARS, written.description.length)
+    }
+
+    @Test
     fun `temporary workspace downgrades the write scope to global`() = runTest {
         val entries = mutableListOf<MemoryEntry>()
         val scopeSlot = slot<MemoryScope>()
