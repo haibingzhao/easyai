@@ -68,6 +68,9 @@ data class UpdateMemoryConfigRequest(
  * @property defaultScanCron deployment default scan cron
  * @property curationModelConfigured whether a MEMORY_CURATION model is resolvable; enabling requires it
  * @property available deployment kill switch (`easyai.memory.consolidation.available`)
+ * @property sliceStates what the scheduler remembers per slice, keyed by the backend slice key
+ *   (`{scope}|{projectPath}|{typeDirName}`, with an empty project segment for GLOBAL). Read-only, and
+ *   what lets the UI say "waiting until Thursday" instead of looking silently broken.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class MemoryConsolidationSettingsDto(
@@ -77,7 +80,27 @@ data class MemoryConsolidationSettingsDto(
     val defaultThreshold: Int,
     val defaultScanCron: String,
     val curationModelConfigured: Boolean,
-    val available: Boolean
+    val available: Boolean,
+    val sliceStates: Map<String, ConsolidationSliceStateDto> = emptyMap()
+)
+
+/**
+ * One slice's scheduler memory, as the settings endpoint reports it.
+ *
+ * @property lastRunAt epoch-ms of the last run over this slice; null when it has never run
+ * @property nextEligibleAt epoch-ms before which the scheduled scan skips this slice; null when no delay
+ *   is in force. A manual run ignores it, so the UI shows it as a wait rather than as a block.
+ * @property zeroGainStreak consecutive runs that produced no merged entry, whatever the reason; the
+ *   reason is what picks the delay, not the streak
+ * @property lastOutcome `PRODUCTIVE`, `NOTHING_TO_MERGE` or `FAILED`; null for a slice recorded before
+ *   the outcome was tracked, which is why the UI treats it as unknown rather than as a failure.
+ */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+data class ConsolidationSliceStateDto(
+    val lastRunAt: Long? = null,
+    val nextEligibleAt: Long? = null,
+    val zeroGainStreak: Int = 0,
+    val lastOutcome: String? = null
 )
 
 /** Partial update; blank [scanCron] clears the override, null leaves it unchanged. */

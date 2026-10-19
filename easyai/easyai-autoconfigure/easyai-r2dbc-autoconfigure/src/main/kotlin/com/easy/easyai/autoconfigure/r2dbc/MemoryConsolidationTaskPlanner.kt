@@ -27,9 +27,10 @@ import java.util.UUID
  *
  * A slice is one (scope, project, memory type): the user's GLOBAL memory plus one per non-temp project,
  * each measured against that type's threshold from the user's `params`. Measurement is one cheap listing
- * per slice ([MemoryStore.listActiveIndex]) that answers three questions at once — how many active entries
- * each type has, which docIds make up the slice, and therefore whether the slice changed at all since the
- * last pass. Nothing is read per entry body, because this runs on every tick for every opted-in user.
+ * per slice ([MemoryStore.listActiveIndex]) that answers three questions at once — how many of each
+ * type's entries are still mergeable material, which docIds make up the slice, and therefore whether the
+ * slice changed at all since the last pass. Nothing is read per entry body, because this runs on every
+ * tick for every opted-in user.
  *
  * Three gates decide "due", and the last two exist because a count threshold on its own does not:
  *
@@ -91,7 +92,17 @@ class MemoryConsolidationTaskPlanner(
             if (index.isEmpty()) continue
             for ((key, memoryType, state) in candidates) {
                 val typeIndex = index.filter { it.type == memoryType }
-                if (typeIndex.size < thresholdFor(user, memoryType)) continue
+                // The threshold counts only what a run would actually be offered. An entry at the depth
+                // ceiling is a finished digest, never material, so a slice made of little else would pass
+                // a raw count, build a task and a hidden session, and have the agent return an empty
+                // report at once — a no-op the scheduler would then bill to its zero-gain delay.
+                val eligibleCount = typeIndex.count { it.level < settings.maxLevel }
+                if (eligibleCount < thresholdFor(user, memoryType)) continue
+                // Deliberately over *every* active level, not just the eligible ones. The run records its
+                // baseline from a listing it does not filter by level, so the two must describe the same
+                // set: narrowing this one would make the comparison never match, and the slice would be
+                // consolidated again at every scan. The threshold asks "is there enough material"; this
+                // asks "did anything change", and those are different sets.
                 val fingerprint = MemoryIndexEntry.fingerprint(typeIndex.map { it.docId })
                 if (state?.activeFingerprint == fingerprint) {
                     logger.debug(

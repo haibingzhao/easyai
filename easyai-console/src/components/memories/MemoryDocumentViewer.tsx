@@ -8,8 +8,8 @@ import {
   Eraser,
   Brain,
   Check,
+  ChevronRight,
   ChevronDown,
-  ChevronUp,
   FileText,
   Layers,
   ArrowUpRight,
@@ -62,7 +62,6 @@ export const MemoryDocumentViewer: React.FC<MemoryDocumentViewerProps> = ({
   const [refsLoading, setRefsLoading] = useState(false);
   const [refsError, setRefsError] = useState<string | null>(null);
   const [refEntries, setRefEntries] = useState<MemoryEntry[] | null>(null);
-  const [expandedRef, setExpandedRef] = useState<string | null>(null);
   const [navError, setNavError] = useState<string | null>(null);
   const [navTarget, setNavTarget] = useState<string | null>(null);
 
@@ -71,7 +70,6 @@ export const MemoryDocumentViewer: React.FC<MemoryDocumentViewerProps> = ({
     setRefsOpen(false);
     setRefEntries(null);
     setRefsError(null);
-    setExpandedRef(null);
     setNavError(null);
   }, [entry?.id, entry?.name]);
 
@@ -293,7 +291,7 @@ export const MemoryDocumentViewer: React.FC<MemoryDocumentViewerProps> = ({
           )}
         </div>
 
-        {/* Merged-entry sources (archived history) */}
+        {/* Merged-entry sources (tree view for multi-level consolidation) */}
         {refs.length > 0 && (
           <div className="mt-4 rounded-md border border-border">
             <button
@@ -307,13 +305,13 @@ export const MemoryDocumentViewer: React.FC<MemoryDocumentViewerProps> = ({
                 </span>
               </span>
               {refsOpen ? (
-                <ChevronUp className="size-3.5 text-muted-foreground shrink-0" />
-              ) : (
                 <ChevronDown className="size-3.5 text-muted-foreground shrink-0" />
+              ) : (
+                <ChevronRight className="size-3.5 text-muted-foreground shrink-0" />
               )}
             </button>
             {refsOpen && (
-              <div className="border-t border-border px-3 py-2 space-y-1">
+              <div className="border-t border-border px-3 py-2">
                 {refsLoading ? (
                   <div className="text-xs text-muted-foreground py-1">{i18n('Loading...')}</div>
                 ) : refsError ? (
@@ -321,54 +319,18 @@ export const MemoryDocumentViewer: React.FC<MemoryDocumentViewerProps> = ({
                 ) : !refEntries || refEntries.length === 0 ? (
                   <div className="text-xs text-muted-foreground py-1">{i18n('No sources found')}</div>
                 ) : (
-                  refEntries.map((ref) => {
-                    const key = ref.id ?? ref.name;
-                    const expanded = expandedRef === key;
-                    return (
-                      <div key={key} className="rounded-md border border-border/60">
-                        <div className="flex items-stretch">
-                          <button
-                            onClick={() => setExpandedRef(expanded ? null : key)}
-                            className="flex-1 min-w-0 flex items-center gap-2 px-2 py-1.5 text-left hover:bg-muted/60 transition-colors"
-                          >
-                            <FileText className="size-3 text-muted-foreground shrink-0" />
-                            <span className="text-xs truncate flex-1">{ref.name}</span>
-                            {(ref.level ?? 0) > 0 && (
-                              <span className="text-[10px] text-violet-600 dark:text-violet-400 shrink-0">
-                                {i18n('Level')} {ref.level}
-                              </span>
-                            )}
-                            <span className="text-[10px] text-muted-foreground shrink-0">
-                              {ref.archived ? i18n('Archived') : i18n('Active')}
-                            </span>
-                          </button>
-                          {/* A source that was itself merged has its own refs: open it to reach them. */}
-                          {ref.id && (
-                            <button
-                              onClick={() => void handleOpenById(ref.id as string)}
-                              disabled={navTarget === ref.id}
-                              className="px-2 flex items-center shrink-0 text-muted-foreground hover:bg-muted transition-colors disabled:opacity-60"
-                              title={i18n('Open as document')}
-                            >
-                              <ArrowUpRight className="size-3.5" />
-                            </button>
-                          )}
-                        </div>
-                        {expanded && (
-                          <div className="px-2 pb-2 border-t border-border/60 pt-2">
-                            {ref.description && (
-                              <div className="text-xs text-muted-foreground mb-1">{ref.description}</div>
-                            )}
-                            <div className="prose prose-sm dark:prose-invert max-w-none break-words">
-                              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownCodeComponents}>
-                                {stripRefMarkers(ref.content) || i18n('No content')}
-                              </ReactMarkdown>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })
+                  <div className="space-y-0.5">
+                    {refEntries.map((ref) => (
+                      <MemorySourceNode
+                        key={ref.id ?? ref.name}
+                        entry={ref}
+                        depth={0}
+                        onLoadRefs={onLoadRefs}
+                        onOpenById={handleOpenById}
+                        navTarget={navTarget}
+                      />
+                    ))}
+                  </div>
                 )}
               </div>
             )}
@@ -400,6 +362,156 @@ export const MemoryDocumentViewer: React.FC<MemoryDocumentViewerProps> = ({
           </div>
         )}
       </div>
+    </div>
+  );
+};
+
+interface MemorySourceNodeProps {
+  entry: MemoryEntry;
+  depth: number;
+  onLoadRefs: (ids: string[]) => Promise<MemoryEntry[]>;
+  onOpenById: (docId: string) => Promise<void>;
+  navTarget: string | null;
+}
+
+/**
+ * Recursive tree node for memory consolidation history. Each node represents a source memory;
+ * if that source was itself a consolidation (has refs), it can be expanded to show its own sources.
+ */
+const MemorySourceNode: React.FC<MemorySourceNodeProps> = ({
+  entry,
+  depth,
+  onLoadRefs,
+  onOpenById,
+  navTarget,
+}) => {
+  const [expanded, setExpanded] = useState(false);
+  const [childEntries, setChildEntries] = useState<MemoryEntry[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const hasChildren = (entry.refs?.length ?? 0) > 0;
+
+  const handleToggle = async () => {
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    setExpanded(true);
+    if (childEntries !== null || !hasChildren) return;
+    setLoading(true);
+    try {
+      const refs = entry.refs ?? [];
+      setChildEntries(await onLoadRefs(refs));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpen = async () => {
+    if (entry.id) {
+      await onOpenById(entry.id);
+    }
+  };
+
+  return (
+    <div>
+      <div
+        className="flex items-center gap-1 py-1 pr-2 hover:bg-muted/60 transition-colors rounded"
+        style={{ paddingLeft: `${depth * 12 + 4}px` }}
+      >
+        {/* Expand/collapse toggle */}
+        {hasChildren ? (
+          <button
+            onClick={() => void handleToggle()}
+            className="shrink-0 p-0.5 hover:bg-muted transition-colors rounded"
+          >
+            {expanded ? (
+              <ChevronDown className="size-3 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="size-3 text-muted-foreground" />
+            )}
+          </button>
+        ) : (
+          <span className="size-3 shrink-0" />
+        )}
+
+        {/* Memory icon */}
+        <FileText className="size-3 text-muted-foreground shrink-0" />
+
+        {/* Memory name and metadata */}
+        <div className="flex-1 min-w-0 flex items-center gap-2">
+          <span className="text-xs truncate">{entry.name}</span>
+          {(entry.level ?? 0) > 0 && (
+            <span className="text-[10px] text-violet-600 dark:text-violet-400 shrink-0">
+              {i18n('Level')} {entry.level}
+            </span>
+          )}
+          <span className="text-[10px] text-muted-foreground shrink-0">
+            {entry.archived ? i18n('Archived') : i18n('Active')}
+          </span>
+        </div>
+
+        {/* Open as document button */}
+        {entry.id && (
+          <button
+            onClick={() => void handleOpen()}
+            disabled={navTarget === entry.id}
+            className="px-1.5 flex items-center shrink-0 text-muted-foreground hover:bg-muted transition-colors disabled:opacity-60 rounded"
+            title={i18n('Open as document')}
+          >
+            <ArrowUpRight className="size-3" />
+          </button>
+        )}
+      </div>
+
+      {/* Loading state */}
+      {expanded && loading && (
+        <div
+          className="flex items-center gap-2 py-1 text-muted-foreground"
+          style={{ paddingLeft: `${(depth + 1) * 12 + 4}px` }}
+        >
+          <span className="text-xs">{i18n('Loading...')}</span>
+        </div>
+      )}
+
+      {/* Error state */}
+      {expanded && error && (
+        <div
+          className="py-1 text-destructive"
+          style={{ paddingLeft: `${(depth + 1) * 12 + 4}px` }}
+        >
+          <span className="text-xs">{error}</span>
+        </div>
+      )}
+
+      {/* Child nodes */}
+      {expanded && childEntries && childEntries.length > 0 && (
+        <div>
+          {childEntries.map((child) => (
+            <MemorySourceNode
+              key={child.id ?? child.name}
+              entry={child}
+              depth={depth + 1}
+              onLoadRefs={onLoadRefs}
+              onOpenById={onOpenById}
+              navTarget={navTarget}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Empty state */}
+      {expanded && childEntries && childEntries.length === 0 && (
+        <div
+          className="py-1 text-muted-foreground"
+          style={{ paddingLeft: `${(depth + 1) * 12 + 4}px` }}
+        >
+          <span className="text-xs">{i18n('No sources found')}</span>
+        </div>
+      )}
     </div>
   );
 };

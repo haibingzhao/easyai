@@ -182,6 +182,7 @@ export { ModelsPage } from './pages/ModelsPage';
 export { McpPage } from './pages/McpPage';
 export { MemoriesPage } from './pages/MemoriesPage';
 export { TasksPage } from './pages/TasksPage';
+export { TaskTranscriptPage } from './pages/TaskTranscriptPage';
 export { KnowledgePage } from './pages/KnowledgePage';
 export { CommandsPage } from './pages/CommandsPage';
 export { SkillsPage } from './pages/SkillsPage';

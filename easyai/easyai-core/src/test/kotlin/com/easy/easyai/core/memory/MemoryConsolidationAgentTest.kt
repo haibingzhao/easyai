@@ -263,8 +263,8 @@ class MemoryConsolidationAgentTest {
             assertEquals(0, report.uncoveredDocIds)
             assertTrue(sent[1].text().contains("body a"), "the merge pass must be given the source bodies")
             assertFalse(sent[0].text().contains("body a"), "grouping must not be shown bodies")
-            verify(exactly = 1) { session.updateTurnOutputContract(any(), CONSOLIDATION_GROUPING_SCHEMA) }
-            verify(exactly = 1) { session.updateTurnOutputContract(any(), CONSOLIDATION_MERGE_SCHEMA) }
+            verify(exactly = 1) { session.updateTurnOutputContract(any(), CONSOLIDATION_GROUPING_SCHEMA, null) }
+            verify(exactly = 1) { session.updateTurnOutputContract(any(), CONSOLIDATION_MERGE_SCHEMA, false) }
         }
 
         @Test
@@ -285,7 +285,7 @@ class MemoryConsolidationAgentTest {
         }
 
         @Test
-        fun `the run asks for a session with no tools, which its prompt promises`() = runTest {
+        fun `the run asks for a session with no tools and no skills, which its prompt promises`() = runTest {
             givenRun(
                 rows,
                 pool,
@@ -297,8 +297,11 @@ class MemoryConsolidationAgentTest {
             val context = slot<AgentContext>()
             coVerify { sessionManager.getOrCreateSession(capture(context), any(), any()) }
             assertTrue(
-                context.captured.noTools,
-                "the system prompt says \"You have no tools\", and an empty tool list alone does not mean that"
+                context.captured.tools.isEmpty() &&
+                    context.captured.skills.isEmpty() &&
+                    context.captured.allowedSkillNames.isEmpty(),
+                "the system prompt says \"You have no tools\", so the request must carry no tools and no " +
+                    "skill list — this agentId has no row, and the session manager takes an empty list as final"
             )
         }
 

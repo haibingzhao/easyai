@@ -106,7 +106,8 @@ class RagAutoConfiguration {
             maxTasksPerTickPerUser = properties.maxTasksPerTickPerUser,
             maxLevel = properties.maxLevel,
             zeroGainBackoffBaseDays = properties.zeroGainBackoffBaseDays,
-            zeroGainBackoffMaxDays = properties.zeroGainBackoffMaxDays
+            zeroGainBackoffMaxDays = properties.zeroGainBackoffMaxDays,
+            failedRunBackoffBaseDays = properties.failedRunBackoffBaseDays
         )
 
     /**
@@ -181,7 +182,8 @@ class RagAutoConfiguration {
         memoryStore = memoryStore.ifAvailable,
         settingsStore = settingsStore.ifAvailable,
         backoffBaseDays = settings.zeroGainBackoffBaseDays,
-        backoffMaxDays = settings.zeroGainBackoffMaxDays
+        backoffMaxDays = settings.zeroGainBackoffMaxDays,
+        failedRunBackoffBaseDays = settings.failedRunBackoffBaseDays
     )
 
     @Bean

@@ -10,9 +10,9 @@ package com.easy.easyai.core.memory
  *   planner is wired, regardless of per-user settings.
  * @property maxGroupingPromptChars character budget of one grouping-pass prompt. That pass prints no
  *   memory bodies at all — only `docId + name + level + size + blurb` per entry — so its ceiling is set
- *   by what the model must *read*, which is cheap. Deliberately an order of magnitude above
- *   [maxMergePromptCharsPerCall]: cutting the grouping budget is what split one slice into batches that
- *   could never see each other and merge across them was then impossible.
+ *   by what the model must *read*, which is cheap. Deliberately several times
+ *   [maxMergePromptCharsPerCall] (120k against 40k): cutting the grouping budget is what split one slice
+ *   into batches that could never see each other and merge across them was then impossible.
  * @property maxSourcesPerGroup largest cluster one merged entry may absorb. A cluster is judged on
  *   names and blurbs, so the cap is what keeps the merge pass from being asked to distill an absurd
  *   amount of text into the body size limit.
@@ -43,11 +43,18 @@ package com.easy.easyai.core.memory
  *   entries stay active and keep counting toward [defaultThreshold], so without this ceiling a slice
  *   that gains a few new memories each day re-distills yesterday's digest one level higher forever.
  *   Entries at or above it remain searchable — they are simply never offered as sources again.
- * @property zeroGainBackoffBaseDays delay after a run that archived nothing, doubled per repeat up to
- *   [zeroGainBackoffMaxDays]. A model that finds nothing to merge leaves the active count unchanged, so
- *   a threshold-only trigger would re-ask the same question at every scan, forever.
- * @property zeroGainBackoffMaxDays ceiling of that doubling, so a permanently unmergeable slice is
- *   retried occasionally rather than never.
+ * @property zeroGainBackoffBaseDays delay after a run that finished and found nothing to merge, doubled
+ *   per repeat up to [zeroGainBackoffMaxDays]. A model that finds nothing to merge leaves the active
+ *   count unchanged, so a threshold-only trigger would re-ask the same question at every scan, forever.
+ *   Deliberately longer than [failedRunBackoffBaseDays]: this outcome is the model's own verdict that the
+ *   slice is already coherent, so re-asking soon would just re-earn the same answer.
+ * @property failedRunBackoffBaseDays delay after a run that could not do its job — it threw, or every
+ *   prompt died in transport or came back unusable — doubled per repeat up to [zeroGainBackoffMaxDays].
+ *   Such a run says nothing about whether the slice is mergeable, so it is retried far sooner than a
+ *   verdict of "nothing to merge"; without any delay at all a slice that consistently outlives
+ *   [runTimeoutMs] would burn that whole budget again at every scan, indefinitely.
+ * @property zeroGainBackoffMaxDays ceiling of both doublings, so a permanently unmergeable or
+ *   permanently failing slice is retried occasionally rather than never.
  */
 data class MemoryConsolidationSettings(
     val available: Boolean = true,
@@ -65,5 +72,6 @@ data class MemoryConsolidationSettings(
     val maxTasksPerTickPerUser: Int = 5,
     val maxLevel: Int = 3,
     val zeroGainBackoffBaseDays: Int = 7,
-    val zeroGainBackoffMaxDays: Int = 30
+    val zeroGainBackoffMaxDays: Int = 30,
+    val failedRunBackoffBaseDays: Int = 1
 )

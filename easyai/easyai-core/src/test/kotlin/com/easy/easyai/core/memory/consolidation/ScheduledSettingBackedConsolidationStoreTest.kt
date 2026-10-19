@@ -160,6 +160,71 @@ class ScheduledSettingBackedConsolidationStoreTest {
     }
 
     @Test
+    fun `a slice outcome survives the row round-trip`() = runBlocking {
+        val original = MemoryConsolidationUserSettings(
+            userId = "alice",
+            enabled = true,
+            sliceStates = mapOf(
+                "global||experience_lessons" to MemoryConsolidationSliceState(
+                    activeFingerprint = 4242,
+                    lastRunAt = 1_700_000_000_000,
+                    zeroGainStreak = 2,
+                    nextEligibleAt = 1_700_000_600_000,
+                    lastOutcome = ConsolidationOutcome.FAILED
+                )
+            )
+        )
+
+        val decoded = MemoryConsolidationUserSettings.fromScheduled(
+            MemoryConsolidationUserSettings.toScheduled(original)
+        )
+
+        assertEquals(original, decoded)
+    }
+
+    @Test
+    fun `a slice recorded before outcomes were tracked decodes with no outcome`() = runBlocking {
+        // A row written by an earlier build carries no outcome key at all. Absent must mean "unknown",
+        // never "failed": guessing would put a wrong reason in front of whoever reads the settings page.
+        val legacy = row(
+            params = mapOf(
+                MemoryConsolidationUserSettings.PARAM_SLICE_STATES to mapOf(
+                    "global||experience_lessons" to mapOf(
+                        "fingerprint" to 4242,
+                        "lastRunAt" to 1_700_000_000_000L,
+                        "zeroGainStreak" to 1,
+                        "nextEligibleAt" to 1_700_000_600_000L
+                    )
+                )
+            )
+        )
+
+        val state = MemoryConsolidationUserSettings.fromScheduled(legacy)
+            .sliceStates.getValue("global||experience_lessons")
+
+        assertNull(state.lastOutcome)
+        assertEquals(1, state.zeroGainStreak)
+        assertEquals(4242, state.activeFingerprint)
+        assertEquals(1_700_000_600_000L, state.nextEligibleAt)
+    }
+
+    @Test
+    fun `an outcome this build does not know decodes as absent rather than as a failure`() = runBlocking {
+        val future = row(
+            params = mapOf(
+                MemoryConsolidationUserSettings.PARAM_SLICE_STATES to mapOf(
+                    "global||experience_lessons" to mapOf("lastOutcome" to "SOMETHING_NEW")
+                )
+            )
+        )
+
+        val state = MemoryConsolidationUserSettings.fromScheduled(future)
+            .sliceStates.getValue("global||experience_lessons")
+
+        assertNull(state.lastOutcome)
+    }
+
+    @Test
     fun `list reads and deletes stay pinned to the consolidation type`() = runBlocking {
         coEvery { generic.listEnabled(AsyncTaskType.MEMORY_CONSOLIDATION) } returns listOf(row(userId = "bob"))
         coEvery { generic.delete("bob", AsyncTaskType.MEMORY_CONSOLIDATION) } returns true

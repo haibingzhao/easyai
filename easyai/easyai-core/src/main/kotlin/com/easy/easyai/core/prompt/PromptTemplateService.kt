@@ -41,7 +41,9 @@ class PromptTemplateService(
                     append(formatItemList(list))
                 }
             } else null,
-            skillsList = if (includeTools) context.skills.takeIf { it.isNotEmpty() }?.let { list ->
+            // Gated on the capability, not on the list: naming `load_skill` to a run that carries no
+            // tools ships a prompt contradicting its own request body.
+            skillsList = if (includeTools && context.skillLoadingAvailable) context.skills.takeIf { it.isNotEmpty() }?.let { list ->
                 buildString {
                     appendLine("Skills provide specialized instructions and workflows for specific tasks.")
                     appendLine("Use the `load_skill` tool to load a skill when a task matches its description.")

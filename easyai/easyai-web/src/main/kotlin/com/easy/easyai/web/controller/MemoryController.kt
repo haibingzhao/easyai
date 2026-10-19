@@ -27,6 +27,7 @@ import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.web.model.ConsolidationReportDto
 import com.easy.easyai.web.model.ConsolidationRequest
 import com.easy.easyai.web.model.ConsolidationResponse
+import com.easy.easyai.web.model.ConsolidationSliceStateDto
 import com.easy.easyai.web.model.CreateMemoryRequest
 import com.easy.easyai.web.model.MemoryConfigDto
 import com.easy.easyai.web.model.MemoryConsolidationSettingsDto
@@ -507,7 +508,17 @@ class MemoryController(
             defaultThreshold = deployment.defaultThreshold,
             defaultScanCron = deployment.dailyCron,
             curationModelConfigured = curationModelConfigured(),
-            available = deployment.available
+            available = deployment.available,
+            // Keys pass through untouched: they are the scheduler's own slice keys, and the UI rebuilds
+            // the same string from the scope/project/type it already has selected.
+            sliceStates = user?.sliceStates.orEmpty().mapValues { (_, state) ->
+                ConsolidationSliceStateDto(
+                    lastRunAt = state.lastRunAt,
+                    nextEligibleAt = state.nextEligibleAt,
+                    zeroGainStreak = state.zeroGainStreak,
+                    lastOutcome = state.lastOutcome?.name
+                )
+            }
         )
     }
 

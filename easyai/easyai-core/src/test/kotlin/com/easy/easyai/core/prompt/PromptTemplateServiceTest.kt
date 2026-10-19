@@ -26,12 +26,16 @@ class PromptTemplateServiceTest {
         tools: List<String> = emptyList(),
         segments: List<String> = emptyList(),
         subAgents: List<Map<String, Any?>> = emptyList(),
-        dynamicSubAgents: Boolean = false
+        dynamicSubAgents: Boolean = false,
+        skills: List<Map<String, Any?>> = emptyList(),
+        skillLoadingAvailable: Boolean = false
     ): PromptContext = PromptContext(
         tools = tools.map { mapOf<String, Any?>("name" to it, "description" to "desc") },
         toolPromptSegments = segments,
         subAgents = subAgents,
-        dynamicSubAgents = dynamicSubAgents
+        dynamicSubAgents = dynamicSubAgents,
+        skills = skills,
+        skillLoadingAvailable = skillLoadingAvailable
     )
 
     @Nested
@@ -139,6 +143,32 @@ class PromptTemplateServiceTest {
             val rendered = service.build(null, contextWith(tools = listOf("read", "bash")))
             assertFalse(rendered.contains("## Available Sub-Agents"))
             assertFalse(rendered.contains("### Ad-hoc Sub-Agents"))
+        }
+    }
+
+    @Nested
+    inner class `skill guidance` {
+
+        private val skills = listOf(mapOf<String, Any?>("name" to "pdf", "description" to "Read PDF"))
+
+        @Test
+        fun `omits the list when nothing can load a skill`() {
+            val rendered = service.build(null, contextWith(skills = skills))
+
+            assertFalse(rendered.contains("Skills provide specialized instructions"))
+            assertFalse(rendered.contains("load_skill"))
+            assertFalse(rendered.contains("Read PDF"))
+        }
+
+        @Test
+        fun `renders the list when a skill-loading tool is registered`() {
+            val rendered = service.build(
+                null,
+                contextWith(tools = listOf("load_skill"), skills = skills, skillLoadingAvailable = true)
+            )
+
+            assertTrue(rendered.contains("Use the `load_skill` tool"))
+            assertTrue(rendered.contains("`pdf`: Read PDF"))
         }
     }
 }

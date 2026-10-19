@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom';
 import { Ban, ListChecks, MessageSquare, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
 import { useTaskStore } from '@/services/stores/task-store';
-import { switchToSession } from '@/services/session-switch';
 import { Dialog } from '@/components/ui/Dialog';
 import { getTaskDescriptor, taskTitle, taskTypeLabel, TASK_TYPE_REGISTRY } from '@/constants/task-types';
 import type { AsyncTaskStatus, TaskFilters } from '@/types/task';
@@ -117,15 +116,10 @@ export const TasksPage: React.FC = () => {
 
   const typeOptions = useMemo(() => Object.keys(TASK_TYPE_REGISTRY), []);
 
-  /** Load the task's hidden session (e.g. a consolidation run) into the chat view. */
-  const openTranscript = async (sessionId: string) => {
-    try {
-      await switchToSession(sessionId);
-      setDetailId(null);
-      navigate('/');
-    } catch (e) {
-      console.error('Failed to open task transcript:', e);
-    }
+  /** Navigate to the dedicated transcript page for a background task's hidden session. */
+  const openTranscript = (taskId: string) => {
+    setDetailId(null);
+    navigate(`/tasks/${taskId}/transcript`);
   };
 
   /** Bulk irreversible delete, so it asks first — the same bar a single row's inline confirm sets. */
@@ -246,7 +240,7 @@ export const TasksPage: React.FC = () => {
                     <div className="flex items-center gap-1 shrink-0">
                       {task.sessionId && (
                         <button
-                          onClick={() => void openTranscript(task.sessionId as string)}
+                          onClick={() => void openTranscript(task.id)}
                           className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
                           title={i18n('Open transcript')}
                         >
@@ -262,7 +256,10 @@ export const TasksPage: React.FC = () => {
                           <Ban className="w-4 h-4" />
                         </button>
                       )}
-                      {terminal && task.status !== 'cancelled' && (
+                      {/* Retry re-runs the handler and overwrites the row's result, so it only
+                          makes sense for a run that did not finish cleanly — a completed pass
+                          has already done its work and re-running it just burns model calls. */}
+                      {(task.status === 'failed' || task.status === 'interrupted') && (
                         <button
                           onClick={() => void retryTask(task.id)}
                           className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
@@ -319,7 +316,7 @@ export const TasksPage: React.FC = () => {
             {detail.error && <DetailRow label={i18n('Error')} value={detail.error} />}
             {detail.sessionId && (
               <button
-                onClick={() => void openTranscript(detail.sessionId as string)}
+                onClick={() => void openTranscript(detail.id)}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border text-sm hover:bg-muted transition-colors"
               >
                 <MessageSquare className="w-4 h-4" />

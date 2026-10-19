@@ -178,16 +178,23 @@
     {
       "name": "easyai.memory.consolidation.zero-gain-backoff-base-days",
       "type": "java.lang.Integer",
-      "description": "First delay after a run that archived nothing, doubled per repeat.",
+      "description": "First delay after a run that finished and found nothing to merge, doubled per repeat.",
       "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
       "defaultValue": 7
     },
     {
       "name": "easyai.memory.consolidation.zero-gain-backoff-max-days",
       "type": "java.lang.Integer",
-      "description": "Ceiling of that doubling, so a permanently unmergeable slice is retried occasionally.",
+      "description": "Ceiling of both backoff doublings, so a permanently unmergeable or permanently failing slice is retried occasionally.",
       "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
       "defaultValue": 30
+    },
+    {
+      "name": "easyai.memory.consolidation.failed-run-backoff-base-days",
+      "type": "java.lang.Integer",
+      "description": "First delay after a run that could not do its job (it threw, or every prompt was lost), doubled per repeat up to zero-gain-backoff-max-days.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 1
     }
   ],
   "hints": []

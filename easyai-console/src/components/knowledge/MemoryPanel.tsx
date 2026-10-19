@@ -61,7 +61,9 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
     loadAll();
     loadConfig();
     loadConsolidation();
-  }, [loadAll, loadConfig, loadConsolidation]);
+    // Re-fetch memories when the project list changes (e.g. initial load race:
+    // MemoryPanel may mount before loadProjects() resolves, so projects is still []).
+  }, [loadAll, loadConfig, loadConsolidation, projects]);
 
   const localEntry = useMemo(() => {
     if (!selected) return null;
@@ -87,16 +89,30 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
           e.scope === sel.scope &&
           (e.projectPath ?? null) === sel.projectPath
       );
-      if (!found) {
+      if (found) return;
+      // Tree leaves can be archived sources: the by-name lookup refuses archived docs, so a
+      // selection carrying a docId goes through the archive drill-down instead.
+      if (sel.id) {
         try {
-          const entry = await memoryService.getMemory(sel.name, sel.scope as 'global' | 'project', sel.projectPath);
-          setFetchedEntry(entry);
+          const [archived] = await loadArchived(
+            [sel.id],
+            sel.scope as 'global' | 'project',
+            sel.projectPath
+          );
+          setFetchedEntry(archived ?? null);
+          return;
         } catch {
-          setFetchedEntry(null);
+          // fall through to the by-name lookup
         }
       }
+      try {
+        const entry = await memoryService.getMemory(sel.name, sel.scope as 'global' | 'project', sel.projectPath);
+        setFetchedEntry(entry);
+      } catch {
+        setFetchedEntry(null);
+      }
     },
-    [entries]
+    [entries, loadArchived]
   );
 
   const scopeLabel = useMemo(() => {

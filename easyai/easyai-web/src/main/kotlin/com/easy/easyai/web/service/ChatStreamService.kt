@@ -8,6 +8,7 @@ import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.compaction.CompactionTransformContextService
 import com.easy.easyai.compaction.ContextCompactionOrchestrator
 import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.agent.AsyncAgentStore
 import com.easy.easyai.core.agent.ChatSession
 import com.easy.easyai.core.agent.SessionManager
 import com.easy.easyai.core.agent.TransformContextService
@@ -78,7 +79,9 @@ class ChatStreamService(
     private val skillTurnRouter: SkillTurnRouter? = null,
     private val backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null,
     /** Allocates the per-session scratch workspace for chats that come in without a project. */
-    private val workspaceService: DefaultWorkspaceService? = null
+    private val workspaceService: DefaultWorkspaceService? = null,
+    /** Guards the fresh-chat entry against an agentId with no row; see [streamChat]. */
+    private val agentStore: AsyncAgentStore? = null
 ) : DisposableBean {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper: ObjectMapper = SharedObjectMapper.instance
@@ -321,6 +324,14 @@ class ChatStreamService(
         val agentId = request.agentId
 
         return try {
+            // Reject an agentId nobody owns before any session state is minted: the session manager takes
+            // an empty tool list as final, so a row-less agent would open a session that can do nothing.
+            // Same owner set the manager resolves against. No store means nothing to check against.
+            if (agentStore != null && agentStore.findById(agentId, readOwners) == null) {
+                return flowOf(errorSse(
+                    "Agent not found: '$agentId'. Select an existing agent — a session cannot resolve tools without one."
+                ))
+            }
             // Mint the session id up front: a project-less chat resolves its temporary workspace
             // by session, so the very first turn must already run inside that directory.
             val sessionId = request.sessionId ?: UUID.randomUUID().toString()

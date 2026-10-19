@@ -62,6 +62,43 @@ export interface MemoryConsolidationSettings {
   curationModelConfigured: boolean;
   /** Deployment kill switch. */
   available: boolean;
+  /**
+   * Scheduler memory per slice, keyed by `{scope}|{projectPath}|{typeDirName}` with an empty project
+   * segment for global scope. Read-only, and what lets the UI say "waiting until Thursday" instead of
+   * looking silently broken. Use `sliceKeyOf` to build a key.
+   */
+  sliceStates?: Record<string, ConsolidationSliceState>;
+}
+
+/** How the last run over a slice ended, as the scheduler judged it. */
+export type ConsolidationOutcome = 'PRODUCTIVE' | 'NOTHING_TO_MERGE' | 'FAILED';
+
+/** One slice's scheduler memory: whether the scan will run it soon, and why not. */
+export interface ConsolidationSliceState {
+  /** Epoch-ms of the last run over this slice; absent when it has never run. */
+  lastRunAt?: number | null;
+  /**
+   * Epoch-ms before which the scheduled scan skips this slice; absent when no delay is in force. A
+   * manual run ignores it, so this reads as a wait rather than as a block.
+   */
+  nextEligibleAt?: number | null;
+  /** Consecutive runs that produced no merged entry, whatever the reason. */
+  zeroGainStreak?: number;
+  /** Absent for a slice recorded before outcomes were tracked — unknown, not a failure. */
+  lastOutcome?: ConsolidationOutcome | null;
+}
+
+/**
+ * The backend's slice key, rebuilt from what the dialog already has selected. Must stay character-for-character
+ * aligned with `MemoryConsolidationTaskHandler.sliceKey`: scope lowercased, empty (not omitted) project
+ * segment for global, then the type's dirName.
+ */
+export function sliceKeyOf(
+  scope: 'global' | 'project',
+  projectPath: string | null | undefined,
+  type: string
+): string {
+  return `${scope}|${scope === 'project' ? (projectPath ?? '') : ''}|${type}`;
 }
 
 /** Partial update; a blank `scanCron` clears the override, `undefined` leaves it unchanged. */

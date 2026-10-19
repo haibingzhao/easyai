@@ -272,7 +272,8 @@ class ChatSession(
     }
 
     /**
-     * Replace this turn's output contract: the instructions and the JSON schema the answer must take.
+     * Replace this turn's output contract: the instructions, the JSON schema the answer must take,
+     * and optionally whether the model should reason before answering.
      *
      * Memory consolidation asks one session two different questions — group these entries, then write
      * these merged bodies — and both are enforced per call, so a single hidden session can carry both:
@@ -280,12 +281,21 @@ class ChatSession(
      * completion check reads it from the context of the turn it is judging, and the system prompt is
      * rebuilt (and persisted) for every run this session starts. One session keeps the task row's single
      * `sessionId`, its retry reuse, and the Tasks page's single transcript link all intact.
+     *
+     * The grouping pass benefits from thinking (wide-view judgement over many entries); the merge pass
+     * rewrites bodies it was already told how to cluster, so thinking there burns tokens for nothing.
+     * Pass [thinkingEnabled] to flip it per turn; null inherits the model row's default.
      */
-    fun updateTurnOutputContract(customInstructions: String, outputSchema: String?) {
+    fun updateTurnOutputContract(
+        customInstructions: String,
+        outputSchema: String?,
+        thinkingEnabled: Boolean? = null
+    ) {
         agent = agent.copy(
             context = agent.context.copy(
                 customInstructions = customInstructions,
-                outputSchema = outputSchema
+                outputSchema = outputSchema,
+                thinkingEnabled = thinkingEnabled
             )
         )
     }

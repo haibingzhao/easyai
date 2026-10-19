@@ -84,6 +84,22 @@ class MemoryConsolidationTaskPlannerTest {
             )
         }
 
+    /** Rows at [level], with docIds distinct from [indexRows] so a mixed set has a fingerprint of its own. */
+    private fun indexRowsAtLevel(
+        count: Int,
+        level: Int,
+        type: MemoryType = MemoryType.EXPERIENCE_LESSONS
+    ) = (1..count).map { index ->
+        MemoryIndexEntry(
+            docId = "${type.dirName}-l$level-$index",
+            name = "entry-l$level-$index",
+            type = type,
+            level = level,
+            contentChars = 500,
+            blurb = "desc $index"
+        )
+    }
+
     /**
      * Only [MemoryType.EXPERIENCE_LESSONS] is over the default threshold of 2; every other type has no
      * rows, so a plan has exactly one candidate slice per scope.
@@ -92,6 +108,11 @@ class MemoryConsolidationTaskPlannerTest {
         val rows = indexRows(count)
         coEvery { memoryStore.listActiveIndex(MemoryScope.GLOBAL, any(), null) } returns rows
         coEvery { memoryStore.listActiveIndex(MemoryScope.PROJECT, any(), null) } returns rows
+    }
+
+    private fun givenGlobalRows(rows: List<MemoryIndexEntry>) {
+        coEvery { memoryStore.listActiveIndex(MemoryScope.GLOBAL, any(), null) } returns rows
+        coEvery { memoryStore.listActiveIndex(MemoryScope.PROJECT, any(), null) } returns emptyList()
     }
 
     /** The planner resolves a LocalDateTime through the system zone; the test must not invent its own. */
@@ -132,6 +153,46 @@ class MemoryConsolidationTaskPlannerTest {
             userId = "alice",
             enabled = true,
             typeThresholds = mapOf(MemoryType.EXPERIENCE_LESSONS.dirName to 5)
+        )
+
+        assertEquals(emptyList(), planner().plan(context(user = user)))
+    }
+
+    @Test
+    fun `a slice made only of finished digests proposes nothing despite its count`() = runBlocking {
+        // Every row sits at the depth ceiling, so the agent would list them, filter to nothing mergeable
+        // and return an empty report at once. A raw count turns that into a task row, a hidden session and
+        // a full listing per scan — and then bills the no-op to the slice's zero-gain delay.
+        givenGlobalRows(indexRowsAtLevel(count = 3, level = 3))
+
+        assertEquals(emptyList(), planner().plan(context()))
+    }
+
+    @Test
+    fun `the threshold counts entries under the ceiling, not every active one`() = runBlocking {
+        // Three digests plus two level-0 rows: five active, but only two are material a run would be
+        // offered, which is exactly the default threshold.
+        givenGlobalRows(indexRowsAtLevel(count = 3, level = 3) + indexRows(2))
+
+        assertEquals(1, planner().plan(context()).size)
+    }
+
+    @Test
+    fun `the fingerprint still covers finished digests, so the gate matches what a run records`() = runBlocking {
+        // A run records its baseline from a listing it does *not* filter by level. Narrowing this gate to
+        // eligible rows would make the two sets permanently unequal, the "nothing changed" branch would
+        // never fire, and the slice would be consolidated again at every scan.
+        val rows = indexRowsAtLevel(count = 3, level = 3) + indexRows(2)
+        givenGlobalRows(rows)
+        val user = MemoryConsolidationUserSettings(
+            userId = "alice",
+            enabled = true,
+            sliceStates = mapOf(
+                "global||experience_lessons" to MemoryConsolidationSliceState(
+                    activeFingerprint = MemoryIndexEntry.fingerprint(rows.map { it.docId }),
+                    lastRunAt = epoch(now)
+                )
+            )
         )
 
         assertEquals(emptyList(), planner().plan(context(user = user)))

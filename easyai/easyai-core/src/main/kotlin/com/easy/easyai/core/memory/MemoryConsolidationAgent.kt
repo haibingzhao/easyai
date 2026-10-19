@@ -222,8 +222,7 @@ class MemoryConsolidationAgent(
             // Curation merges and rewrites stored facts; two runs over the same cluster should not
             // disagree about what was kept.
             samplingIntent = SamplingIntent.DETERMINISTIC,
-            outputSchema = CONSOLIDATION_GROUPING_SCHEMA,
-            noTools = true
+            outputSchema = CONSOLIDATION_GROUPING_SCHEMA
         )
         val runState = MemoryConsolidationRunState(
             type = type,
@@ -233,9 +232,9 @@ class MemoryConsolidationAgent(
             maxArchives = settings.maxArchivesPerRun.coerceAtLeast(1),
             stats = MemoryConsolidationRunStats()
         )
-        // [noTools] is the point: the run's only output channel is the schema-conforming answer, and this
-        // class is the only writer. A chat turn over the same session therefore cannot reach the store
-        // either — and the request body no longer contradicts the system prompt it ships with.
+        // Zero tools is the point: the run's only output channel is the schema-conforming answer, and this
+        // class is the only writer, so a chat turn over the same session cannot reach the store either.
+        // `memory-consolidation` has no agent row, so the session manager takes these empty lists as final.
         val session = sessionManager.getOrCreateSession(baseContext, modelConfig, factory)
 
         val callCounts: PromptCounts
@@ -502,18 +501,26 @@ class MemoryConsolidationAgent(
         outputType: Class<T>,
         reask: Boolean = false
     ): BatchAnswer<T> {
+        val isMerge = phase == PHASE_MERGE
         session.updateTurnOutputContract(
-            customInstructions = if (phase == PHASE_MERGE) MERGE_SYSTEM_PROMPT else GROUPING_SYSTEM_PROMPT,
-            outputSchema = if (phase == PHASE_MERGE) CONSOLIDATION_MERGE_SCHEMA else CONSOLIDATION_GROUPING_SCHEMA
+            customInstructions = if (isMerge) MERGE_SYSTEM_PROMPT else GROUPING_SYSTEM_PROMPT,
+            outputSchema = if (isMerge) CONSOLIDATION_MERGE_SCHEMA else CONSOLIDATION_GROUPING_SCHEMA,
+            // Grouping judges which entries belong together from an index — thinking helps the
+            // wide-view comparison. Merge rewrites bodies the grouping already clustered — thinking
+            // there burns tokens on reasoning the prompt already resolved.
+            thinkingEnabled = if (isMerge) false else null
         )
         val metadata = buildMap {
             put(PHASE_KEY, phase)
             put(BATCH_KEY, "$position/$count")
             if (reask) put(REASK_KEY, "true")
         }
-        val stream = session.promptWithHistory(
-            listOf(UserMessage(content = listOf(TextContent(prompt)), metadata = metadata))
-        )
+        val userMessage = UserMessage(content = listOf(TextContent(prompt)), metadata = metadata)
+        // The chat flow persists the user turn before prompting; this run prompts the hidden session
+        // directly, so the prompt has to be saved here or the task transcript shows answers with no
+        // question — and the phase/batch metadata that labels each turn never reaches the reader.
+        sessionManager?.saveSessionMessages(session.agentContext, listOf(userMessage))
+        val stream = session.promptWithHistory(listOf(userMessage))
         val text = stream.result().lastOrNull()?.text().orEmpty()
         // A run the schema check gave up on carries no answer, only the text it failed with. This
         // caller writes stored memories from that payload, so a stalled reply has to cost a prompt
@@ -645,9 +652,9 @@ class MemoryConsolidationAgent(
         appendLine("Clusters proposed by the grouping pass, each with the full bodies of its sources.")
         appendLine("Write one merged memory per cluster, or refuse a cluster after reading it by listing")
         appendLine("every one of its docIds in 'unmergedDocIds'. Silence is read as a lost answer.")
-        appendLine("mergedContent is a distilled digest of key points under headings, in this order: what")
-        appendLine("happened and when, the reasoning or conditions behind it, and the conclusion to take.")
-        appendLine("Target ${MemoryContentLimits.CONTENT_TARGET_CHARS} characters; the program rejects an")
+        appendLine("mergedContent is a distilled digest of key points under headings that fit the")
+        appendLine("subject — do not force a fixed section template. Target")
+        appendLine("${MemoryContentLimits.CONTENT_TARGET_CHARS} characters; the program rejects an")
         appendLine("oversized body, so distill further rather than overflow it.")
         appendLine("Every docId of this prompt must appear in exactly one cluster or in 'unmergedDocIds'.")
         appendLine()
@@ -813,10 +820,11 @@ class MemoryConsolidationAgent(
             schema, and a separate program validates it, checks it against the store and writes it.
 
             Rules:
-            - mergedContent is a distilled digest of key points, not a concatenation. Cover it under
-              headings, in this order: what happened and when, the reasoning or conditions behind it, and
-              the conclusion or action to take. Keep every distinct still-true fact in some form; do not
-              invent facts. When sources conflict, prefer the most recently updated one and note it.
+            - mergedContent is a distilled digest of the key points, not a concatenation. Organise it
+              under headings that fit the subject — a preference needs its rule and conditions, a record
+              needs what happened and why it matters, a technical note needs the mechanism and its limits
+              — never one fixed template for every entry. Keep every still-true fact in some form; invent
+              nothing. When sources conflict, prefer the most recently updated one and note it.
             - Stay inside the character target reported in the prompt. The program rejects an oversized
               body outright, so distill further rather than overflow.
             - mergedDescription is one line.

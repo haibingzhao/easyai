@@ -1,12 +1,30 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, Eye, Layers, Loader2, Play } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Eye, HelpCircle, Layers, Loader2, Play } from 'lucide-react';
 import { Dialog } from '@/components/ui/Dialog';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { ConsolidationSwitch } from '@/components/memories/ConsolidationSwitch';
 import { useMemoryStore } from '@/services/stores/memory-store';
 import { useCategoryStore } from '@/services/stores/category-store';
 import type { ConsolidationReport } from '@/types/memory';
-import { MEMORY_CONTENT_TARGET_CHARS } from '@/types/memory';
+import { MEMORY_CONTENT_TARGET_CHARS, sliceKeyOf } from '@/types/memory';
+import { nextOccurrences } from '@/utils/cron';
 import { i18n } from '@/utils/i18n';
+
+/** Field order and value ranges shown in the cron help tooltip, matching the backend parser. */
+const CRON_FIELDS = [
+  { labelKey: 'Cron field seconds', rangeKey: 'Cron range seconds' },
+  { labelKey: 'Cron field minutes', rangeKey: 'Cron range minutes' },
+  { labelKey: 'Cron field hours', rangeKey: 'Cron range hours' },
+  { labelKey: 'Cron field day of month', rangeKey: 'Cron range day of month' },
+  { labelKey: 'Cron field month', rangeKey: 'Cron range month' },
+  { labelKey: 'Cron field day of week', rangeKey: 'Cron range day of week' },
+];
+
+const CRON_EXAMPLES = [
+  { expr: '0 0 3 * * *', descKey: 'Cron example daily 3am' },
+  { expr: '0 30 9 * * 1-5', descKey: 'Cron example weekdays 9:30' },
+  { expr: '0 */15 * * * *', descKey: 'Cron example every 15 min' },
+];
 
 interface MemoryConsolidationDialogProps {
   open: boolean;
@@ -44,6 +62,7 @@ export const MemoryConsolidationDialog: React.FC<MemoryConsolidationDialogProps>
   const [report, setReport] = useState<ConsolidationReport | null>(null);
   const [taskId, setTaskId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [confirmRunOpen, setConfirmRunOpen] = useState(false);
 
   // Initialize the drafts only on the closed→open edge. `saveConsolidation` writes a fresh
   // `consolidation` object into the store; if that identity change re-ran this effect it would
@@ -93,6 +112,36 @@ export const MemoryConsolidationDialog: React.FC<MemoryConsolidationDialogProps>
     [report]
   );
 
+  // Live preview of the schedule: an empty draft falls back to the deployment default so the
+  // reader sees what "blank" actually means; a non-empty draft is validated client-side with the
+  // same grammar the backend enforces, so a bad expression is flagged before Save.
+  const cronPreview = useMemo(() => {
+    const usingDefault = cronDraft.trim() === '';
+    const expression = usingDefault ? (consolidation?.defaultScanCron ?? '') : cronDraft.trim();
+    if (!expression) return { runs: [] as Date[], invalid: false, usingDefault };
+    const runs = nextOccurrences(expression, 5);
+    return { runs, invalid: runs.length === 0, usingDefault };
+  }, [cronDraft, consolidation?.defaultScanCron]);
+
+  // The scheduler's own memory of the slice selected in "Run once". Shown there rather than beside the
+  // thresholds because slice state is keyed by (scope, project, type) and only that section knows the
+  // scope — and because a manual run deliberately ignores the wait this describes, which is exactly what
+  // a reader staring at a paused slice needs to be told. An expired delay is dropped: past its
+  // `nextEligibleAt` the backend gate no longer applies, so showing it would claim a wait that is over.
+  const sliceStatus = useMemo(() => {
+    if (!type) return null;
+    const state = consolidation?.sliceStates?.[sliceKeyOf(scope, currentProjectPath, type)];
+    if (!state) return null;
+    const now = Date.now();
+    return {
+      lastRunAt: state.lastRunAt ?? null,
+      deferredUntil:
+        state.nextEligibleAt != null && state.nextEligibleAt > now ? state.nextEligibleAt : null,
+      outcome: state.lastOutcome ?? null,
+      streak: state.zeroGainStreak ?? 0,
+    };
+  }, [consolidation, scope, currentProjectPath, type]);
+
   const handleToggle = async () => {
     if (!consolidation) return;
     setNotice(null);
@@ -129,12 +178,9 @@ export const MemoryConsolidationDialog: React.FC<MemoryConsolidationDialogProps>
     }
   };
 
-  const handleRun = async (dryRun: boolean) => {
+  const handlePreview = async () => {
     if (!type) return;
-    if (!dryRun && !window.confirm(i18n('Run consolidation now? Absorbed memories are archived, not deleted.'))) {
-      return;
-    }
-    setAction(dryRun ? 'preview' : 'run');
+    setAction('preview');
     setReport(null);
     setTaskId(null);
     setNotice(null);
@@ -144,22 +190,45 @@ export const MemoryConsolidationDialog: React.FC<MemoryConsolidationDialogProps>
         scope,
         projectPath: scope === 'project' ? currentProjectPath : null,
         type,
-        dryRun,
+        dryRun: true,
       });
-      if (dryRun) {
-        setReport(response.report ?? null);
-      } else {
-        setTaskId(response.taskId ?? null);
-        setNotice({
-          type: 'success',
-          text: i18n('Consolidation task submitted. Track its progress on the Tasks page.'),
-        });
-      }
+      setReport(response.report ?? null);
     } catch {
       // error already set in store
     } finally {
       setAction(null);
     }
+  };
+
+  const executeRun = async () => {
+    if (!type) return;
+    setAction('run');
+    setReport(null);
+    setTaskId(null);
+    setNotice(null);
+    clearError();
+    try {
+      const response = await consolidate({
+        scope,
+        projectPath: scope === 'project' ? currentProjectPath : null,
+        type,
+        dryRun: false,
+      });
+      setTaskId(response.taskId ?? null);
+      setNotice({
+        type: 'success',
+        text: i18n('Consolidation task submitted. Track its progress on the Tasks page.'),
+      });
+    } catch {
+      // error already set in store
+    } finally {
+      setAction(null);
+    }
+  };
+
+  const handleRunRequest = () => {
+    if (!type) return;
+    setConfirmRunOpen(true);
   };
 
   const enabled = consolidation?.enabled ?? false;
@@ -238,17 +307,69 @@ export const MemoryConsolidationDialog: React.FC<MemoryConsolidationDialogProps>
 
         {/* Scan schedule */}
         <div>
-          <label className="block text-sm font-medium mb-1">{i18n('Scan schedule')}</label>
+          <div className="flex items-center gap-1.5 mb-1">
+            <label className="text-sm font-medium">{i18n('Scan schedule')}</label>
+            {/* Hover help: the six-field layout, per-field ranges and worked examples. */}
+            <span className="relative group inline-flex">
+              <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
+              <span className="hidden group-hover:block absolute left-0 top-full mt-1 z-50 w-80 rounded-lg border border-border bg-background p-3 shadow-xl text-left">
+                <span className="block text-xs font-medium mb-1.5">{i18n('Cron format')}</span>
+                <span className="grid grid-cols-6 gap-1 text-[11px] font-mono mb-1">
+                  {CRON_FIELDS.map((field) => (
+                    <span key={field.labelKey} className="text-foreground">{i18n(field.labelKey)}</span>
+                  ))}
+                </span>
+                <span className="grid grid-cols-6 gap-1 text-[11px] font-mono text-muted-foreground mb-2">
+                  {CRON_FIELDS.map((field) => (
+                    <span key={field.rangeKey} className="truncate" title={i18n(field.rangeKey)}>
+                      {i18n(field.rangeKey)}
+                    </span>
+                  ))}
+                </span>
+                <span className="block text-[11px] text-muted-foreground mb-2">
+                  {i18n('Cron syntax note')}
+                </span>
+                <span className="block text-[11px] font-medium mb-1">{i18n('Cron examples')}</span>
+                <span className="block space-y-0.5 text-[11px] font-mono text-muted-foreground">
+                  {CRON_EXAMPLES.map((example) => (
+                    <span key={example.expr} className="block">
+                      <span className="text-foreground">{example.expr}</span>
+                      {'  →  '}
+                      {i18n(example.descKey)}
+                    </span>
+                  ))}
+                </span>
+              </span>
+            </span>
+          </div>
           <input
             type="text"
             value={cronDraft}
             onChange={(e) => setCronDraft(e.target.value)}
             placeholder={consolidation?.defaultScanCron ?? ''}
-            className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary"
+            className={`w-full px-3 py-2 rounded-md border bg-background text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary ${
+              cronPreview.invalid ? 'border-destructive' : 'border-border'
+            }`}
           />
           <p className="text-xs text-muted-foreground mt-1">
             {i18n('Cron expression; leave blank to use the deployment default')}
           </p>
+          {cronPreview.invalid && (
+            <p className="text-xs text-destructive mt-1">{i18n('Invalid cron expression')}</p>
+          )}
+          {cronPreview.runs.length > 0 && (
+            <div className="mt-1.5 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">
+                {i18n('Next runs')}
+                {cronPreview.usingDefault && ` (${i18n('Showing deployment default')})`}
+              </span>
+              <span className="block mt-0.5 space-y-0.5 font-mono text-[11px]">
+                {cronPreview.runs.map((run) => (
+                  <span key={run.getTime()} className="block">{run.toLocaleString()}</span>
+                ))}
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="flex justify-end">
@@ -289,7 +410,7 @@ export const MemoryConsolidationDialog: React.FC<MemoryConsolidationDialogProps>
               ))}
             </select>
             <button
-              onClick={() => void handleRun(true)}
+              onClick={() => void handlePreview()}
               disabled={action !== null || !type || !modelConfigured}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs border border-border hover:bg-muted transition-colors disabled:opacity-50"
             >
@@ -301,7 +422,7 @@ export const MemoryConsolidationDialog: React.FC<MemoryConsolidationDialogProps>
               {i18n('Preview')}
             </button>
             <button
-              onClick={() => void handleRun(false)}
+              onClick={() => void handleRunRequest()}
               disabled={action !== null || !type || !modelConfigured}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
             >
@@ -318,6 +439,42 @@ export const MemoryConsolidationDialog: React.FC<MemoryConsolidationDialogProps>
               {i18n('A configured curation model is required to preview or run a pass.')}
             </p>
           )}
+
+          {/* Scheduler state of the selected slice: the difference between "waiting on purpose" and
+              "silently broken", which is otherwise invisible. */}
+          <div className="mt-2 text-[11px] text-muted-foreground">
+            <span className="font-medium text-foreground">{i18n('Slice scheduler status')}</span>
+            {!sliceStatus ? (
+              <span className="block mt-0.5">
+                {i18n('This slice has not been consolidated yet.')}
+              </span>
+            ) : (
+              <span className="block mt-0.5 space-y-0.5">
+                <span className="block">
+                  {i18n('Last run')}:{' '}
+                  <span className="font-mono">
+                    {sliceStatus.lastRunAt
+                      ? new Date(sliceStatus.lastRunAt).toLocaleString()
+                      : '—'}
+                  </span>
+                </span>
+                {sliceStatus.deferredUntil && (
+                  <span className="block">
+                    {i18n('Scan paused until')}{' '}
+                    <span className="font-mono">
+                      {new Date(sliceStatus.deferredUntil).toLocaleString()}
+                    </span>
+                    {sliceStatus.outcome === 'FAILED' && ` — ${i18n('the last pass failed')}`}
+                    {sliceStatus.outcome === 'NOTHING_TO_MERGE' &&
+                      ` — ${i18n('the last pass found nothing to merge')}`}
+                    {sliceStatus.streak > 1 &&
+                      ` (${sliceStatus.streak} ${i18n('consecutive unproductive runs')})`}
+                    <span className="block">{i18n('Running manually ignores this wait.')}</span>
+                  </span>
+                )}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Dry-run report */}
@@ -453,6 +610,17 @@ export const MemoryConsolidationDialog: React.FC<MemoryConsolidationDialogProps>
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmRunOpen}
+        message={i18n('Run consolidation now? Absorbed memories are archived, not deleted.')}
+        confirmLabel={i18n('Run')}
+        onConfirm={() => {
+          setConfirmRunOpen(false);
+          void executeRun();
+        }}
+        onCancel={() => setConfirmRunOpen(false)}
+      />
     </Dialog>
   );
 };

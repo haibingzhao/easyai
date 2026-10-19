@@ -148,12 +148,15 @@ open class WebAutoConfiguration {
         @Autowired(required = false)
         backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null,
         @Autowired(required = false)
-        defaultWorkspaceService: DefaultWorkspaceService? = null
+        defaultWorkspaceService: DefaultWorkspaceService? = null,
+        @Autowired(required = false)
+        agentStore: AsyncAgentStore? = null
     ): ChatStreamService {
         return ChatStreamService(sessionManager, configStore, modelFactories,
             transformContextService, permissionService, sessionStore, projectStore, snapshotService,
             customEventConverters ?: emptyList(), commandService, goalStatusNotifier, goalStore, fileStorageService,
-            scriptEnvProvider, executionService, skillTurnRouter, backgroundTaskManagerRegistry, defaultWorkspaceService)
+            scriptEnvProvider, executionService, skillTurnRouter, backgroundTaskManagerRegistry, defaultWorkspaceService,
+            agentStore)
     }
 
     @Bean

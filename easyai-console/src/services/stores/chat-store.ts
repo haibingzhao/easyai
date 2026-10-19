@@ -89,12 +89,19 @@ interface ChatState {
   _lastSnapshots: MessageSnapshot[];
   /** Root main session the currently viewed session belongs to (own id for a main session; null before a session exists) */
   forkRootId: string | null;
+  /**
+   * True while the chat view is showing a read-only background-task transcript (Tasks → open transcript).
+   * Session-mutating actions such as fork/branch are meaningless on a hidden async-task session, so the
+   * meta bar hides them while this is set. Reset by clearChat and by switchToSession.
+   */
+  transcriptMode: boolean;
   /** Whether the backend snapshot/checkpoint system is active for the current session (gates the Review panel). Defaults to true for older backends. */
   snapshotEnabled: boolean;
   /** App-wide snapshot capability from GET /api/chat/snapshot-capability (false for no-op backend overrides). Global — not reset on session switch. */
   snapshotCapability: boolean;
   setRunningSessionId: (id: string | null) => void;
   setForkRootId: (id: string | null) => void;
+  setTranscriptMode: (on: boolean) => void;
   setSnapshotEnabled: (enabled: boolean) => void;
   setSnapshotCapability: (enabled: boolean) => void;
 
@@ -191,6 +198,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   liveStreamDropped: false,
   _lastSnapshots: [],
   forkRootId: null,
+  transcriptMode: false,
   snapshotEnabled: true,
   snapshotCapability: true,
 
@@ -215,6 +223,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   })),
   setRunningSessionId: (id) => set({ runningSessionId: id, liveStreamDropped: false, ...(id !== null ? { _lastSnapshots: [] } : { livePreview: null }) }),
   setForkRootId: (id) => set({ forkRootId: id }),
+  setTranscriptMode: (on) => set({ transcriptMode: on }),
   setSnapshotEnabled: (enabled) => set({ snapshotEnabled: enabled }),
   setSnapshotCapability: (enabled) => set({ snapshotCapability: enabled }),
 
@@ -516,6 +525,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     liveStreamDropped: false,
     _lastSnapshots: [],
     forkRootId: null,
+    transcriptMode: false,
     snapshotEnabled: true,
   }),
 

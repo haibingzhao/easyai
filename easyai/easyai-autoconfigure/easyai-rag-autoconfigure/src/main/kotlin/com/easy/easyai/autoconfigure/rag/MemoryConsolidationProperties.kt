@@ -63,9 +63,12 @@ class MemoryConsolidationProperties {
     /** Consolidation depth at which an entry stops being mergeable material. */
     var maxLevel: Int = coreDefaults.maxLevel
 
-    /** First delay after a run that archived nothing; doubled per repeat. */
+    /** First delay after a run that finished and found nothing to merge; doubled per repeat. */
     var zeroGainBackoffBaseDays: Int = coreDefaults.zeroGainBackoffBaseDays
 
-    /** Ceiling of that doubling. */
+    /** Ceiling of both backoff doublings. */
     var zeroGainBackoffMaxDays: Int = coreDefaults.zeroGainBackoffMaxDays
+
+    /** First delay after a run that could not do its job (threw, or every prompt was lost); doubled per repeat. */
+    var failedRunBackoffBaseDays: Int = coreDefaults.failedRunBackoffBaseDays
 }

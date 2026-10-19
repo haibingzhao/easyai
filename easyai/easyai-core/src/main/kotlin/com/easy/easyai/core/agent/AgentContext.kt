@@ -33,7 +33,8 @@ import java.nio.file.Path
  * @param allowedSkillNames Skill whitelist for this agent. Empty = no skills authorized (fail-closed).
  *   Non-empty = only listed skills.
  * @param subAgents Sub-agents data for prompt template rendering (list of {name, description} maps).
- * @param tools The list of tool definitions available to the agent.
+ * @param tools The list of tool definitions available to the agent. Empty is a final value: the run has
+ *   no tools, and no layer downstream resolves a default set on its behalf.
  * @param maxIterations Maximum number of agent loop iterations.
  * @param maxRetries Maximum number of retries for LLM call failures.
  * @param initialMessages Initial messages to seed the agent transcript.
@@ -95,13 +96,6 @@ data class AgentContext(
      */
     val mcpConfigs: List<AgentToolConfig> = emptyList(),
     val tools: List<ToolDefinition> = emptyList(),
-    /**
-     * This run must be given no tools at all. [tools] cannot say it on its own: an empty list is also
-     * what every caller that wants the resolved default leaves in place, and the session manager reads
-     * that silence as "resolve" — which is how a schema-only background run came to carry 34 tool
-     * definitions next to a system prompt that tells the model it has none.
-     */
-    val noTools: Boolean = false,
     val maxIterations: Int = 100,
     val maxRetries: Int = 3,
     /** Master switch for cross-run tool-message folding (send-time projection). */
@@ -126,6 +120,13 @@ data class AgentContext(
     val samplingIntent: SamplingIntent = SamplingIntent.FOLLOW_CONFIG,
     /** JSON Schema for structured output enforcement. Injected into ChatOptions and system prompt. */
     val outputSchema: String? = null,
+    /**
+     * Per-turn thinking override. Null follows the model row's `options.thinking`; explicit true/false
+     * forces thinking on or off regardless of the row. Memory consolidation uses this to keep thinking
+     * on for the grouping pass (wide-view judgement) and turn it off for the merge pass (rewrite, no
+     * judgement needed — thinking there burns tokens for nothing).
+     */
+    val thinkingEnabled: Boolean? = null,
     /** When true, defer structured output to final iteration after multi-turn tool calling. */
     val outputSchemaMultiTurn: Boolean = false,
     /** JSON Schema for structured input validation. Validated against inputVariables before agent loop. */

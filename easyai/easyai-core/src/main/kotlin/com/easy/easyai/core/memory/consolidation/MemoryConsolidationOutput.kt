@@ -68,8 +68,9 @@ data class ConsolidationCluster(
     val mergedDescription: String,
 
     @field:JsonPropertyDescription(
-        "Distilled merged body: the key points only — timeline, what happened, why, and the conclusion. " +
-            "Aim for the target size the prompt states; every still-true fact must survive in some form."
+        "Distilled merged body: the key points only, organised under headings that fit the subject " +
+            "rather than a fixed template. Aim for the target size the prompt states; every still-true " +
+            "fact must survive in some form."
     )
     val mergedContent: String,
 

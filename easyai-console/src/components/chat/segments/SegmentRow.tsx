@@ -3,7 +3,7 @@ import type { MessageSegment } from '@/types/message-segment';
 import { ThinkingBlock } from '../ThinkingBlock';
 import { ToolMessage } from '../ToolMessage';
 import { CompactionIndicator } from '../CompactionIndicator';
-import { TextMarkdown } from './TextMarkdown';
+import { ConsolidationTextRow } from '../ConsolidationAnswer';
 
 export interface SegmentRowProps {
   segment: MessageSegment;
@@ -40,7 +40,9 @@ export const SegmentRow: React.FC<SegmentRowProps> = ({
 
     case 'text':
       if (!segment.content.trim()) return null;
-      return <TextMarkdown content={segment.content} />;
+      // A consolidation pass answers with strict-schema JSON; markdown would render it as
+      // punctuation noise with accidental strikethroughs, so it gets its own renderer.
+      return <ConsolidationTextRow content={segment.content} />;
 
     case 'tool':
       return (

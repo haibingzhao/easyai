@@ -586,8 +586,17 @@ internal class AgentLoopRunner(
         lastSamplingIntent = samplingIntent
 
         val chatOptions = if (modelConfig != null) {
+            val sampledConfig = SamplingPolicy.applyTo(modelConfig, samplingIntent)
+            // Thinking is a per-turn concern like sampling: the row says whether the model reasons
+            // by default, but a background pass (memory consolidation merge) may need it off to avoid
+            // paying for reasoning it will not use.
+            val effectiveConfig = context.thinkingEnabled?.let { override ->
+                val opts = sampledConfig.options ?: return@let sampledConfig
+                if (opts.thinking == override) sampledConfig
+                else sampledConfig.copy(options = opts.copy(thinking = override))
+            } ?: sampledConfig
             services.buildChatOptions(
-                config = SamplingPolicy.applyTo(modelConfig, samplingIntent),
+                config = effectiveConfig,
                 toolCallbacks = toolCallbacks,
                 outputSchema = effectiveOutputSchema
             )
@@ -638,6 +647,7 @@ internal class AgentLoopRunner(
                 .sortedBy { it.promptSegmentOrder }
                 .mapNotNull { it.systemPromptSegment },
             dynamicSubAgents = context.tools.any { ToolCapability.SPAWNS_SUBAGENTS in it.capabilities },
+            skillLoadingAvailable = context.tools.any { ToolCapability.SKILL_LOADING in it.capabilities },
             outputSchema = context.outputSchema,
             outputSchemaMultiTurn = context.outputSchemaMultiTurn,
             inputVariables = context.inputVariables,
