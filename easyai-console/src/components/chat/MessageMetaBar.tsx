@@ -20,11 +20,14 @@ interface MessageMetaBarProps {
  */
 export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStreaming = false }) => {
   const sessionId = useChatStore((s) => s.sessionId);
+  const transcriptMode = useChatStore((s) => s.transcriptMode);
   const [forking, setForking] = useState(false);
   const [forkConfirmOpen, setForkConfirmOpen] = useState(false);
 
   const forkTarget = [...messages].reverse().find((m) => m.messageId);
-  const canFork = !isStreaming && !!sessionId && !!forkTarget?.messageId;
+  // Forking branches into a new editable session; on a read-only background-task transcript there is
+  // nothing sensible to branch from, so the action is hidden there.
+  const canFork = !isStreaming && !transcriptMode && !!sessionId && !!forkTarget?.messageId;
 
   let inputTokens = 0;
   let outputTokens = 0;

@@ -9,6 +9,8 @@ import com.easy.easyai.api.llm.ToolCallback
 import com.easy.easyai.api.llm.observation.ObservationChatModel
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.api.model.SamplingPolicy
+import com.easy.easyai.api.model.StructuredOutputPolicy
 import com.easy.easyai.api.model.StructuredOutputSupport
 import io.micrometer.observation.ObservationRegistry
 import org.slf4j.LoggerFactory
@@ -90,7 +92,9 @@ class AnthropicChatModelFactory : ChatModelFactory {
                 // reason by DEFAULT, e.g. qwen3.x-max, so merely omitting the field leaves it on).
                 options = options.copy(
                     effort = it.effort,
-                    temperature = it.temperature,
+                    // Gated, not read straight off the row: a model that declares sampling
+                    // NOT_SETTABLE must never see the row number.
+                    temperature = SamplingPolicy.rowTemperature(config),
                     maxTokens = it.maxTokens
                 )
             }
@@ -101,10 +105,8 @@ class AnthropicChatModelFactory : ChatModelFactory {
         // options.outputSchema is recorded for the loop's bookkeeping; actual enforcement is the
         // prompt-based OutputSchemaCompletionCheck path in easyai-core.
         if (outputSchema != null) {
-            when (config.capabilities?.structuredOutput) {
-                // null = undeclared: record the schema; a future wire-level output_config hookup
-                // (SDK 2.52 OutputConfig.format) would start enforcing at the API here.
-                null, StructuredOutputSupport.JSON_SCHEMA -> options = options.copy(outputSchema = outputSchema)
+            when (StructuredOutputPolicy.of(config)) {
+                StructuredOutputSupport.JSON_SCHEMA -> options = options.copy(outputSchema = outputSchema)
                 StructuredOutputSupport.JSON_OBJECT -> logger.debug(
                     "Model {} declares JSON_OBJECT-only structured output, which the Anthropic protocol cannot express; using prompt-based enforcement",
                     config.modelId

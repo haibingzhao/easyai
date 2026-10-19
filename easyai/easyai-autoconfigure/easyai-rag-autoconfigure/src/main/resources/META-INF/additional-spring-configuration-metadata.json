@@ -1,0 +1,201 @@
+{
+  "properties": [
+    {
+      "name": "easyai.rag.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the EasyRAG integration is enabled.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.RagProperties",
+      "defaultValue": true
+    },
+    {
+      "name": "easyai.rag.base-url",
+      "type": "java.lang.String",
+      "description": "EasyRAG server base URL; non-blank turns on the deployment-wide STATIC layer (Settings -> RAG becomes read-only).",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.RagProperties",
+      "defaultValue": ""
+    },
+    {
+      "name": "easyai.rag.username",
+      "type": "java.lang.String",
+      "description": "Optional credential for EasyRAG JWT login.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.RagProperties",
+      "defaultValue": ""
+    },
+    {
+      "name": "easyai.rag.password",
+      "type": "java.lang.String",
+      "description": "Optional credential for EasyRAG JWT login. Server-side only, never echoed to the console.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.RagProperties",
+      "defaultValue": ""
+    },
+    {
+      "name": "easyai.rag.workspace",
+      "type": "java.lang.String",
+      "description": "Optional EasyRAG workspace; blank means the server default.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.RagProperties",
+      "defaultValue": ""
+    },
+    {
+      "name": "easyai.rag.top-k",
+      "type": "java.lang.Integer",
+      "description": "Default retrieval top-k.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.RagProperties",
+      "defaultValue": 5
+    },
+    {
+      "name": "easyai.rag.read-timeout-ms",
+      "type": "java.lang.Long",
+      "description": "Timeout for read operations (search / read / list), in milliseconds.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.RagProperties",
+      "defaultValue": 5000
+    },
+    {
+      "name": "easyai.rag.index-timeout-ms",
+      "type": "java.lang.Long",
+      "description": "Timeout for document insert / delete operations, in milliseconds.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.RagProperties",
+      "defaultValue": 30000
+    },
+    {
+      "name": "easyai.rag.index-submit-timeout-ms",
+      "type": "java.lang.Long",
+      "description": "Timeout for the index submission call (async mode), in milliseconds.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.RagProperties",
+      "defaultValue": 10000
+    },
+    {
+      "name": "easyai.rag.index-poll-interval-ms",
+      "type": "java.lang.Long",
+      "description": "Initial interval between status polls during indexing, in milliseconds.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.RagProperties",
+      "defaultValue": 2000
+    },
+    {
+      "name": "easyai.rag.index-poll-max-ms",
+      "type": "java.lang.Long",
+      "description": "Maximum total time to poll for indexing completion, in milliseconds.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.RagProperties",
+      "defaultValue": 300000
+    },
+    {
+      "name": "easyai.memory.consolidation.available",
+      "type": "java.lang.Boolean",
+      "description": "Deployment-wide kill switch for multi-level memory consolidation. When false no agent, handler or scheduler is wired.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": true
+    },
+    {
+      "name": "easyai.memory.consolidation.max-grouping-prompt-chars",
+      "type": "java.lang.Integer",
+      "description": "Character budget of one grouping-pass prompt, which shows entry index rows (docId, name, blurb, level, stored size) and never bodies.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 120000
+    },
+    {
+      "name": "easyai.memory.consolidation.max-sources-per-group",
+      "type": "java.lang.Integer",
+      "description": "Largest cluster one merged entry may absorb.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 8
+    },
+    {
+      "name": "easyai.memory.consolidation.max-group-source-chars",
+      "type": "java.lang.Integer",
+      "description": "Summed stored size of one cluster's sources; a larger cluster is trimmed and, if it cannot fit, refused.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 12000
+    },
+    {
+      "name": "easyai.memory.consolidation.clusters-per-merge-call",
+      "type": "java.lang.Integer",
+      "description": "Clusters answered by one merge-pass prompt. Each answer re-emits every merged body, so this bounds output, not context.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 3
+    },
+    {
+      "name": "easyai.memory.consolidation.max-merge-prompt-chars-per-call",
+      "type": "java.lang.Integer",
+      "description": "Character budget of one merge-pass prompt (the source bodies it must rewrite).",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 40000
+    },
+    {
+      "name": "easyai.memory.consolidation.max-archives-per-run",
+      "type": "java.lang.Integer",
+      "description": "Max source entries archived by one consolidation run.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 200
+    },
+    {
+      "name": "easyai.memory.consolidation.max-iterations",
+      "type": "java.lang.Integer",
+      "description": "Cap on agent-loop iterations for one prompt; there is no tool phase to fit.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 6
+    },
+    {
+      "name": "easyai.memory.consolidation.run-timeout-ms",
+      "type": "java.lang.Long",
+      "description": "Wall-clock budget for one consolidation task: one grouping pass plus the merge prompts it queues.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 1500000
+    },
+    {
+      "name": "easyai.memory.consolidation.dry-run-timeout-ms",
+      "type": "java.lang.Long",
+      "description": "Wall-clock budget for a preview, which an HTTP request waits on synchronously; a preview is grouping-only.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 120000
+    },
+    {
+      "name": "easyai.memory.consolidation.default-threshold",
+      "type": "java.lang.Integer",
+      "description": "Per-type threshold used when the user did not override that memory type.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 20
+    },
+    {
+      "name": "easyai.memory.consolidation.daily-cron",
+      "type": "java.lang.String",
+      "description": "Default daily scan cron (six-field Spring syntax).",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": "0 0 3 * * *"
+    },
+    {
+      "name": "easyai.memory.consolidation.max-tasks-per-tick-per-user",
+      "type": "java.lang.Integer",
+      "description": "Max consolidation tasks one scan tick may queue for a single user.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 5
+    },
+    {
+      "name": "easyai.memory.consolidation.max-level",
+      "type": "java.lang.Integer",
+      "description": "Consolidation depth at which an entry stops being mergeable material; it stays active and searchable.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 3
+    },
+    {
+      "name": "easyai.memory.consolidation.zero-gain-backoff-base-days",
+      "type": "java.lang.Integer",
+      "description": "First delay after a run that finished and found nothing to merge, doubled per repeat.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 7
+    },
+    {
+      "name": "easyai.memory.consolidation.zero-gain-backoff-max-days",
+      "type": "java.lang.Integer",
+      "description": "Ceiling of both backoff doublings, so a permanently unmergeable or permanently failing slice is retried occasionally.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 30
+    },
+    {
+      "name": "easyai.memory.consolidation.failed-run-backoff-base-days",
+      "type": "java.lang.Integer",
+      "description": "First delay after a run that could not do its job (it threw, or every prompt was lost), doubled per repeat up to zero-gain-backoff-max-days.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 1
+    }
+  ],
+  "hints": []
+}

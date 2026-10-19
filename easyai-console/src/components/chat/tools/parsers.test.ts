@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBashArgs } from './parsers';
+import { parseBashArgs, parseMemoryDocument } from './parsers';
 
 describe('parseBashArgs', () => {
   it('reads the same command and description from card JSON and permission arguments', () => {
@@ -36,5 +36,45 @@ describe('parseBashArgs', () => {
 
   it.each([undefined, null, 0, -1, '60'])('uses the caller default for invalid timeout: %j', (timeout) => {
     expect(parseBashArgs({ command: 'pwd', timeout }).timeout).toBeUndefined();
+  });
+});
+
+describe('parseMemoryDocument', () => {
+  const doc = (frontmatter: string, body = '## Body\n\ntext') => `---\n${frontmatter}\n---\n\n${body}`;
+
+  it('splits frontmatter fields from the markdown body', () => {
+    const parsed = parseMemoryDocument(doc('name: frp-setup\ndescription: frp relay for Mac\ncreated: 2026-01-15'));
+    expect(parsed.fields.name).toBe('frp-setup');
+    expect(parsed.fields.description).toBe('frp relay for Mac');
+    expect(parsed.body).toBe('\n## Body\n\ntext');
+    expect(parsed.tags).toEqual([]);
+  });
+
+  it('decodes every list item without leaving stray quotes on the inner ones', () => {
+    // The store quotes each item, so the whole line starts and ends with a quote that is not one pair:
+    // unquoting the line first and then splitting on commas left `"` around every middle item.
+    const parsed = parseMemoryDocument(doc('keywords: "frp", "tunnel", "port:8000"'));
+    expect(parsed.tags).toEqual(['frp', 'tunnel', 'port:8000']);
+  });
+
+  it('keeps a comma inside a quoted item in one piece', () => {
+    const parsed = parseMemoryDocument(doc('scenarios: "deploy, then verify"\nkeywords: "a, b", c'));
+    expect(parsed.tags).toEqual(['a, b', 'c', 'deploy, then verify']);
+  });
+
+  it('reads items written before every element was quoted', () => {
+    const parsed = parseMemoryDocument(doc('keywords: frp, tunnel'));
+    expect(parsed.tags).toEqual(['frp', 'tunnel']);
+  });
+
+  it('unescapes a quote inside an item', () => {
+    const parsed = parseMemoryDocument(doc('keywords: "he said \\"hi\\"", plain'));
+    expect(parsed.tags).toEqual(['he said "hi"', 'plain']);
+  });
+
+  it('returns the whole output as body when there is no frontmatter', () => {
+    const parsed = parseMemoryDocument('just prose');
+    expect(parsed.fields).toEqual({});
+    expect(parsed.body).toBe('just prose');
   });
 });

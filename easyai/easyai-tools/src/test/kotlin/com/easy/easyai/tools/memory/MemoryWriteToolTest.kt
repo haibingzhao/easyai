@@ -1,6 +1,7 @@
 package com.easy.easyai.tools.memory
 
 import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.memory.MemoryContentLimits
 import com.easy.easyai.core.memory.MemoryEntry
 import com.easy.easyai.core.memory.MemoryOwnerContext
 import com.easy.easyai.core.memory.MemoryScope
@@ -24,12 +25,8 @@ class MemoryWriteToolTest {
 
     private class FakeMemoryStore : MemoryStore {
         val written = mutableListOf<MemoryEntry>()
-        var existsResult = false
 
-        /** Types handed to the duplicate check, so tests can assert it stays type qualified. */
-        val existsTypes = mutableListOf<MemoryType?>()
-
-        /** Types handed to every name lookup, for the same assertion on update and remove. */
+        /** Types handed to every name lookup, so tests can assert the duplicate check stays type qualified. */
         val lookups = mutableListOf<MemoryType?>()
 
         /** Entries the tool resolved by name; batch operations reuse them instead of re-looking up. */
@@ -75,16 +72,14 @@ class MemoryWriteToolTest {
             scope: MemoryScope,
             owner: MemoryOwnerContext,
             type: MemoryType?
-        ): Boolean {
-            existsTypes.add(type)
-            return existsResult
-        }
+        ): Boolean = findByName(name, scope, owner, type) != null
 
         override suspend fun findByName(
             name: String,
             scope: MemoryScope,
             owner: MemoryOwnerContext,
-            type: MemoryType?
+            type: MemoryType?,
+            includeArchived: Boolean
         ): MemoryEntry? {
             lookups.add(type)
             return entriesByName[name]
@@ -196,6 +191,51 @@ class MemoryWriteToolTest {
     }
 
     @Nested
+    inner class `entry size budget` {
+
+        @Test
+        fun `add rejects content over the hard cap`() {
+            val result = execute(addArgs("content" to "x".repeat(MemoryContentLimits.CONTENT_HARD_CAP_CHARS + 1)))
+            assertTrue(result.isError)
+            val message = output(result)
+            assertTrue(message.contains("'content'"), message)
+            assertTrue(message.contains("split"), message)
+            assertTrue(store.written.isEmpty())
+        }
+
+        @Test
+        fun `add rejects a description over its cap`() {
+            val result = execute(addArgs("description" to "d".repeat(MemoryContentLimits.DESCRIPTION_CAP_CHARS + 1)))
+            assertTrue(result.isError)
+            assertTrue(output(result).contains("'description'"))
+            assertTrue(store.written.isEmpty())
+        }
+
+        @Test
+        fun `update rejects a resulting body over the hard cap`() {
+            store.entriesByName = mapOf(
+                "test_entry" to MemoryEntry(
+                    name = "test_entry",
+                    description = "d",
+                    type = MemoryType.OTHER,
+                    content = "old body",
+                    path = "other/test_entry.md"
+                )
+            )
+            val result = execute(
+                mapOf(
+                    "action" to "update",
+                    "name" to "test_entry",
+                    "content" to "x".repeat(MemoryContentLimits.CONTENT_HARD_CAP_CHARS + 1)
+                )
+            )
+            assertTrue(result.isError)
+            assertTrue(output(result).contains("'content'"))
+            assertTrue(store.written.isEmpty())
+        }
+    }
+
+    @Nested
     inner class `type qualified name lookup` {
 
         private fun existingEntry(): MemoryEntry = MemoryEntry(
@@ -212,7 +252,37 @@ class MemoryWriteToolTest {
 
             // The category is validated before the check, so the store can resolve the key in
             // one request instead of probing every type of the active domain.
-            assertEquals(listOf(MemoryType.OTHER), store.existsTypes)
+            assertEquals(listOf(MemoryType.OTHER), store.lookups)
+        }
+
+        @Test
+        fun `add on a name held by an active entry is rejected`() {
+            store.entriesByName = mapOf("test_entry" to existingEntry())
+
+            val result = execute(addArgs())
+
+            assertTrue(result.isError)
+            assertTrue(output(result).contains("already exists"), output(result))
+            assertTrue(store.written.isEmpty())
+        }
+
+        @Test
+        fun `add refuses a name that belongs to consolidated history`() {
+            // A merged entry archived its source under this very key. An active-only lookup would call
+            // the name free and the write would revive it as a live duplicate of the entry above it.
+            store.entriesByName = mapOf(
+                "test_entry" to existingEntry().copy(
+                    archived = true,
+                    level = 1,
+                    mergedInto = "merged-doc"
+                )
+            )
+
+            val result = execute(addArgs())
+
+            assertTrue(result.isError)
+            assertTrue(output(result).contains("read-only"), output(result))
+            assertTrue(store.written.isEmpty())
         }
 
         @Test

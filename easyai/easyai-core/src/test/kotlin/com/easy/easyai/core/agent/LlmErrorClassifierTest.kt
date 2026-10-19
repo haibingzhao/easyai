@@ -410,6 +410,52 @@ class LlmErrorClassifierTest {
     }
 
     /**
+     * [LlmErrorClassifier.isResponseFormatRejected] is the trigger for the runner surfacing a
+     * [ResponseFormatUnsupportedException] that names the capability to fix, so it must match the
+     * wordings gateways really print and nothing else.
+     */
+    @Nested
+    inner class `isResponseFormatRejected` {
+
+        @Test
+        fun `bailian unavailable wording matches`() {
+            // As the OpenAI adapter renders it once the error frame has been unwrapped.
+            val e = NonTransientAiException(
+                "400: This response_format type is unavailable now code=invalid_parameter_error type=invalid_request_error"
+            )
+            assertTrue(LlmErrorClassifier.isResponseFormatRejected(e))
+            assertFalse(LlmErrorClassifier.isContentFiltered(e), "the branches must not claim the same failure")
+            assertFalse(LlmErrorClassifier.isEndpointOutage(e))
+        }
+
+        @Test
+        fun `openai unsupported wording matches`() {
+            val e = NonTransientAiException(
+                "400: 'response_format' of type 'json_schema' is not supported on this model"
+            )
+            assertTrue(LlmErrorClassifier.isResponseFormatRejected(e))
+        }
+
+        @Test
+        fun `reaches a refusal buried in the cause chain`() {
+            val e = RuntimeException("stream failed", NonTransientAiException("400: response_format is invalid"))
+            assertTrue(LlmErrorClassifier.isResponseFormatRejected(e))
+        }
+
+        @Test
+        fun `other client errors do not match`() {
+            assertFalse(LlmErrorClassifier.isResponseFormatRejected(NonTransientAiException("400: InvalidParameter")))
+            assertFalse(
+                LlmErrorClassifier.isResponseFormatRejected(
+                    NonTransientAiException("400: This model's maximum context length is 128000 tokens")
+                )
+            )
+            // A 5xx that merely mentions the field is an outage, not a capability the row got wrong.
+            assertFalse(LlmErrorClassifier.isResponseFormatRejected(TransientAiException("503: response_format unavailable")))
+        }
+    }
+
+    /**
      * DashScope (Bailian) failures reach the loop already normalized onto Spring AI's retry types by
      * the adapter, whose message shape is "<statusCode>: code=<code> message=<message>
      * requestId=<id>". These tests pin that contract end to end.

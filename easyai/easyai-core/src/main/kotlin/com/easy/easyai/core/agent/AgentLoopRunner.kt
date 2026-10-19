@@ -1,6 +1,11 @@
 package com.easy.easyai.core.agent
 
 import com.easy.easyai.api.llm.*
+import com.easy.easyai.api.model.SamplingDecision
+import com.easy.easyai.api.model.SamplingIntent
+import com.easy.easyai.api.model.SamplingPolicy
+import com.easy.easyai.api.model.SamplingTrace
+import com.easy.easyai.api.model.TemperatureSource
 import com.easy.easyai.core.event.*
 import com.easy.easyai.core.memory.MemoryRef
 import com.easy.easyai.core.message.CommandMessageProjection
@@ -61,12 +66,39 @@ internal class AgentLoopRunner(
     /** References collected during the last preparePrompt() call, available for the next assistant message. */
     private var lastReferences: ContextReferences? = null
 
+    /**
+     * Sampling decided for the last preparePrompt() call, attached to the assistant message that
+     * follows it. Set before the request goes out so a failed turn still records what was asked for.
+     */
+    private var lastSampling: SamplingDecision? = null
+
+    /** The intent [lastSampling] was taken under — a repair turn overrides the run's own. */
+    private var lastSamplingIntent: SamplingIntent = SamplingIntent.FOLLOW_CONFIG
+
+    /**
+     * Whether this run has already said out loud that a pinned temperature did not survive into the
+     * request. One line per run is enough: every turn of a reasoning-mode row drops it the same way,
+     * and a per-turn warning would bury the fact that the whole run is unconstrained.
+     */
+    private var pinnedSamplingDroppedLogged = false
+
     /** When true, next preparePrompt() applies API-level structured output regardless of multiTurn mode. */
     @Volatile
     var forceStructuredOutput = false
         private set
 
     fun enableForcedStructuredOutput() { forceStructuredOutput = true }
+
+    /**
+     * Latched for the last structured-output nudge: that turn sends no tool schemas and pins
+     * sampling, so the final chance to produce conforming JSON is the cheapest and least variable
+     * one. Same one-way pattern as [forceStructuredOutput] — the runner dies with the run.
+     */
+    @Volatile
+    var repairTurn = false
+        private set
+
+    fun beginRepairTurn() { repairTurn = true }
 
     /**
      * Get the context references collected during the last [preparePrompt] call.
@@ -339,6 +371,20 @@ internal class AgentLoopRunner(
                         turnId, e.message)
                     throw QuotaExhaustedException("模型额度已耗尽$retryHint", e)
                 }
+                // A refused response format is a wrong capability on the model row, not a fault of this
+                // request: every replay of the same request re-triggers the same 400. Say what to change
+                // instead of dropping the format and letting the run continue on a quieter path, which is
+                // how a mis-declared row stayed invisible behind "400: Unknown".
+                if (LlmErrorClassifier.isResponseFormatRejected(e)) {
+                    logger.warn(
+                        "${logPrefix}[Turn {}] Gateway refused the response format declared for model {} (no retry): {}",
+                        turnId, context.modelId, e.message
+                    )
+                    throw ResponseFormatUnsupportedException(
+                        "模型 ${context.modelId} 不支持本次请求声明的结构化输出格式，请在「设置 → 模型」把该模型的" +
+                            "结构化输出能力改为「仅 JSON 对象」或「不支持」后重试。网关原话：${e.message}", e
+                    )
+                }
                 // Report outage-class failures (connection errors, stalls, 5xx) to the
                 // endpoint circuit breaker. Rate limits and client errors are filtered
                 // out by isEndpointOutage and never count.
@@ -489,7 +535,17 @@ internal class AgentLoopRunner(
             id = messageId,
             content = contentBlocks,
             stopReason = stopReason,
-            usage = rawUsage
+            usage = rawUsage,
+            sampling = lastSampling?.let {
+                SamplingTrace(
+                    intent = lastSamplingIntent,
+                    source = it.source,
+                    requestedTemperature = it.temperature,
+                    // Read off the options this turn was actually built with: an adapter may have
+                    // dropped the value for a reasoning mode, and that difference is the point.
+                    sentTemperature = prompt.options?.temperature
+                )
+            }
         )
     }
 
@@ -505,29 +561,66 @@ internal class AgentLoopRunner(
         val llmMessages = services.messageConverter.toLlmMessages(
             projectedMessages, context.userId ?: "system", context.effectiveOwners
         )
-        val toolCallbacks = tools.map { ToolCallback(it.name, it.description, it.inputSchema) }
+        // A repair turn asks for text only: advertising tool schemas there invites another call
+        // instead of the JSON the caller is waiting for.
+        val toolCallbacks =
+            if (repairTurn) emptyList()
+            else tools.map { ToolCallback(it.name, it.description, it.inputSchema) }
 
         // Timing gate for API-level structured output: multi-turn mode defers enforcement
         // until the completion check sets forceStructuredOutput. Whether the model's protocol
-        // can actually express the schema (capabilities.structuredOutput gate) is decided by
-        // the protocol factory inside buildChatOptions; declined schemas fall through to the
-        // prompt-based OutputSchemaCompletionCheck path.
+        // can actually express the schema (capabilities.structuredOutput, where an undeclared row
+        // means it cannot) is decided by the protocol factory inside buildChatOptions.
         val deferredForMultiTurn = context.outputSchemaMultiTurn && !forceStructuredOutput
         val effectiveOutputSchema =
             if (context.outputSchema != null && !deferredForMultiTurn) context.outputSchema else null
 
-        val chatOptions = context.modelConfig?.let { config ->
+        // Sampling is a per-call stance, not a per-connection one: one row backs a human's chat turn
+        // and a background risk verdict. The policy picks the number from intent + row + the model's
+        // declared sampling capability; an adapter may still drop it for a reasoning mode.
+        val modelConfig = context.modelConfig
+        val samplingIntent = if (repairTurn) SamplingIntent.DETERMINISTIC else context.samplingIntent
+        // Recorded for the trace; `decide` always answers, so a row is the only condition below.
+        val sampling = modelConfig?.let { SamplingPolicy.decide(it, samplingIntent) }
+        lastSampling = sampling
+        lastSamplingIntent = samplingIntent
+
+        val chatOptions = if (modelConfig != null) {
+            val sampledConfig = SamplingPolicy.applyTo(modelConfig, samplingIntent)
+            // Thinking is a per-turn concern like sampling: the row says whether the model reasons
+            // by default, but a background pass (memory consolidation merge) may need it off to avoid
+            // paying for reasoning it will not use.
+            val effectiveConfig = context.thinkingEnabled?.let { override ->
+                val opts = sampledConfig.options ?: return@let sampledConfig
+                if (opts.thinking == override) sampledConfig
+                else sampledConfig.copy(options = opts.copy(thinking = override))
+            } ?: sampledConfig
             services.buildChatOptions(
-                config = config,
+                config = effectiveConfig,
                 toolCallbacks = toolCallbacks,
                 outputSchema = effectiveOutputSchema
             )
-        } ?: run {
+        } else {
             // No model config: no capabilities to consult, keep the generic enforcement path.
             DefaultChatOptions(
                 model = context.modelId.ifEmpty { null },
                 toolCallbacks = toolCallbacks,
                 outputSchema = effectiveOutputSchema
+            )
+        }
+
+        // A reasoning mode carries no sampling field, so a run that asked to be pinned is not pinned:
+        // Anthropic with thinking on, and OpenAI with an effort set, drop the number where the row's own
+        // options are turned into request options. The per-turn trace says `requested=0.1, sent=null`;
+        // this is the run-level line that the whole run ran without the reproducibility constraint.
+        if (sampling != null && sampling.source == TemperatureSource.PINNED &&
+            chatOptions.temperature == null && !pinnedSamplingDroppedLogged
+        ) {
+            pinnedSamplingDroppedLogged = true
+            logger.warn(
+                "${logPrefix}Sampling intent {} asked for temperature {} but the {} adapter sends none in " +
+                    "this model's reasoning mode; this run is not sampling-constrained",
+                samplingIntent, sampling.temperature, context.protocol
             )
         }
 
@@ -554,6 +647,7 @@ internal class AgentLoopRunner(
                 .sortedBy { it.promptSegmentOrder }
                 .mapNotNull { it.systemPromptSegment },
             dynamicSubAgents = context.tools.any { ToolCapability.SPAWNS_SUBAGENTS in it.capabilities },
+            skillLoadingAvailable = context.tools.any { ToolCapability.SKILL_LOADING in it.capabilities },
             outputSchema = context.outputSchema,
             outputSchemaMultiTurn = context.outputSchemaMultiTurn,
             inputVariables = context.inputVariables,

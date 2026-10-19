@@ -1,5 +1,6 @@
 package com.easy.easyai.swarm.runtime
 
+import com.easy.easyai.api.model.SamplingIntent
 import com.easy.easyai.core.team.BlockedMemberState
 import com.easy.easyai.core.team.MemberSignalTool
 import com.easy.easyai.core.team.TeamEventDrain
@@ -309,7 +310,10 @@ internal class TeamTaskExecutor(
 
         val leaderResult = workerExecutor.executeWorker(
             leaderSpec, leaderPrompt, run, task, runContext, { false },
-            outputSchemaOverride = LEADER_DECISION_SCHEMA
+            outputSchemaOverride = LEADER_DECISION_SCHEMA,
+            // The decision is machine-parsed into worker assignments; a different number on each
+            // run of the same team makes the schedule itself non-reproducible.
+            samplingIntent = SamplingIntent.DETERMINISTIC
         )
         state.total += leaderResult
 
@@ -345,7 +349,10 @@ internal class TeamTaskExecutor(
 
         val leaderResult = workerExecutor.executeWorker(
             leaderSpec, leaderPrompt, run, task, runContext, { false },
-            outputSchemaOverride = LEADER_DECISION_SCHEMA
+            outputSchemaOverride = LEADER_DECISION_SCHEMA,
+            // The decision is machine-parsed into worker assignments; a different number on each
+            // run of the same team makes the schedule itself non-reproducible.
+            samplingIntent = SamplingIntent.DETERMINISTIC
         )
         state.total += leaderResult
 

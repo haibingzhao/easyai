@@ -37,6 +37,11 @@ export interface ModelProviderInfo {
 }
 
 export interface ModelOptions {
+  /**
+   * Sampling temperature. Left empty, the field is not sent at all and the provider's own
+   * per-model default applies — which is not observable afterwards, so a value that matters for
+   * reproducibility has to be typed in.
+   */
   temperature?: number;
   maxTokens?: number;
   thinking?: boolean;
@@ -47,10 +52,18 @@ export interface ModelOptions {
 
 export type StructuredOutputSupport = 'JSON_SCHEMA' | 'JSON_OBJECT' | 'NONE';
 
+export type SamplingSupport = 'SETTABLE' | 'NOT_SETTABLE';
+
 export interface ModelCapabilities {
   vision?: boolean;
-  /** API-level structured output support. Undefined = undeclared (treated as JSON_SCHEMA). */
+  /** API-level structured output support. Undefined = undeclared (treated as NONE, prompt fallback). */
   structuredOutput?: StructuredOutputSupport;
+  /**
+   * Whether sampling parameters may be sent at all. Undefined = undeclared (treated as SETTABLE).
+   * Mark NOT_SETTABLE for models whose endpoint rejects the field — several current reasoning
+   * models return an error for any request carrying temperature, including its own default.
+   */
+  sampling?: SamplingSupport;
   /** Reasoning / tool-calling support. Undefined or true = capable; false marks decision models. */
   supportsToolCalling?: boolean;
 }
@@ -219,7 +232,7 @@ export interface ModelConfigTestResult {
 // Auxiliary (per-task) model settings types (Settings → Task Models)
 
 /** A background purpose that can be backed by its own model. Mirrors the backend AuxModelTask enum. */
-export type AuxModelTaskKey = 'compaction' | 'session_title' | 'skill_selection' | 'asr' | 'dictation_refine';
+export type AuxModelTaskKey = 'compaction' | 'session_title' | 'skill_selection' | 'asr' | 'dictation_refine' | 'memory_curation';
 
 /** Which layer is in force for a task: the user's choice, or the default (chat-session model). */
 export type AuxModelEffectiveSource = 'user' | 'default';

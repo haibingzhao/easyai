@@ -1,6 +1,7 @@
 package com.easy.easyai.tools.memory
 
 import com.easy.easyai.core.domain.DomainCatalog
+import com.easy.easyai.core.memory.MemoryContentLimits
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.memory.MemoryType
 import com.easy.easyai.core.tool.ToolDefinition
@@ -45,6 +46,18 @@ An entry that contradicts the current code or the user's latest statement must b
 with `memory_write action='update'` — never add a rival entry alongside a stale one.
 Use `memory_write action='remove'` only for entries proven obsolete or superseded; when
 unsure, leave them untouched. `memory_list` adds `unused for N days` for a full review view.
+
+### Drilling into merged memories
+
+Periodic consolidation folds related entries into one higher-level entry. Such a merged hit carries
+`level` and lists `sources` — the docIds of the entries it absorbed — and its body is a distillation,
+so detail it dropped is still in those sources. When you need the timeline, the cause, or what was
+tried and rejected, call `memory_read` with `docIds=[...]` to get the archived bodies back, at most
+ten ids per call. What comes back carries its own `sources`, so a chain can be followed deeper.
+
+History is read-only context. Never `memory_write` against a name or path you read there: writing an
+active entry onto a history key revives a live duplicate of what the merged entry already states. To
+correct a fact you found in history, update the merged entry itself.
 """
 
 @Component
@@ -56,7 +69,8 @@ class MemorySearchToolBuilder : AbstractMemoryToolBuilder() {
             "decisions, project conventions, prior findings). Searches across name, description, and content. " +
             "Optionally restrict results by business time via 'timeRangeStart'/'timeRangeEnd' " +
             "(epoch seconds or ISO date like 2026-01-01). " +
-            "Each hit reports its 'updated' date and 'maturity' so staleness can be judged.",
+            "Each hit reports its 'updated' date and 'maturity' so staleness can be judged, and a merged " +
+            "hit additionally reports its 'level' and the 'sources' docIds it absorbed.",
         permissionCategory = "memory",
         systemPromptSegment = MEMORY_GUIDANCE_SEGMENT.trimIndent(),
         promptSegmentOrder = 20
@@ -69,7 +83,9 @@ class MemorySearchToolBuilder : AbstractMemoryToolBuilder() {
 class MemoryReadToolBuilder : AbstractMemoryToolBuilder() {
     override val metadata = ToolMetadata(
         name = "memory_read",
-        description = "Read the full content of a specific memory file by its path (e.g., 'feedback/testing.md').",
+        description = "Read a memory entry in full. Pass 'path' for an active entry (e.g., " +
+            "'feedback/testing.md'), or 'docIds' — a JSON array of at most ten docIds taken from a merged " +
+            "hit's 'sources' — to read back the archived entries it absorbed.",
         permissionCategory = "memory"
     )
 
@@ -94,7 +110,9 @@ class MemoryWriteToolBuilder : AbstractMemoryToolBuilder() {
 Parameter rules (violating any of these is the most common call failure):
 - 'type': must be exactly one of: $validTypes. Never invent aliases such as 'project' or 'user'.
 - 'name': bare file name only - no directory segments (no '/'), no '.md' suffix. The category goes into 'type', NOT into 'name'.
-- 'scenarios': a real JSON array of strings like ["scenario one"]. Never pass it as a single JSON-encoded string."""
+- 'scenarios': a real JSON array of strings like ["scenario one"]. Never pass it as a single JSON-encoded string.
+- 'content': distilled facts, target ~${MemoryContentLimits.CONTENT_TARGET_CHARS} characters; calls over ${MemoryContentLimits.CONTENT_HARD_CAP_CHARS} characters are rejected. Split broader material into multiple focused entries instead of one giant entry.
+- 'description': a one-line summary of at most ${MemoryContentLimits.DESCRIPTION_CAP_CHARS} characters."""
         return MemoryWriteTool(metadata.copy(description = metadata.description + parameterRules), store)
     }
 }
@@ -104,7 +122,7 @@ class MemoryListToolBuilder : AbstractMemoryToolBuilder() {
     override val metadata = ToolMetadata(
         name = "memory_list",
         description = "List all memory entries. Optionally filter by type (user/feedback/project/reference). " +
-            "Shows name, type, description, path, dates, maturity and staleness hints for governance review.",
+            "Shows docId, name, type, description, path, level, dates, maturity and staleness hints for governance review.",
         permissionCategory = "memory"
     )
 

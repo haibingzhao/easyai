@@ -1,1 +1,3 @@
 com.easy.easyai.autoconfigure.r2dbc.R2dbcRepositoryAutoConfiguration
+com.easy.easyai.autoconfigure.r2dbc.ScheduledTaskAutoConfiguration
+com.easy.easyai.autoconfigure.r2dbc.MemoryConsolidationTaskAutoConfiguration

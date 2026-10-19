@@ -230,7 +230,10 @@ class ChatSession(
                 lastEndReason = "normal" // consume the reason to avoid re-triggering on subsequent resumes
                 workingMessages.add(
                     UserMessage(
-                        content = listOf(TextContent("[System: The previous execution stopped with todo items still open because repeating the reminder produced no progress. Ask the user whether those items should be worked on now, or close them out.]")),
+                        // Which check gave up is in the transcript (its own notice message), so the
+                        // guidance stays generic — naming todos here would mislead a run that stalled
+                        // on an output schema.
+                        content = listOf(TextContent("[System: The previous execution stopped because a completion check ran out of reminders without making progress. Do not answer as if the task were finished: take a different approach, or ask the user what to do next.]")),
                         metadata = mapOf(UserMessage.SYSTEM_ORIGIN_KEY to UserMessage.ORIGIN_RESUME_GUIDANCE)
                     )
                 )
@@ -269,6 +272,35 @@ class ChatSession(
     }
 
     /**
+     * Replace this turn's output contract: the instructions, the JSON schema the answer must take,
+     * and optionally whether the model should reason before answering.
+     *
+     * Memory consolidation asks one session two different questions — group these entries, then write
+     * these merged bodies — and both are enforced per call, so a single hidden session can carry both:
+     * the loop reads [AgentContext.outputSchema] when it builds each prompt's options, the schema
+     * completion check reads it from the context of the turn it is judging, and the system prompt is
+     * rebuilt (and persisted) for every run this session starts. One session keeps the task row's single
+     * `sessionId`, its retry reuse, and the Tasks page's single transcript link all intact.
+     *
+     * The grouping pass benefits from thinking (wide-view judgement over many entries); the merge pass
+     * rewrites bodies it was already told how to cluster, so thinking there burns tokens for nothing.
+     * Pass [thinkingEnabled] to flip it per turn; null inherits the model row's default.
+     */
+    fun updateTurnOutputContract(
+        customInstructions: String,
+        outputSchema: String?,
+        thinkingEnabled: Boolean? = null
+    ) {
+        agent = agent.copy(
+            context = agent.context.copy(
+                customInstructions = customInstructions,
+                outputSchema = outputSchema,
+                thinkingEnabled = thinkingEnabled
+            )
+        )
+    }
+
+    /**
      * Create an AgentRunner for this prompt execution.
      * Registers job for abort/cancel support without resetting abort flag.
      */
@@ -289,7 +321,11 @@ class ChatSession(
                     // Abort was requested before job was registered — cancel immediately
                     job?.cancel()
                 }
-            }
+            },
+            // Every run this session starts records why it ended, including runs nobody forwards
+            // the event stream of (memory consolidation, swarm phases). Without this the caller can
+            // only re-parse the answer to discover that a completion check had given up on it.
+            endReasonSink = { reason -> lastEndReason = reason }
         )
         // Reset abort flag before starting execution (synchronous, before coroutine starts)
         abortRequested = false

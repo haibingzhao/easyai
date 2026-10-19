@@ -37,7 +37,13 @@ enum class AuxModelTask(val key: String) {
      * Post-dictation context-aware rewrite of the dictated text. Unset means the refinement step
      * is skipped and raw transcriptions stand.
      */
-    DICTATION_REFINE("dictation_refine");
+    DICTATION_REFINE("dictation_refine"),
+
+    /**
+     * Memory consolidation: merges related memories of one type into higher-level entries and
+     * archives the absorbed sources. Required — unset means memory consolidation stays disabled.
+     */
+    MEMORY_CURATION("memory_curation");
 
     companion object {
         /** The task for a persisted key; null when the key is unknown (e.g. from an older/newer build). */

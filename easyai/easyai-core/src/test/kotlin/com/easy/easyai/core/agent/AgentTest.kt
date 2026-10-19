@@ -88,7 +88,8 @@ class AgentTest {
 
     private fun createTestAgentService(
         chatModel: ChatModel,
-        eventListeners: List<AgentEventListener> = emptyList()
+        eventListeners: List<AgentEventListener> = emptyList(),
+        completionChecks: List<AgentCompletionCheck> = emptyList()
     ): AgentService {
         val mockPromptService = mockk<PromptTemplateService>(relaxed = true)
         every { mockPromptService.build(any(), any()) } returns "test prompt"
@@ -98,7 +99,8 @@ class AgentTest {
             toolExecutor = DefaultToolExecutionEngine(),
             promptTemplateService = mockPromptService,
             defaultChatModel = chatModel,
-            eventListeners = eventListeners
+            eventListeners = eventListeners,
+            completionChecks = completionChecks
         )
     }
 
@@ -223,6 +225,26 @@ class AgentTest {
             session.reset()
             // After reset, queues should be cleared — session should still work
             assertEquals(SessionStatus.ACTIVE, session.status)
+        }
+
+        @Test
+        fun `a run records why it stopped even when nobody consumes the events`() = runBlocking {
+            val stallCheck = object : AgentCompletionCheck {
+                override suspend fun check(input: CompletionCheckInput) =
+                    CompletionCheckResult.Stalled(notice = "gave up")
+            }
+            val mockModel = createMockChatModel(createMockChatResponse(text = "wrapping up", finishReason = "stop"))
+            val agent = Agent(
+                context = AgentContext(agentId = "test", customInstructions = "test"),
+                services = createTestAgentService(mockModel, completionChecks = listOf(stallCheck))
+            )
+            val session = ChatSession(id = "test-session", agent = agent)
+
+            // The caller takes only the result — the end reason has to reach it anyway, or a
+            // background run cannot tell a finished answer from one a check gave up on.
+            session.prompt("go", emptyList()).result()
+
+            assertEquals(AgentCompletionCheck.END_REASON_STALLED, session.lastEndReason)
         }
     }
 

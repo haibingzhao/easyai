@@ -2,6 +2,7 @@ package com.easy.easyai.tools.memory
 
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.domain.DomainCatalog
+import com.easy.easyai.core.memory.MemoryContentLimits
 import com.easy.easyai.core.memory.MemoryEntry
 import com.easy.easyai.core.memory.MemoryMaturity
 import com.easy.easyai.core.memory.MemoryOwnerContext
@@ -143,7 +144,13 @@ internal class MemoryWriteTool(
         val validTypes = MemoryType.entriesFor(DomainCatalog.activeDomain)
 
         // Report every violated parameter at once so the caller can fix them all in a single retry.
-        if (type.isNullOrBlank() || description.isNullOrBlank() || content.isNullOrBlank() || !isValidMemoryName(name)) {
+        val contentLength = content?.length ?: 0
+        val descriptionLength = description?.length ?: 0
+        val contentTooLong = contentLength > MemoryContentLimits.CONTENT_HARD_CAP_CHARS
+        val descriptionTooLong = descriptionLength > MemoryContentLimits.DESCRIPTION_CAP_CHARS
+        if (type.isNullOrBlank() || description.isNullOrBlank() || content.isNullOrBlank() ||
+            !isValidMemoryName(name) || contentTooLong || descriptionTooLong
+        ) {
             val problems = mutableListOf<String>()
             if (type.isNullOrBlank()) problems.add("- 'type' is required for add; valid values: ${validTypes.joinToString(", ") { it.dirName }}")
             if (description.isNullOrBlank()) problems.add("- 'description' is required for add")
@@ -152,6 +159,17 @@ internal class MemoryWriteTool(
                 problems.add(
                     "- 'name' must be a bare file name without directory separators ('/') and without '.md'; " +
                         "the category belongs in 'type', not in the name"
+                )
+            }
+            if (contentTooLong) {
+                problems.add(
+                    "- 'content' is $contentLength characters, over the ${MemoryContentLimits.CONTENT_HARD_CAP_CHARS} limit; " +
+                        "distill it to ~${MemoryContentLimits.CONTENT_TARGET_CHARS} or split the material into multiple focused entries"
+                )
+            }
+            if (descriptionTooLong) {
+                problems.add(
+                    "- 'description' must be a one-line summary of at most ${MemoryContentLimits.DESCRIPTION_CAP_CHARS} characters"
                 )
             }
             return errorResult("Error: invalid parameters for add:\n${problems.joinToString("\n")}")
@@ -163,8 +181,19 @@ internal class MemoryWriteTool(
             return errorResult("Error: Type '$type' is not available in the current domain. Use: ${validTypes.joinToString(", ") { it.dirName }}.")
         }
 
-        // Name dedup check: the type is already validated, so resolve the key directly
-        if (store.exists(name, scope, owner, memoryType)) {
+        // Name dedup check: the type is already validated, so resolve the key directly. Archived
+        // visibility is part of this check: a consolidated source is stored under the same key as an
+        // active entry, so a name that only matches history looks free to an active-only lookup, and the
+        // upsert below would revive it as a live duplicate of the merged entry that absorbed it.
+        val keyOccupant = store.findByName(name, scope, owner, memoryType, includeArchived = true)
+        if (keyOccupant != null) {
+            if (keyOccupant.archived) {
+                return errorResult(
+                    "Error: '$name' is consolidated history (level ${keyOccupant.level}), absorbed by the merged " +
+                        "entry ${keyOccupant.mergedInto ?: "unknown"}. History is read-only — correct the merged " +
+                        "entry instead, or write a different name."
+                )
+            }
             return errorResult("Entry '$name' already exists in ${scope.name.lowercase()} scope. Use action='update' to modify it.")
         }
 
@@ -208,6 +237,13 @@ internal class MemoryWriteTool(
             }
         } else {
             content
+        }
+
+        if (updatedContent.length > MemoryContentLimits.CONTENT_HARD_CAP_CHARS) {
+            return errorResult(
+                "Error: resulting 'content' would be ${updatedContent.length} characters, over the " +
+                    "${MemoryContentLimits.CONTENT_HARD_CAP_CHARS} limit; distill the entry or split it instead."
+            )
         }
 
         val entry = existing.copy(
@@ -332,14 +368,6 @@ internal class MemoryWriteTool(
             }
         }
         return result
-    }
-
-    private fun coerceToStringList(value: Any?): Any? {
-        if (value !is String) return value
-        return runCatching {
-            val node = SharedObjectMapper.instance.readTree(value)
-            if (node.isArray) node.toList().map { it.asString() } else listOf(value)
-        }.getOrElse { listOf(value) }
     }
 
     private fun resolveScope(scopeStr: String?): MemoryScope = when (scopeStr?.lowercase()) {

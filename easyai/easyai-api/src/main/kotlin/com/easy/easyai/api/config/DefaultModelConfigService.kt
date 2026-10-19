@@ -66,7 +66,7 @@ class DefaultModelConfigService(
         userId: String,
         owners: Collection<String>
     ): ModelProviderConfig {
-        request.options?.let { validateOptions(it) }
+        request.options?.let { validateOptions(it, request.protocol) }
         validateGenerationRow(request)
         val id = request.id ?: UUID.randomUUID().toString()
         // When apiKey is null, preserve existing key or resolve from group
@@ -201,9 +201,13 @@ class DefaultModelConfigService(
         }
     }
 
-    private fun validateOptions(options: ModelOptions) {
-        require(options.temperature in 0.0..2.0) {
-            "temperature must be between 0.0 and 2.0, got: ${options.temperature}"
+    private fun validateOptions(options: ModelOptions, protocol: Protocol) {
+        // Null is a real value here: it means "do not send temperature at all" and lets the
+        // vendor's per-model default apply. Only a present number is range-checked.
+        options.temperature?.let { temperature ->
+            require(isTemperatureInRange(protocol, temperature)) {
+                "temperature must be in ${temperatureRangeLabel(protocol)} for $protocol, got: $temperature"
+            }
         }
         require(options.maxTokens > 0) {
             "maxTokens must be positive, got: ${options.maxTokens}"
@@ -222,5 +226,22 @@ class DefaultModelConfigService(
     companion object {
         /** Protocols the media tools can drive: OpenAI-compatible gateways (incl. DashScope compat), DashScope, Kling. */
         private val GENERATION_PROTOCOLS: Set<Protocol> = setOf(Protocol.OPENAI, Protocol.DASHSCOPE, Protocol.KLING)
+
+        /**
+         * Vendor-published temperature span for each wire protocol. One shared 0.0-2.0 check would
+         * accept values the gateway then rejects: Anthropic allows at most 1.0, DashScope documents
+         * a half-open [0, 2).
+         */
+        private fun isTemperatureInRange(protocol: Protocol, temperature: Double): Boolean = when (protocol) {
+            Protocol.ANTHROPIC -> temperature in 0.0..1.0
+            Protocol.DASHSCOPE -> temperature in 0.0..<2.0
+            else -> temperature in 0.0..2.0
+        }
+
+        private fun temperatureRangeLabel(protocol: Protocol): String = when (protocol) {
+            Protocol.ANTHROPIC -> "[0.0, 1.0]"
+            Protocol.DASHSCOPE -> "[0.0, 2.0)"
+            else -> "[0.0, 2.0]"
+        }
     }
 }

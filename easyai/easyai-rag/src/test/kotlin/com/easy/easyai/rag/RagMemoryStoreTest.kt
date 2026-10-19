@@ -121,7 +121,8 @@ class RagMemoryStoreTest {
                 topK = any(),
                 timeRangeStart = any(),
                 timeRangeEnd = any(),
-                bizId = any()
+                bizId = any(),
+                excludeArchived = any()
             )
         } returns listOf(
             RagChunk(
@@ -149,6 +150,41 @@ class RagMemoryStoreTest {
     }
 
     @Test
+    fun `list items carrying a comma or a quote survive the frontmatter round trip`() = runTest {
+        val docSlot = slot<RagDocument>()
+        coEvery { client.upsert(capture(docSlot), any(), any()) } returns RagUpsertResult(docId = "doc-1", indexed = true)
+        val entry = sampleEntry().copy(
+            keywords = listOf("frp, tunnel", "port:8000", "he said \"hi\""),
+            scenarios = listOf("Deploy, then verify")
+        )
+        store.write(entry, MemoryScope.GLOBAL, globalOwner)
+
+        coEvery {
+            client.search(
+                query = any(),
+                filters = any(),
+                topK = any(),
+                timeRangeStart = any(),
+                timeRangeEnd = any(),
+                bizId = any(),
+                excludeArchived = any()
+            )
+        } returns listOf(
+            RagChunk(
+                content = docSlot.captured.content,
+                filePath = "easyai/experience_lessons/frp-remote-access.md",
+                score = 0.9,
+                createTime = null,
+                metadata = emptyMap()
+            )
+        )
+
+        val parsed = store.search("frp", MemoryScope.GLOBAL, globalOwner, 5).single()
+        assertEquals(entry.keywords, parsed.keywords)
+        assertEquals(entry.scenarios, parsed.scenarios)
+    }
+
+    @Test
     fun `search falls back to chunk metadata when the hit chunk lacks frontmatter`() = runTest {
         val updatedEpoch = LocalDate.of(2026, 1, 15).atStartOfDay(ZoneId.systemDefault()).toEpochSecond()
         coEvery {
@@ -158,7 +194,8 @@ class RagMemoryStoreTest {
                 topK = any(),
                 timeRangeStart = any(),
                 timeRangeEnd = any(),
-                bizId = any()
+                bizId = any(),
+                excludeArchived = any()
             )
         } returns listOf(
             RagChunk(
@@ -187,7 +224,8 @@ class RagMemoryStoreTest {
                 topK = any(),
                 timeRangeStart = any(),
                 timeRangeEnd = any(),
-                bizId = any()
+                bizId = any(),
+                excludeArchived = any()
             )
         } returns listOf(RagChunk("body without frontmatter", filePath = null, score = 0.8, createTime = null, metadata = emptyMap()))
 
@@ -203,7 +241,8 @@ class RagMemoryStoreTest {
                 topK = any(),
                 timeRangeStart = any(),
                 timeRangeEnd = any(),
-                bizId = any()
+                bizId = any(),
+                excludeArchived = any()
             )
         } returns emptyList()
 
@@ -216,7 +255,8 @@ class RagMemoryStoreTest {
                 topK = 7,
                 timeRangeStart = 100L,
                 timeRangeEnd = 200L,
-                bizId = projectBizId
+                bizId = projectBizId,
+                excludeArchived = true
             )
         }
     }
@@ -235,7 +275,8 @@ class RagMemoryStoreTest {
                 topK = any(),
                 timeRangeStart = any(),
                 timeRangeEnd = any(),
-                bizId = any()
+                bizId = any(),
+                excludeArchived = any()
             )
         } returns listOf(
             RagChunk(storedContent, "easyai/experience_lessons/frp-remote-access.md", 0.9, null, emptyMap()),
@@ -258,9 +299,10 @@ class RagMemoryStoreTest {
         assertFalse(store.exists("frp-remote-access", MemoryScope.PROJECT, noProjectOwner))
         assertEquals(0, store.deleteAll(MemoryScope.PROJECT, noProjectOwner))
 
-        coVerify(exactly = 0) { client.search(any(), any(), any(), any(), any(), any()) }
-        coVerify(exactly = 0) { client.list(any(), any()) }
+        coVerify(exactly = 0) { client.search(any(), any(), any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { client.list(any(), any(), any()) }
         coVerify(exactly = 0) { client.readByExternalId(any(), any()) }
+        coVerify(exactly = 0) { client.readByDocIds(any(), any()) }
     }
 
     @Test
@@ -316,32 +358,32 @@ class RagMemoryStoreTest {
 
         assertEquals(sampleEntry().name, found?.name)
         assertEquals(MemoryType.EXPERIENCE_LESSONS, found?.type)
-        coVerify(exactly = 0) { client.list(any(), any()) }
+        coVerify(exactly = 0) { client.list(any(), any(), any()) }
         coVerify(exactly = 1) { client.readByExternalId(any(), any()) }
     }
 
     @Test
     fun `findByName without a type probes the document list instead of every type`() = runTest {
         val content = storedContentOf(sampleEntry())
-        coEvery { client.list("easyai/", globalBizId) } returns listOf(docInfo("doc-1", FILE_PATH, externalId = EXTERNAL_ID))
+        coEvery { client.list("easyai/", globalBizId, excludeArchived = true) } returns listOf(docInfo("doc-1", FILE_PATH, externalId = EXTERNAL_ID))
         coEvery { client.readByExternalId(EXTERNAL_ID, globalBizId) } returns detail(content)
 
         val found = store.findByName("frp-remote-access", MemoryScope.GLOBAL, globalOwner)
 
         assertEquals(sampleEntry().name, found?.name)
-        coVerify(exactly = 1) { client.list(any(), any()) }
+        coVerify(exactly = 1) { client.list(any(), any(), any()) }
         coVerify(exactly = 1) { client.readByExternalId(any(), any()) }
     }
 
     @Test
     fun `findByName returns null after one list call when no candidate matches`() = runTest {
-        coEvery { client.list(any(), any()) } returns listOf(
+        coEvery { client.list(any(), any(), any()) } returns listOf(
             docInfo("doc-9", "easyai/other/unrelated.md", externalId = "easyai:other/unrelated.md")
         )
 
         assertNull(store.findByName("frp-remote-access", MemoryScope.GLOBAL, globalOwner))
 
-        coVerify(exactly = 1) { client.list(any(), any()) }
+        coVerify(exactly = 1) { client.list(any(), any(), any()) }
         coVerify(exactly = 0) { client.readByExternalId(any(), any()) }
     }
 
@@ -356,7 +398,7 @@ class RagMemoryStoreTest {
         assertEquals("frp-remote-access", entry?.name)
         assertEquals(MemoryMaturity.MEDIUM, entry?.maturity)
         coVerify(exactly = 1) { client.readByExternalId(any(), any()) }
-        coVerify(exactly = 0) { client.list(any(), any()) }
+        coVerify(exactly = 0) { client.list(any(), any(), any()) }
     }
 
     @Test
@@ -394,23 +436,80 @@ class RagMemoryStoreTest {
         store.write(sampleEntry(), MemoryScope.GLOBAL, globalOwner)
         val storedContent = docSlot.captured.content
 
-        coEvery { client.list("easyai/experience_lessons/", globalBizId) } returns listOf(
+        coEvery { client.list("easyai/experience_lessons/", globalBizId, excludeArchived = true) } returns listOf(
             docInfo("doc-1", "easyai/experience_lessons/frp-remote-access.md", externalId = "easyai:experience_lessons/frp-remote-access.md")
         )
-        coEvery { client.readByExternalId("easyai:experience_lessons/frp-remote-access.md", globalBizId) } returns
-            RagDocumentDetail(
-                docId = "doc-1",
-                externalId = null,
-                filePath = "easyai/experience_lessons/frp-remote-access.md",
-                content = storedContent,
-                status = null,
-                createTime = null,
-                chunksCount = null
+        coEvery { client.readByDocIds(listOf("doc-1"), globalBizId) } returns
+            listOf(
+                RagDocumentDetail(
+                    docId = "doc-1",
+                    externalId = null,
+                    filePath = "easyai/experience_lessons/frp-remote-access.md",
+                    content = storedContent,
+                    status = null,
+                    createTime = null,
+                    chunksCount = null
+                )
             )
 
         val entries = store.list(MemoryScope.GLOBAL, globalOwner, MemoryType.EXPERIENCE_LESSONS)
         assertEquals(1, entries.size)
         assertEquals("frp-remote-access", entries[0].name)
+    }
+
+    @Test
+    fun `listActiveIndex describes a slice from the listing alone`() = runTest {
+        // The grouping pass and the scheduler's fingerprint both read this: it must carry identity, depth
+        // and size without ever asking for a body, or a daily tick turns into a full store dump.
+        coEvery { client.list("easyai/experience_lessons/", globalBizId, excludeArchived = true) } returns listOf(
+            docInfo(
+                "doc-1", "easyai/experience_lessons/a.md",
+                level = 2, contentLength = 1_800, contentSummary = "frp tunnel setup notes"
+            ),
+            docInfo("doc-2", "easyai/experience_lessons/b.md", contentLength = 400)
+        )
+
+        val index = store.listActiveIndex(MemoryScope.GLOBAL, globalOwner, MemoryType.EXPERIENCE_LESSONS)
+
+        assertEquals(listOf("doc-1", "doc-2"), index.map { it.docId })
+        assertEquals(listOf("a", "b"), index.map { it.name })
+        assertEquals(listOf(2, 0), index.map { it.level })
+        assertEquals(listOf(1_800, 400), index.map { it.contentChars })
+        assertEquals("frp tunnel setup notes", index[0].blurb)
+        assertEquals("", index[1].blurb, "a document the server summarized not at all still has a row")
+        coVerify(exactly = 0) { client.readByDocIds(any(), any()) }
+    }
+
+    @Test
+    fun `a listing row with no derivable type is skipped, not guessed`() = runTest {
+        coEvery { client.list("easyai/", globalBizId, excludeArchived = true) } returns listOf(
+            docInfo("doc-1", "easyai/experience_lessons/a.md", contentLength = 10),
+            docInfo("doc-2", "easyai/not_a_type/z.md", contentLength = 10),
+            docInfo("", "easyai/experience_lessons/empty-id.md", contentLength = 10)
+        )
+
+        val index = store.listActiveIndex(MemoryScope.GLOBAL, globalOwner)
+
+        assertEquals(listOf("doc-1"), index.map { it.docId }, "an untypeable or id-less row cannot be cited")
+    }
+
+    @Test
+    fun `read does not hand back an archived entry's body`() = runTest {
+        // History is reachable through findByIds only; readEntry already refuses an archived
+        // document, and guessing the key must not open the raw-content path around that rule.
+        coEvery { client.readByExternalId(EXTERNAL_ID, globalBizId) } returns
+            RagDocumentDetail(
+                docId = "doc-1",
+                externalId = EXTERNAL_ID,
+                filePath = FILE_PATH,
+                content = "---\nname: frp-remote-access\n---\n\nabsorbed body",
+                status = null,
+                createTime = null,
+                chunksCount = null,
+                archived = true
+            )
+
+        assertNull(store.read("experience_lessons/frp-remote-access.md", MemoryScope.GLOBAL, globalOwner))
     }
 
     // ── error translation ──────────────────────────────────────────────
@@ -424,16 +523,24 @@ class RagMemoryStoreTest {
         }
     }
 
-    private fun docInfo(docId: String, filePath: String, externalId: String? = null) = RagDocInfo(
+    private fun docInfo(
+        docId: String,
+        filePath: String,
+        externalId: String? = null,
+        level: Int = 0,
+        contentLength: Int? = null,
+        contentSummary: String? = null
+    ) = RagDocInfo(
         docId = docId,
         filePath = filePath,
         status = null,
         externalId = externalId,
-        contentSummary = null,
-        contentLength = null,
+        contentSummary = contentSummary,
+        contentLength = contentLength,
         chunksCount = null,
         createdAt = null,
-        updatedAt = null
+        updatedAt = null,
+        level = level
     )
 
     private fun detail(content: String) = RagDocumentDetail(

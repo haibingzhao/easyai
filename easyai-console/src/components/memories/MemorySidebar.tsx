@@ -1,16 +1,30 @@
 import React, { useMemo, useState } from 'react';
-import { Search, ChevronDown, ChevronRight, FileText, FolderOpen, Globe } from 'lucide-react';
-import type { MemoryEntry } from '@/types/memory';
+import {
+  Search,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  FolderOpen,
+  Globe,
+  AlertCircle,
+  Settings2,
+  Loader2,
+} from 'lucide-react';
+import type { MemoryConsolidationSettings, MemoryEntry } from '@/types/memory';
 import { maturityLabelKey } from '@/types/memory';
 import { useCategoryStore } from '@/services/stores/category-store';
+import { useMemoryStore } from '@/services/stores/memory-store';
 import { i18n } from '@/utils/i18n';
 import type { Project } from '@/services/project-service';
 import { ToolTooltip } from '@/components/agent/ToolItem';
+import { ConsolidationSwitch } from '@/components/memories/ConsolidationSwitch';
 
 export interface SelectedMemory {
   scope: 'global' | 'project';
   projectPath: string | null;
   name: string;
+  /** docId when known; lets the panel resolve archived tree leaves via the archive endpoint. */
+  id?: string | null;
 }
 
 interface MemorySidebarProps {
@@ -21,7 +35,152 @@ interface MemorySidebarProps {
   autoGeneration: boolean;
   onToggleAutoGeneration: (enabled: boolean) => void;
   onSelect: (sel: SelectedMemory) => void;
+  /** Per-user consolidation preferences; null hides the whole consolidation section. */
+  consolidation: MemoryConsolidationSettings | null;
+  onToggleConsolidation: (enabled: boolean) => void;
+  onOpenConsolidation: () => void;
 }
+
+interface MemoryTreeNodeProps {
+  entry: MemoryEntry;
+  depth: number;
+  selected: SelectedMemory | null;
+  scopeKey: string;
+  onSelect: (sel: SelectedMemory) => void;
+}
+
+/**
+ * Recursive tree node for memory entries. If an entry has refs (was formed by consolidation),
+ * it can be expanded to show its source memories.
+ */
+const MemoryTreeNode: React.FC<MemoryTreeNodeProps> = ({
+  entry,
+  depth,
+  selected,
+  scopeKey,
+  onSelect,
+}) => {
+  const [expanded, setExpanded] = useState(false);
+  const [childEntries, setChildEntries] = useState<MemoryEntry[] | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const loadArchived = useMemoryStore((s) => s.loadArchived);
+  const hasChildren = (entry.refs?.length ?? 0) > 0;
+
+  const isSelected =
+    selected?.name === entry.name &&
+    selected.scope === entry.scope &&
+    selected.projectPath === (scopeKey === 'global' ? null : scopeKey);
+
+  const handleToggle = async () => {
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    setExpanded(true);
+    if (childEntries !== null || !hasChildren) return;
+    setLoading(true);
+    try {
+      const refs = entry.refs ?? [];
+      const scope = entry.scope as 'global' | 'project';
+      const projectPath = entry.projectPath ?? null;
+      const loaded = await loadArchived(refs, scope, projectPath);
+      setChildEntries(loaded);
+    } catch {
+      // Load failed — leave childEntries null so retry is possible
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSelect = () => {
+    onSelect({
+      scope: entry.scope as 'global' | 'project',
+      projectPath: scopeKey === 'global' ? null : scopeKey,
+      name: entry.name,
+      id: entry.id ?? null,
+    });
+  };
+
+  return (
+    <div>
+      <div
+        className={`w-full flex items-center gap-1 px-1.5 py-1 rounded-md text-left transition-colors ${
+          isSelected ? 'bg-primary/10 text-primary' : 'hover:bg-muted/60 text-foreground'
+        }`}
+        style={{ paddingLeft: `${depth * 12 + 6}px` }}
+      >
+        {/* Chevron: single click toggles the source list */}
+        {hasChildren ? (
+          <button
+            onClick={() => void handleToggle()}
+            className="shrink-0 p-0.5 hover:bg-muted transition-colors rounded"
+          >
+            {loading ? (
+              <Loader2 className="size-3 text-muted-foreground animate-spin" />
+            ) : expanded ? (
+              <ChevronDown className="size-3 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="size-3 text-muted-foreground" />
+            )}
+          </button>
+        ) : (
+          <span className="size-3 shrink-0" />
+        )}
+
+        {/* Title: single click selects; on merged entries double click also toggles sources */}
+        <button
+          onClick={handleSelect}
+          onDoubleClick={() => {
+            if (hasChildren) void handleToggle();
+          }}
+          className="flex-1 min-w-0 flex items-center gap-1 text-left"
+        >
+          <FileText className="size-3 text-muted-foreground shrink-0" />
+          <span className="text-xs truncate flex-1">{entry.name}</span>
+          {entry.maturity && (
+            <span
+              className={`shrink-0 size-1.5 rounded-full ${
+                entry.maturity === 'high'
+                  ? 'bg-green-500'
+                  : entry.maturity === 'medium'
+                    ? 'bg-amber-500'
+                    : 'bg-slate-400'
+              }`}
+              title={i18n(maturityLabelKey(entry.maturity))}
+            />
+          )}
+        </button>
+      </div>
+
+      {/* Child nodes */}
+      {expanded && childEntries && childEntries.length > 0 && (
+        <div>
+          {childEntries.map((child) => (
+            <MemoryTreeNode
+              key={child.id ?? child.name}
+              entry={child}
+              depth={depth + 1}
+              selected={selected}
+              scopeKey={scopeKey}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Empty state */}
+      {expanded && childEntries && childEntries.length === 0 && (
+        <div
+          className="text-[10px] text-muted-foreground py-0.5"
+          style={{ paddingLeft: `${(depth + 1) * 12 + 6}px` }}
+        >
+          {i18n('No sources')}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const FILTER_ANY = 'all';
 
@@ -33,6 +192,9 @@ export const MemorySidebar: React.FC<MemorySidebarProps> = ({
   autoGeneration,
   onToggleAutoGeneration,
   onSelect,
+  consolidation,
+  onToggleConsolidation,
+  onOpenConsolidation,
 }) => {
   const memoryCategories = useCategoryStore((s) => s.memoryCategories);
   const [query, setQuery] = useState('');
@@ -82,13 +244,53 @@ export const MemorySidebar: React.FC<MemorySidebarProps> = ({
     setCollapsedScopes((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const isSelected = (entry: MemoryEntry, scopeKey: string) =>
-    selected?.name === entry.name &&
-    selected.scope === entry.scope &&
-    selected.projectPath === (scopeKey === 'global' ? null : scopeKey);
-
   return (
     <div className="flex flex-col h-full min-h-0">
+      {/* Memory consolidation toggle (per-user preference, shown only when the deployment wires it) */}
+      {consolidation?.available && (
+        <div className="px-3 pt-3 pb-2 border-b border-border">
+          <div className="flex items-center justify-between gap-2">
+            <ToolTooltip
+              name={i18n('Memory Consolidation')}
+              description={i18n('Scheduled merge of related memories')}
+              className="min-w-0 flex-1"
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-1">
+                  <span className="text-xs font-medium text-foreground truncate">
+                    {i18n('Memory Consolidation')}
+                  </span>
+                  <button
+                    onClick={onOpenConsolidation}
+                    className="p-0.5 rounded hover:bg-muted text-muted-foreground transition-colors shrink-0"
+                    title={i18n('Settings')}
+                  >
+                    <Settings2 className="size-3.5" />
+                  </button>
+                </div>
+                <div className="text-[11px] text-muted-foreground truncate">
+                  {i18n('Scheduled merge of related memories')}
+                </div>
+              </div>
+            </ToolTooltip>
+            <ConsolidationSwitch
+              enabled={consolidation.enabled}
+              modelConfigured={consolidation.curationModelConfigured}
+              onChange={onToggleConsolidation}
+            />
+          </div>
+          {!consolidation.curationModelConfigured && (
+            <button
+              onClick={onOpenConsolidation}
+              className="mt-1.5 flex items-start gap-1 text-[11px] text-amber-600 hover:opacity-80 transition-opacity text-left"
+            >
+              <AlertCircle className="size-3 shrink-0 mt-0.5" />
+              <span>{i18n('Memory curation model not configured')}</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Automatic generation toggle */}
       {currentProject && (
         <div className="px-3 pt-3 pb-2 border-b border-border">
@@ -229,36 +431,14 @@ export const MemorySidebar: React.FC<MemorySidebarProps> = ({
                         </div>
                         <div className="space-y-px">
                           {catEntries.map((entry) => (
-                            <button
+                            <MemoryTreeNode
                               key={entry.name}
-                              onClick={() =>
-                                onSelect({
-                                  scope: entry.scope as 'global' | 'project',
-                                  projectPath: scope.projectPath,
-                                  name: entry.name,
-                                })
-                              }
-                              className={`w-full flex items-center gap-1.5 px-1.5 py-1 rounded-md text-left transition-colors ${
-                                isSelected(entry, scope.key)
-                                  ? 'bg-primary/10 text-primary'
-                                  : 'hover:bg-muted/60 text-foreground'
-                              }`}
-                            >
-                              <FileText className="size-3 text-muted-foreground shrink-0" />
-                              <span className="text-xs truncate flex-1">{entry.name}</span>
-                              {entry.maturity && (
-                                <span
-                                  className={`shrink-0 size-1.5 rounded-full ${
-                                    entry.maturity === 'high'
-                                      ? 'bg-green-500'
-                                      : entry.maturity === 'medium'
-                                        ? 'bg-amber-500'
-                                        : 'bg-slate-400'
-                                  }`}
-                                  title={i18n(maturityLabelKey(entry.maturity))}
-                                />
-                              )}
-                            </button>
+                              entry={entry}
+                              depth={0}
+                              selected={selected}
+                              scopeKey={scope.key}
+                              onSelect={onSelect}
+                            />
                           ))}
                         </div>
                       </div>

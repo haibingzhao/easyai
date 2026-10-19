@@ -111,7 +111,7 @@ class BackgroundTaskManager(
                     publishCompleted(taskId, toolName, resultText, completedTask.startedAt)
                 }
 
-                // Inject result into agent
+                // Inject result into the agent's steering queue (auto-resumes if the loop is idle)
                 injectResult(completedTask)
 
             } catch (e: CancellationException) {

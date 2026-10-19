@@ -16,6 +16,14 @@ import java.time.LocalDate
  * @property scenarios Usage scenarios that this memory applies to.
  * @property lastAccessed Date the entry was last retrieved by an agent; a staleness hint
  *   only — it never feeds the business time used by time-range filtering.
+ * @property id Backend document id (EasyRAG docId); the stable reference used by consolidation.
+ * @property archived True for a history entry absorbed by a consolidated entry. Archived entries
+ *   are excluded from normal retrieval and can only be read back by id.
+ * @property level Consolidation depth: source entries are 0, a consolidated entry is
+ *   `max(sources) + 1`.
+ * @property refs For a consolidated entry: the docIds it absorbed. Drives downward drill-down.
+ * @property mergedInto For an absorbed source: the docId of the consolidated entry. Drives upward
+ *   drill-down.
  */
 data class MemoryEntry(
     val name: String,
@@ -28,5 +36,10 @@ data class MemoryEntry(
     val updated: LocalDate? = null,
     val maturity: MemoryMaturity? = null,
     val scenarios: List<String> = emptyList(),
-    val lastAccessed: LocalDate? = null
+    val lastAccessed: LocalDate? = null,
+    val id: String? = null,
+    val archived: Boolean = false,
+    val level: Int = 0,
+    val refs: List<String> = emptyList(),
+    val mergedInto: String? = null
 )

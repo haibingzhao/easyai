@@ -20,7 +20,7 @@ export async function switchToSession(sessionId: string): Promise<void> {
   const {
     loadSessionMessages, setSessionId, setTodos, setAllSubAgentTodos,
     setFileReviewOverrides, setRunningSessionId, setStreaming, setForkRootId,
-    setSnapshotEnabled,
+    setSnapshotEnabled, setTranscriptMode,
   } = chat;
 
   const streamingStatus = await getStreamingStatus(sessionId);
@@ -31,6 +31,7 @@ export async function switchToSession(sessionId: string): Promise<void> {
   ]);
   loadSessionMessages(detail!.messages, detail!.pendingPermission, checkpoints, detail!.endReason, detail!.variables, detail!.modelContextLength, sessionId);
   setForkRootId(detail!.forkRootSessionId ?? sessionId);
+  setTranscriptMode(false);
   // The session owns its workspace: adopt it so the file panel, mentions and memory UI point at
   // the directory the agent actually worked in, and drop a stale one when it has none yet.
   adoptSessionWorkspace(detail);
@@ -39,8 +40,16 @@ export async function switchToSession(sessionId: string): Promise<void> {
   useNavStore.getState().setSelectedFile(null);
 
   // Restore Agent and Model selectors from the last message's config
-  if (detail!.lastAgentId) {
-    useAgentStore.getState().selectAgent(detail!.lastAgentId);
+  const lastAgentId = detail!.lastAgentId;
+  const knownAgents = useAgentStore.getState().agents;
+  // A background task's transcript runs under an agent with no row of its own (`memory-consolidation`);
+  // selecting it would point the composer at an agent the user can neither see nor pick. An empty list
+  // means the agents have not loaded yet, so that case keeps the previous behaviour.
+  if (
+    lastAgentId &&
+    (knownAgents.length === 0 || knownAgents.some((agent) => agent.id === lastAgentId))
+  ) {
+    useAgentStore.getState().selectAgent(lastAgentId);
   }
   if (detail!.lastConfigId) {
     useSettingsStore.getState().setSelectedModelConfig(detail!.lastConfigId);
@@ -74,4 +83,48 @@ export async function switchToSession(sessionId: string): Promise<void> {
   setCurrentSessionId(sessionId);
   setSessionId(sessionId);
   setSnapshotEnabled(snapshotEnabled);
+}
+
+/**
+ * Load a session's messages in read-only mode for a background task transcript.
+ *
+ * Unlike {@link switchToSession}, this never marks the session as streaming (the task row
+ * is the authority for background work, not the session DB status), skips agent/model
+ * restoration (the task agent has no user-visible row), and skips workspace adoption
+ * (the file panel is not shown). The chat store is left in a clean, idle state so the
+ * MessageList renders a static transcript.
+ */
+export async function loadTranscriptSession(sessionId: string): Promise<void> {
+  const chat = useChatStore.getState();
+  const {
+    loadSessionMessages, setSessionId, setTodos, setAllSubAgentTodos,
+    setRunningSessionId, setStreaming, setForkRootId,
+    setSnapshotEnabled, setTranscriptMode,
+  } = chat;
+
+  const [detail, checkpoints] = await Promise.all([
+    sessionService.getSessionDetail(sessionId),
+    getCheckpoints(sessionId).catch(() => [] as CheckpointInfo[]),
+  ]);
+
+  loadSessionMessages(detail!.messages, detail!.pendingPermission, checkpoints, detail!.endReason, detail!.variables, detail!.modelContextLength, sessionId);
+  setForkRootId(detail!.forkRootSessionId ?? sessionId);
+
+  const snapshotEnabled = detail!.snapshotEnabled !== false;
+  useNavStore.getState().setSelectedFile(null);
+
+  // Load todos for context (useful in the Summary panel) but skip review state.
+  const groupedTodos = await sessionService.getGroupedTodos(sessionId);
+  setTodos(groupedTodos.main);
+  setAllSubAgentTodos(
+    Object.fromEntries(groupedTodos.subAgents.map((g) => [g.agentName, { todos: g.todos, toolCallId: g.agentName }]))
+  );
+
+  // Force read-only state regardless of the session's DB streaming status, and mark the view as a
+  // transcript so session-mutating actions (fork/branch) stay hidden.
+  setRunningSessionId(null);
+  setSessionId(sessionId);
+  setSnapshotEnabled(snapshotEnabled);
+  setStreaming(false);
+  setTranscriptMode(true);
 }

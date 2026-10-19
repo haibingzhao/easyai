@@ -262,3 +262,85 @@ export function getToolRowSummary(toolName: string, argsString: string): string 
       return singleLine(argsString);
   }
 }
+// ---------------------------------------------------------------------------
+// Stored memory document (YAML frontmatter + Markdown body)
+// ---------------------------------------------------------------------------
+
+const MEMORY_FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+
+/** Frontmatter fields written as comma-separated flow lists rather than scalars. */
+const MEMORY_LIST_FIELDS = new Set(['keywords', 'scenarios']);
+
+/** Fields of a stored memory document; `tags` are keywords plus scenarios. */
+export interface ParsedMemoryDocument {
+  fields: Record<string, string>;
+  tags: string[];
+  body: string;
+}
+
+/** Decode a scalar written by the memory store; an unquoted value is returned as-is. */
+function unquoteYamlScalar(value: string): string {
+  if (
+    value.length >= 2 &&
+    ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
+  ) {
+    return value.slice(1, -1).replace(/\\"/g, '"');
+  }
+  return value;
+}
+
+/**
+ * Decode a flow list written by the memory store: comma-separated items, each double-quoted with `\\`
+ * and `\"` escapes. Mirrors `RagMemoryStore.parseYamlList`: the split must ignore a comma inside
+ * quotes, and quotes must come off item by item — a multi-item line starts and ends with quotes that
+ * are not one pair, so unquoting the whole line first leaves stray quotes on every inner item.
+ */
+function parseYamlFlowList(raw: string | undefined): string[] {
+  if (!raw) return [];
+  const items: string[] = [];
+  let current = '';
+  let quoted = false;
+  let escaped = false;
+  for (const char of raw) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+    } else if (quoted && char === '\\') {
+      escaped = true;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === ',' && !quoted) {
+      items.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  items.push(current);
+  return items.map((item) => item.trim()).filter((item) => item.length > 0);
+}
+
+/**
+ * Split a stored memory document into its metadata fields, its tags and its markdown body. Without the
+ * split the closing `---` turns the whole metadata block into a setext heading when rendered as
+ * markdown.
+ */
+export function parseMemoryDocument(output: string): ParsedMemoryDocument {
+  const match = MEMORY_FRONTMATTER_RE.exec(output);
+  if (!match) return { fields: {}, tags: [], body: output };
+  const fields: Record<string, string> = {};
+  for (const line of match[1].split('\n')) {
+    const idx = line.indexOf(':');
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim();
+    const raw = line.slice(idx + 1).trim();
+    // List fields keep their raw text: their own items carry the quotes, and unquoting the whole line
+    // first removes a pair that is not one, which is how a comma inside an item ended up as a separator.
+    fields[key] = MEMORY_LIST_FIELDS.has(key) ? raw : unquoteYamlScalar(raw);
+  }
+  return {
+    fields,
+    tags: [...parseYamlFlowList(fields.keywords), ...parseYamlFlowList(fields.scenarios)],
+    body: output.slice(match[0].length),
+  };
+}

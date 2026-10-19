@@ -1,6 +1,8 @@
 package com.easy.easyai.core.agent
 
 import com.easy.easyai.api.model.ModelProviderConfig
+import com.easy.easyai.api.model.SamplingIntent
+import com.easy.easyai.core.agent.AgentContext.Companion.SYSTEM_KIND_ASYNC_TASK
 import com.easy.easyai.core.event.CustomEvent
 import com.easy.easyai.core.memory.MemoryAccessTracker
 import com.easy.easyai.core.model.EasyAiMessage
@@ -31,7 +33,8 @@ import java.nio.file.Path
  * @param allowedSkillNames Skill whitelist for this agent. Empty = no skills authorized (fail-closed).
  *   Non-empty = only listed skills.
  * @param subAgents Sub-agents data for prompt template rendering (list of {name, description} maps).
- * @param tools The list of tool definitions available to the agent.
+ * @param tools The list of tool definitions available to the agent. Empty is a final value: the run has
+ *   no tools, and no layer downstream resolves a default set on its behalf.
  * @param maxIterations Maximum number of agent loop iterations.
  * @param maxRetries Maximum number of retries for LLM call failures.
  * @param initialMessages Initial messages to seed the agent transcript.
@@ -60,6 +63,13 @@ data class AgentContext(
     val projectPath: Path? = null,
     /** Kind of the bound project. [ProjectKind.TEMP] marks a per-session scratch workspace, which disables project-scoped memory. */
     val projectKind: ProjectKind = ProjectKind.USER,
+    /**
+     * Provenance written onto the session row when the system opened it for background work instead
+     * of a user starting a chat ([SYSTEM_KIND_ASYNC_TASK]). Null means an ordinary interactive
+     * session, which is the only kind Chat History lists. Persisted, so hiding a run's transcript
+     * does not depend on the task row that points at it still existing.
+     */
+    val systemKind: String? = null,
     /** Whether automatic memory generation (MemoryFlushAgent) is enabled for the current project. */
     val memoryAutoGeneration: Boolean = true,
     /** Calling agent ID. Null = top-level (user-selected). Tracks call chain depth. */
@@ -101,8 +111,22 @@ data class AgentContext(
     val thinkingHistoryEnabled: Boolean = false,
     val initialMessages: List<EasyAiMessage> = emptyList(),
     val modelContextLength: Int = 204_800,  // Default context window size (200K)
+    /**
+     * What this run needs from sampling. [modelConfig] carries one set of numbers for one
+     * connection, but the same row backs a human's chat turn and a background risk verdict; the
+     * intent says which of those this run is, and [com.easy.easyai.api.model.SamplingPolicy] turns
+     * intent + row into the temperature actually sent. Defaults to the row as configured.
+     */
+    val samplingIntent: SamplingIntent = SamplingIntent.FOLLOW_CONFIG,
     /** JSON Schema for structured output enforcement. Injected into ChatOptions and system prompt. */
     val outputSchema: String? = null,
+    /**
+     * Per-turn thinking override. Null follows the model row's `options.thinking`; explicit true/false
+     * forces thinking on or off regardless of the row. Memory consolidation uses this to keep thinking
+     * on for the grouping pass (wide-view judgement) and turn it off for the merge pass (rewrite, no
+     * judgement needed — thinking there burns tokens for nothing).
+     */
+    val thinkingEnabled: Boolean? = null,
     /** When true, defer structured output to final iteration after multi-turn tool calling. */
     val outputSchemaMultiTurn: Boolean = false,
     /** JSON Schema for structured input validation. Validated against inputVariables before agent loop. */
@@ -179,8 +203,21 @@ data class AgentContext(
             }
         }
 
-    private companion object {
+    /**
+     * The owner set for auxiliary-model resolution. By contract aux choices never fold in the shared
+     * `system` layer (see `AuxModelSettingsStore`), so this is [effectiveOwners] without the `system`
+     * entry — mirroring the web boundary's `currentGroupOwners()` (self + group bucket) and keeping
+     * the two memory-consolidation entry points on one set. `system` is retained only when it *is* the
+     * caller (auth-disabled deployments run as `system`), so those still resolve their own choice.
+     */
+    val auxOwners: Set<String>
+        get() = effectiveOwners.filterNot { it == SYSTEM_OWNER && it != userId }.toSet()
+
+    companion object {
+        /** [systemKind] value for a session opened to host a background async-task run. */
+        const val SYSTEM_KIND_ASYNC_TASK = "async_task"
+
         /** The shared read-only layer, matching `UserScope.SYSTEM_USER_ID` / the `user_id` default. */
-        const val SYSTEM_OWNER = "system"
+        private const val SYSTEM_OWNER = "system"
     }
 }

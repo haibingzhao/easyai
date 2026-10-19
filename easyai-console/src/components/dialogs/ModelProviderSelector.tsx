@@ -8,7 +8,8 @@ import { InlineAddModelForm } from '@/components/models/InlineAddModelForm';
 import { AddModelToGroupForm } from '@/components/models/AddModelToGroupForm';
 import { GroupEditDialog } from '@/components/models/GroupEditDialog';
 import { ToolCallingToggle } from '@/components/ui/ToolCallingToggle';
-import { MODEL_FIELD_HINTS, validateContextTokenBounds } from '@/constants/model-options';
+import { SamplingToggle } from '@/components/ui/SamplingToggle';
+import { DEFAULT_FORM_TEMPERATURE, MODEL_FIELD_HINTS, temperatureMax, validateContextTokenBounds, validateTemperature } from '@/constants/model-options';
 import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, ModelConfigGroup, SaveModelProviderConfigRequest, SaveModelConfigGroupRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
 
 interface ModelProviderSelectorProps {
@@ -413,7 +414,11 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const [options, setOptions] = useState<ModelOptions>(config.options || {});
+  // An edit never invents an options row. A stored row without a temperature deliberately sends
+  // none, and saving a seeded 0.7 would also store the row for the first time — which puts the
+  // backend's maxTokens default on a model that used to take the adapter's own. The field's
+  // placeholder already shows the default, so nothing is hidden by leaving it blank.
+  const [options, setOptions] = useState<ModelOptions>(config.options ?? {});
   const [showOptions, setShowOptions] = useState(!!config.options && Object.keys(config.options).length > 0);
   const [capabilities, setCapabilities] = useState<ModelCapabilities>(config.capabilities || {});
 
@@ -450,6 +455,11 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
       alert(i18n(boundError));
       return;
     }
+    const temperatureError = validateTemperature(options, config.protocol);
+    if (temperatureError) {
+      alert(i18n(temperatureError));
+      return;
+    }
 
     const useCustomName = isCustomModel || config.isCustom;
     const modelId = useCustomName ? customModelName.trim() : selectedModelId;
@@ -473,7 +483,7 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
       isCustomModel,
       enabled: config.enabled,
       options: Object.keys(options).length > 0 ? options : undefined,
-      capabilities: (capabilities.vision || capabilities.structuredOutput || capabilities.supportsToolCalling === false) ? capabilities : undefined,
+      capabilities: (capabilities.vision || capabilities.structuredOutput || capabilities.sampling || capabilities.supportsToolCalling === false) ? capabilities : undefined,
       groupId: config.groupId,
     };
 
@@ -590,6 +600,11 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
             </select>
           </div>
 
+          <SamplingToggle
+            value={capabilities.sampling}
+            onChange={(sampling) => setCapabilities(prev => ({ ...prev, sampling }))}
+          />
+
           <ToolCallingToggle
             checked={capabilities.supportsToolCalling !== false}
             onChange={(val) => setCapabilities(prev => ({
@@ -614,15 +629,21 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
                     type="number"
                     step="0.1"
                     min="0"
-                    max="2"
+                    max={temperatureMax(config.protocol)}
+                    disabled={capabilities.sampling === 'NOT_SETTABLE'}
                     value={options.temperature ?? ''}
                     onChange={(e) => setOptions(prev => ({
                       ...prev,
                       temperature: e.target.value ? parseFloat(e.target.value) : undefined,
                     }))}
-                    placeholder="0.7"
-                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                    placeholder={String(DEFAULT_FORM_TEMPERATURE)}
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm disabled:opacity-50"
                   />
+                  <p className="mt-1 text-[11px] leading-tight text-muted-foreground">
+                    {i18n(capabilities.sampling === 'NOT_SETTABLE'
+                      ? MODEL_FIELD_HINTS.temperatureNotSettable
+                      : MODEL_FIELD_HINTS.temperature)}
+                  </p>
                 </div>
                 <div>
                   <label className="text-xs font-medium mb-1 block">{i18n('Max Tokens')}</label>

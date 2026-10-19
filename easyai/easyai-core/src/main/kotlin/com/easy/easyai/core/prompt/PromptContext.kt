@@ -28,6 +28,8 @@ data class PromptContext(
     val toolPromptSegments: List<String> = emptyList(),
     /** True when a registered tool declares [com.easy.easyai.core.tool.ToolCapability.SPAWNS_SUBAGENTS]. */
     val dynamicSubAgents: Boolean = false,
+    /** True when a registered tool declares [com.easy.easyai.core.tool.ToolCapability.SKILL_LOADING]. */
+    val skillLoadingAvailable: Boolean = false,
     /** JSON Schema for structured output enforcement. Non-null triggers output format instructions. */
     val outputSchema: String? = null,
     /** When true, suppress output schema from system prompt (deferred to completion check phase). */

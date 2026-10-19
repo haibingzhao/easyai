@@ -76,7 +76,7 @@ internal class R2dbcSkillWiringTest {
 
             assertTrue(session.agentContext.skills.isEmpty())
             assertTrue(session.agentContext.allowedSkillNames.isEmpty())
-            coVerify { toolResolver.createSessionTools(match { it.skills.isEmpty() && it.allowedSkillNames.isEmpty() }) }
+            coVerify(exactly = 0) { toolResolver.createSessionTools(any()) }
             verify { registry wasNot Called }
         }
     }

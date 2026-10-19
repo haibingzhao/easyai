@@ -1,7 +1,11 @@
 package com.easy.easyai.autoconfigure.rag
 
+import com.easy.easyai.core.memory.MemoryConsolidationAgent
+import com.easy.easyai.core.memory.MemoryConsolidationSettings
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.skill.SkillStore
+import com.easy.easyai.rag.RagArchiveResult
+import com.easy.easyai.rag.RagArchiveUpdate
 import com.easy.easyai.rag.RagChunk
 import com.easy.easyai.rag.RagClient
 import com.easy.easyai.rag.RagDocInfo
@@ -103,6 +107,66 @@ class RagAutoConfigurationTest {
     }
 
     @Test
+    fun `memory consolidation beans exist by default even without session infrastructure`() {
+        contextRunner.run { context ->
+            assertEquals(1, context.getBeanNamesForType(MemoryConsolidationAgent::class.java).size)
+        }
+    }
+
+    @Test
+    fun `memory consolidation kill switch removes the agent`() {
+        contextRunner
+            .withPropertyValues("easyai.memory.consolidation.available=false")
+            .run { context ->
+                assertEquals(0, context.getBeanNamesForType(MemoryConsolidationAgent::class.java).size)
+            }
+    }
+
+    @Test
+    fun `every consolidation limit is settable, none silently falls back to the core default`() {
+        // A core field left out of MemoryConsolidationProperties, or out of the bean's argument list, is
+        // not merely un-advertised: auto-configuration rebuilds the core type from these properties, so
+        // whatever the operator sets for it is ignored. This test is what makes that omission fail loudly
+        // instead of shipping a limit nobody can move.
+        contextRunner
+            .withPropertyValues(
+                "easyai.memory.consolidation.max-grouping-prompt-chars=300000",
+                "easyai.memory.consolidation.max-sources-per-group=12",
+                "easyai.memory.consolidation.max-group-source-chars=20000",
+                "easyai.memory.consolidation.clusters-per-merge-call=5",
+                "easyai.memory.consolidation.max-merge-prompt-chars-per-call=60000",
+                "easyai.memory.consolidation.max-archives-per-run=400",
+                "easyai.memory.consolidation.max-iterations=9",
+                "easyai.memory.consolidation.run-timeout-ms=900000",
+                "easyai.memory.consolidation.dry-run-timeout-ms=90000",
+                "easyai.memory.consolidation.default-threshold=40",
+                "easyai.memory.consolidation.daily-cron=0 15 4 * * *",
+                "easyai.memory.consolidation.max-tasks-per-tick-per-user=3",
+                "easyai.memory.consolidation.max-level=5",
+                "easyai.memory.consolidation.zero-gain-backoff-base-days=3",
+                "easyai.memory.consolidation.zero-gain-backoff-max-days=21"
+            )
+            .run { context ->
+                val settings = context.getBean(MemoryConsolidationSettings::class.java)
+                assertEquals(300_000, settings.maxGroupingPromptChars)
+                assertEquals(12, settings.maxSourcesPerGroup)
+                assertEquals(20_000, settings.maxGroupSourceChars)
+                assertEquals(5, settings.clustersPerMergeCall)
+                assertEquals(60_000, settings.maxMergePromptCharsPerCall)
+                assertEquals(400, settings.maxArchivesPerRun)
+                assertEquals(9, settings.maxIterations)
+                assertEquals(900_000L, settings.runTimeoutMs)
+                assertEquals(90_000L, settings.dryRunTimeoutMs)
+                assertEquals(40, settings.defaultThreshold)
+                assertEquals("0 15 4 * * *", settings.dailyCron)
+                assertEquals(3, settings.maxTasksPerTickPerUser)
+                assertEquals(5, settings.maxLevel)
+                assertEquals(3, settings.zeroGainBackoffBaseDays)
+                assertEquals(21, settings.zeroGainBackoffMaxDays)
+            }
+    }
+
+    @Test
     fun `the skill flag alone cannot conjure a store without the RAG client`() {
         contextRunner
             .withPropertyValues("easyai.rag.enabled=false", "easyai.skills.rag.enabled=true")
@@ -116,13 +180,28 @@ class RagAutoConfigurationTest {
 private class FakeRagClient : RagClient {
     override suspend fun isEnabled(): Boolean = true
     override suspend fun healthCheck(): Boolean = true
-    override suspend fun upsert(doc: RagDocument, bizId: String?, awaitIndexing: Boolean): RagUpsertResult =
+    override suspend fun upsert(
+        doc: RagDocument,
+        bizId: String?,
+        awaitIndexing: Boolean
+    ): RagUpsertResult =
         RagUpsertResult(docId = "fake", indexed = true)
     override suspend fun delete(externalId: String, bizId: String?): Boolean = true
     override suspend fun batchDelete(docIds: List<String>, bizId: String?): Int = 0
     override suspend fun readByExternalId(externalId: String, bizId: String?): RagDocumentDetail? = null
     override suspend fun inspectByExternalId(externalId: String, bizId: String?): RagDocumentDetail? = null
-    override suspend fun list(pathPrefix: String, bizId: String?): List<RagDocInfo> = emptyList()
+    override suspend fun list(pathPrefix: String, bizId: String?, excludeArchived: Boolean): List<RagDocInfo> =
+        emptyList()
+
+    override suspend fun readByDocIds(docIds: List<String>, bizId: String?): List<RagDocumentDetail> =
+        emptyList()
+
+    override suspend fun archiveDocIds(
+        docIds: List<String>,
+        update: RagArchiveUpdate,
+        bizId: String?
+    ): RagArchiveResult = RagArchiveResult(updated = docIds.size)
+
     override suspend fun search(
         query: String,
         filters: Map<String, String>,
@@ -130,7 +209,8 @@ private class FakeRagClient : RagClient {
         timeRangeStart: Long?,
         timeRangeEnd: Long?,
         bizId: String?,
-        bizIds: List<String>?
+        bizIds: List<String>?,
+        excludeArchived: Boolean
     ): List<RagChunk> = emptyList()
 
     override suspend fun getWorkspaceConfig(workspace: String): RagWorkspaceConfig? = null

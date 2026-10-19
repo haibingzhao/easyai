@@ -16,9 +16,68 @@ data class MemoryOwnerContext(
 )
 
 /**
+ * Archive-related fields applied to an existing entry without rewriting its content.
+ *
+ * Only non-null fields are written by [MemoryStore.archive]; content and vectors are untouched,
+ * so archiving never re-indexes.
+ *
+ * @property archived mark the entry as history (excluded from normal retrieval)
+ * @property level consolidation depth to set
+ * @property refs consolidated-entry source docIds
+ * @property mergedInto docId of the consolidated entry that absorbed this source
+ */
+data class MemoryArchiveUpdate(
+    val archived: Boolean? = null,
+    val level: Int? = null,
+    val refs: List<String>? = null,
+    val mergedInto: String? = null
+)
+
+/**
+ * One active memory as the consolidation grouping pass sees it: identity and shape, never the body.
+ *
+ * The grouping pass decides *which* entries belong together and must not pay for every body to do it —
+ * a daily scheduler tick and a 300-entry slice both answer that question from names, sizes and depth.
+ * The merge pass that follows still reads the real bodies, for the few clusters it is rewriting.
+ *
+ * @property docId stable backend id the output must cite
+ * @property name entry file name without extension
+ * @property type the memory type this entry is filed under
+ * @property level consolidation depth; 0 for an untouched entry
+ * @property contentChars stored body length in characters, so a cluster's total size is known before
+ *   its bodies are ever fetched
+ * @property blurb one-line summary, or an empty string when the backend cannot supply one cheaply
+ */
+data class MemoryIndexEntry(
+    val docId: String,
+    val name: String,
+    val type: MemoryType,
+    val level: Int,
+    val contentChars: Int,
+    val blurb: String
+) {
+    companion object {
+        /**
+         * A change detector for "has anything happened in this slice since the last pass".
+         *
+         * Only membership matters: archiving a source and writing its merged entry are the run's own
+         * doing and must not re-dirty the slice, which is why the baseline is recomputed from the live
+         * set *after* each run rather than before it. Editing a body in place keeps its docId, so an
+         * edit alone never schedules a pass — that is the accepted cost of a cheap tick, and a user who
+         * wants a pass can run one.
+         */
+        @JvmStatic
+        fun fingerprint(docIds: Collection<String>): Int = docIds.filter { it.isNotEmpty() }.sorted().hashCode()
+    }
+}
+
+/**
  * Storage interface for the memory system.
  *
  * All operations are scope-aware: callers specify [MemoryScope.GLOBAL] or [MemoryScope.PROJECT].
+ *
+ * Retrieval operations ([loadAll], [search], [list]) only see **active** entries; archived
+ * entries are reachable exclusively through [findByIds].
  *
  * Implementations must be thread-safe for concurrent read access.
  */
@@ -72,6 +131,44 @@ interface MemoryStore {
     suspend fun write(entry: MemoryEntry, scope: MemoryScope, owner: MemoryOwnerContext = MemoryOwnerContext()): Path
 
     /**
+     * Write (create or update) a memory entry and return it with backend-populated identity
+     * (at minimum [MemoryEntry.id], the stable docId used by consolidation references).
+     *
+     * The default implementation delegates to [write] and only enriches [MemoryEntry.path], for
+     * backends without document ids.
+     */
+    suspend fun writeEntry(
+        entry: MemoryEntry,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext = MemoryOwnerContext()
+    ): MemoryEntry = entry.copy(path = write(entry, scope, owner).toString())
+
+    /**
+     * Read entries by backend document id, **including archived ones**. Missing ids are simply
+     * absent from the result. This is the only retrieval path that exposes history entries.
+     *
+     * The default returns an empty list.
+     */
+    suspend fun findByIds(
+        docIds: List<String>,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext = MemoryOwnerContext()
+    ): List<MemoryEntry> = emptyList()
+
+    /**
+     * Apply archive metadata to existing entries without rewriting content or re-indexing.
+     * This is how consolidated sources are marked as history.
+     *
+     * @return number of entries actually updated.
+     */
+    suspend fun archive(
+        docIds: List<String>,
+        update: MemoryArchiveUpdate,
+        scope: MemoryScope,
+        owner: MemoryOwnerContext = MemoryOwnerContext()
+    ): Int = 0
+
+    /**
      * Read a specific memory entry by relative path.
      *
      * @param path Relative path from memory root, e.g. "feedback/testing.md".
@@ -112,6 +209,40 @@ interface MemoryStore {
         owner: MemoryOwnerContext = MemoryOwnerContext(),
         type: MemoryType? = null
     ): List<MemoryEntry>
+
+    /**
+     * The active entries of one slice as [MemoryIndexEntry] rows: identity, depth and size, no bodies.
+     *
+     * Two callers need exactly this and nothing more. The scheduler reads a slice per tick to compare
+     * counts against thresholds and to decide whether the set changed since the last pass — one listing
+     * answers both, so a separate counting call would be a second read of the same answer. The
+     * consolidation grouping pass builds its cluster proposals from it, and only the merge pass that
+     * follows goes back to [findByIds] for the handful of bodies it is actually rewriting.
+     *
+     * Implementations that can list this at the source override it; the default materializes every
+     * entry, which is correct but reads the whole store.
+     *
+     * @param scope Global or Project scope.
+     * @param owner Ownership context for backend isolation.
+     * @param type Optional type filter; null lists every type of the slice.
+     */
+    suspend fun listActiveIndex(
+        scope: MemoryScope,
+        owner: MemoryOwnerContext = MemoryOwnerContext(),
+        type: MemoryType? = null
+    ): List<MemoryIndexEntry> = list(scope, owner, type)
+        .mapNotNull { entry ->
+            entry.id?.let {
+                MemoryIndexEntry(
+                    docId = it,
+                    name = entry.name,
+                    type = entry.type,
+                    level = entry.level,
+                    contentChars = entry.content.length,
+                    blurb = entry.description
+                )
+            }
+        }
 
     /**
      * Read a specific memory entry by relative path, fully materialized.
@@ -172,13 +303,18 @@ interface MemoryStore {
      * @param owner Ownership context for backend isolation.
      * @param type Known category of the entry; null searches across all types of the
      *   active domain.
+     * @param includeArchived Also resolve an entry absorbed by a consolidation run. Callers that
+     *   write must set it: a history document lives at the same key, so a name that only matches it
+     *   would otherwise be treated as free and the write would revive it as an active duplicate of
+     *   the merged entry above it.
      * @return The entry if found, or null.
      */
     suspend fun findByName(
         name: String,
         scope: MemoryScope,
         owner: MemoryOwnerContext = MemoryOwnerContext(),
-        type: MemoryType? = null
+        type: MemoryType? = null,
+        includeArchived: Boolean = false
     ): MemoryEntry?
 
     /**

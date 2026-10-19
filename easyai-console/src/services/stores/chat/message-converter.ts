@@ -238,6 +238,7 @@ export function convertSnapshot(msg: MessageSnapshot): Message {
         try { const parsed = JSON.parse(tr.output); if (Array.isArray(parsed)) contentBlocks = parsed; } catch { /* ignore */ }
         return {
           id: tr.toolCallId, toolName: tr.toolName, result: tr.output, contentBlocks,
+          details: tr.details,
           isError: tr.isError ?? false, exitCode: tr.exitCode, durationMs: tr.durationMs,
           mimeType: tr.mimeType, truncated: tr.truncated, usage: tr.usage,
         };

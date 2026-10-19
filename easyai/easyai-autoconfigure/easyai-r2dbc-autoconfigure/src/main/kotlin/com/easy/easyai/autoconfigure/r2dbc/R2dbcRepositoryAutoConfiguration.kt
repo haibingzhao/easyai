@@ -12,12 +12,16 @@ import com.easy.easyai.core.goal.GoalCompletionCheck
 import com.easy.easyai.core.goal.GoalStatusNotifier
 import com.easy.easyai.core.goal.GoalStore
 import com.easy.easyai.core.model.aux.AuxModelSettingsStore
+import com.easy.easyai.core.memory.consolidation.MemoryConsolidationSettingsStore
+import com.easy.easyai.core.memory.consolidation.ScheduledSettingBackedConsolidationStore
 import com.easy.easyai.core.permission.PermissionRuleStore
 import com.easy.easyai.core.permission.PermissionService
 import com.easy.easyai.core.permission.ShellAiRiskChecker
 import com.easy.easyai.core.prompt.InstructionsLoader
 import com.easy.easyai.core.skill.AsyncSkillCatalogStore
 import com.easy.easyai.core.storage.StorageSettingsStore
+import com.easy.easyai.core.task.AsyncTaskStore
+import com.easy.easyai.core.task.ScheduledTaskSettingStore
 import com.easy.easyai.core.team.TeamExecutionStore
 import com.easy.easyai.core.team.TeamMemberHistoryLoader
 import com.easy.easyai.core.tool.ToolDefinition
@@ -40,6 +44,8 @@ import com.easy.easyai.repository.skill.R2dbcAsyncSkillCatalogStore
 import com.easy.easyai.repository.storage.R2dbcStorageSettingsStore
 import com.easy.easyai.repository.swarm.R2dbcSwarmPresetStore
 import com.easy.easyai.repository.swarm.R2dbcSwarmRunStore
+import com.easy.easyai.repository.task.R2dbcAsyncTaskStore
+import com.easy.easyai.repository.task.R2dbcScheduledTaskSettingStore
 import com.easy.easyai.repository.todo.AsyncTodoStore
 import com.easy.easyai.repository.todo.R2dbcAsyncTodoStore
 import com.easy.easyai.repository.todo.TodoCompletionCheck
@@ -322,6 +328,19 @@ class R2dbcRepositoryAutoConfiguration(
         )
     }
 
+    /**
+     * Durable store for app-scoped async tasks (memory consolidation now; scheduled/persistent work
+     * later). Registered whenever the repository layer is on; the runner and handlers treat its
+     * absence as "no task tracking" rather than failing.
+     */
+    @Bean
+    @ConditionalOnMissingBean(AsyncTaskStore::class)
+    fun asyncTaskStore(initializer: R2dbcDatabaseInitializer): AsyncTaskStore {
+        return R2dbcAsyncTaskStore(
+            db = initializer.getDatabase()
+        )
+    }
+
     @Bean
     @ConditionalOnMissingBean(PermissionRuleStore::class)
     fun permissionRuleStore(initializer: R2dbcDatabaseInitializer): PermissionRuleStore {
@@ -488,6 +507,28 @@ class R2dbcRepositoryAutoConfiguration(
     @ConditionalOnMissingBean(AuxModelSettingsStore::class)
     fun auxModelSettingsStore(initializer: R2dbcDatabaseInitializer): AuxModelSettingsStore {
         return R2dbcAuxModelSettingsStore(initializer.getDatabase())
+    }
+
+    /**
+     * User-scoped opt-in for every schedulable task type (one row per `(user, type)`) — the
+     * configuration side of [AsyncTaskStore]. Consumed by [ScheduledTaskRunner]; each type reads its
+     * own slice of `params` through a typed view.
+     */
+    @Bean
+    @ConditionalOnMissingBean(ScheduledTaskSettingStore::class)
+    fun scheduledTaskSettingStore(initializer: R2dbcDatabaseInitializer): ScheduledTaskSettingStore {
+        return R2dbcScheduledTaskSettingStore(initializer.getDatabase())
+    }
+
+    /**
+     * Per-user memory-consolidation settings (Memories page runtime switch + per-type thresholds),
+     * stored as the `memory_consolidation` row of the generic scheduled-task table. Consumed by the
+     * consolidation planner and the REST surface.
+     */
+    @Bean
+    @ConditionalOnMissingBean(MemoryConsolidationSettingsStore::class)
+    fun memoryConsolidationSettingsStore(store: ScheduledTaskSettingStore): MemoryConsolidationSettingsStore {
+        return ScheduledSettingBackedConsolidationStore(store)
     }
 
     // ─── Swarm Beans ─────────────────────────────────────────────────────────────

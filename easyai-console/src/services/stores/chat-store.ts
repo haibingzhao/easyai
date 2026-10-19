@@ -16,6 +16,7 @@ import {
   type StreamingToolCall,
   type ToolBlockData,
   type RetryInfo,
+  type LivePreview,
 } from './chat/types';
 import { handleChatEvent, setLastRespondedPermissionToolCallId } from './chat/event-handler';
 import { commitStreamingMessageImpl, loadSessionMessagesImpl } from './chat/session-loader';
@@ -45,6 +46,8 @@ interface ChatState {
   isFileWriting: boolean;
   streamingBlocks: StreamingBlock[];
   streamingToolOutputs: Record<string, string>;
+  /** Isolated live preview of the in-flight round from the watch tap during recovery; never committed to `messages`. */
+  livePreview: LivePreview | null;
   usage: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number } | null;
   cumulativeUsage: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number } | null;
   /** Current context window token count (from last LLM response's inputTokens + cacheReadTokens + cacheWriteTokens + outputTokens) */
@@ -86,12 +89,19 @@ interface ChatState {
   _lastSnapshots: MessageSnapshot[];
   /** Root main session the currently viewed session belongs to (own id for a main session; null before a session exists) */
   forkRootId: string | null;
+  /**
+   * True while the chat view is showing a read-only background-task transcript (Tasks → open transcript).
+   * Session-mutating actions such as fork/branch are meaningless on a hidden async-task session, so the
+   * meta bar hides them while this is set. Reset by clearChat and by switchToSession.
+   */
+  transcriptMode: boolean;
   /** Whether the backend snapshot/checkpoint system is active for the current session (gates the Review panel). Defaults to true for older backends. */
   snapshotEnabled: boolean;
   /** App-wide snapshot capability from GET /api/chat/snapshot-capability (false for no-op backend overrides). Global — not reset on session switch. */
   snapshotCapability: boolean;
   setRunningSessionId: (id: string | null) => void;
   setForkRootId: (id: string | null) => void;
+  setTranscriptMode: (on: boolean) => void;
   setSnapshotEnabled: (enabled: boolean) => void;
   setSnapshotCapability: (enabled: boolean) => void;
 
@@ -110,7 +120,7 @@ interface ChatState {
   appendToolArgs: (id: string, delta: string) => void;
   appendToolOutput: (id: string, output: string) => void;
   getStreamingToolOutput: (id: string) => string | undefined;
-  commitToolResult: (id: string, result: string | undefined, isError: boolean, exitCode?: number | null, mimeType?: string | null, truncated?: boolean, usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }, durationMs?: number) => void;
+  commitToolResult: (id: string, result: string | undefined, isError: boolean, exitCode?: number | null, mimeType?: string | null, truncated?: boolean, usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }, durationMs?: number, details?: Record<string, unknown>) => void;
   setUsage: (usage: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number }) => void;
   setCumulativeUsage: (usage: { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number } | null) => void;
   setContextWindow: (size: number) => void;
@@ -139,6 +149,8 @@ interface ChatState {
   clearChat: () => void;
   handleEvent: (event: SocketEvent) => void;
   commitStreamingMessage: () => void;
+  /** Drop the watch-tap live preview (round committed, watch detached, or session changed). */
+  clearLivePreview: () => void;
   loadSessionMessages: (messages: MessageSnapshot[], pendingPermission?: PendingPermissionInfo | null, checkpoints?: CheckpointInfo[], endReason?: string | null, variables?: Record<string, string> | null, modelContextLength?: number | null, ownerSessionId?: string) => void;
   /** Merge delta snapshots into _lastSnapshots and re-process. Used for incremental recovery after streaming. */
   loadSessionMessagesIncremental: (deltaSnapshots: MessageSnapshot[], pendingPermission?: PendingPermissionInfo | null, checkpoints?: CheckpointInfo[], endReason?: string | null, variables?: Record<string, string> | null, modelContextLength?: number | null, ownerSessionId?: string) => void;
@@ -158,6 +170,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   isFileWriting: false,
   streamingBlocks: [],
   streamingToolOutputs: {},
+  livePreview: null,
   usage: null,
   cumulativeUsage: null,
   contextTokens: 0,
@@ -185,6 +198,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   liveStreamDropped: false,
   _lastSnapshots: [],
   forkRootId: null,
+  transcriptMode: false,
   snapshotEnabled: true,
   snapshotCapability: true,
 
@@ -198,6 +212,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     sessionId: id,
     streamingBlocks: [],
     streamingToolOutputs: {},
+    livePreview: null,
     isStreaming: false,
     isFileWriting: false,
     isCompacting: false,
@@ -206,8 +221,9 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     backgroundTasks: {},
     snapshotEnabled: true,
   })),
-  setRunningSessionId: (id) => set({ runningSessionId: id, liveStreamDropped: false, ...(id !== null ? { _lastSnapshots: [] } : {}) }),
+  setRunningSessionId: (id) => set({ runningSessionId: id, liveStreamDropped: false, ...(id !== null ? { _lastSnapshots: [] } : { livePreview: null }) }),
   setForkRootId: (id) => set({ forkRootId: id }),
+  setTranscriptMode: (on) => set({ transcriptMode: on }),
   setSnapshotEnabled: (enabled) => set({ snapshotEnabled: enabled }),
   setSnapshotCapability: (enabled) => set({ snapshotCapability: enabled }),
 
@@ -316,7 +332,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     return get().streamingToolOutputs[id];
   },
 
-  commitToolResult: (id, result, isError, exitCode?, mimeType?, truncated?, usage?, durationMs?) => set((state) => {
+  commitToolResult: (id, result, isError, exitCode?, mimeType?, truncated?, usage?, durationMs?, details?) => set((state) => {
     const rawResult = result ?? state.streamingToolOutputs[id] ?? '';
     // Try to parse JSON result into content blocks
     let contentBlocks: ToolResultContentBlock[] | undefined;
@@ -336,6 +352,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       toolName,
       result: rawResult, 
       contentBlocks, 
+      details,
       isError, 
       exitCode, 
       mimeType, 
@@ -483,6 +500,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     isFileWriting: false,
     streamingBlocks: [],
     streamingToolOutputs: {},
+    livePreview: null,
     usage: null,
     cumulativeUsage: null,
     contextTokens: 0,
@@ -507,10 +525,13 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     liveStreamDropped: false,
     _lastSnapshots: [],
     forkRootId: null,
+    transcriptMode: false,
     snapshotEnabled: true,
   }),
 
   commitStreamingMessage: () => set((state) => commitStreamingMessageImpl(state)),
+
+  clearLivePreview: () => set((state) => (state.livePreview === null ? {} : { livePreview: null })),
 
   loadSessionMessages: (messages, pendingPermission, checkpoints, endReason, variables, modelContextLength, ownerSessionId) => {
     // Store raw snapshots for incremental merge support

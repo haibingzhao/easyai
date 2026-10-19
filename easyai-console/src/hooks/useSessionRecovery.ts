@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { sessionService } from '@/services/session-service';
-import { getStreamingStatus } from '@/services/chat-service';
+import { getStreamingStatus, watchSession } from '@/services/chat-service';
 import { getCheckpoints, getFileReviewState } from '@/services/checkpoint-service';
 import { adoptSessionWorkspace } from '@/services/stores/project-store';
 import { useChatStore } from '@/services/stores/chat-store';
+import { handleWatchEvent } from '@/services/stores/chat/watch-handler';
 import type { CheckpointInfo } from '@/types/checkpoint';
 
 /** Poll cadence while a session is still running. */
@@ -17,24 +18,43 @@ export interface SessionRecovery {
   /** Re-run one poll immediately. iOS suspends in-flight fetches in the background, so a phone
    *  returning to the foreground must not wait out the 3s tick. */
   pollNow: () => void;
+  /** Poll now *and* re-attach the watch tap. A phone returning to the foreground lost the watch
+   *  connection along with its fetches, so it must re-subscribe to see the in-flight round live
+   *  rather than waiting for the next committed round to reach the poll. */
+  reattach: () => void;
 }
 
 /**
- * Polls a *running* session back into shape from the backend's committed state.
+ * Recovers a *running* session from two complementary sources.
  *
- * This is the single source of truth for recovery: DB snapshots plus incremental merges, never a
- * re-attached SSE stream. Attaching a watch stream here would double-render committed turns
- * (messages copy plus streaming copy of the same turn), which is exactly the bug this path replaced.
+ * The DB poll is the single source of truth for **committed** rounds: snapshots plus incremental
+ * merges. It cannot show an in-flight round, because the backend commits a round only once, when
+ * its LLM call returns (`AgentLoop` persists the assistant message after the whole round) — so a
+ * 50s thinking phase leaves the poll with nothing new and the transcript frozen until it lands.
+ *
+ * To cover that gap we also attach the backend's watch tap (`POST /session/{id}/events`), which
+ * broadcasts the live round. Its events are reduced into an **isolated** `livePreview` (never the
+ * committed `messages`, never `commitStreamingMessage`), and rendered only while their `messageId`
+ * is absent from `messages`. That keying makes a committed round and its live preview mutually
+ * exclusive, so re-attaching cannot double-render committed turns — the bug a naive watch stream
+ * used to cause.
  *
  * Extracted from `ChatPanel` so the mobile shell gets identical behaviour — it matters more there,
- * because iOS suspends the stream the moment the app leaves the foreground.
+ * because iOS suspends both the fetch and the watch stream the moment the app leaves the foreground.
  */
 export function useSessionRecovery(runningSessionId: string | null): SessionRecovery {
   const pollRef = useRef<(() => Promise<void>) | null>(null);
+  /** Bumped by {@link SessionRecovery.reattach} to force the watch effect to re-subscribe. */
+  const [attachNonce, setAttachNonce] = useState(0);
 
   const pollNow = useCallback(() => {
     void pollRef.current?.();
   }, []);
+
+  const reattach = useCallback(() => {
+    pollNow();
+    setAttachNonce((n) => n + 1);
+  }, [pollNow]);
 
   useEffect(() => {
     if (!runningSessionId) {
@@ -183,5 +203,52 @@ export function useSessionRecovery(runningSessionId: string | null): SessionReco
     };
   }, [runningSessionId]);
 
-  return { pollNow };
+  // Watch tap: attach to the backend's live broadcast for the in-flight round while a recovery is
+  // active. Gated on `local` — the tap only exists on the instance running the session, and the
+  // backend answers a non-local attach with an immediate `not_streaming` done anyway. The poll stays
+  // the backbone (committed rounds, checkpoints, todos, permissions) and the fallback if the watch
+  // is unavailable or drops; on any watch ending we clear the preview and let the poll reconcile.
+  useEffect(() => {
+    if (!runningSessionId) return;
+    const sid = runningSessionId;
+    let cancelled = false;
+    let handle: { abort: () => void } | null = null;
+
+    void (async () => {
+      try {
+        const status = await getStreamingStatus(sid);
+        if (cancelled || !status.local) return;
+        const watch = watchSession(sid, {
+          onEvent: (event) => {
+            if (!cancelled) handleWatchEvent(event);
+          },
+          onDone: () => {
+            if (cancelled) return;
+            useChatStore.getState().clearLivePreview();
+            pollNow();
+          },
+          onError: () => {
+            if (cancelled) return;
+            useChatStore.getState().clearLivePreview();
+            pollNow();
+          },
+        });
+        handle = watch;
+        // The cleanup can run while `getStreamingStatus` is still in flight and find no handle to
+        // close, so the attach is released here too — otherwise it leaks one SSE stream per effect
+        // that unmounted before its status request came back.
+        if (cancelled) watch.abort();
+      } catch {
+        /* watch unavailable — poll-only recovery continues */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      handle?.abort();
+      useChatStore.getState().clearLivePreview();
+    };
+  }, [runningSessionId, attachNonce, pollNow]);
+
+  return { pollNow, reattach };
 }

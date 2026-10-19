@@ -100,6 +100,17 @@ class LlmShellAiRiskCheckerTest {
         }
 
         @Test
+        fun `fence language marker is not mistaken for the payload`() = runBlocking {
+            val checker = checkerWithModel {
+                "```JSON\n{\"risky\": false, \"reason\": \"safe\"}\n```"
+            }
+            val result = checker.checkRisk("ls", null, null, "model-1", rules)
+
+            assertTrue(result.allowed)
+            assertEquals("safe", result.reason)
+        }
+
+        @Test
         fun `escaped quotes in reason are unescaped`() = runBlocking {
             val checker = checkerWithModel { """{"risky": true, "reason": "命令包含 \"rm -rf\""}""" }
             val result = checker.checkRisk("x", null, null, "model-1", rules)

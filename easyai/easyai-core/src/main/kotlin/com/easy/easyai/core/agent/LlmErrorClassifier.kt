@@ -34,6 +34,14 @@ internal object LlmErrorClassifier {
     private val QUOTA_RESET_REGEX = Regex("reset at ([^.,;\\n]+)", RegexOption.IGNORE_CASE)
 
     /**
+     * A refusal that names `response_format` next to a refusal word — matched against a lowercased
+     * message. Covers the two wordings actually observed: "this response_format type is unavailable
+     * now" (Bailian) and "'response_format' of type 'json_schema' is not supported on this model".
+     */
+    private val RESPONSE_FORMAT_REJECTION_REGEX =
+        Regex("response_format.{0,80}(unavailable|not support|unsupported|invalid|reject)")
+
+    /**
      * Check if the error indicates context length exceeded.
      * This is a non-transient error that requires context compaction.
      *
@@ -205,6 +213,29 @@ internal object LlmErrorClassifier {
         var depth = 0
         while (current != null && depth++ < MAX_CAUSE_DEPTH) {
             if (isContentFilteredMessage(current.message?.lowercase() ?: "")) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
+    }
+
+    /**
+     * Check if the gateway refused the **response format** the request was built with — Bailian's
+     * "This response_format type is unavailable now", OpenAI's "…is not supported on this model".
+     *
+     * Deterministic for the request as built, unlike a timeout, and the request as built is a
+     * configuration fact: the row declares a schema-bearing format the model does not answer to. The
+     * agent loop therefore surfaces it as a [ResponseFormatUnsupportedException] naming what to fix,
+     * instead of retrying it or quietly dropping the format for the rest of the run.
+     */
+    fun isResponseFormatRejected(e: Throwable): Boolean {
+        var current: Throwable? = e
+        var depth = 0
+        while (current != null && depth++ < MAX_CAUSE_DEPTH) {
+            if (current is NonTransientAiException &&
+                RESPONSE_FORMAT_REJECTION_REGEX.containsMatchIn(current.message?.lowercase() ?: "")
+            ) {
                 return true
             }
             current = current.cause
@@ -390,6 +421,18 @@ internal class LlmEndpointUnavailableException(
  * provider's reset instant when it printed one.
  */
 internal class QuotaExhaustedException(
+    message: String,
+    cause: Throwable?,
+) : RuntimeException(message, cause)
+
+/**
+ * Thrown when the gateway refuses the response format the model row asked for
+ * (see [LlmErrorClassifier.isResponseFormatRejected]). Replaying the request re-triggers the same
+ * refusal, so it is never retried and the frontend gets no retry affordance: what has to change is
+ * the row's declared structured-output capability. The provider's own sentence travels as the cause,
+ * which is how an unsupported format is told apart from a merely mis-declared one.
+ */
+internal class ResponseFormatUnsupportedException(
     message: String,
     cause: Throwable?,
 ) : RuntimeException(message, cause)

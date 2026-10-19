@@ -6,6 +6,8 @@ import com.alibaba.dashscope.protocol.ConnectionOptions
 import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.api.model.SamplingPolicy
+import com.easy.easyai.api.model.StructuredOutputPolicy
 import com.easy.easyai.api.model.StructuredOutputSupport
 import io.micrometer.observation.ObservationRegistry
 import org.slf4j.LoggerFactory
@@ -71,7 +73,11 @@ class DashScopeChatModelFactory : ChatModelFactory {
             .resultFormat(RESULT_FORMAT_MESSAGE)
 
         config.options?.let { options ->
-            builder.temperature(options.temperature)
+            // Gated, not read straight off the row: these defaults back the ChatModel that
+            // non-loop callers (memory flush, risk verdict, dictation) reuse, and a portable
+            // per-call ChatOptions can only override a null temperature by inheriting them — it
+            // cannot say "omit". So a model declaring sampling NOT_SETTABLE has to be stopped here.
+            builder.temperature(SamplingPolicy.rowTemperature(config))
             if (options.thinking) {
                 builder.enableThinking(true)
                     .thinkingBudget(DEFAULT_THINKING_BUDGET_TOKENS)
@@ -91,10 +97,10 @@ class DashScopeChatModelFactory : ChatModelFactory {
         // The capability gate decides the response-format kind for the whole model, not just for
         // turns that carry a schema: DashScopeChatModel.resolveOptions can merge an outputSchema
         // from a caller's generic ChatOptions onto these defaults, and a NONE model must never
-        // emit json_schema even then.
-        when (config.capabilities?.structuredOutput) {
-            // null = undeclared, keep schema enforcement as the default behavior.
-            null, StructuredOutputSupport.JSON_SCHEMA ->
+        // emit json_schema even then. An undeclared row reads as NONE — see StructuredOutputPolicy.
+        val support = StructuredOutputPolicy.of(config)
+        when (support) {
+            StructuredOutputSupport.JSON_SCHEMA ->
                 builder.responseFormatKind(DashScopeResponseFormatKind.JSON_SCHEMA)
 
             StructuredOutputSupport.JSON_OBJECT ->
@@ -104,13 +110,13 @@ class DashScopeChatModelFactory : ChatModelFactory {
                 builder.responseFormatKind(DashScopeResponseFormatKind.NONE)
                 if (outputSchema != null) {
                     logger.debug(
-                        "Model {} declares no API-level structured output; using prompt-based enforcement",
+                        "Model {} allows no API-level structured output; using prompt-based enforcement",
                         config.modelId
                     )
                 }
             }
         }
-        if (outputSchema != null && config.capabilities?.structuredOutput != StructuredOutputSupport.NONE) {
+        if (outputSchema != null && support != StructuredOutputSupport.NONE) {
             builder.outputSchema(outputSchema)
         }
         return builder.build()

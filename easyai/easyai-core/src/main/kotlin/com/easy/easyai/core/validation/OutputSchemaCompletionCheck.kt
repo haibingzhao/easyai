@@ -11,7 +11,10 @@ import org.slf4j.LoggerFactory
  * Acts as a fallback when StructuredOutputChatOptions is not supported by the model.
  *
  * When validation fails, injects a retry prompt (up to [maxRetries] times) to guide
- * the LLM to produce valid JSON output.
+ * the LLM to produce valid JSON output. Once those are used up the check reports
+ * [CompletionCheckResult.Stalled] instead of accepting the non-conforming text: a caller that asked
+ * for a schema is a caller that intends to parse the answer, and handing it prose would turn a
+ * failed run into silently wrong data.
  *
  * In multi-turn mode ([com.easy.easyai.core.agent.AgentContext.outputSchemaMultiTurn]) the
  * structured-output iteration is skipped when the tool-calling phase already emitted
@@ -31,6 +34,13 @@ class OutputSchemaCompletionCheck(
 
     /** One nudge for the forced structured-output phase, plus the validation retries. */
     override fun maxNudges(): Int = maxRetries + 1
+
+    /**
+     * The validation retries are the last word here: the nudge that brings the ledger to
+     * [maxRetries] is followed by a [CompletionCheckResult.Stalled], not by another chance to ask.
+     * [maxNudges] is one larger (it counts the forced phase too) and the loop would never see it.
+     */
+    override fun isFinalNudge(attempts: Int): Boolean = attempts >= maxRetries
 
     override suspend fun check(input: CompletionCheckInput): CompletionCheckResult {
         val schema = input.agentContext.outputSchema
@@ -73,11 +83,17 @@ class OutputSchemaCompletionCheck(
                 CompletionCheckResult.Done
             }
             input.nudgeAttempt >= maxRetries -> {
+                val errors = (result as ValidationResult.Invalid).errors
                 logger.warn(
-                    "Output schema validation failed after {} retries for session {}, returning original result",
+                    "Output schema validation still failing after {} retries for session {}",
                     maxRetries, sessionKey
                 )
-                CompletionCheckResult.Done  // Exceeded retries, return original
+                // Stall rather than finish: returning the non-conforming text as if it were the
+                // result lets a downstream parser read garbage as data.
+                CompletionCheckResult.Stalled(
+                    notice = "Output did not match the required schema after ${maxRetries + 1} attempts: " +
+                        errors.joinToString("; ").take(300)
+                )
             }
             else -> {
                 val attempt = input.nudgeAttempt + 1

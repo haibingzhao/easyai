@@ -52,20 +52,27 @@ internal class MemoryListTool(
         val owner = MemoryOwnerContext(agentContext.userId, agentContext.projectPath)
 
         val sb = StringBuilder()
+        val scopeDetails = mutableListOf<Map<String, Any?>>()
 
         for (scope in listOf(MemoryScope.PROJECT, MemoryScope.GLOBAL)) {
             val entries = store.list(scope, owner, typeFilter)
             if (entries.isEmpty()) continue
 
+            val ordered = entries.sortedBy { it.type.dirName }
             sb.appendLine("## ${scope.name} scope (${entries.size} entries)")
             sb.appendLine()
             val reviewCandidates = mutableListOf<String>()
-            entries.sortedBy { it.type.dirName }.forEach { entry ->
+            val reviewDetails = mutableListOf<Map<String, Any?>>()
+            ordered.forEach { entry ->
                 sb.appendLine("- **${entry.name}** [${entry.type.dirName}] — ${entry.description}")
                 val unusedDays = unusedDays(entry)
                 val unusedText = unusedDays?.let { "$it days" } ?: "unknown"
+                // An entry without a docId cannot be cited by any tool that takes one, so the field is
+                // dropped rather than rendered empty — an empty id invites the model to pass "".
+                val docIdField = entry.id?.let { "docId: `$it` | " } ?: ""
                 sb.appendLine(
-                    "  path: `${entry.path}` | created: ${entry.created ?: "unknown"} | " +
+                    "  ${docIdField}path: `${entry.path}` | level: ${entry.level} | " +
+                        "created: ${entry.created ?: "unknown"} | " +
                         "updated: ${entry.updated ?: "unknown"} | " +
                         "maturity: ${entry.maturity?.apiName ?: "unset"} | unused for $unusedText"
                 )
@@ -73,6 +80,13 @@ internal class MemoryListTool(
                     reviewCandidates.add(
                         "- ${entry.name} [${entry.type.dirName}] unused for $unusedText → verify it; " +
                             "use memory_write action='update' to correct or action='remove' if obsolete"
+                    )
+                    reviewDetails.add(
+                        mapOf(
+                            "name" to entry.name,
+                            "type" to entry.type.dirName,
+                            "unusedDays" to unusedDays
+                        )
                     )
                 }
             }
@@ -83,6 +97,16 @@ internal class MemoryListTool(
                 reviewCandidates.forEach { sb.appendLine(it) }
             }
             sb.appendLine()
+
+            scopeDetails.add(
+                mapOf(
+                    "scope" to scope.name.lowercase(),
+                    "count" to entries.size,
+                    "entries" to ordered.map { entryDetails(it) },
+                    "reviewCandidates" to reviewDetails,
+                    "staleAfterDays" to STALE_AFTER_DAYS
+                )
+            )
         }
 
         val text = if (sb.isEmpty()) {
@@ -90,8 +114,30 @@ internal class MemoryListTool(
         } else {
             sb.toString()
         }
-        return ToolResult(content = listOf(TextContent(text)))
+        return ToolResult(
+            content = listOf(TextContent(text)),
+            details = if (scopeDetails.isEmpty()) emptyMap() else mapOf("scopes" to scopeDetails)
+        )
     }
+
+    /**
+     * One entry as the renderer needs it. The prose in the tool output is addressed to the model and
+     * carries no contract; this map is the contract, with dates as ISO strings and staleness as a day
+     * count so the UI can localize instead of re-parsing English text.
+     */
+    private fun entryDetails(entry: MemoryEntry): Map<String, Any?> = mapOf(
+        "name" to entry.name,
+        "type" to entry.type.dirName,
+        "description" to entry.description,
+        "path" to entry.path,
+        "updated" to entry.updated?.toString(),
+        "maturity" to entry.maturity?.apiName,
+        // The same two the prose line carries: level is what tells a merged entry apart from a source,
+        // and without the docId a listed entry cannot be cited by any tool that takes one.
+        "level" to entry.level,
+        "docId" to entry.id,
+        "unusedDays" to unusedDays(entry)
+    )
 
     private companion object {
         /** Unused-days threshold past which a low-maturity entry is listed for review. */

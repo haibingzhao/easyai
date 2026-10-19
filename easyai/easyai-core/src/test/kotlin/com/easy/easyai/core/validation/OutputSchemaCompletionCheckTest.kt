@@ -7,6 +7,7 @@ import com.easy.easyai.core.model.AssistantMessage
 import com.easy.easyai.core.model.TextContent
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -157,7 +158,7 @@ class OutputSchemaCompletionCheckTest {
     }
 
     @Test
-    fun `validation gives up once maxRetries is exhausted`() {
+    fun `validation stalls once maxRetries is exhausted`() {
         val check = OutputSchemaCompletionCheck(OutputSchemaValidator(), maxRetries = 2)
         val context = AgentContext(
             agentId = "test-agent",
@@ -169,12 +170,36 @@ class OutputSchemaCompletionCheckTest {
         val result = runBlocking {
             check.check(inputWithContext(context, turnId = 3, nudgeAttempt = 2, texts = arrayOf(prose)))
         }
-        assertEquals(CompletionCheckResult.Done, result)
+        // Never Done: a caller that asked for a schema parses the answer, and prose would be read
+        // as data instead of as a failed run.
+        val stalled = result as? CompletionCheckResult.Stalled
+        assertTrue(stalled != null, "expected a stalled result once retries are used up, got: $result")
+        assertTrue(
+            stalled?.notice?.contains("did not match the required schema") == true,
+            "expected the notice to name the contract that failed, got: ${stalled?.notice}"
+        )
     }
 
     @Test
     fun `nudge cap covers the forced phase plus the validation retries`() {
         val check = OutputSchemaCompletionCheck(OutputSchemaValidator(), maxRetries = 2)
         assertEquals(3, check.maxNudges())
+    }
+
+    @Test
+    fun `the last validation retry is the final nudge, not the cap`() {
+        // The check Stalls once nudgeAttempt reaches maxRetries, so the loop would never see
+        // attempts reach maxNudges (= maxRetries + 1). The final nudge is the one that lands on
+        // maxRetries; that is the round the loop has to make cheap.
+        val check = OutputSchemaCompletionCheck(OutputSchemaValidator(), maxRetries = 2)
+        assertFalse(check.isFinalNudge(1))
+        assertTrue(check.isFinalNudge(2))
+        assertTrue(check.isFinalNudge(3))
+    }
+
+    @Test
+    fun `with a single retry the structured phase nudge is already the final one`() {
+        val check = OutputSchemaCompletionCheck(OutputSchemaValidator(), maxRetries = 1)
+        assertTrue(check.isFinalNudge(1))
     }
 }

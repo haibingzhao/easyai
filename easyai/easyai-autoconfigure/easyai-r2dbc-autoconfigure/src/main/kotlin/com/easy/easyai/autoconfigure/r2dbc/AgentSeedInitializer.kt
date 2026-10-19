@@ -22,7 +22,7 @@ import kotlin.time.Duration.Companion.milliseconds
  * Idempotent: skips if seed records already exist.
  *
  * Merges two responsibilities:
- * 1. Creates the default coding agent (with tools resolved from [ToolFactory]) if no agents exist.
+ * 1. Creates the default coding agent (with tools resolved from [ToolFactory]) if it doesn't exist.
  * 2. Seeds sub-agent definitions from [AgentSeedData].
  */
 class AgentSeedInitializer(
@@ -66,13 +66,15 @@ class AgentSeedInitializer(
     }
 
     /**
-     * Creates the default coding agent if no agents exist.
+     * Creates the default coding agent if it doesn't exist.
      * Resolves default tool names from [ToolFactory] metadata.
      */
     private suspend fun seedDefaultCodingAgent() {
-        val existingCount = agentStore.count()
-        if (existingCount > 0) {
-            logger.debug("Agents already exist (count={}), skipping default coding agent", existingCount)
+        // Per-id, like every other seed here: a table that already holds a user's own agent still needs
+        // this row, and chat now rejects an agentId that has none.
+        val existing = agentStore.findById(DEFAULT_AGENT_ID, AuthConstants.SYSTEM_USER_ID)
+        if (existing != null) {
+            logger.debug("Default coding agent already exists, skipping")
             return
         }
 

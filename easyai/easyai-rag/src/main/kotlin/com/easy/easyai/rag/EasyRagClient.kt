@@ -73,7 +73,11 @@ internal class EasyRagClient(
         }
     }
 
-    override suspend fun upsert(doc: RagDocument, bizId: String?, awaitIndexing: Boolean): RagUpsertResult {
+    override suspend fun upsert(
+        doc: RagDocument,
+        bizId: String?,
+        awaitIndexing: Boolean
+    ): RagUpsertResult {
         val config = loadEnabledConfig("upsert")
         val body = mapOfNonNull(
             "text" to doc.content,
@@ -88,6 +92,12 @@ internal class EasyRagClient(
                 "skipKg" to doc.options.skipKg,
                 "buildStructure" to doc.options.buildStructure
             ),
+            // Consolidation fields: sent only when they carry meaning, so ordinary writes keep
+            // the legacy payload (active, level 0, no refs).
+            "archived" to doc.archived.takeIf { it },
+            "level" to doc.level.takeIf { it > 0 },
+            "refIds" to doc.refIds.takeIf { it.isNotEmpty() },
+            "mergedInto" to doc.mergedInto,
             "workspace" to config.workspace,
             "bizId" to bizId
         )
@@ -197,7 +207,11 @@ internal class EasyRagClient(
     override suspend fun inspectByExternalId(externalId: String, bizId: String?): RagDocumentDetail? =
         readByExternalId(loadEnabledConfig("inspect"), externalId, bizId)
 
-    override suspend fun list(pathPrefix: String, bizId: String?): List<RagDocInfo> {
+    override suspend fun list(
+        pathPrefix: String,
+        bizId: String?,
+        excludeArchived: Boolean
+    ): List<RagDocInfo> {
         val config = RagConfig.load(configPath)
         if (!config.enabled) return emptyList()
         val result = mutableListOf<RagDocInfo>()
@@ -210,7 +224,9 @@ internal class EasyRagClient(
                     "pageSize" to LIST_PAGE_SIZE.toString(),
                     "filePathPrefix" to pathPrefix,
                     "workspace" to config.workspace,
-                    "bizId" to bizId
+                    "bizId" to bizId,
+                    // Omitted when false to keep the legacy request byte-for-byte.
+                    "excludeArchived" to excludeArchived.takeIf { it }?.toString()
                 ),
                 timeoutMs = config.readTimeoutMs
             )
@@ -235,7 +251,8 @@ internal class EasyRagClient(
         timeRangeStart: Long?,
         timeRangeEnd: Long?,
         bizId: String?,
-        bizIds: List<String>?
+        bizIds: List<String>?,
+        excludeArchived: Boolean
     ): List<RagChunk> {
         val config = RagConfig.load(configPath)
         if (!config.enabled) return emptyList()
@@ -251,7 +268,8 @@ internal class EasyRagClient(
             // Server normalises this (trim / drop blanks / order-preserving dedup) and falls
             // back to the single-biz contract when the set ends up empty, so blanks are safe
             // to send. A non-empty set overrides `bizId` server-side.
-            "bizIds" to bizIds?.filter { it.isNotBlank() }?.distinct()?.takeIf { it.isNotEmpty() }
+            "bizIds" to bizIds?.filter { it.isNotBlank() }?.distinct()?.takeIf { it.isNotEmpty() },
+            "excludeArchived" to excludeArchived.takeIf { it }
         )
         val response = exchange(config, HttpMethod.POST, "/api/query/data", body = body, timeoutMs = config.readTimeoutMs)
         val chunks = (response["chunks"] as? List<*>)
@@ -266,9 +284,93 @@ internal class EasyRagClient(
                 metadata = (chunk["metadata"] as? Map<*, *>)
                     ?.entries?.associate { (k, v) -> k.toString() to v }
                     ?: emptyMap(),
-                bizId = chunk["biz_id"] as? String
+                // Snake_case like every other chunk field the endpoint echoes. R16 of
+                // .doc/easyrag-memory-governance-requirements.md makes the retrieval projection echo
+                // the record's `full_doc_id` here, and promises null rather than "" when a hit has no
+                // addressable id, so a missing id stays a missing id downstream.
+                docId = chunk["doc_id"] as? String,
+                bizId = chunk["biz_id"] as? String,
+                archived = chunk["archived"] as? Boolean ?: false,
+                level = (chunk["level"] as? Number)?.toInt() ?: 0,
+                refIds = parseStringList(chunk["ref_ids"]),
+                mergedInto = chunk["merged_into"] as? String
             )
         }
+    }
+
+    override suspend fun readByDocIds(docIds: List<String>, bizId: String?): List<RagDocumentDetail> {
+        val ids = docIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (ids.isEmpty()) return emptyList()
+        val config = loadEnabledConfig("readByDocIds")
+        val documents = mutableListOf<RagDocumentDetail>()
+        for (batch in ids.chunked(ARCHIVE_BATCH_SIZE)) {
+            val response = exchange(
+                config, HttpMethod.POST, "/api/documents/by-ids",
+                body = mapOfNonNull(
+                    "docIds" to batch,
+                    "workspace" to config.workspace,
+                    "bizId" to bizId
+                ),
+                timeoutMs = config.readTimeoutMs
+            )
+            (response["documents"] as? List<*>)
+                ?.filterIsInstance<Map<String, Any?>>()
+                ?.mapTo(documents) { parseDocumentDetail(it) }
+        }
+        return documents
+    }
+
+    override suspend fun archiveDocIds(
+        docIds: List<String>,
+        update: RagArchiveUpdate,
+        bizId: String?
+    ): RagArchiveResult {
+        val ids = docIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (ids.isEmpty()) return RagArchiveResult(updated = 0)
+        if (update.archived == null && update.level == null &&
+            update.refIds == null && update.mergedInto == null
+        ) {
+            return RagArchiveResult(updated = 0)
+        }
+        val config = loadEnabledConfig("archiveDocIds")
+        var updated = 0
+        val notFound = mutableListOf<String>()
+        val errors = mutableMapOf<String, String>()
+        for (batch in ids.chunked(ARCHIVE_BATCH_SIZE)) {
+            val response = withConflictRetry("archiveDocIds") {
+                exchange(
+                    config, HttpMethod.PATCH, "/api/documents/archive",
+                    body = mapOfNonNull(
+                        "docIds" to batch,
+                        "workspace" to config.workspace,
+                        "bizId" to bizId,
+                        "archived" to update.archived,
+                        "level" to update.level,
+                        "refIds" to update.refIds,
+                        "mergedInto" to update.mergedInto
+                    ),
+                    timeoutMs = config.indexTimeoutMs
+                )
+            }
+            val results = (response["results"] as? List<*>)
+                ?.filterIsInstance<Map<String, Any?>>()
+                .orEmpty()
+            for (result in results) {
+                val docId = result["docId"] as? String ?: continue
+                when ((result["status"] as? String)?.lowercase()) {
+                    "success" -> updated++
+                    "not_found" -> notFound.add(docId)
+                    else -> errors[docId] = result["message"] as? String ?: "archive failed"
+                }
+            }
+        }
+        if (notFound.isNotEmpty()) {
+            logger.debug("RAG archive: {} ids not found in slice {}", notFound.size, bizId)
+        }
+        if (errors.isNotEmpty()) {
+            logger.warn("RAG archive reported {} errors: {}", errors.size, errors)
+        }
+        return RagArchiveResult(updated = updated, notFound = notFound, errors = errors)
     }
 
     // ------------------------------------------------------------------
@@ -373,18 +475,28 @@ internal class EasyRagClient(
         } catch (e: RagException) {
             if (e.statusCode == NOT_FOUND) return null else throw e
         }
-        return RagDocumentDetail(
-            docId = node["doc_id"] as? String ?: throw RagException("EasyRAG document response missing doc_id"),
-            externalId = node["external_id"] as? String,
-            filePath = node["file_path"] as? String,
-            content = node["content"] as? String,
-            status = node["status"] as? String,
-            createTime = (node["create_time"] as? Number)?.toLong(),
-            chunksCount = (node["chunks_count"] as? Number)?.toInt(),
-            metadata = (node["metadata"] as? Map<*, *>)?.entries?.associate { it.key.toString() to it.value }
-                ?: emptyMap()
-        )
+        return parseDocumentDetail(node)
     }
+
+    /** Parse the snake_case document payload shared by by-external-id and by-ids. */
+    private fun parseDocumentDetail(node: Map<String, Any?>): RagDocumentDetail = RagDocumentDetail(
+        docId = node["doc_id"] as? String ?: throw RagException("EasyRAG document response missing doc_id"),
+        externalId = node["external_id"] as? String,
+        filePath = node["file_path"] as? String,
+        content = node["content"] as? String,
+        status = node["status"] as? String,
+        createTime = (node["create_time"] as? Number)?.toLong(),
+        chunksCount = (node["chunks_count"] as? Number)?.toInt(),
+        metadata = (node["metadata"] as? Map<*, *>)?.entries?.associate { it.key.toString() to it.value }
+            ?: emptyMap(),
+        archived = node["archived"] as? Boolean ?: false,
+        level = (node["level"] as? Number)?.toInt() ?: 0,
+        refIds = parseStringList(node["ref_ids"]),
+        mergedInto = node["merged_into"] as? String
+    )
+
+    private fun parseStringList(value: Any?): List<String> =
+        (value as? List<*>)?.filterIsInstance<String>() ?: emptyList()
 
     private fun parseDocInfo(node: Map<String, Any?>): RagDocInfo = RagDocInfo(
         docId = node["id"] as? String ?: "",
@@ -395,7 +507,11 @@ internal class EasyRagClient(
         contentLength = (node["contentLength"] as? Number)?.toInt(),
         chunksCount = (node["chunksCount"] as? Number)?.toInt(),
         createdAt = parseInstantToEpoch(node["createdAt"]),
-        updatedAt = parseInstantToEpoch(node["updatedAt"])
+        updatedAt = parseInstantToEpoch(node["updatedAt"]),
+        archived = node["archived"] as? Boolean ?: false,
+        level = (node["level"] as? Number)?.toInt() ?: 0,
+        refIds = parseStringList(node["refIds"] ?: node["ref_ids"]),
+        mergedInto = node["mergedInto"] as? String ?: node["merged_into"] as? String
     )
 
     private fun parseInstantToEpoch(value: Any?): Long? {
@@ -669,6 +785,8 @@ internal class EasyRagClient(
     private companion object {
         const val MAX_BODY_SIZE = 16 * 1024 * 1024
         const val LIST_PAGE_SIZE = 100
+        /** EasyRAG caps `by-ids` / `archive` requests at 200 ids each. */
+        const val ARCHIVE_BATCH_SIZE = 200
         const val UPSERT_RETRY_MAX = 2
         const val UPSERT_RETRY_BACKOFF_MS = 500L
         const val NOT_FOUND = 404

@@ -48,7 +48,7 @@ internal class MemorySearchTool(
         val timeRangeEnd = parseEpochSeconds(args["timeRangeEnd"])
         val owner = MemoryOwnerContext(agentContext.userId, agentContext.projectPath)
 
-        val results = mutableListOf<String>()
+        val hits = mutableListOf<Pair<MemoryScope, MemoryEntry>>()
         for (scope in listOf(MemoryScope.PROJECT, MemoryScope.GLOBAL)) {
             val entries = store.search(query, scope, owner, timeRangeStart = timeRangeStart, timeRangeEnd = timeRangeEnd)
             entries.forEachIndexed { index, entry ->
@@ -60,22 +60,52 @@ internal class MemorySearchTool(
                     runCatching { store.touch(entry.path, scope, owner) }
                         .onFailure { logger.debug("Failed to record access for memory: {}", entry.path, it) }
                 }
-                results.add(formatHit(scope, entry))
+                hits.add(scope to entry)
             }
         }
 
-        val text = if (results.isEmpty()) {
+        val text = if (hits.isEmpty()) {
             "No memories found matching '$query'."
         } else {
-            "Found ${results.size} memories:\n\n${results.joinToString("\n\n")}"
+            "Found ${hits.size} memories:\n\n${hits.joinToString("\n\n") { (scope, entry) -> formatHit(scope, entry) }}"
         }
-        return ToolResult(content = listOf(TextContent(text)))
+        return ToolResult(
+            content = listOf(TextContent(text)),
+            details = if (hits.isEmpty()) emptyMap() else mapOf("hits" to hits.map { (scope, entry) -> hitDetails(scope, entry) })
+        )
+    }
+
+    /**
+     * The same facts the prose carries, addressed to the renderer. [formatHit]'s text is what the
+     * model reads and may be reworded or localized at will; this map is the UI's contract, so the
+     * frontend never has to parse display text back into data. Freshness arrives as a date plus a
+     * day count rather than `"2026-01-15 (3 days ago)"` so a label can be composed in the viewer's
+     * own language.
+     */
+    private fun hitDetails(scope: MemoryScope, entry: MemoryEntry): Map<String, Any?> {
+        val updated = entry.updated
+        return mapOf(
+            "scope" to scope.name.lowercase(),
+            "path" to entry.path,
+            "name" to entry.name,
+            "description" to entry.description,
+            "level" to entry.level,
+            "updated" to updated?.toString(),
+            "daysSinceUpdate" to updated?.let { ChronoUnit.DAYS.between(it, LocalDate.now()) },
+            "maturity" to entry.maturity?.apiName,
+            "contentPreview" to entry.content.take(CONTENT_PREVIEW_LIMIT)
+        )
     }
 
     /**
      * Render one hit. The freshness tail is what lets the model judge a memory without a
      * follow-up lookup: `updated: unknown` is reported as unknown rather than dropped, so a
      * missing timestamp can never be misread as a recent one.
+     *
+     * A merged entry says so with its `level` and lists what it absorbed as `sources`: the body below it
+     * is distilled, and the only way back to what the distillation dropped is the archived originals.
+     * Those ids do not survive in the body either — the preview is truncated, so provenance markers at
+     * the end of a long merged body would be cut off exactly when there is most to look up.
      */
     private fun formatHit(scope: MemoryScope, entry: MemoryEntry): String {
         val updated = entry.updated
@@ -86,9 +116,25 @@ internal class MemorySearchTool(
             "$updated ($days days ago)"
         }
         val maturityText = entry.maturity?.apiName ?: "unset"
-        return "[${scope.name.lowercase()}:${entry.path}] ${entry.name} — ${entry.description}" +
-            " | updated: $updatedText | maturity: $maturityText\n" +
-            entry.content.take(CONTENT_PREVIEW_LIMIT)
+        return buildString {
+            append("[${scope.name.lowercase()}:${entry.path}] ${entry.name} — ${entry.description}")
+            append(" | updated: $updatedText | maturity: $maturityText")
+            if (entry.level > 0) {
+                append(" | level: ${entry.level}")
+                // Sources the backend did not hand back are reported as absent, never invented: a
+                // guessed id would only come back from memory_read as a failed lookup.
+                if (entry.refs.isNotEmpty()) {
+                    append(" | sources: ${formatRefs(entry.refs)}")
+                }
+            }
+            append("\n").append(entry.content.take(CONTENT_PREVIEW_LIMIT))
+        }
+    }
+
+    private fun formatRefs(refs: List<String>): String {
+        val listed = refs.take(MAX_SOURCE_IDS_LISTED).joinToString(", ")
+        val overflow = refs.size - MAX_SOURCE_IDS_LISTED
+        return if (overflow > 0) "$listed (+$overflow more)" else listed
     }
 
     /**
@@ -122,6 +168,9 @@ internal class MemorySearchTool(
 
         /** Max characters of entry content returned per search hit, reducing follow-up memory_read calls. */
         const val CONTENT_PREVIEW_LIMIT = 1500
+
+        /** Source docIds named per merged hit; the rest are counted. Matches memory_read's per-call cap. */
+        const val MAX_SOURCE_IDS_LISTED = 10
 
         /** Number of hits per scope whose access date is recorded as a freshness signal. */
         const val TOUCH_LIMIT = 3

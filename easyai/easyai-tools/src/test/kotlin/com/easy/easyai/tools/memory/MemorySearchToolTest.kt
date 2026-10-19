@@ -20,12 +20,15 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import java.nio.file.Path
 import java.time.LocalDate
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Tests [MemorySearchTool] rendering: each hit must expose the freshness tail the memory
- * governance rules in the system prompt rely on, while the header format the console parses
- * with /Found (\d+) memories/ stays intact.
+ * Tests [MemorySearchTool] output: every hit must carry the freshness tail the memory governance
+ * rules in the system prompt rely on, and the same facts as a structured payload the console renders
+ * from. The prose is addressed to the model — it is what decides a drill-down — while the UI reads only
+ * the payload, so each side is pinned where it is consumed.
  */
 class MemorySearchToolTest {
 
@@ -37,7 +40,13 @@ class MemorySearchToolTest {
         store = store
     )
 
-    private fun entry(name: String, updated: LocalDate?, maturity: MemoryMaturity?): MemoryEntry = MemoryEntry(
+    private fun entry(
+        name: String,
+        updated: LocalDate?,
+        maturity: MemoryMaturity?,
+        level: Int = 0,
+        refs: List<String> = emptyList()
+    ): MemoryEntry = MemoryEntry(
         name = name,
         description = "description of $name",
         type = MemoryType.EXPERIENCE_LESSONS,
@@ -45,7 +54,9 @@ class MemorySearchToolTest {
         path = "experience_lessons/$name.md",
         created = LocalDate.of(2025, 12, 1),
         updated = updated,
-        maturity = maturity
+        maturity = maturity,
+        level = level,
+        refs = refs
     )
 
     /** Hits are served from the project scope only, so counts stay attributable to one scope. */
@@ -57,16 +68,20 @@ class MemorySearchToolTest {
     private fun output(result: ToolResult): String =
         result.content.filterIsInstance<TextContent>().joinToString("") { it.text }
 
-    private fun executeSearch(): String = runBlocking {
-        output(
-            tool.execute(
-                agentContext = AgentContext(agentId = "test", userId = "u", projectPath = Path.of("/proj")),
-                toolCallId = "call-test",
-                args = mapOf("query" to "frp"),
-                coroutineScope = CoroutineScope(Job())
-            )
+    private fun execute(): ToolResult = runBlocking {
+        tool.execute(
+            agentContext = AgentContext(agentId = "test", userId = "u", projectPath = Path.of("/proj")),
+            toolCallId = "call-test",
+            args = mapOf("query" to "frp"),
+            coroutineScope = CoroutineScope(Job())
         )
     }
+
+    private fun executeSearch(): String = output(execute())
+
+    @Suppress("UNCHECKED_CAST")
+    private fun detailHits(result: ToolResult): List<Map<String, Any?>> =
+        result.details["hits"] as List<Map<String, Any?>>
 
     @Nested
     inner class `freshness on every hit` {
@@ -98,6 +113,90 @@ class MemorySearchToolTest {
             val text = executeSearch()
 
             assertTrue(Regex("Found (\\d+) memories").containsMatchIn(text), text)
+        }
+    }
+
+    @Nested
+    inner class `merged entry provenance` {
+
+        @Test
+        fun `a merged hit names its level and source docIds`() {
+            stubProjectHits(listOf(entry("relay-notes", LocalDate.now(), MemoryMaturity.HIGH, level = 2, refs = listOf("doc-a", "doc-b"))))
+
+            val text = executeSearch()
+
+            assertTrue(text.contains("level: 2"), text)
+            assertTrue(text.contains("sources: doc-a, doc-b"), text)
+        }
+
+        @Test
+        fun `an untouched entry names neither level nor sources`() {
+            stubProjectHits(listOf(entry("plain", LocalDate.now(), MemoryMaturity.LOW)))
+
+            val text = executeSearch()
+
+            assertTrue(!text.contains("level:"), text)
+            assertTrue(!text.contains("sources:"), text)
+        }
+
+        @Test
+        fun `a merged hit whose backend returned no refs invents none`() {
+            stubProjectHits(listOf(entry("blind-merge", LocalDate.now(), MemoryMaturity.MEDIUM, level = 1)))
+
+            val text = executeSearch()
+
+            assertTrue(text.contains("level: 1"), text)
+            assertTrue(!text.contains("sources:"), text)
+        }
+
+        @Test
+        fun `an over-long source list is counted instead of dumped`() {
+            stubProjectHits(listOf(entry("wide", LocalDate.now(), MemoryMaturity.HIGH, level = 1, refs = (1..13).map { "doc-$it" })))
+
+            val text = executeSearch()
+
+            assertTrue(text.contains("doc-10 (+3 more)"), text)
+            assertTrue(!text.contains("doc-11"), text)
+        }
+    }
+
+    @Nested
+    inner class `structured render payload` {
+
+        @Test
+        fun `hits carry every field the card renders`() {
+            val updated = LocalDate.now().minusDays(3)
+            stubProjectHits(listOf(entry("frp-setup", updated, MemoryMaturity.MEDIUM)))
+
+            val hit = detailHits(execute()).single()
+
+            assertEquals("project", hit["scope"])
+            assertEquals("experience_lessons/frp-setup.md", hit["path"])
+            assertEquals("frp-setup", hit["name"])
+            assertEquals("description of frp-setup", hit["description"])
+            assertEquals(updated.toString(), hit["updated"])
+            assertEquals(3L, hit["daysSinceUpdate"])
+            assertEquals("medium", hit["maturity"])
+            assertEquals(0, hit["level"])
+            assertEquals("body of frp-setup", hit["contentPreview"])
+        }
+
+        @Test
+        fun `an unknown timestamp stays null`() {
+            stubProjectHits(listOf(entry("mystery", updated = null, maturity = null)))
+
+            val hit = detailHits(execute()).single()
+
+            assertNull(hit["updated"])
+            assertNull(hit["daysSinceUpdate"])
+            assertNull(hit["maturity"])
+        }
+
+        @Test
+        fun `no hits leaves the payload empty`() {
+            stubProjectHits(emptyList())
+
+            assertTrue(execute().details.isEmpty())
         }
     }
 

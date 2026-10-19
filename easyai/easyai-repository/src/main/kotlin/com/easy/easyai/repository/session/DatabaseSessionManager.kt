@@ -264,6 +264,9 @@ class DatabaseSessionManager(
      *
      * Identity fields (sessionId, agentId, projectId, projectPath, tools)
      * are read from [agentContext]. Only model connection params are passed separately.
+     *
+     * An [AgentContext.agentId] with no row in the agent table gets exactly the tools and skills the
+     * context carries — no default bag is resolved on its behalf, so an empty list means zero tools.
      */
     override suspend fun getOrCreateSession(
         agentContext: AgentContext,
@@ -278,21 +281,18 @@ class DatabaseSessionManager(
         // system); session rows below stay keyed by the caller's own id.
         val callerOwners = agentContext.effectiveOwners
         val projectPath = agentContext.projectPath ?: toolResolver.resolveProjectPath(projectId, callerId)
-        val explicitTools = agentContext.tools.takeIf { it.isNotEmpty() }
         // Look the agent up before touching any whitelist: the rows belong to the bucket the agent
         // itself lives in, which for a built-in or shared agent is not the caller's. An id with no
         // row falls back to the seeded system bucket, whose whitelist is the one that applies.
         val agentDef = agentLookup?.invoke(agentId, callerOwners)
         val agentOwnerId = agentDef?.userId ?: UserScope.SYSTEM_USER_ID
-        // Build resolved context with actual projectPath for downstream tool creation
-        // Also fill skills/subAgents from session-level defaults if not already set by caller.
-        // The default-agent skill view is only filled on the no-agent-definition fallback path below;
-        // a DB agent re-resolves skills and whitelist in resolveAgentContextAndTools.
+        // Build resolved context with actual projectPath for downstream tool creation. Sub-agents are the
+        // one field resolved here: this is the fresh-chat path's only resolution point, and
+        // resolveAgentContextAndTools never touches it. Everything else stays as the caller supplied it.
         val resolvedSubAgents = resolveSubAgentsData(agentId, agentOwnerId, callerOwners)
         val resolvedContext = agentContext.copy(
             sessionId = id,
             projectPath = projectPath,
-            skills = agentContext.skills,
             subAgents = agentContext.subAgents.ifEmpty { resolvedSubAgents }
         )
 
@@ -329,23 +329,17 @@ class DatabaseSessionManager(
             return chatSession
         }
 
-        // Fallback: no agent definition found, use explicit tools or resolve defaults
-        if (explicitTools == null) {
-            logger.debug("Agent definition not found for: {}, using default tools", agentId)
-        }
-        // Default local agent: whitelist from the effective view, built before the tools.
-        val defaultSkillNames = agentContext.allowedSkillNames.ifEmpty {
-            effectiveSkillNames(agentContext.effectiveOwners)
-        }
-        val defaultContext = resolvedContext.copy(
-            allowedSkillNames = defaultSkillNames,
-            skills = resolvedContext.skills.ifEmpty { skillsFor(agentContext.effectiveOwners, defaultSkillNames) }
+        // Fallback: no agent definition. The caller's lists are final — an empty tool list means this run
+        // genuinely has no tools, not "resolve the default bag"; chat rejects a row-less agentId before
+        // getting here. Nothing is authorized either: bring allowedSkillNames with your own load_skill.
+        logger.debug(
+            "No agent definition for: {}; using the {} tool(s) the request carries",
+            agentId, resolvedContext.tools.size
         )
-        val resolvedTools = explicitTools ?: toolResolver.createSessionTools(defaultContext)
 
         // Check database for existing session (to restore endReason)
         val persistedSession = sessionStore.findById(id, agentContext.userId ?: "system")
-        val agent = agentFactory.createAgentWithConfig(id, config, resolvedTools, defaultContext)
+        val agent = agentFactory.createAgentWithConfig(id, config, resolvedContext.tools, resolvedContext)
         val chatSession = ChatSession(id, agent)
         if (persistedSession != null) {
             logger.info("Restoring session from database with config {}: {}", config.id, id)

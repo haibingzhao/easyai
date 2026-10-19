@@ -9,6 +9,7 @@ import { StreamingMessage } from './StreamingMessage';
 import { StreamingIndicator } from './StreamingIndicator';
 import { ErrorMessage } from './ErrorMessage';
 import { CompactionIndicator } from './CompactionIndicator';
+import { ConsolidationTurn, readConsolidationTurn } from './ConsolidationTurn';
 import { useChatStore } from '../../services/stores/chat-store';
 import { resumeSession } from '../../services/chat-service';
 import { i18n } from '../../utils/i18n';
@@ -64,9 +65,21 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
   const runningSessionId = useChatStore((state) => state.runningSessionId);
   const pendingPermission = useChatStore((state) => state.pendingPermission);
   const retryInfo = useChatStore((state) => state.retryInfo);
+  const livePreview = useChatStore((state) => state.livePreview);
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
 
   const items = useMemo(() => buildRenderItems(messages), [messages]);
+
+  // Watch-tap preview of the in-flight round during recovery. Rendered only while it is keyed by a
+  // messageId that is not yet committed: once the poll delivers an assistant message with the same
+  // messageId, the committed copy owns the round and the preview hides — so a turn is never shown
+  // twice. An unkeyed preview (tool events seen before any delta) cannot be deduped, so it stays
+  // hidden and the poll surfaces that round's committed tool cards instead.
+  const previewVisible =
+    !!livePreview &&
+    !!livePreview.messageId &&
+    livePreview.blocks.length > 0 &&
+    !messages.some((m) => m.role === 'assistant' && m.messageId === livePreview.messageId);
 
   const handleEditClick = useCallback((index: number) => {
     setEditingMessageIndex(index);
@@ -95,6 +108,17 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
         switch (message.role) {
           case 'user':
           case 'user-with-attachments': {
+            // A background consolidation run hands the model a whole memory batch per prompt. Shown
+            // inline that is a wall of material hiding the answer, so those turns render collapsed and
+            // labelled with the pass they belong to.
+            const turnMessage = message as Message & { role: 'user' | 'user-with-attachments' };
+            if (readConsolidationTurn(turnMessage)) {
+              return (
+                <div key={index} data-msg-index={index}>
+                  <ConsolidationTurn message={turnMessage} />
+                </div>
+              );
+            }
             // If this message is being edited, replace with InlineEditMessage.
             // data-msg-index stays on the wrapper so the question navigator can still scroll to a
             // question that happens to be open in the editor.
@@ -156,6 +180,14 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
           blocks={streamingBlocks}
           cancelReason={runningSessionId ? null : cancelReason}
           streamingToolOutputs={streamingToolOutputs}
+        />
+      )}
+
+      {previewVisible && livePreview && (
+        <StreamingMessage
+          blocks={livePreview.blocks}
+          cancelReason={null}
+          streamingToolOutputs={livePreview.toolOutputs}
         />
       )}
 

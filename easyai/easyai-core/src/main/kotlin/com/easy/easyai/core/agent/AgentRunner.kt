@@ -24,7 +24,15 @@ class AgentRunner(
     private val steeringQueue: PendingMessageQueue = PendingMessageQueue(),
     private val followUpQueue: PendingMessageQueue = PendingMessageQueue(),
     private val abortSignal: () -> Boolean = { false },
-    private val registerJob: (Job?) -> Unit = {}
+    private val registerJob: (Job?) -> Unit = {},
+    /**
+     * Receives [AgentEndEvent.endReason] before the stream completes.
+     *
+     * The web SSE layer records the reason by watching events itself; a caller that drives a
+     * session directly (`session.prompt(...).result()`) sees none of them, so without this sink the
+     * owner of the run cannot tell a finished task from a run a completion check gave up on.
+     */
+    private val endReasonSink: (String) -> Unit = {}
 ) {
 
     private val context: AgentContext get() = agent.context
@@ -63,6 +71,9 @@ class AgentRunner(
         val allListeners = services.eventListeners
 
         suspend fun pushAndNotify(event: AgentEvent) {
+            // Record the end reason before publishing: a caller that reads session state once the
+            // stream completes must see the reason for this run, not the one from the run before.
+            if (event is AgentEndEvent) endReasonSink(event.endReason)
             push(event)
             allListeners.forEach { listener ->
                 try {

@@ -261,6 +261,34 @@ class EasyRagClientTest {
     }
 
     @Test
+    fun `search maps the governance projection fields`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(
+            MockResponse().setBody(
+                """{"chunks":[{"reference_id":"r","content":"hello","file_path":"easyai/global/user/a.md",""" +
+                    """"score":0.9,"create_time":1768435200,"doc_id":"doc-77","archived":false,""" +
+                    """"level":2,"ref_ids":["doc-1","doc-2"],"merged_into":null,"metadata":{}}]}"""
+            )
+        )
+
+        val chunk = client.search(query = "q").single()
+
+        assertEquals("doc-77", chunk.docId)
+        assertFalse(chunk.archived)
+        assertEquals(2, chunk.level)
+        assertEquals(listOf("doc-1", "doc-2"), chunk.refIds)
+        assertNull(chunk.mergedInto)
+    }
+
+    @Test
+    fun `a hit with no doc_id keeps null rather than an empty id`() = runTest {
+        enqueueAuthStatus()
+        server.enqueue(MockResponse().setBody("""{"chunks":[{"reference_id":"r","content":"c"}]}"""))
+
+        assertNull(client.search(query = "q").single().docId)
+    }
+
+    @Test
     fun `write operations fail when config disabled`() = runTest {
         val disabledPath = Files.createTempFile("easyai-rag-disabled", ".json")
         RagConfig.save(RagConfig(enabled = false), disabledPath)

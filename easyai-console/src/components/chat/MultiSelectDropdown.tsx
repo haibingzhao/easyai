@@ -113,6 +113,9 @@ export const MultiSelectDropdown: React.FC<MultiSelectDropdownProps> = ({
     if (trimmed && !values.includes(trimmed)) {
       onChange([...values, trimmed]);
       setSearch('');
+      // The open list overlays whatever follows the component (e.g. the tag editor's
+      // Save/Cancel row); close it once the typed value became a chip.
+      setIsOpen(false);
     }
   }, [search, values, onChange]);
 

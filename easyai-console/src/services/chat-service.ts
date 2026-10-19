@@ -305,9 +305,10 @@ export function compactSession(
 }
 
 /**
- * Attach to a running session's SSE stream for real-time observation.
- * Same pattern as resumeSession — reuses createSseStream (POST + auth + error handling).
- * Used when opening a running session from history to get real-time events instead of polling.
+ * Attach to a running session's SSE broadcast as a read-only observer.
+ * Same pattern as resumeSession — reuses createSseStream (POST + auth + error handling), matching
+ * the backend's `@PostMapping("/session/{sessionId}/events")`. Used during recovery to render the
+ * in-flight round's live tail.
  */
 export function watchSession(
   sessionId: string,

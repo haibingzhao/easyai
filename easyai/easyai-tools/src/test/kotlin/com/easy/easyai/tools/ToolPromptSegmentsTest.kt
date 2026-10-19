@@ -47,6 +47,20 @@ class ToolPromptSegmentsTest {
     }
 
     @Test
+    fun `memory segment teaches drilling into merged entries and keeps history read-only`() {
+        val guidance = segment(MemorySearchToolBuilder().metadata.systemPromptSegment)
+
+        assertTrue(guidance.contains("### Drilling into merged memories"), guidance)
+        assertTrue(guidance.contains("sources"), guidance)
+        assertTrue(guidance.contains("memory_read"), guidance)
+        assertTrue(guidance.contains("docIds"), guidance)
+        assertTrue(guidance.contains("History is read-only"), guidance)
+        // The drill-down budget is stated in words, never as a number: any four-digit run in this
+        // segment would break the cache-stability assertion above.
+        assertFalse(Regex("\\d{4}").containsMatchIn(guidance), guidance)
+    }
+
+    @Test
     fun `knowledge segment guides parallel issuance together with memory search`() {
         val guidance = segment(KnowledgeSearchToolBuilder(false).metadata.systemPromptSegment)
         assertTrue(guidance.contains("## Knowledge Base"), guidance)

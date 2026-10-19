@@ -161,6 +161,8 @@ export interface ToolExecutionEndEvent extends BaseEvent {
   toolUsage?: UsageInfo;
   /** Whether this tool modifies files on disk */
   tracksFileChanges?: boolean;
+  /** Structured render payload the tool attached (see ToolResult.details) */
+  details?: Record<string, unknown>;
 }
 
 export interface UsageInfo {
@@ -324,6 +326,7 @@ export interface SessionContextEvent extends BaseEvent {
 
 export interface BackgroundTaskEvent extends BaseEvent {
   type: 'background_task';
+  /** Lifecycle verb emitted by a `run_background` task. */
   event: 'launched' | 'progress' | 'completed' | 'failed' | 'cancelled';
   taskId: string;
   toolName?: string;

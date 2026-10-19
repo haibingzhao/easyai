@@ -1,9 +1,11 @@
 package com.easy.easyai.core.util
 
+import com.easy.easyai.api.llm.NonTransientAiException
 import com.easy.easyai.api.llm.TransientAiException
 import com.easy.easyai.core.agent.ContentFilteredException
 import com.easy.easyai.core.agent.LlmEndpointUnavailableException
 import com.easy.easyai.core.agent.QuotaExhaustedException
+import com.easy.easyai.core.agent.ResponseFormatUnsupportedException
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import kotlin.test.assertFalse
@@ -43,6 +45,17 @@ class ErrorUtilsTest {
             // type guard the "default to retryable" fallback would offer a retry that cannot succeed.
             val gateway = TransientAiException("429: Your token-plan 1-month quota has been exhausted.")
             val e = QuotaExhaustedException("模型额度已耗尽，配额将在 10-19 16:00:00 UTC 重置", gateway)
+            assertFalse(isRetryableError(e))
+        }
+
+        @Test
+        fun `refused response format is never retryable`() {
+            // What has to change is the model row's declared capability, so a retry button offers an
+            // attempt that re-triggers the same refusal.
+            val gateway = NonTransientAiException("400: This response_format type is unavailable now")
+            val e = ResponseFormatUnsupportedException(
+                "模型 deepseek-v4.1-flash 不支持本次请求声明的结构化输出格式", gateway
+            )
             assertFalse(isRetryableError(e))
         }
     }

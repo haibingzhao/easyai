@@ -122,6 +122,32 @@ class MemoryFlushAgentTest {
     }
 
     @Test
+    fun `over-long extracted fields are capped at the hard limits`() = runTest {
+        val entries = mutableListOf<MemoryEntry>()
+        coEvery { store.write(capture(entries), any(), any()) } returns Path.of("x")
+        val longBody = "x".repeat(MemoryContentLimits.CONTENT_HARD_CAP_CHARS + 500)
+        val longDesc = "d".repeat(MemoryContentLimits.DESCRIPTION_CAP_CHARS + 80)
+        val json = """{"memories": [{"title": "big fact", "description": "$longDesc", """ +
+            """"category": "experience_lessons", "content": "$longBody"}]}"""
+
+        val result = MemoryFlushAgent(store).maybeFlush(
+            agentContext = agentContext,
+            messages = messages,
+            modelContextLength = 100_000,
+            estimatedTokenCount = 90_000,
+            chatModel = chatModelReturning(json)
+        )
+
+        assertEquals(1, result?.written)
+        val written = entries.single()
+        assertTrue(written.content.endsWith("…(truncated)"))
+        // The marker is paid for out of the cap: an entry a character over it cannot be saved from the
+        // Memories page, whose write endpoint applies the same limit.
+        assertEquals(MemoryContentLimits.CONTENT_HARD_CAP_CHARS, written.content.length)
+        assertEquals(MemoryContentLimits.DESCRIPTION_CAP_CHARS, written.description.length)
+    }
+
+    @Test
     fun `temporary workspace downgrades the write scope to global`() = runTest {
         val entries = mutableListOf<MemoryEntry>()
         val scopeSlot = slot<MemoryScope>()
@@ -177,6 +203,46 @@ class MemoryFlushAgentTest {
         )
 
         assertNull(result)
+        coVerify(exactly = 0) { store.write(any(), any(), any()) }
+    }
+
+    @Test
+    fun `an unparsable answer earns exactly one re-ask with the correction appended`() = runTest {
+        val promptSlot = slot<Prompt>()
+        val chatModel = mockk<ChatModel>()
+        every { chatModel.call(capture(promptSlot)) } returns chatResponse("prose again")
+
+        val result = MemoryFlushAgent(store).maybeFlush(
+            agentContext = agentContext,
+            messages = messages,
+            modelContextLength = 100_000,
+            estimatedTokenCount = 90_000,
+            chatModel = chatModel
+        )
+
+        assertNull(result)
+        coVerify(exactly = 2) { chatModel.call(any()) }
+        val lastPrompt = promptSlot.captured.instructions.joinToString("\n") { it.text.orEmpty() }
+        assertContains(lastPrompt, "could not be read as the required JSON object")
+    }
+
+    @Test
+    fun `an honest empty memory list is accepted without a re-ask`() = runTest {
+        // The flush prompt tells the model to return {"memories": []} when nothing is worth keeping,
+        // so that answer is a valid result — re-asking it would burn a call on the highest-frequency
+        // path and claim a parse failure that never happened.
+        val chatModel = chatModelReturning("""{"memories": []}""")
+
+        val result = MemoryFlushAgent(store).maybeFlush(
+            agentContext = agentContext,
+            messages = messages,
+            modelContextLength = 100_000,
+            estimatedTokenCount = 90_000,
+            chatModel = chatModel
+        )
+
+        assertNull(result)
+        coVerify(exactly = 1) { chatModel.call(any()) }
         coVerify(exactly = 0) { store.write(any(), any(), any()) }
     }
 
