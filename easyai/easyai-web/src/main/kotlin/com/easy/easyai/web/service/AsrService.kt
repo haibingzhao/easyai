@@ -1,8 +1,9 @@
 package com.easy.easyai.web.service
 
 import com.easy.easyai.api.config.ChatModelFactory
-import com.easy.easyai.api.model.ModelOptions
 import com.easy.easyai.api.model.ModelProviderConfig
+import com.easy.easyai.api.model.SamplingIntent
+import com.easy.easyai.api.model.SamplingPolicy
 import com.easy.easyai.core.media.MediaProviderSettings
 import com.easy.easyai.core.model.aux.AuxModelResolver
 import com.easy.easyai.core.model.aux.AuxModelTask
@@ -102,15 +103,19 @@ class AsrService(
     /**
      * Refine is a single forward correction pass — extended thinking adds latency and leaks
      * monologue into the output — so a thinking-enabled row gets Prompt-level options rebuilt
-     * with thinking off. Those options (the row's factory `build()`) are what the protocol
-     * factories actually send; the cached ChatModel itself carries only the model name.
+     * with thinking off, and sampling is pinned because re-writing a transcription is a judgement
+     * about what the speaker meant, not a conversation. Those options (the row's factory `build()`)
+     * are what the protocol factories actually send; the cached ChatModel itself carries only the
+     * model name. A row with no options block is left without one rather than given a default,
+     * which would also have invented a maxTokens.
      */
     private fun refinePrompt(resolved: ResolvedAuxModel, messages: List<Message>): Prompt {
         val config = resolved.modelConfig
         val factory = modelFactories.firstOrNull { it.supports(config.protocol) }
             ?: return Prompt(messages)
+        val sampled = SamplingPolicy.applyTo(config, SamplingIntent.DETERMINISTIC)
         val options = factory.build(
-            config.copy(options = (config.options ?: ModelOptions()).copy(thinking = false)),
+            sampled.copy(options = sampled.options?.copy(thinking = false)),
             emptyList()
         )
         return Prompt(messages, options)

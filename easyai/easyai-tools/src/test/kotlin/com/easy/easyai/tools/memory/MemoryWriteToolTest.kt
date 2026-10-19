@@ -25,12 +25,8 @@ class MemoryWriteToolTest {
 
     private class FakeMemoryStore : MemoryStore {
         val written = mutableListOf<MemoryEntry>()
-        var existsResult = false
 
-        /** Types handed to the duplicate check, so tests can assert it stays type qualified. */
-        val existsTypes = mutableListOf<MemoryType?>()
-
-        /** Types handed to every name lookup, for the same assertion on update and remove. */
+        /** Types handed to every name lookup, so tests can assert the duplicate check stays type qualified. */
         val lookups = mutableListOf<MemoryType?>()
 
         /** Entries the tool resolved by name; batch operations reuse them instead of re-looking up. */
@@ -76,10 +72,7 @@ class MemoryWriteToolTest {
             scope: MemoryScope,
             owner: MemoryOwnerContext,
             type: MemoryType?
-        ): Boolean {
-            existsTypes.add(type)
-            return existsResult
-        }
+        ): Boolean = findByName(name, scope, owner, type) != null
 
         override suspend fun findByName(
             name: String,
@@ -259,7 +252,37 @@ class MemoryWriteToolTest {
 
             // The category is validated before the check, so the store can resolve the key in
             // one request instead of probing every type of the active domain.
-            assertEquals(listOf(MemoryType.OTHER), store.existsTypes)
+            assertEquals(listOf(MemoryType.OTHER), store.lookups)
+        }
+
+        @Test
+        fun `add on a name held by an active entry is rejected`() {
+            store.entriesByName = mapOf("test_entry" to existingEntry())
+
+            val result = execute(addArgs())
+
+            assertTrue(result.isError)
+            assertTrue(output(result).contains("already exists"), output(result))
+            assertTrue(store.written.isEmpty())
+        }
+
+        @Test
+        fun `add refuses a name that belongs to consolidated history`() {
+            // A merged entry archived its source under this very key. An active-only lookup would call
+            // the name free and the write would revive it as a live duplicate of the entry above it.
+            store.entriesByName = mapOf(
+                "test_entry" to existingEntry().copy(
+                    archived = true,
+                    level = 1,
+                    mergedInto = "merged-doc"
+                )
+            )
+
+            val result = execute(addArgs())
+
+            assertTrue(result.isError)
+            assertTrue(output(result).contains("read-only"), output(result))
+            assertTrue(store.written.isEmpty())
         }
 
         @Test

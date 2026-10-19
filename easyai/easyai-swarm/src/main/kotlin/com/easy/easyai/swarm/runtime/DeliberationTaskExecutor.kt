@@ -1,5 +1,6 @@
 package com.easy.easyai.swarm.runtime
 
+import com.easy.easyai.api.model.SamplingIntent
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.swarm.event.SwarmEventBridge
 import com.easy.easyai.swarm.model.*
@@ -263,7 +264,10 @@ internal class DeliberationTaskExecutor(
                 val prompt = roundPrompts[participantId] ?: openingPrompt
 
                 val result = workerExecutor.executeWorker(
-                    agentSpec, prompt, run, task, runContext, abortSignal
+                    agentSpec, prompt, run, task, runContext, abortSignal,
+                    // A turn that repeats the previous speaker is a failed turn; the verdict that
+                    // reads these turns is pinned instead.
+                    samplingIntent = SamplingIntent.DELIBERATIVE
                 )
 
                 history.add(DeliberationEntry(
@@ -316,7 +320,10 @@ internal class DeliberationTaskExecutor(
         } else {
             verdictPrompt
         }
-        val verdict = workerExecutor.executeWorker(judgeSpec, finalVerdictPrompt, run, task, runContext, abortSignal)
+        val verdict = workerExecutor.executeWorker(
+            judgeSpec, finalVerdictPrompt, run, task, runContext, abortSignal,
+            samplingIntent = SamplingIntent.DETERMINISTIC
+        )
 
         total += verdict
 
@@ -420,6 +427,7 @@ internal class DeliberationTaskExecutor(
         val result = workerExecutor.executeWorker(
             judgeSpec, prompt, run, task, runContext, abortSignal,
             outputSchemaOverride = ROUND_PROMPTS_SCHEMA,
+            samplingIntent = SamplingIntent.DETERMINISTIC,
             systemPromptOverride = ORCHESTRATOR_SYSTEM_PROMPT
         )
         total += result

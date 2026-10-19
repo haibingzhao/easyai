@@ -4,6 +4,7 @@ import com.easy.easyai.api.model.ModelCapabilities
 import com.easy.easyai.api.model.ModelOptions
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.api.model.SamplingSupport
 import com.easy.easyai.api.model.StructuredOutputSupport
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -43,8 +44,10 @@ class AnthropicChatModelFactoryTest {
     inner class `structured output gate` {
 
         @Test
-        fun `undeclared capabilities keep schema enforcement`() {
-            assertNotNull(built(outputSchema = schema).outputSchema)
+        fun `undeclared capabilities get no api-level enforcement`() {
+            // StructuredOutputPolicy: an undeclared row is a row nobody tested, so nothing is asserted
+            // of it — the schema travels in the prompt instead.
+            assertNull(built(outputSchema = schema).outputSchema)
         }
 
         @Test
@@ -77,7 +80,8 @@ class AnthropicChatModelFactoryTest {
         @Test
         fun `thinking=false emits effort and no budget`() {
             val options = ModelOptions(temperature = 0.7, maxTokens = 1000, thinking = false, effort = "high")
-            val b = built(options = options, outputSchema = schema)
+            val caps = ModelCapabilities(structuredOutput = StructuredOutputSupport.JSON_SCHEMA)
+            val b = built(caps, options = options, outputSchema = schema)
             assertNull(b.thinkingBudget)
             assertEquals("high", b.effort)
             assertNotNull(b.outputSchema)
@@ -98,6 +102,26 @@ class AnthropicChatModelFactoryTest {
             val b = built(options = options)
             assertNull(b.thinkingBudget)
             assertNull(b.effort)
+        }
+    }
+
+    @Nested
+    inner class `sampling capability gate` {
+
+        private val row = ModelOptions(temperature = 0.7, maxTokens = 1000, thinking = false)
+
+        @Test
+        fun `a settable row sends its temperature`() {
+            assertEquals(0.7, built(options = row).temperature)
+        }
+
+        @Test
+        fun `NOT_SETTABLE drops the temperature and keeps the rest of the row`() {
+            val caps = ModelCapabilities(sampling = SamplingSupport.NOT_SETTABLE)
+            val b = built(caps, options = row)
+
+            assertNull(b.temperature)
+            assertEquals(1000, b.maxTokens)
         }
     }
 }

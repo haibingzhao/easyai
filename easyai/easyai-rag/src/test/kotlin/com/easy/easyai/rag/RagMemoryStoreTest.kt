@@ -458,20 +458,39 @@ class RagMemoryStoreTest {
     }
 
     @Test
-    fun `countActiveByType groups the listing by type without fetching a single body`() = runTest {
-        coEvery { client.list("easyai/", globalBizId, excludeArchived = true) } returns listOf(
-            docInfo("doc-1", "easyai/experience_lessons/a.md"),
-            docInfo("doc-2", "easyai/experience_lessons/b.md"),
-            docInfo("doc-3", "easyai/user_preferences/c.md")
+    fun `listActiveIndex describes a slice from the listing alone`() = runTest {
+        // The grouping pass and the scheduler's fingerprint both read this: it must carry identity, depth
+        // and size without ever asking for a body, or a daily tick turns into a full store dump.
+        coEvery { client.list("easyai/experience_lessons/", globalBizId, excludeArchived = true) } returns listOf(
+            docInfo(
+                "doc-1", "easyai/experience_lessons/a.md",
+                level = 2, contentLength = 1_800, contentSummary = "frp tunnel setup notes"
+            ),
+            docInfo("doc-2", "easyai/experience_lessons/b.md", contentLength = 400)
         )
 
-        val counts = store.countActiveByType(MemoryScope.GLOBAL, globalOwner)
+        val index = store.listActiveIndex(MemoryScope.GLOBAL, globalOwner, MemoryType.EXPERIENCE_LESSONS)
 
-        assertEquals(
-            mapOf(MemoryType.EXPERIENCE_LESSONS to 2, MemoryType.USER_PREFERENCES to 1), counts,
-            "a scheduler must be able to measure a slice without reading it"
-        )
+        assertEquals(listOf("doc-1", "doc-2"), index.map { it.docId })
+        assertEquals(listOf("a", "b"), index.map { it.name })
+        assertEquals(listOf(2, 0), index.map { it.level })
+        assertEquals(listOf(1_800, 400), index.map { it.contentChars })
+        assertEquals("frp tunnel setup notes", index[0].blurb)
+        assertEquals("", index[1].blurb, "a document the server summarized not at all still has a row")
         coVerify(exactly = 0) { client.readByDocIds(any(), any()) }
+    }
+
+    @Test
+    fun `a listing row with no derivable type is skipped, not guessed`() = runTest {
+        coEvery { client.list("easyai/", globalBizId, excludeArchived = true) } returns listOf(
+            docInfo("doc-1", "easyai/experience_lessons/a.md", contentLength = 10),
+            docInfo("doc-2", "easyai/not_a_type/z.md", contentLength = 10),
+            docInfo("", "easyai/experience_lessons/empty-id.md", contentLength = 10)
+        )
+
+        val index = store.listActiveIndex(MemoryScope.GLOBAL, globalOwner)
+
+        assertEquals(listOf("doc-1"), index.map { it.docId }, "an untypeable or id-less row cannot be cited")
     }
 
     @Test
@@ -504,16 +523,24 @@ class RagMemoryStoreTest {
         }
     }
 
-    private fun docInfo(docId: String, filePath: String, externalId: String? = null) = RagDocInfo(
+    private fun docInfo(
+        docId: String,
+        filePath: String,
+        externalId: String? = null,
+        level: Int = 0,
+        contentLength: Int? = null,
+        contentSummary: String? = null
+    ) = RagDocInfo(
         docId = docId,
         filePath = filePath,
         status = null,
         externalId = externalId,
-        contentSummary = null,
-        contentLength = null,
+        contentSummary = contentSummary,
+        contentLength = contentLength,
         chunksCount = null,
         createdAt = null,
-        updatedAt = null
+        updatedAt = null,
+        level = level
     )
 
     private fun detail(content: String) = RagDocumentDetail(

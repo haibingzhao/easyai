@@ -5,7 +5,7 @@ import com.easy.easyai.api.llm.ToolCallback
 
 /**
  * How `response_format` should be expressed for a turn, derived by the factory from the model's
- * declared `capabilities.structuredOutput` (undeclared means full support).
+ * declared `capabilities.structuredOutput` (undeclared means no API-level enforcement).
  */
 internal enum class DashScopeResponseFormatKind {
     JSON_SCHEMA,

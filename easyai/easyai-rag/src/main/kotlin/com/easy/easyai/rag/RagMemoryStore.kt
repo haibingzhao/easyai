@@ -343,25 +343,42 @@ internal class RagMemoryStore(
             docIds.mapNotNull { docId -> details[docId]?.let { entryFromDocument(it) } }
         }
 
-    /**
-     * Count from the document listing alone: one paginated series of paths, no body fetched.
-     * [list] has to read every document because callers want the materialized entry, and a scheduler
-     * that only compares a count against a threshold must not pay for that on every tick.
-     */
-    override suspend fun countActiveByType(
-        scope: MemoryScope,
-        owner: MemoryOwnerContext
-    ): Map<MemoryType, Int> = translateBackendErrors("countActiveByType") {
-        val bizId = bizIdOf(scope, owner) ?: return@translateBackendErrors emptyMap()
-        client.list(listPrefix(null), bizId, excludeArchived = true)
-            .mapNotNull { typeOfListedPath(it.filePath) }
-            .groupingBy { it }
-            .eachCount()
-    }
-
     /** The type directory of a listed document's `{type}/{name}.md` path; null for a foreign path. */
     private fun typeOfListedPath(filePath: String): MemoryType? =
         relativePathOf(filePath)?.substringBefore('/')?.let { MemoryType.fromDirName(it) }
+
+    /**
+     * The document listing alone: `id`, path, `level` and stored length are all fields the list endpoint
+     * already echoes, so one paginated read describes a whole slice with no body fetched.
+     *
+     * [contentChars] counts the stored document, frontmatter included, and so reads slightly above the
+     * parsed body. Every consumer budgets prompt text with it, never enforces a content limit — the
+     * consolidation writer still measures the real body before it stores anything.
+     */
+    override suspend fun listActiveIndex(
+        scope: MemoryScope,
+        owner: MemoryOwnerContext,
+        type: MemoryType?
+    ): List<MemoryIndexEntry> = translateBackendErrors("listActiveIndex") {
+        val bizId = bizIdOf(scope, owner) ?: return@translateBackendErrors emptyList()
+        client.list(listPrefix(type), bizId, excludeArchived = true)
+            .mapNotNull { doc ->
+                val relative = relativePathOf(doc.filePath) ?: return@mapNotNull null
+                val entryType = typeOfListedPath(doc.filePath)
+                    ?: return@mapNotNull null
+                val name = relative.substringAfterLast('/').removeSuffix(".md")
+                if (doc.docId.isEmpty() || name.isEmpty()) return@mapNotNull null
+                MemoryIndexEntry(
+                    docId = doc.docId,
+                    name = name,
+                    type = entryType,
+                    level = doc.level,
+                    contentChars = doc.contentLength ?: 0,
+                    blurb = doc.contentSummary.orEmpty().take(INDEX_BLURB_CHARS)
+                )
+            }
+            .distinctBy { it.docId }
+    }
 
     // ── exists / findByName ────────────────────────────────────────────
     override suspend fun exists(
@@ -640,6 +657,8 @@ internal class RagMemoryStore(
         const val FRONTMATTER_DELIMITER = "---"
         /** Markdown heading-based chunking: no LLM cost, keeps entry sections intact. */
         const val CHUNK_METHOD_STRUCTURE_AWARE = "structure_aware"
+        /** How much of the server's `contentSummary` reaches a grouping prompt as one entry's blurb. */
+        const val INDEX_BLURB_CHARS = 200
         val DATE_FMT: DateTimeFormatter = DateTimeFormatter.ISO_LOCAL_DATE
     }
 }

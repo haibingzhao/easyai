@@ -1,5 +1,6 @@
 package com.easy.easyai.swarm.runtime
 
+import com.easy.easyai.api.model.SamplingIntent
 import com.easy.easyai.common.textio.template.TemplateRenderer
 import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.event.MessageEndEvent
@@ -159,6 +160,8 @@ class SwarmWorkerExecutor(
         additionalCompletionChecks: List<AgentCompletionCheck> = emptyList(),
         inputFromVars: Map<String, String> = emptyMap(),
         outputSchemaOverride: String? = null,
+        /** Variance this phase may have; see [SwarmAgentResolver.resolve]. */
+        samplingIntent: SamplingIntent = SamplingIntent.FOLLOW_CONFIG,
         /** Override the Agent's SystemMessage prompt. Used by Deliberation orchestrator phases
          *  (Opening/Round) to inject a neutral orchestrator prompt instead of the Judge's own promptTemplate. */
         systemPromptOverride: String? = null,
@@ -174,6 +177,7 @@ class SwarmWorkerExecutor(
                 modelConfigCache = runContext.modelConfigCache,
                 inputFromVars = inputFromVars,
                 outputSchemaOverride = outputSchemaOverride,
+                samplingIntent = samplingIntent,
             )
         } catch (e: Exception) {
             logger.error("Failed to resolve agent '{}': {}", agentSpec.id, e.message, e)

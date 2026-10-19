@@ -4,7 +4,8 @@ import { TokenInput } from '../TokenInput';
 import { modelConfigService } from '@/services/model-config-service';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import { ToolCallingToggle } from '@/components/ui/ToolCallingToggle';
-import { MODEL_FIELD_HINTS, validateContextTokenBounds } from '@/constants/model-options';
+import { SamplingToggle } from '@/components/ui/SamplingToggle';
+import { DEFAULT_FORM_TEMPERATURE, MODEL_FIELD_HINTS, initialModelOptions, temperatureMax, validateContextTokenBounds, validateTemperature } from '@/constants/model-options';
 import { useModelCatalogPrefill } from './useModelCatalogPrefill';
 import { ModelCatalogHint } from './ModelCatalogHint';
 import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, ModelConfigGroup, SaveModelProviderConfigRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
@@ -82,7 +83,7 @@ export const AddModelToGroupForm: React.FC<AddModelToGroupFormProps> = ({ group,
     setSelectedModelId('');
     setIsCustomModel(group.isCustom);
     setCustomModelName('');
-    setOptions({});
+    setOptions(initialModelOptions());
     setCapabilities({});
     setShowOptions(true);
   };
@@ -105,6 +106,11 @@ export const AddModelToGroupForm: React.FC<AddModelToGroupFormProps> = ({ group,
       alert(i18n(boundError));
       return;
     }
+    const temperatureError = validateTemperature(options, group.protocol);
+    if (temperatureError) {
+      alert(i18n(temperatureError));
+      return;
+    }
 
     const effectiveIsCustomModel = isCustomModel || group.isCustom || !selectedModelId;
     const modelId = effectiveIsCustomModel ? customModelName.trim() : selectedModelId;
@@ -124,7 +130,7 @@ export const AddModelToGroupForm: React.FC<AddModelToGroupFormProps> = ({ group,
         isCustomModel: effectiveIsCustomModel,
         enabled: true,
         options: Object.keys(options).length > 0 ? options : undefined,
-        capabilities: (capabilities.vision || capabilities.structuredOutput || capabilities.supportsToolCalling === false) ? capabilities : undefined,
+        capabilities: (capabilities.vision || capabilities.structuredOutput || capabilities.sampling || capabilities.supportsToolCalling === false) ? capabilities : undefined,
         groupId: group.id,
       };
 
@@ -267,6 +273,11 @@ export const AddModelToGroupForm: React.FC<AddModelToGroupFormProps> = ({ group,
           </select>
         </div>
 
+        <SamplingToggle
+          value={capabilities.sampling}
+          onChange={(sampling) => setCapabilities(prev => ({ ...prev, sampling }))}
+        />
+
         <ToolCallingToggle
           checked={capabilities.supportsToolCalling !== false}
           onChange={(val) => setCapabilities(prev => ({
@@ -291,15 +302,21 @@ export const AddModelToGroupForm: React.FC<AddModelToGroupFormProps> = ({ group,
                   type="number"
                   step="0.1"
                   min="0"
-                  max="2"
+                  max={temperatureMax(group.protocol)}
+                  disabled={capabilities.sampling === 'NOT_SETTABLE'}
                   value={options.temperature ?? ''}
                   onChange={(e) => setOptions(prev => ({
                     ...prev,
                     temperature: e.target.value ? parseFloat(e.target.value) : undefined,
                   }))}
-                  placeholder="0.7"
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                  placeholder={String(DEFAULT_FORM_TEMPERATURE)}
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm disabled:opacity-50"
                 />
+                <p className="mt-1 text-[11px] leading-tight text-muted-foreground">
+                  {i18n(capabilities.sampling === 'NOT_SETTABLE'
+                    ? MODEL_FIELD_HINTS.temperatureNotSettable
+                    : MODEL_FIELD_HINTS.temperature)}
+                </p>
               </div>
               <div>
                 <label className="text-xs font-medium mb-1 block">{i18n('Max Tokens')}</label>

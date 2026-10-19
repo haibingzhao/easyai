@@ -27,7 +27,8 @@ import kotlin.test.assertTrue
 /**
  * Tests [MemorySearchTool] output: every hit must carry the freshness tail the memory governance
  * rules in the system prompt rely on, and the same facts as a structured payload the console renders
- * from. The prose has no contract — the UI never parses it — so the payload is what the tests pin.
+ * from. The prose is addressed to the model — it is what decides a drill-down — while the UI reads only
+ * the payload, so each side is pinned where it is consumed.
  */
 class MemorySearchToolTest {
 
@@ -39,7 +40,13 @@ class MemorySearchToolTest {
         store = store
     )
 
-    private fun entry(name: String, updated: LocalDate?, maturity: MemoryMaturity?): MemoryEntry = MemoryEntry(
+    private fun entry(
+        name: String,
+        updated: LocalDate?,
+        maturity: MemoryMaturity?,
+        level: Int = 0,
+        refs: List<String> = emptyList()
+    ): MemoryEntry = MemoryEntry(
         name = name,
         description = "description of $name",
         type = MemoryType.EXPERIENCE_LESSONS,
@@ -47,7 +54,9 @@ class MemorySearchToolTest {
         path = "experience_lessons/$name.md",
         created = LocalDate.of(2025, 12, 1),
         updated = updated,
-        maturity = maturity
+        maturity = maturity,
+        level = level,
+        refs = refs
     )
 
     /** Hits are served from the project scope only, so counts stay attributable to one scope. */
@@ -104,6 +113,50 @@ class MemorySearchToolTest {
             val text = executeSearch()
 
             assertTrue(Regex("Found (\\d+) memories").containsMatchIn(text), text)
+        }
+    }
+
+    @Nested
+    inner class `merged entry provenance` {
+
+        @Test
+        fun `a merged hit names its level and source docIds`() {
+            stubProjectHits(listOf(entry("relay-notes", LocalDate.now(), MemoryMaturity.HIGH, level = 2, refs = listOf("doc-a", "doc-b"))))
+
+            val text = executeSearch()
+
+            assertTrue(text.contains("level: 2"), text)
+            assertTrue(text.contains("sources: doc-a, doc-b"), text)
+        }
+
+        @Test
+        fun `an untouched entry names neither level nor sources`() {
+            stubProjectHits(listOf(entry("plain", LocalDate.now(), MemoryMaturity.LOW)))
+
+            val text = executeSearch()
+
+            assertTrue(!text.contains("level:"), text)
+            assertTrue(!text.contains("sources:"), text)
+        }
+
+        @Test
+        fun `a merged hit whose backend returned no refs invents none`() {
+            stubProjectHits(listOf(entry("blind-merge", LocalDate.now(), MemoryMaturity.MEDIUM, level = 1)))
+
+            val text = executeSearch()
+
+            assertTrue(text.contains("level: 1"), text)
+            assertTrue(!text.contains("sources:"), text)
+        }
+
+        @Test
+        fun `an over-long source list is counted instead of dumped`() {
+            stubProjectHits(listOf(entry("wide", LocalDate.now(), MemoryMaturity.HIGH, level = 1, refs = (1..13).map { "doc-$it" })))
+
+            val text = executeSearch()
+
+            assertTrue(text.contains("doc-10 (+3 more)"), text)
+            assertTrue(!text.contains("doc-11"), text)
         }
     }
 

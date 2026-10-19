@@ -82,14 +82,22 @@ export interface ConsolidationRequest {
   dryRun?: boolean;
 }
 
-/** One cluster in a consolidation plan. Dry runs omit the merged docId / archived count. */
+/**
+ * One cluster in a consolidation plan. A preview reports the grouping pass's clusters (with the size they
+ * would have to distill); a real run reports what the writer did with them.
+ */
 export interface ConsolidationPlanItem {
   title?: string;
   name?: string;
   level?: number;
   sourceDocIds?: string[];
+  /** Combined stored size of this cluster's sources — what the merge pass must compress into the digest. */
+  sourceChars?: number;
+  /** Written body size, reported for a real run so an over-target cluster is visible per cluster. */
+  contentChars?: number;
   mergedDocId?: string;
   archived?: number;
+  expectedArchives?: number;
   dryRun?: boolean;
   /** Present instead of a write result when the writer refused this cluster, with the reason. */
   rejected?: string;
@@ -99,14 +107,24 @@ export interface ConsolidationReport {
   type: string;
   scope: string;
   activeBefore: number;
+  /** Clusters the grouping pass proposed and its validator accepted, written or not. */
+  clustersProposed: number;
   mergedWritten: number;
   archived: number;
+  /** Groups refused as too large to distill into one merged entry even after trimming their tail. */
+  droppedGroups: number;
+  /** Written bodies past the key-points target but inside the hard cap: stored, and worth a look. */
+  overTarget: number;
   /** Sources a written cluster failed to archive, so they are still live duplicates of it. */
   archiveShortfall: number;
   skippedSingletons: number;
   skippedOverCap: number;
   /** Batches whose answer could not be applied: an unusable first answer, or an unusable re-ask. */
   rejectedBatches: number;
+  /** Batches whose model call itself failed, so the model never got to answer. */
+  llmFailures: number;
+  /** Why the first failed call failed, as the model client reported it. */
+  llmFailureReason?: string | null;
   /** Sources the model neither clustered nor declared as leftovers. */
   uncoveredDocIds: number;
   dryRun: boolean;
@@ -119,6 +137,14 @@ export interface ConsolidationResponse {
   taskId?: string | null;
   report?: ConsolidationReport | null;
 }
+
+/**
+ * Body size budget of one memory entry, mirroring the backend's `MemoryContentLimits`: 2K is what the
+ * consolidation prompt asks a merged digest to fit in, 6K is what the store refuses beyond. A merged
+ * entry over the target is still stored, so the UI marks it rather than treating it as a failure.
+ */
+export const MEMORY_CONTENT_TARGET_CHARS = 2000;
+export const MEMORY_CONTENT_HARD_CAP_CHARS = 6000;
 
 /**
  * Memory categories fallback (coding domain defaults).

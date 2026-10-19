@@ -101,6 +101,11 @@ internal class MemorySearchTool(
      * Render one hit. The freshness tail is what lets the model judge a memory without a
      * follow-up lookup: `updated: unknown` is reported as unknown rather than dropped, so a
      * missing timestamp can never be misread as a recent one.
+     *
+     * A merged entry says so with its `level` and lists what it absorbed as `sources`: the body below it
+     * is distilled, and the only way back to what the distillation dropped is the archived originals.
+     * Those ids do not survive in the body either — the preview is truncated, so provenance markers at
+     * the end of a long merged body would be cut off exactly when there is most to look up.
      */
     private fun formatHit(scope: MemoryScope, entry: MemoryEntry): String {
         val updated = entry.updated
@@ -111,9 +116,25 @@ internal class MemorySearchTool(
             "$updated ($days days ago)"
         }
         val maturityText = entry.maturity?.apiName ?: "unset"
-        return "[${scope.name.lowercase()}:${entry.path}] ${entry.name} — ${entry.description}" +
-            " | updated: $updatedText | maturity: $maturityText\n" +
-            entry.content.take(CONTENT_PREVIEW_LIMIT)
+        return buildString {
+            append("[${scope.name.lowercase()}:${entry.path}] ${entry.name} — ${entry.description}")
+            append(" | updated: $updatedText | maturity: $maturityText")
+            if (entry.level > 0) {
+                append(" | level: ${entry.level}")
+                // Sources the backend did not hand back are reported as absent, never invented: a
+                // guessed id would only come back from memory_read as a failed lookup.
+                if (entry.refs.isNotEmpty()) {
+                    append(" | sources: ${formatRefs(entry.refs)}")
+                }
+            }
+            append("\n").append(entry.content.take(CONTENT_PREVIEW_LIMIT))
+        }
+    }
+
+    private fun formatRefs(refs: List<String>): String {
+        val listed = refs.take(MAX_SOURCE_IDS_LISTED).joinToString(", ")
+        val overflow = refs.size - MAX_SOURCE_IDS_LISTED
+        return if (overflow > 0) "$listed (+$overflow more)" else listed
     }
 
     /**
@@ -147,6 +168,9 @@ internal class MemorySearchTool(
 
         /** Max characters of entry content returned per search hit, reducing follow-up memory_read calls. */
         const val CONTENT_PREVIEW_LIMIT = 1500
+
+        /** Source docIds named per merged hit; the rest are counted. Matches memory_read's per-call cap. */
+        const val MAX_SOURCE_IDS_LISTED = 10
 
         /** Number of hits per scope whose access date is recorded as a freshness signal. */
         const val TOUCH_LIMIT = 3

@@ -5,6 +5,7 @@ import { ConsolidationSwitch } from '@/components/memories/ConsolidationSwitch';
 import { useMemoryStore } from '@/services/stores/memory-store';
 import { useCategoryStore } from '@/services/stores/category-store';
 import type { ConsolidationReport } from '@/types/memory';
+import { MEMORY_CONTENT_TARGET_CHARS } from '@/types/memory';
 import { i18n } from '@/utils/i18n';
 
 interface MemoryConsolidationDialogProps {
@@ -328,19 +329,41 @@ export const MemoryConsolidationDialog: React.FC<MemoryConsolidationDialogProps>
             <div className="text-[11px] text-muted-foreground">
               {i18n('Active entries')}: {report.activeBefore} · {i18n('Planned clusters')}:{' '}
               {plannedClusters.length}
+              {/* A cluster that survived grouping can still fail on size or budget; the count of what
+                  grouping asked for is what tells those two apart. */}
+              {report.clustersProposed > 0 && ` · ${i18n('Proposed')} ${report.clustersProposed}`}
               {rejectedClusters.length > 0 &&
                 ` · ${i18n('Rejected')} ${rejectedClusters.length}`}
+              {report.droppedGroups > 0 && ` · ${i18n('Groups refused')} ${report.droppedGroups}`}
+              {report.overTarget > 0 && ` · ${i18n('Over target')} ${report.overTarget}`}
             </div>
-            {(report.rejectedBatches > 0 || report.uncoveredDocIds > 0) && (
+            {report.dryRun && (
+              <div className="text-[11px] text-muted-foreground">
+                {i18n('A preview runs the grouping pass only: it lists which entries would merge, and writes no bodies.')}
+              </div>
+            )}
+            {(report.llmFailures > 0 || report.rejectedBatches > 0 || report.uncoveredDocIds > 0) && (
               <div className="flex items-start gap-2 p-2 rounded-md bg-amber-500/10 text-amber-600 text-xs">
                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>
-                  {report.rejectedBatches > 0 &&
-                    `${i18n('Batches rejected: the model answer did not match the required format.')} ${report.rejectedBatches}`}
-                  {report.rejectedBatches > 0 && report.uncoveredDocIds > 0 && ' · '}
-                  {report.uncoveredDocIds > 0 &&
-                    `${i18n('Entries the model did not account for:')} ${report.uncoveredDocIds}`}
-                </span>
+                <div className="space-y-1">
+                  {report.llmFailures > 0 && (
+                    <div>
+                      {`${i18n('Model calls failed:')} ${report.llmFailures} — ${i18n(
+                        'The model was never asked; this is not an answer format problem.'
+                      )}`}
+                    </div>
+                  )}
+                  {report.llmFailureReason && <div className="break-all">{report.llmFailureReason}</div>}
+                  {(report.rejectedBatches > 0 || report.uncoveredDocIds > 0) && (
+                    <div>
+                      {report.rejectedBatches > 0 &&
+                        `${i18n('Batches rejected: the model answer did not match the required format.')} ${report.rejectedBatches}`}
+                      {report.rejectedBatches > 0 && report.uncoveredDocIds > 0 && ' · '}
+                      {report.uncoveredDocIds > 0 &&
+                        `${i18n('Entries the model did not account for:')} ${report.uncoveredDocIds}`}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
             {plannedClusters.length === 0 && rejectedClusters.length === 0 ? (
@@ -359,6 +382,23 @@ export const MemoryConsolidationDialog: React.FC<MemoryConsolidationDialogProps>
                     <span className="text-muted-foreground shrink-0">
                       {item.sourceDocIds?.length ?? 0} {i18n('sources')}
                     </span>
+                    {/* The size the merge pass has to distill into one digest — grouping cannot show the
+                        bodies, so this number is what makes "would that even fit" answerable. */}
+                    {typeof item.sourceChars === 'number' && (
+                      <span className="text-muted-foreground shrink-0">{item.sourceChars} chars</span>
+                    )}
+                    {typeof item.contentChars === 'number' && (
+                      <span
+                        className={
+                          item.contentChars > MEMORY_CONTENT_TARGET_CHARS
+                            ? 'shrink-0 text-amber-600'
+                            : 'shrink-0 text-muted-foreground'
+                        }
+                        title={i18n('Written body size')}
+                      >
+                        {item.contentChars} chars
+                      </span>
+                    )}
                   </div>
                 ))}
                 {rejectedClusters.map((item, index) => (

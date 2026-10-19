@@ -208,7 +208,8 @@ internal class OpenAiStreamingChatModel(
         )
     }
 
-    private fun createRequest(prompt: Prompt, options: OpenAiChatOptions): ChatCompletionCreateParams {
+    /** internal for same-module unit tests: the wire params are what a response-format bug shows up in. */
+    internal fun createRequest(prompt: Prompt, options: OpenAiChatOptions): ChatCompletionCreateParams {
         val builder = ChatCompletionCreateParams.builder()
         prompt.instructions.forEach { message -> toMessageParams(message).forEach { builder.addMessage(it) } }
 
@@ -267,8 +268,21 @@ internal class OpenAiStreamingChatModel(
         }
     }
 
-    private fun parseSchema(schemaJson: String): ResponseFormatJsonSchema.JsonSchema.Schema =
-        objectMapper.readValue(schemaJson, ResponseFormatJsonSchema.JsonSchema.Schema::class.java)
+    /**
+     * Reads the schema into the SDK's free-form schema object.
+     *
+     * Not `readValue(schemaJson, Schema::class.java)`: `Schema` is a Jackson 2 type whose only creator
+     * takes `Map<String, JsonValue>`, and this Jackson 3 mapper cannot see the annotation the SDK uses
+     * to restore `JsonValue` — so deserializing any schema failed, before the request left the process.
+     * Plain values through [JsonValue.from] is how [toChatCompletionTool] already feeds tool schemas.
+     */
+    private fun parseSchema(schemaJson: String): ResponseFormatJsonSchema.JsonSchema.Schema {
+        @Suppress("UNCHECKED_CAST")
+        val schemaMap = objectMapper.readValue(schemaJson, Map::class.java) as Map<String, Any?>
+        val builder = ResponseFormatJsonSchema.JsonSchema.Schema.builder()
+        schemaMap.forEach { (key, value) -> builder.putAdditionalProperty(key, JsonValue.from(value)) }
+        return builder.build()
+    }
 
     /**
      * One wire message per conversation turn — except a [ToolResponseMessage], which packs the
@@ -404,11 +418,23 @@ internal class OpenAiStreamingChatModel(
         )
     }
 
-    /** Maps SDK errors to the retry-classification exceptions the agent loop understands. */
+    /**
+     * Maps SDK errors to the retry-classification exceptions the agent loop understands.
+     *
+     * The SDK message already opens with the status code, so it is not prefixed a second time here —
+     * and when the gateway's body is not `{"error": {...}}` that message degrades to `"400: Unknown"`,
+     * which is why the structured fields travel alongside it and [OpenAiErrorLoggingHttpClient] logs
+     * the raw body they were parsed out of.
+     */
     private fun Throwable.toAiException(): Throwable {
         val service = (this as? OpenAIServiceException) ?: (this.cause as? OpenAIServiceException) ?: return this
+        val detail = buildString {
+            append(service.message)
+            service.code().orElse(null)?.let { append(" code=").append(it) }
+            service.type().orElse(null)?.let { append(" type=").append(it) }
+            service.param().orElse(null)?.let { append(" param=").append(it) }
+        }
         val status = service.statusCode()
-        val detail = "$status: ${service.message}"
         return if (status == 429 || status >= 500) {
             TransientAiException(detail, this)
         } else {

@@ -1,8 +1,11 @@
 package com.easy.easyai.core.memory.consolidation
 
 import com.easy.easyai.common.util.SharedObjectMapper
+import tools.jackson.databind.JsonNode
 import com.easy.easyai.core.memory.MemoryArchiveUpdate
+import com.easy.easyai.core.memory.MemoryConsolidationSettings
 import com.easy.easyai.core.memory.MemoryEntry
+import com.easy.easyai.core.memory.MemoryIndexEntry
 import com.easy.easyai.core.memory.MemoryOwnerContext
 import com.easy.easyai.core.memory.MemoryScope
 import com.easy.easyai.core.memory.MemoryStore
@@ -21,14 +24,16 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Tests the sole write path of a consolidation run: the shape of what lands in the store, and the
- * store-backed checks a JSON Schema cannot express (invented docIds, a source two clusters both
- * claimed, a source already archived by an earlier run).
+ * Tests the sole write path of a consolidation run: the shape of what lands in the store, the grouping
+ * validator that decides what may be asked at all, and the store-backed checks a JSON Schema cannot
+ * express (invented docIds, a source two clusters both claimed, a source already archived by an earlier
+ * run).
  */
 class MemoryConsolidationWriterTest {
 
     private val store = mockk<MemoryStore>()
-    private val writer = MemoryConsolidationWriter(store)
+    private val settings = MemoryConsolidationSettings()
+    private val writer = MemoryConsolidationWriter(store, settings)
     private val scope = MemoryScope.PROJECT
     private val owner = MemoryOwnerContext("alice", Path.of("/tmp/demo"))
     private val batchIds = listOf("doc-a", "doc-b")
@@ -44,6 +49,16 @@ class MemoryConsolidationWriterTest {
         updated = LocalDate.of(2026, 1, 1),
         level = level,
         archived = archived
+    )
+
+    /** The index row the grouping pass judges on: identity and stored size, never the body. */
+    private fun indexRow(id: String, chars: Int = 500, level: Int = 0) = MemoryIndexEntry(
+        docId = id,
+        name = "src-$id",
+        type = MemoryType.EXPERIENCE_LESSONS,
+        level = level,
+        contentChars = chars,
+        blurb = "blurb $id"
     )
 
     /** Resolves only the docIds a cluster actually asks for, so overlap reads like the real store. */
@@ -80,11 +95,187 @@ class MemoryConsolidationWriterTest {
         sourceDocIds = sources
     )
 
-    private fun output(vararg clusters: ConsolidationCluster, leftovers: List<String> = emptyList()) =
-        MemoryConsolidationOutput(clusters = clusters.toList(), leftoverDocIds = leftovers)
+    private fun mergeOutput(
+        vararg clusters: ConsolidationCluster,
+        unmerged: List<String> = emptyList()
+    ) = MemoryConsolidationMergeOutput(clusters = clusters.toList(), unmergedDocIds = unmerged)
+
+    private fun groupOutput(
+        vararg groups: ConsolidationGroup,
+        leftovers: List<String> = emptyList()
+    ) = MemoryConsolidationGroupingOutput(groups = groups.toList(), leftoverDocIds = leftovers)
+
+    private fun group(title: String = "FRP setup", sources: List<String> = listOf("doc-a", "doc-b")) =
+        ConsolidationGroup(title = title, sourceDocIds = sources)
 
     private fun rejects(state: MemoryConsolidationRunState): List<String> =
         state.stats.clusters.mapNotNull { it["rejected"] as? String }
+
+    @Nested
+    inner class Grouping {
+
+        @Test
+        fun `a validated group is queued for the merge pass, not written`() = runTest {
+            val runState = state()
+
+            val outcome = writer.planGroups(listOf(indexRow("doc-a"), indexRow("doc-b")), groupOutput(group()), runState)
+
+            assertEquals(emptyList<String>(), outcome.uncoveredDocIds)
+            assertEquals(1, runState.stats.clustersProposed.get())
+            val proposed = runState.stats.proposed.single()
+            assertEquals(listOf("doc-a", "doc-b"), proposed.sourceDocIds)
+            assertEquals(1000, proposed.sourceChars, "the queued cluster carries sizes, not bodies")
+            coVerify(exactly = 0) { store.writeEntry(any(), any(), any()) }
+            coVerify(exactly = 0) { store.archive(any(), any(), any(), any()) }
+        }
+
+        @Test
+        fun `a docId the model invented leaves the real sources uncovered`() = runTest {
+            val runState = state()
+
+            val outcome = writer.planGroups(
+                listOf(indexRow("doc-a"), indexRow("doc-b")),
+                groupOutput(group(sources = listOf("doc-a", "doc-nonexistent"))),
+                runState
+            )
+
+            assertEquals(0, runState.stats.clustersProposed.get())
+            assertEquals(listOf("doc-a", "doc-b"), outcome.uncoveredDocIds)
+        }
+
+        @Test
+        fun `one source may be proposed by only one group`() = runTest {
+            val runState = state()
+            val rows = listOf(indexRow("doc-a"), indexRow("doc-b"), indexRow("doc-c"))
+
+            val outcome = writer.planGroups(
+                rows,
+                groupOutput(group(title = "first", sources = listOf("doc-a", "doc-b")), group(title = "second", sources = listOf("doc-a", "doc-c"))),
+                runState
+            )
+
+            assertEquals(1, runState.stats.clustersProposed.get(), "the second cluster lost its shared source")
+            assertEquals(1, runState.stats.skippedSingletons.get())
+            assertEquals(listOf("doc-c"), outcome.uncoveredDocIds)
+        }
+
+        @Test
+        fun `a source taken by an earlier batch's cluster is not a gap for this batch`() = runTest {
+            val runState = state()
+            writer.planGroups(
+                listOf(indexRow("doc-a"), indexRow("doc-b")),
+                groupOutput(group(sources = listOf("doc-a", "doc-b"))),
+                runState
+            )
+
+            // Grouping runs over several prompts, and `claimedByModel` only knows about this batch's
+            // clusters. Without settling the already-placed source, its docId would be re-asked with the
+            // rows the model has just answered — and the lone free source beside it would be asked twice.
+            val halfTaken = writer.planGroups(
+                listOf(indexRow("doc-a"), indexRow("doc-c")),
+                groupOutput(group(title = "second", sources = listOf("doc-a", "doc-c"))),
+                runState
+            )
+            assertEquals(listOf("doc-c"), halfTaken.uncoveredDocIds)
+
+            val allTaken = writer.planGroups(
+                listOf(indexRow("doc-a"), indexRow("doc-b")),
+                groupOutput(group(title = "third", sources = listOf("doc-a", "doc-b"))),
+                runState
+            )
+            assertEquals(emptyList<String>(), allTaken.uncoveredDocIds, "nothing here is unaccounted for")
+        }
+
+        @Test
+        fun `a group whose bodies cannot fit one merged entry is dropped`() = runTest {
+            val runState = state()
+            // Each row alone is under the cap, the pair is not: the tail is trimmed away, and a cluster
+            // of one is not a cluster.
+            val rows = listOf(indexRow("doc-a", chars = settings.maxGroupSourceChars), indexRow("doc-b", chars = 1_000))
+
+            val outcome = writer.planGroups(rows, groupOutput(group()), runState)
+
+            assertEquals(1, runState.stats.droppedGroups.get())
+            assertEquals(0, runState.stats.clustersProposed.get())
+            assertEquals(
+                emptyList<String>(), outcome.uncoveredDocIds,
+                "a refused group is a decision, not a gap — re-asking it would only repeat the refusal"
+            )
+        }
+
+        @Test
+        fun `an oversized group keeps its head and trims the tail`() = runTest {
+            val runState = state()
+            val rows = (1..settings.maxSourcesPerGroup + 2).map { indexRow("doc-$it", chars = 1_000) }
+            val ids = rows.map { it.docId }
+
+            writer.planGroups(rows, groupOutput(group(sources = ids)), runState)
+
+            val proposed = runState.stats.proposed.single()
+            assertEquals(settings.maxSourcesPerGroup, proposed.sourceDocIds.size, "the entry-count cap is what bound it")
+            assertEquals(ids.take(settings.maxSourcesPerGroup), proposed.sourceDocIds, "the tail is what goes")
+        }
+
+        @Test
+        fun `a declared leftover is covered work, not a gap`() = runTest {
+            val runState = state()
+
+            val outcome = writer.planGroups(
+                listOf(indexRow("doc-a"), indexRow("doc-b")),
+                groupOutput(leftovers = listOf("doc-a", "doc-b")),
+                runState
+            )
+
+            assertEquals(emptyList<String>(), outcome.uncoveredDocIds)
+            assertEquals(0, runState.stats.clustersProposed.get())
+        }
+
+        @Test
+        fun `a preview plans the archives the real run would consume and shows their sizes`() = runTest {
+            val runState = state(dryRun = true, maxArchives = 2)
+
+            writer.planGroups(
+                listOf(indexRow("doc-a"), indexRow("doc-b"), indexRow("doc-c"), indexRow("doc-d")),
+                groupOutput(
+                    group(title = "first", sources = listOf("doc-a", "doc-b")),
+                    group(title = "second", sources = listOf("doc-c", "doc-d"))
+                ),
+                runState
+            )
+
+            assertEquals(2, runState.stats.plannedArchives.get())
+            assertEquals(0, runState.remainingArchives())
+            assertEquals(2, runState.stats.clusters.size)
+            val row = runState.stats.clusters.first()
+            assertEquals(1000, row["sourceChars"], "the preview must show how much a cluster has to distill")
+            assertEquals(1, row["level"], "a merged entry sits one level above its deepest source")
+            assertEquals(true, row["dryRun"])
+        }
+
+        @Test
+        fun `a preview defers the cluster the real run would defer instead of planning it`() = runTest {
+            val runState = state(dryRun = true, maxArchives = 2)
+
+            val outcome = writer.planGroups(
+                listOf(indexRow("doc-a"), indexRow("doc-b"), indexRow("doc-c"), indexRow("doc-d")),
+                groupOutput(
+                    group(title = "first", sources = listOf("doc-a", "doc-b")),
+                    group(title = "second", sources = listOf("doc-c", "doc-d"))
+                ),
+                runState
+            )
+
+            assertTrue(
+                rejects(runState).any { it.contains("exceed the remaining budget") },
+                rejects(runState).toString()
+            )
+            assertEquals(1, runState.stats.skippedOverCap.get())
+            assertEquals(
+                emptyList<String>(), outcome.uncoveredDocIds,
+                "a cluster the budget ran out on is a decision, not a gap"
+            )
+        }
+    }
 
     @Nested
     inner class Commit {
@@ -99,7 +290,7 @@ class MemoryConsolidationWriterTest {
             val archiveUpdate = slot<MemoryArchiveUpdate>()
             coEvery { store.archive(any(), capture(archiveUpdate), scope, owner) } returns 2
 
-            val outcome = writer.writeBatch(batchIds, output(cluster()), runState)
+            val outcome = writer.writeBatch(batchIds, mergeOutput(cluster()), runState)
 
             val entry = written.captured
             assertEquals(2, entry.level, "merged level must be max(source levels) + 1")
@@ -130,7 +321,7 @@ class MemoryConsolidationWriterTest {
             }
             coEvery { store.archive(any(), any(), scope, owner) } returns 2
 
-            writer.writeBatch(batchIds, output(cluster()), runState)
+            writer.writeBatch(batchIds, mergeOutput(cluster()), runState)
 
             assertEquals(listOf("frp", "shared", "tunnel"), written.captured.keywords)
             assertEquals(listOf("remote access", "deploy, then verify"), written.captured.scenarios)
@@ -147,7 +338,7 @@ class MemoryConsolidationWriterTest {
 
             writer.writeBatch(
                 listOf("doc-a", "doc-b", "doc-c"),
-                output(cluster(sources = listOf("doc-a", "doc-b", "doc-c"))),
+                mergeOutput(cluster(sources = listOf("doc-a", "doc-b", "doc-c"))),
                 runState
             )
 
@@ -169,7 +360,7 @@ class MemoryConsolidationWriterTest {
 
             writer.writeBatch(
                 batchIds,
-                output(cluster(refs = listOf(ConsolidationSectionRef("## Setup", listOf("doc-a"))))),
+                mergeOutput(cluster(refs = listOf(ConsolidationSectionRef("## Setup", listOf("doc-a"))))),
                 runState
             )
 
@@ -177,10 +368,26 @@ class MemoryConsolidationWriterTest {
         }
 
         @Test
+        fun `a body past the key-points target is stored and counted, not refused`() = runTest {
+            // The 2K figure is what the prompt asks for; 6K is what the store can hold. Refusing at 2K
+            // would throw away a merge the model did correctly and leave the sources as duplicates.
+            val runState = state()
+            coEvery { store.writeEntry(any(), scope, owner) } answers { firstArg<MemoryEntry>().copy(id = "merged-1") }
+            coEvery { store.archive(any(), any(), scope, owner) } returns 2
+            val long = "x".repeat(com.easy.easyai.core.memory.MemoryContentLimits.CONTENT_TARGET_CHARS + 100)
+
+            writer.writeBatch(batchIds, mergeOutput(cluster(content = long)), runState)
+
+            assertEquals(1, runState.stats.mergedWritten.get())
+            assertEquals(1, runState.stats.overTarget.get())
+            assertTrue(rejects(runState).isEmpty(), rejects(runState).toString())
+        }
+
+        @Test
         fun `dry run records the plan without writing or archiving`() = runTest {
             val runState = state(dryRun = true)
 
-            val outcome = writer.writeBatch(batchIds, output(cluster()), runState)
+            val outcome = writer.writeBatch(batchIds, mergeOutput(cluster()), runState)
 
             assertEquals(0, runState.stats.mergedWritten.get())
             assertEquals(0, runState.stats.archived.get())
@@ -199,7 +406,7 @@ class MemoryConsolidationWriterTest {
         fun `a cluster with fewer than two sources is skipped`() = runTest {
             val runState = state()
 
-            writer.writeBatch(batchIds, output(cluster(sources = listOf("doc-a"))), runState)
+            writer.writeBatch(batchIds, mergeOutput(cluster(sources = listOf("doc-a"))), runState)
 
             assertTrue(rejects(runState).any { it.contains("needs at least 2 sourceDocIds") }, rejects(runState).toString())
             assertEquals(1, runState.stats.skippedSingletons.get())
@@ -210,7 +417,7 @@ class MemoryConsolidationWriterTest {
         fun `a cluster larger than the remaining archive budget is deferred`() = runTest {
             val runState = state(maxArchives = 1)
 
-            writer.writeBatch(batchIds, output(cluster()), runState)
+            writer.writeBatch(batchIds, mergeOutput(cluster()), runState)
 
             assertTrue(rejects(runState).any { it.contains("exceed the remaining budget") }, rejects(runState).toString())
             assertEquals(1, runState.stats.skippedOverCap.get())
@@ -221,7 +428,7 @@ class MemoryConsolidationWriterTest {
         fun `a cluster naming docIds the store does not have is rejected`() = runTest {
             val runState = state(pool = listOf(source("doc-a")))
 
-            writer.writeBatch(batchIds, output(cluster()), runState)
+            writer.writeBatch(batchIds, mergeOutput(cluster()), runState)
 
             assertTrue(rejects(runState).any { it.contains("fewer than 2 source documents were found") }, rejects(runState).toString())
             coVerify(exactly = 0) { store.writeEntry(any(), any(), any()) }
@@ -231,7 +438,7 @@ class MemoryConsolidationWriterTest {
         fun `blank merged fields are rejected`() = runTest {
             val runState = state()
 
-            writer.writeBatch(batchIds, output(cluster(description = "   ")), runState)
+            writer.writeBatch(batchIds, mergeOutput(cluster(description = "   ")), runState)
 
             assertTrue(rejects(runState).any { it.contains("are required") }, rejects(runState).toString())
             coVerify(exactly = 0) { store.writeEntry(any(), any(), any()) }
@@ -248,7 +455,7 @@ class MemoryConsolidationWriterTest {
 
             writer.writeBatch(
                 listOf("doc-a", "doc-b", "doc-c"),
-                output(
+                mergeOutput(
                     cluster(title = "first", sources = listOf("doc-a", "doc-b")),
                     cluster(title = "second", sources = listOf("doc-a", "doc-c"))
                 ),
@@ -268,7 +475,7 @@ class MemoryConsolidationWriterTest {
         fun `a source archived by an earlier run is not absorbed again`() = runTest {
             val runState = state(pool = listOf(source("doc-a"), source("doc-b", archived = true)))
 
-            writer.writeBatch(batchIds, output(cluster()), runState)
+            writer.writeBatch(batchIds, mergeOutput(cluster()), runState)
 
             assertTrue(
                 rejects(runState).any { it.contains("fewer than 2 source documents were found") },
@@ -287,7 +494,7 @@ class MemoryConsolidationWriterTest {
 
             writer.writeBatch(
                 listOf("doc-a", "doc-b", "doc-c", "doc-d"),
-                output(
+                mergeOutput(
                     cluster(title = "first", sources = listOf("doc-a", "doc-b")),
                     cluster(title = "second", sources = listOf("doc-c", "doc-d"))
                 ),
@@ -304,25 +511,35 @@ class MemoryConsolidationWriterTest {
     /**
      * The whole "validate the answer before writing it" design rests on the generated schema demanding
      * every field: an optional property would let a half-filled answer pass the shape check and reach
-     * the writer as blank text.
+     * the writer as blank text. Both passes are covered because each one's silence means something the
+     * writer has to tell apart from a lost answer.
      */
     @Nested
     inner class SchemaContract {
 
         @Test
-        fun `the schema requires every output field`() {
-            val root = SharedObjectMapper.instance.readTree(CONSOLIDATION_OUTPUT_SCHEMA)
-            assertEquals(
-                setOf("clusters", "leftoverDocIds"),
-                (0 until root.path("required").size()).map { root.path("required")[it].asText() }.toSet()
-            )
+        fun `the grouping schema requires every output field`() {
+            val root = SharedObjectMapper.instance.readTree(CONSOLIDATION_GROUPING_SCHEMA)
+            assertEquals(requiredOf(root), setOf("groups", "leftoverDocIds"))
+            val group = root.path("properties")["groups"].path("items")
+            assertEquals(requiredOf(group), setOf("sourceDocIds", "title"))
+            assertFalse(group.path("additionalProperties").asBoolean())
+        }
+
+        @Test
+        fun `the merge schema requires every output field`() {
+            val root = SharedObjectMapper.instance.readTree(CONSOLIDATION_MERGE_SCHEMA)
+            assertEquals(requiredOf(root), setOf("clusters", "unmergedDocIds"))
             val cluster = root.path("properties")["clusters"].path("items")
             assertEquals(
                 setOf("mergedContent", "mergedDescription", "mergedTitle", "sectionRefs", "sourceDocIds"),
-                (0 until cluster.path("required").size()).map { cluster.path("required")[it].asText() }.toSet()
+                requiredOf(cluster)
             )
             assertFalse(cluster.path("additionalProperties").asBoolean())
         }
+
+        private fun requiredOf(node: JsonNode): Set<String> =
+            (0 until node.path("required").size()).map { node.path("required")[it].asText() }.toSet()
     }
 
     @Nested
@@ -336,7 +553,7 @@ class MemoryConsolidationWriterTest {
 
             val outcome = writer.writeBatch(
                 listOf("doc-a", "doc-b", "doc-c"),
-                output(cluster(sources = listOf("doc-a", "doc-b"))),
+                mergeOutput(cluster(sources = listOf("doc-a", "doc-b"))),
                 runState
             )
 
@@ -344,14 +561,14 @@ class MemoryConsolidationWriterTest {
         }
 
         @Test
-        fun `an unmergeable entry declared as leftover is not a gap`() = runTest {
+        fun `an unmergeable entry declared as such is not a gap`() = runTest {
             val runState = state(pool = listOf(source("doc-a"), source("doc-b"), source("doc-c")))
             coEvery { store.writeEntry(any(), scope, owner) } answers { firstArg<MemoryEntry>().copy(id = "merged-1") }
             coEvery { store.archive(any(), any(), scope, owner) } returns 2
 
             val outcome = writer.writeBatch(
                 listOf("doc-a", "doc-b", "doc-c"),
-                output(cluster(sources = listOf("doc-a", "doc-b")), leftovers = listOf("doc-c")),
+                mergeOutput(cluster(sources = listOf("doc-a", "doc-b")), unmerged = listOf("doc-c")),
                 runState
             )
 
@@ -362,7 +579,7 @@ class MemoryConsolidationWriterTest {
         fun `a batch with no cluster at all reports every source as covered once declared`() = runTest {
             val runState = state(dryRun = true)
 
-            val outcome = writer.writeBatch(batchIds, output(leftovers = batchIds), runState)
+            val outcome = writer.writeBatch(batchIds, mergeOutput(unmerged = batchIds), runState)
 
             assertEquals(emptyList<String>(), outcome.uncoveredDocIds)
             assertEquals(0, runState.stats.clusters.size)

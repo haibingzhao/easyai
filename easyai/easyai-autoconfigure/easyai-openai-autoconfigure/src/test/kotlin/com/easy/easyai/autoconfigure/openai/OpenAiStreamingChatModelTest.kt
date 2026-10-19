@@ -5,7 +5,9 @@ import com.easy.easyai.api.llm.DefaultChatOptions
 import com.easy.easyai.api.llm.Prompt
 import com.easy.easyai.api.llm.ToolCallback
 import com.easy.easyai.api.llm.ToolResponseMessage
+import com.easy.easyai.api.llm.UserMessage
 import com.openai.core.JsonValue
+import com.openai.core.jsonMapper
 import com.openai.models.chat.completions.ChatCompletionChunk
 import com.openai.models.chat.completions.ChatCompletionChunk.Choice
 import com.openai.models.chat.completions.ChatCompletionChunk.Choice.Delta
@@ -170,6 +172,55 @@ class OpenAiStreamingChatModelTest {
             model.mapChunk(chunk(fragment), acc)
 
             assertTrue(model.mapChunk(chunk(finish), acc).flatMap { it.results }.flatMap { it.output.toolCalls }.isEmpty())
+        }
+    }
+
+    @Nested
+    inner class `response format on the wire` {
+
+        /** The shape the memory consolidator sends: `$schema` at the root, nested objects, arrays. */
+        private val schema = """
+            {"${'$'}schema":"https://json-schema.org/draft/2020-12/schema","type":"object",
+             "properties":{"clusters":{"type":"array","items":{"type":"object","properties":{
+                 "mergedTitle":{"type":"string"}},"required":["mergedTitle"]}},
+             "leftoverDocIds":{"type":"array","items":{"type":"string"}}},
+             "required":["clusters","leftoverDocIds"],"additionalProperties":false}
+        """.trimIndent()
+
+        private fun options(strict: Boolean) = OpenAiChatOptions(
+            model = "gpt-test",
+            responseFormatKind = OpenAiResponseFormatKind.JSON_SCHEMA,
+            outputSchema = schema,
+            strict = strict
+        )
+
+        @Test
+        fun `a json_schema response format carries its schema onto the wire`() {
+            val params = model.createRequest(Prompt(listOf(UserMessage("classify these")), options(true)), options(true))
+
+            val jsonSchema = params.responseFormat().get().asJsonSchema().jsonSchema()
+            assertEquals("json_schema", jsonSchema.name())
+            assertEquals(true, jsonSchema.strict().get())
+            assertEquals(
+                setOf("${'$'}schema", "type", "properties", "required", "additionalProperties"),
+                jsonSchema.schema().get()._additionalProperties().keys,
+                "every generated key must survive into the SDK schema object"
+            )
+
+            // The request body is what the gateway sees; a schema that silently vanished would read
+            // as "the model ignored the format" in every downstream report.
+            val body = jsonMapper().writeValueAsString(params._body())
+            assertTrue(body.contains("leftoverDocIds"), "nested schema must reach the wire: $body")
+            assertTrue(body.contains("${'$'}schema"), "the draft key must not be dropped: $body")
+        }
+
+        @Test
+        fun `json_object stays schema-less`() {
+            val opts = OpenAiChatOptions(model = "gpt-test", responseFormatKind = OpenAiResponseFormatKind.JSON_OBJECT)
+
+            val params = model.createRequest(Prompt(listOf(UserMessage("answer")), opts), opts)
+
+            assertTrue(params.responseFormat().get().isJsonObject())
         }
     }
 

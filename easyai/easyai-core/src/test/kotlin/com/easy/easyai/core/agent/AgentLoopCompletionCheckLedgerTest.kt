@@ -1,6 +1,11 @@
 package com.easy.easyai.core.agent
 
 import com.easy.easyai.api.config.ChatModelFactory
+import com.easy.easyai.api.llm.DefaultChatOptions
+import com.easy.easyai.api.llm.ToolCallback
+import com.easy.easyai.api.model.ModelOptions
+import com.easy.easyai.api.model.ModelProviderConfig
+import com.easy.easyai.api.model.ModelProviderInfo.Protocol
 import com.easy.easyai.core.event.AgentEndEvent
 import com.easy.easyai.core.event.AgentEvent
 import com.easy.easyai.core.event.UserMessageAddedEvent
@@ -13,6 +18,8 @@ import com.easy.easyai.core.tool.DefaultToolExecutionEngine
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.tool.ToolUpdate
+import com.easy.easyai.core.validation.OutputSchemaCompletionCheck
+import com.easy.easyai.core.validation.OutputSchemaValidator
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
@@ -133,11 +140,12 @@ class AgentLoopCompletionCheckLedgerTest {
         chatModel: ChatModel,
         checks: List<AgentCompletionCheck>,
         events: CopyOnWriteArrayList<AgentEvent>,
+        factory: ChatModelFactory = createMockChatModelFactory(chatModel),
     ): DefaultAgentService {
         val promptService = mockk<PromptTemplateService>(relaxed = true)
         every { promptService.build(any(), any()) } returns "test prompt"
         return DefaultAgentService(
-            chatModelFactories = listOf(createMockChatModelFactory(chatModel)),
+            chatModelFactories = listOf(factory),
             messageConverter = DefaultMessageConverter(),
             toolExecutor = DefaultToolExecutionEngine(),
             promptTemplateService = promptService,
@@ -154,17 +162,28 @@ class AgentLoopCompletionCheckLedgerTest {
         checks: List<AgentCompletionCheck>,
         maxIterations: Int,
         tools: List<com.easy.easyai.core.tool.ToolDefinition> = emptyList(),
-    ): Run {
-        llmCalls = 0
-        val events = CopyOnWriteArrayList<AgentEvent>()
-        val context = AgentContext(
+    ): Run = runWith(
+        AgentContext(
             agentId = "test",
             customInstructions = "test",
             tools = tools,
             maxIterations = maxIterations,
-        )
+        ),
+        chatModel,
+        checks,
+    )
+
+    /** Run [context] against [chatModel] with a caller-supplied factory, so a test can read what each turn asked for. */
+    private suspend fun runWith(
+        context: AgentContext,
+        chatModel: ChatModel,
+        checks: List<AgentCompletionCheck>,
+        factory: ChatModelFactory = createMockChatModelFactory(chatModel),
+    ): Run {
+        llmCalls = 0
+        val events = CopyOnWriteArrayList<AgentEvent>()
         val runner = AgentRunner(
-            agent = Agent(context, servicesWith(chatModel, checks, events)),
+            agent = Agent(context, servicesWith(chatModel, checks, events, factory)),
             messages = mutableListOf()
         )
         runner.prompt(listOf(UserMessage("do work"))).result()
@@ -288,6 +307,69 @@ class AgentLoopCompletionCheckLedgerTest {
 
             val events = runAgent(chatModel, listOf(check), maxIterations = 1)
 
+            assertEquals(AgentCompletionCheck.END_REASON_STALLED, endReasonOf(events.events))
+        }
+    }
+
+    @Nested
+    inner class `structured output repair turn` {
+
+        private val schema = """{"type":"object","required":["answer"],"properties":{"answer":{"type":"string"}}}"""
+
+        private fun chatRow() = ModelProviderConfig(
+            id = "cfg-1",
+            name = "test",
+            protocol = Protocol.OPENAI,
+            isCustom = false,
+            modelId = "qwen-test",
+            options = ModelOptions(temperature = 0.7, maxTokens = 1_000),
+        )
+
+        /** A factory that records what each turn asked the protocol layer to send. */
+        private fun recordingFactory(
+            chatModel: ChatModel,
+            asked: MutableList<Pair<Double?, Int>>,
+        ): ChatModelFactory {
+            val factory = mockk<ChatModelFactory>(relaxed = true)
+            every { factory.supports(any()) } returns true
+            every { factory.create(any(), any()) } returns chatModel
+            every { factory.build(any(), any(), any()) } answers {
+                val config = firstArg<ModelProviderConfig>()
+                asked.add(config.options?.temperature to secondArg<List<ToolCallback>>().size)
+                DefaultChatOptions(model = config.modelId)
+            }
+            return factory
+        }
+
+        @Test
+        fun `the last schema nudge is sent as a repair turn`() = runBlocking {
+            val asked = mutableListOf<Pair<Double?, Int>>()
+            val chatModel = createMockChatModel(createMockChatResponse(text = "分析完成，总体偏乐观。"))
+            val context = AgentContext(
+                agentId = "test",
+                customInstructions = "test",
+                sessionId = "s-repair",
+                modelConfig = chatRow(),
+                tools = listOf(createTestTool()),
+                outputSchema = schema,
+                maxIterations = 20,
+            )
+
+            // maxRetries = 1 makes the single retry nudge the check's last one. This asserts the
+            // wiring, not just the runner: the loop used to compare attempts against maxNudges(),
+            // a value the check never reaches because it Stalls first, so the repair turn was dead.
+            val events = runWith(
+                context, chatModel,
+                listOf(OutputSchemaCompletionCheck(OutputSchemaValidator(), maxRetries = 1)),
+                recordingFactory(chatModel, asked),
+            )
+
+            assertEquals(2, events.llmCalls)
+            assertEquals(
+                listOf<Pair<Double?, Int>>(0.7 to 1, 0.1 to 0),
+                asked,
+                "only the final round drops the tool schemas and pins sampling",
+            )
             assertEquals(AgentCompletionCheck.END_REASON_STALLED, endReasonOf(events.events))
         }
     }

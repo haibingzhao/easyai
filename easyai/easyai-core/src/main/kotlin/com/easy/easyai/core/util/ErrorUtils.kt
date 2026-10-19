@@ -3,6 +3,7 @@ package com.easy.easyai.core.util
 import com.easy.easyai.core.agent.ContentFilteredException
 import com.easy.easyai.core.agent.LlmEndpointUnavailableException
 import com.easy.easyai.core.agent.QuotaExhaustedException
+import com.easy.easyai.core.agent.ResponseFormatUnsupportedException
 import java.net.SocketException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeoutException
@@ -22,6 +23,12 @@ fun isRetryableError(e: Exception): Boolean {
     // matches none of the text checks below and the "retryable unless clearly a client error"
     // fallback would offer a retry that cannot succeed.
     if (e is QuotaExhaustedException) {
+        return false
+    }
+    // A refused response format is a capability the model does not answer to. Its message is Chinese
+    // and names no status code, so the fallback below would read it as retryable and offer a retry
+    // that re-triggers the same 400 until the model row is edited.
+    if (e is ResponseFormatUnsupportedException) {
         return false
     }
     // An open circuit means the endpoint kept failing, not that this request is doomed:

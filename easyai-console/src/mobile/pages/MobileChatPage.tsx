@@ -58,8 +58,8 @@ export const MobileChatPage: React.FC = () => {
   const clearSelectedMember = useTeamStore((s) => s.clearSelectedMember);
 
   useChatBootstrap();
-  const { pollNow } = useSessionRecovery(runningSessionId);
-  useVisibilityReconnect(pollNow);
+  const { reattach } = useSessionRecovery(runningSessionId);
+  useVisibilityReconnect(reattach);
 
   const { containerRef, onScroll, scrollToBottom, followEnabled, resumeFollow, activeUserMessage } =
     useMessageAutoScroll();

@@ -181,8 +181,19 @@ internal class MemoryWriteTool(
             return errorResult("Error: Type '$type' is not available in the current domain. Use: ${validTypes.joinToString(", ") { it.dirName }}.")
         }
 
-        // Name dedup check: the type is already validated, so resolve the key directly
-        if (store.exists(name, scope, owner, memoryType)) {
+        // Name dedup check: the type is already validated, so resolve the key directly. Archived
+        // visibility is part of this check: a consolidated source is stored under the same key as an
+        // active entry, so a name that only matches history looks free to an active-only lookup, and the
+        // upsert below would revive it as a live duplicate of the merged entry that absorbed it.
+        val keyOccupant = store.findByName(name, scope, owner, memoryType, includeArchived = true)
+        if (keyOccupant != null) {
+            if (keyOccupant.archived) {
+                return errorResult(
+                    "Error: '$name' is consolidated history (level ${keyOccupant.level}), absorbed by the merged " +
+                        "entry ${keyOccupant.mergedInto ?: "unknown"}. History is read-only — correct the merged " +
+                        "entry instead, or write a different name."
+                )
+            }
             return errorResult("Entry '$name' already exists in ${scope.name.lowercase()} scope. Use action='update' to modify it.")
         }
 
@@ -357,14 +368,6 @@ internal class MemoryWriteTool(
             }
         }
         return result
-    }
-
-    private fun coerceToStringList(value: Any?): Any? {
-        if (value !is String) return value
-        return runCatching {
-            val node = SharedObjectMapper.instance.readTree(value)
-            if (node.isArray) node.toList().map { it.asString() } else listOf(value)
-        }.getOrElse { listOf(value) }
     }
 
     private fun resolveScope(scopeStr: String?): MemoryScope = when (scopeStr?.lowercase()) {

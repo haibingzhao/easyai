@@ -25,4 +25,18 @@ interface MemoryConsolidationSettingsStore {
      * so materializing the (small) list once per tick is fine.
      */
     suspend fun listEnabled(): List<MemoryConsolidationUserSettings>
+
+    /**
+     * Fold one slice's post-run memory into the user's row, so the next scan can tell "nothing new since
+     * the last pass" and "the last passes found nothing to merge" apart from fresh work.
+     *
+     * Skipped when the user has no row at all: a manual run by somebody who never opened the settings
+     * page must not create one, because an absent row *is* "off, never configured". Read-modify-write,
+     * so a settings edit landing inside this window wins — the next run recomputes the fingerprint
+     * anyway, while a lost threshold edit would not come back on its own.
+     */
+    suspend fun recordSliceState(userId: String, sliceKey: String, state: MemoryConsolidationSliceState) {
+        val current = get(userId) ?: return
+        save(current.copy(sliceStates = current.sliceStates + (sliceKey to state)))
+    }
 }

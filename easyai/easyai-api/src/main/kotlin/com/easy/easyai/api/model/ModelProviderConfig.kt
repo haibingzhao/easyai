@@ -82,7 +82,12 @@ data class SaveModelProviderConfigRequest(
 /**
  * Model generation options.
  *
- * @property temperature Sampling temperature (0.0 - 2.0). Default 0.7.
+ * @property temperature Sampling temperature. Null — the default — means the field is not sent at
+ *   all and the provider's own per-model default applies (see the protocol adapters'
+ *   `temperature?.let` guards). Range and default are both model-specific: vendor defaults span
+ *   0 to 1.0 and Anthropic caps the range at 1.0, so a number stored here is only what was
+ *   *requested* — it is never proof of what the gateway applied.
+ *   Rows saved before this field became nullable carry an explicit 0.7 and keep sending it.
  * @property maxTokens Maximum output tokens in raw token count (e.g. 16384 = 16K). Default 16384.
  * @property thinking Whether to enable extended thinking / reasoning. Default false.
  * @property effort Controls overall token budget across all response types (text, tools, thinking).
@@ -93,7 +98,7 @@ data class SaveModelProviderConfigRequest(
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class ModelOptions(
-    val temperature: Double = 0.7,
+    val temperature: Double? = null,
     val maxTokens: Int = 16_384,
     val thinking: Boolean = false,
     val effort: String? = null,
@@ -112,10 +117,17 @@ data class ModelCapabilities(
     val vision: Boolean = false,
     /**
      * API-level structured output support. Null means undeclared — treated as
-     * [StructuredOutputSupport.JSON_SCHEMA] (current enforcement behavior). Mark models
-     * explicitly when their gateway rejects response_format/output_config (HTTP 400).
+     * [StructuredOutputSupport.NONE], so nothing goes on the wire and the schema is conveyed by the
+     * prompt (see [StructuredOutputPolicy]). Mark models explicitly when their gateway accepts
+     * `response_format`/`output_config`, and equally explicitly when it answers HTTP 400.
      */
     val structuredOutput: StructuredOutputSupport? = null,
+    /**
+     * Whether sampling parameters may be sent to this model at all. Null means undeclared — treated
+     * as [SamplingSupport.SETTABLE] (current behavior). Mark a model `NOT_SETTABLE` when its gateway
+     * rejects the field outright, so the adapter omits it instead of failing the call.
+     */
+    val sampling: SamplingSupport? = null,
     /**
      * Whether the model reasons and accepts tool calls. Null/true means capable (legacy rows
      * predate the flag); explicit false marks single-forward decision models (e.g. Bailian
@@ -136,6 +148,17 @@ data class ModelCapabilities(
  * @property NONE No API-level enforcement; rely on prompt + OutputSchemaValidator fallback.
  */
 enum class StructuredOutputSupport { JSON_SCHEMA, JSON_OBJECT, NONE }
+
+/**
+ * Whether a model accepts sampling parameters (temperature and friends) on the request.
+ *
+ * @property SETTABLE The value may be sent; this is what an undeclared capability means.
+ * @property NOT_SETTABLE A request carrying sampling parameters fails. Current-generation reasoning
+ *   endpoints on both major vendors do this — some reject any value including the model's own
+ *   default, others reject only non-default ones. easyai cannot tell those two apart (it does not
+ *   know the vendor's default), so both are handled the same way: send nothing.
+ */
+enum class SamplingSupport { SETTABLE, NOT_SETTABLE }
 
 /**
  * A group of model configurations sharing the same connection settings.

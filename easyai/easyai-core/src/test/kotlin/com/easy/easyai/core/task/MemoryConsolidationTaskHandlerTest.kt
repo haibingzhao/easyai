@@ -2,15 +2,21 @@ package com.easy.easyai.core.task
 
 import com.easy.easyai.core.memory.ConsolidationReport
 import com.easy.easyai.core.memory.MemoryConsolidationAgent
+import com.easy.easyai.core.memory.MemoryIndexEntry
 import com.easy.easyai.core.memory.MemoryOwnerContext
 import com.easy.easyai.core.memory.MemoryScope
+import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.memory.MemoryType
 import com.easy.easyai.core.memory.consolidation.MemoryConsolidationSessionTitlePort
+import com.easy.easyai.core.memory.consolidation.MemoryConsolidationSettingsStore
+import com.easy.easyai.core.memory.consolidation.MemoryConsolidationSliceState
+import com.easy.easyai.core.memory.consolidation.MemoryConsolidationUserSettings
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import java.nio.file.Path
 import kotlin.test.assertEquals
@@ -20,14 +26,72 @@ import kotlin.test.assertTrue
 /**
  * Tests [MemoryConsolidationTaskHandler]'s payload restoration: it must rebuild the slice, owner,
  * visibility set, type and dry-run flag from the persisted [AsyncTask.payload] (so a task survives a
- * restart), mint/link the hidden session, and serialize the agent's report into the task result.
+ * restart), mint/link the hidden session, serialize the agent's report into the task result, and record
+ * the per-slice memory the scheduler needs so the same question is not asked again tomorrow.
  * The agent itself is mocked.
  */
 class MemoryConsolidationTaskHandlerTest {
 
+    private companion object {
+        const val MILLIS_PER_DAY = 24L * 60 * 60 * 1000
+    }
+
     private val agent = mockk<MemoryConsolidationAgent>(relaxed = true)
     private val taskStore = mockk<AsyncTaskStore>(relaxed = true)
     private val titlePort = mockk<MemoryConsolidationSessionTitlePort>(relaxed = true)
+    private val memoryStore = mockk<MemoryStore>(relaxed = true)
+    private val settingsStore = mockk<MemoryConsolidationSettingsStore>(relaxed = true)
+    private val recordedKeys = mutableListOf<String>()
+
+    /** The handler wired for the bookkeeping path, with backoff days as small numbers a test can assert. */
+    private fun recordingHandler() = MemoryConsolidationTaskHandler(
+        agent, taskStore, titlePort, memoryStore, settingsStore, backoffBaseDays = 7, backoffMaxDays = 30
+    )
+
+    private fun realTask(mergedWritten: Int, previousStreak: Int = 0): Pair<AsyncTask, MemoryConsolidationSliceState> {
+        coEvery { agent.consolidate(any(), any(), any(), any(), any(), any()) } returns
+            ConsolidationReport(
+                type = MemoryType.EXPERIENCE_LESSONS,
+                scope = MemoryScope.GLOBAL,
+                activeBefore = 20,
+                mergedWritten = mergedWritten,
+                archived = if (mergedWritten > 0) 4 else 0
+            )
+        coEvery { memoryStore.listActiveIndex(MemoryScope.GLOBAL, any(), MemoryType.EXPERIENCE_LESSONS) } returns
+            listOf(
+                MemoryIndexEntry("doc-2", "b", MemoryType.EXPERIENCE_LESSONS, 0, 500, ""),
+                MemoryIndexEntry("doc-1", "a", MemoryType.EXPERIENCE_LESSONS, 0, 500, "")
+            )
+        val previous = MemoryConsolidationSliceState(zeroGainStreak = previousStreak)
+        recordedStates.clear()
+        recordedKeys.clear()
+        coEvery { settingsStore.recordSliceState(any(), any(), any()) } coAnswers {
+            recordedKeys += secondArg<String>()
+            recordedStates += thirdArg<MemoryConsolidationSliceState>()
+        }
+        coEvery { settingsStore.get("alice") } returns MemoryConsolidationUserSettings(
+            userId = "alice",
+            enabled = true,
+            sliceStates = mapOf("global||experience_lessons" to previous)
+        )
+        val task = task(
+            mapOf(
+                MemoryConsolidationTaskHandler.KEY_SCOPE to "global",
+                MemoryConsolidationTaskHandler.KEY_USER_ID to "alice",
+                MemoryConsolidationTaskHandler.KEY_TYPE to "experience_lessons"
+            )
+        )
+        return task to previous
+    }
+
+    /** Every state this test's handler tried to record, in order — a loop may record several. */
+    private val recordedStates = mutableListOf<MemoryConsolidationSliceState>()
+
+    private fun recorded(): MemoryConsolidationSliceState {
+        assertTrue(recordedStates.isNotEmpty(), "no slice state was recorded")
+        assertEquals("global||experience_lessons", recordedKeys.last())
+        return recordedStates.last()
+    }
 
     private fun task(payload: Map<String, Any?>, sessionId: String? = "session-1", retryCount: Int = 0) = AsyncTask(
         id = "task-1",
@@ -164,5 +228,126 @@ class MemoryConsolidationTaskHandlerTest {
             )
         )
         assertTrue(outcome is TaskOutcome.Failure)
+    }
+
+    /**
+     * The scheduler can only tell "the store grew" from "we just curated it, and merged entries still
+     * count" if a finished run leaves a record behind. These are those records.
+     */
+    @Nested
+    inner class Suppression {
+
+        @Test
+        fun `a run that archived nothing starts the delay and absorbs its own output into the baseline`() = runTest {
+            val (task, _) = realTask(mergedWritten = 0)
+
+            recordingHandler().execute(task)
+
+            val state = recorded()
+            assertEquals(1, state.zeroGainStreak)
+            assertEquals(MemoryIndexEntry.fingerprint(listOf("doc-1", "doc-2")), state.activeFingerprint,
+                "the set is measured after the run, so a merge never re-dirties its own slice")
+            val days = ((state.nextEligibleAt!! - state.lastRunAt!!) / MILLIS_PER_DAY)
+            assertEquals(7L, days, "first zero-gain run is delayed a week")
+        }
+
+        @Test
+        fun `the delay doubles per zero-gain run and stops at the cap`() = runTest {
+            listOf(1 to 14L, 2 to 28L, 3 to 30L, 8 to 30L).forEach { (previousStreak, expectedDays) ->
+                val (task, _) = realTask(mergedWritten = 0, previousStreak = previousStreak)
+
+                recordingHandler().execute(task)
+
+                val state = recorded()
+                assertEquals(previousStreak + 1, state.zeroGainStreak)
+                assertEquals(
+                    expectedDays,
+                    (state.nextEligibleAt!! - state.lastRunAt!!) / MILLIS_PER_DAY,
+                    "streak $previousStreak should delay $expectedDays days"
+                )
+            }
+        }
+
+        @Test
+        fun `a run that merged clears the delay`() = runTest {
+            val (task, _) = realTask(mergedWritten = 1, previousStreak = 3)
+
+            recordingHandler().execute(task)
+
+            val state = recorded()
+            assertEquals(0, state.zeroGainStreak)
+            kotlin.test.assertNull(state.nextEligibleAt, "work landed, so the next scan is free to ask again")
+        }
+
+        @Test
+        fun `a preview records nothing`() = runTest {
+            coEvery { agent.consolidate(any(), any(), any(), any(), any(), any()) } returns
+                ConsolidationReport(
+                    type = MemoryType.EXPERIENCE_LESSONS, scope = MemoryScope.GLOBAL, activeBefore = 20, dryRun = true
+                )
+
+            recordingHandler().execute(
+                task(
+                    mapOf(
+                        MemoryConsolidationTaskHandler.KEY_SCOPE to "global",
+                        MemoryConsolidationTaskHandler.KEY_USER_ID to "alice",
+                        MemoryConsolidationTaskHandler.KEY_TYPE to "experience_lessons",
+                        MemoryConsolidationTaskHandler.KEY_DRY_RUN to true
+                    )
+                )
+            )
+
+            coVerify(exactly = 0) { settingsStore.recordSliceState(any(), any(), any()) }
+        }
+
+        @Test
+        fun `bookkeeping never fails a run that succeeded`() = runTest {
+            coEvery { agent.consolidate(any(), any(), any(), any(), any(), any()) } returns
+                ConsolidationReport(type = MemoryType.EXPERIENCE_LESSONS, scope = MemoryScope.GLOBAL, activeBefore = 2)
+            coEvery { memoryStore.listActiveIndex(any(), any(), any()) } throws IllegalStateException("backend down")
+
+            val outcome = recordingHandler().execute(
+                task(
+                    mapOf(
+                        MemoryConsolidationTaskHandler.KEY_SCOPE to "global",
+                        MemoryConsolidationTaskHandler.KEY_USER_ID to "alice",
+                        MemoryConsolidationTaskHandler.KEY_TYPE to "experience_lessons"
+                    )
+                )
+            )
+
+            assertTrue(outcome is TaskOutcome.Success)
+            coVerify(exactly = 0) { settingsStore.recordSliceState(any(), any(), any()) }
+        }
+
+        @Test
+        fun `the result map carries the two-pass numbers`() = runTest {
+            coEvery { agent.consolidate(any(), any(), any(), any(), any(), any()) } returns
+                ConsolidationReport(
+                    type = MemoryType.EXPERIENCE_LESSONS,
+                    scope = MemoryScope.GLOBAL,
+                    activeBefore = 20,
+                    clustersProposed = 6,
+                    mergedWritten = 4,
+                    archived = 9,
+                    droppedGroups = 1,
+                    overTarget = 2
+                )
+
+            val outcome = MemoryConsolidationTaskHandler(agent, taskStore, titlePort).execute(
+                task(
+                    mapOf(
+                        MemoryConsolidationTaskHandler.KEY_SCOPE to "global",
+                        MemoryConsolidationTaskHandler.KEY_USER_ID to "alice",
+                        MemoryConsolidationTaskHandler.KEY_TYPE to "experience_lessons"
+                    )
+                )
+            )
+
+            val result = (outcome as TaskOutcome.Success).result
+            assertEquals(6, result["clustersProposed"])
+            assertEquals(1, result["droppedGroups"])
+            assertEquals(2, result["overTarget"])
+        }
     }
 }

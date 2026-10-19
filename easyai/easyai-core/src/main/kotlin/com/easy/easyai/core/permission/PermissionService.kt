@@ -490,8 +490,13 @@ class PermissionService(
     companion object {
         private val DEFAULT_PATTERN_KEYS = listOf("command", "cmd", "path", "file", "filepath", "file_path", "url")
 
-        /** Timeout for a single AI risk check LLM call. */
-        private const val AI_CHECK_TIMEOUT_MS = 15_000L
+        /**
+         * Ceiling for one AI risk check. A checker budgets its own rounds (an unparsable verdict is
+         * re-asked once, and each round bounds itself), so this is not the per-round timeout — it is
+         * the guard against an implementation that never returns, and has to leave room for both of
+         * the default checker's rounds.
+         */
+        private const val AI_CHECK_TIMEOUT_MS = 35_000L
 
         /** Upper bound of cached AI risk check results. */
         private const val MAX_AI_RISK_CACHE_ENTRIES = 200

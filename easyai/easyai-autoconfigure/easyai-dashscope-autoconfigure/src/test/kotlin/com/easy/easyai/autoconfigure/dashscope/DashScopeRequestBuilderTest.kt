@@ -151,8 +151,21 @@ internal class DashScopeRequestBuilderTest {
     inner class `structured output` {
 
         @Test
-        fun `declares json schema when support is undeclared`() {
+        fun `sends no response format when support is undeclared`() {
+            // StructuredOutputPolicy reads an undeclared row as NONE, so neither the format nor the
+            // schema leaves the process; the loop conveys the schema in the prompt and validates it.
             val options = dashScopeOptions(config(structuredOutput = null), schema)
+
+            assertNull(options.outputSchema)
+            assertEquals(DashScopeResponseFormatKind.NONE, options.responseFormatKind)
+        }
+
+        @Test
+        fun `sends json schema when the row declares it`() {
+            val options = dashScopeOptions(
+                config(structuredOutput = StructuredOutputSupport.JSON_SCHEMA),
+                schema
+            )
 
             assertEquals(schema, options.outputSchema)
             assertEquals(DashScopeResponseFormatKind.JSON_SCHEMA, options.responseFormatKind)

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { modelConfigService } from '@/services/model-config-service';
+import { initialModelOptions } from '@/constants/model-options';
 import type { ModelCapabilities, ModelCatalogEntry, ModelOptions } from '@/types/settings';
 
 export type CatalogPrefillState = 'idle' | 'hit' | 'miss';
@@ -13,14 +14,15 @@ const DEFAULT_CONTEXT_TOKEN = 204_800;
  * Prefill a model form from the global model catalog.
  *
  * Watches the effective model id, debounces a lookup, and on a hit fills the capability
- * toggles and token limits exactly once per id — later manual edits stick. `thinking` and
- * `temperature` are deliberately never touched: the catalog's thinking flag is a selection
- * hint, while the form's switch changes runtime behavior and cost.
+ * toggles and token limits exactly once per id — later manual edits stick. `thinking` is
+ * deliberately never touched: the catalog's thinking flag is a selection hint, while the form's
+ * switch changes runtime behavior and cost. `temperature` is only ever set by the form itself,
+ * because an absent one now means "omit" rather than "backend default".
  */
 export function useModelCatalogPrefill(modelId: string) {
   const [state, setState] = useState<CatalogPrefillState>('idle');
   const [entry, setEntry] = useState<ModelCatalogEntry | null>(null);
-  const [options, setOptionsState] = useState<ModelOptions>({});
+  const [options, setOptionsState] = useState<ModelOptions>(initialModelOptions);
   const [capabilities, setCapabilitiesState] = useState<ModelCapabilities>({});
   const filledForRef = useRef('');
 

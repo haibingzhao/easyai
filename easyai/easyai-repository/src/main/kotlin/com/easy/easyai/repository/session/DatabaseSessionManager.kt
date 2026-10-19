@@ -278,7 +278,13 @@ class DatabaseSessionManager(
         // system); session rows below stay keyed by the caller's own id.
         val callerOwners = agentContext.effectiveOwners
         val projectPath = agentContext.projectPath ?: toolResolver.resolveProjectPath(projectId, callerId)
-        val explicitTools = agentContext.tools.takeIf { it.isNotEmpty() }
+        // An empty `tools` means "the caller said nothing", so a caller that means zero tools has to
+        // say so out loud; otherwise every schema-only background run silently inherits the default bag.
+        val explicitTools = if (agentContext.noTools) {
+            emptyList()
+        } else {
+            agentContext.tools.takeIf { it.isNotEmpty() }
+        }
         // Look the agent up before touching any whitelist: the rows belong to the bucket the agent
         // itself lives in, which for a built-in or shared agent is not the caller's. An id with no
         // row falls back to the seeded system bucket, whose whitelist is the one that applies.

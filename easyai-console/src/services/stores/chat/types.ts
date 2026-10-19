@@ -108,6 +108,21 @@ export interface CompactionBlockData {
 
 export type StreamingBlock = ThinkingBlockData | TextBlockData | ToolBlockData | CompactionBlockData;
 
+/**
+ * Isolated live preview of the single in-flight round, sourced from the watch tap during
+ * recovery (see `useSessionRecovery`). Deliberately kept separate from `streamingBlocks`:
+ * the DB poll owns committed rounds and clears `streamingBlocks` on every load, so writing
+ * the tap there would be clobbered each tick. The preview never commits to `messages` — it
+ * is rendered only while its `messageId` is absent from `messages`, and the poll's committed
+ * copy supersedes it, so the same round can never render twice.
+ */
+export interface LivePreview {
+  /** The in-flight round's messageId; null until a delta carrying one arrives. */
+  messageId: string | null;
+  blocks: StreamingBlock[];
+  toolOutputs: Record<string, string>;
+}
+
 /** LLM timeout retry state for UI indicator display */
 export interface RetryInfo {
   attempt: number;

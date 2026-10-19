@@ -2,6 +2,7 @@ package com.easy.easyai.swarm.runtime
 
 import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.api.model.ModelProviderConfig
+import com.easy.easyai.api.model.SamplingIntent
 import com.easy.easyai.common.textio.template.TemplateRenderer
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.AgentDefinition
@@ -59,6 +60,12 @@ class SwarmAgentResolver(
         modelConfigCache: List<ModelProviderConfig>? = null,
         inputFromVars: Map<String, String> = emptyMap(),
         outputSchemaOverride: String? = null,
+        /**
+         * How much variance this phase may have. Swarm runs one agent definition through several
+         * phases with different jobs — dispatch decisions, debate turns, a final verdict — so the
+         * phase declares its intent instead of inheriting one number from the model row.
+         */
+        samplingIntent: SamplingIntent = SamplingIntent.FOLLOW_CONFIG,
     ): Pair<AgentContext, List<ToolDefinition>> {
         // 1. Load AgentDefinition from cache/DB, or synthesize from inline spec
         val agentDef = if (spec.isInline) {
@@ -135,6 +142,7 @@ class SwarmAgentResolver(
             modelConfig = modelConfig,
             maxIterations = spec.maxIterations,
             maxRetries = spec.maxRetries,
+            samplingIntent = samplingIntent,
             outputSchema = outputSchemaOverride ?: agentDef.outputSchema,
             outputSchemaMultiTurn = agentDef.outputSchemaMultiTurn,
             swarmRunId = run.id,

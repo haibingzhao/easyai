@@ -1,9 +1,11 @@
 package com.easy.easyai.autoconfigure.r2dbc
 
 import com.easy.easyai.core.memory.MemoryConsolidationSettings
+import com.easy.easyai.core.memory.MemoryIndexEntry
 import com.easy.easyai.core.memory.MemoryScope
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.memory.MemoryType
+import com.easy.easyai.core.memory.consolidation.MemoryConsolidationSliceState
 import com.easy.easyai.core.memory.consolidation.MemoryConsolidationUserSettings
 import com.easy.easyai.core.model.ProjectInfo
 import com.easy.easyai.core.task.AsyncTask
@@ -20,13 +22,16 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import java.time.LocalDateTime
+import java.time.ZoneId
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * Tests what the consolidation planner proposes: the threshold gate, slice expansion across global and
- * project memory, duplicate suppression against pending tasks, and the draft payload.
+ * Tests what the consolidation planner proposes: the threshold gate, the two suppression gates that a
+ * count alone cannot express (nothing arrived since the last pass / the last pass gained nothing), slice
+ * expansion across global and project memory, duplicate suppression against pending tasks, and the draft
+ * payload.
  *
  * Due-ness and submission are no longer in scope here — [ScheduledTaskRunnerTest] covers those.
  */
@@ -66,17 +71,31 @@ class MemoryConsolidationTaskPlannerTest {
         )
     }
 
+    /** One listing answers counts, fingerprints and everything else, so that is the call to stub. */
+    private fun indexRows(count: Int, type: MemoryType = MemoryType.EXPERIENCE_LESSONS) =
+        (1..count).map { index ->
+            MemoryIndexEntry(
+                docId = "${type.dirName}-$index",
+                name = "entry-$index",
+                type = type,
+                level = 0,
+                contentChars = 500,
+                blurb = "desc $index"
+            )
+        }
+
     /**
-     * Only [MemoryType.EXPERIENCE_LESSONS] is over the default threshold of 2; every other type is
-     * absent from the counts, so a plan has exactly one candidate slice per scope. The planner measures
-     * a slice with one count query, so that is the call to stub.
+     * Only [MemoryType.EXPERIENCE_LESSONS] is over the default threshold of 2; every other type has no
+     * rows, so a plan has exactly one candidate slice per scope.
      */
     private fun givenOverThreshold(count: Int = 2) {
-        coEvery { memoryStore.countActiveByType(MemoryScope.GLOBAL, any()) } returns
-            mapOf(MemoryType.EXPERIENCE_LESSONS to count)
-        coEvery { memoryStore.countActiveByType(MemoryScope.PROJECT, any()) } returns
-            mapOf(MemoryType.EXPERIENCE_LESSONS to count)
+        val rows = indexRows(count)
+        coEvery { memoryStore.listActiveIndex(MemoryScope.GLOBAL, any(), null) } returns rows
+        coEvery { memoryStore.listActiveIndex(MemoryScope.PROJECT, any(), null) } returns rows
     }
+
+    /** The planner resolves a LocalDateTime through the system zone; the test must not invent its own. */
+    private fun epoch(at: LocalDateTime): Long = at.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
     private fun pendingTask(scope: String, type: String, projectPath: String? = null) = AsyncTask(
         id = "existing",
@@ -135,14 +154,14 @@ class MemoryConsolidationTaskPlannerTest {
     }
 
     @Test
-    fun `a slice costs one count query no matter how many types it holds`() = runBlocking {
+    fun `a slice costs one listing no matter how many types it holds`() = runBlocking {
         givenOverThreshold()
         val projects = listOf(ProjectInfo(id = "p1", name = "demo", path = "/tmp/demo"))
 
         planner().plan(context(projects = projects))
 
-        coVerify(exactly = 1) { memoryStore.countActiveByType(MemoryScope.GLOBAL, any()) }
-        coVerify(exactly = 1) { memoryStore.countActiveByType(MemoryScope.PROJECT, any()) }
+        coVerify(exactly = 1) { memoryStore.listActiveIndex(MemoryScope.GLOBAL, any(), null) }
+        coVerify(exactly = 1) { memoryStore.listActiveIndex(MemoryScope.PROJECT, any(), null) }
     }
 
     @Test
@@ -151,7 +170,7 @@ class MemoryConsolidationTaskPlannerTest {
         val pending = MemoryType.entriesFor("coding").map { pendingTask(scope = "global", type = it.dirName) }
 
         assertEquals(emptyList(), planner().plan(context(pending = pending)))
-        coVerify(exactly = 0) { memoryStore.countActiveByType(MemoryScope.GLOBAL, any()) }
+        coVerify(exactly = 0) { memoryStore.listActiveIndex(MemoryScope.GLOBAL, any(), null) }
     }
 
     @Test
@@ -223,5 +242,71 @@ class MemoryConsolidationTaskPlannerTest {
         val storeless = MemoryConsolidationTaskPlanner(MemoryConsolidationSettings(defaultThreshold = 2), null, projectStore)
 
         assertEquals(emptyList<TaskDraft>(), storeless.plan(context()))
+    }
+
+    @Test
+    fun `a slice untouched since the last pass is not asked the same question again`() = runBlocking {
+        // The count is still over threshold — merged entries stay active — so only the docId set tells
+        // "the store grew" apart from "nothing happened since we curated it".
+        val rows = indexRows(2)
+        coEvery { memoryStore.listActiveIndex(MemoryScope.GLOBAL, any(), null) } returns rows
+        coEvery { memoryStore.listActiveIndex(MemoryScope.PROJECT, any(), null) } returns emptyList()
+        val user = MemoryConsolidationUserSettings(
+            userId = "alice",
+            enabled = true,
+            sliceStates = mapOf(
+                "global||experience_lessons" to MemoryConsolidationSliceState(
+                    activeFingerprint = MemoryIndexEntry.fingerprint(rows.map { it.docId }),
+                    lastRunAt = epoch(now)
+                )
+            )
+        )
+
+        assertEquals(emptyList(), planner().plan(context(user = user)))
+    }
+
+    @Test
+    fun `a slice whose set did change is due again`() = runBlocking {
+        givenOverThreshold()
+        val user = MemoryConsolidationUserSettings(
+            userId = "alice",
+            enabled = true,
+            sliceStates = mapOf(
+                "global||experience_lessons" to MemoryConsolidationSliceState(activeFingerprint = 12345)
+            )
+        )
+
+        assertEquals(1, planner().plan(context(user = user)).size)
+    }
+
+    @Test
+    fun `a type in its zero-gain delay proposes nothing, and every deferred type skips the listing`() = runBlocking {
+        givenOverThreshold()
+        val deferred = MemoryType.entriesFor("coding").associate { memoryType ->
+            "global||${memoryType.dirName}" to
+                MemoryConsolidationSliceState(zeroGainStreak = 1, nextEligibleAt = epoch(now.plusDays(6)))
+        }
+        val user = MemoryConsolidationUserSettings(userId = "alice", enabled = true, sliceStates = deferred)
+
+        assertEquals(emptyList(), planner().plan(context(user = user)))
+        // The delay is checked before anything is read: a fully deferred slice must not cost a listing.
+        coVerify(exactly = 0) { memoryStore.listActiveIndex(MemoryScope.GLOBAL, any(), null) }
+    }
+
+    @Test
+    fun `a delay that has expired lets the slice through again`() = runBlocking {
+        givenOverThreshold()
+        val user = MemoryConsolidationUserSettings(
+            userId = "alice",
+            enabled = true,
+            sliceStates = mapOf(
+                "global||experience_lessons" to MemoryConsolidationSliceState(
+                    zeroGainStreak = 1,
+                    nextEligibleAt = epoch(now.minusSeconds(1))
+                )
+            )
+        )
+
+        assertEquals(1, planner().plan(context(user = user)).size)
     }
 }

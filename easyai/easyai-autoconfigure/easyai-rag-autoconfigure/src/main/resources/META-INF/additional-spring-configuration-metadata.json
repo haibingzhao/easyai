@@ -85,11 +85,39 @@
       "defaultValue": true
     },
     {
-      "name": "easyai.memory.consolidation.max-entries-per-batch",
+      "name": "easyai.memory.consolidation.max-grouping-prompt-chars",
       "type": "java.lang.Integer",
-      "description": "Max active entries fed to one prompt batch; a larger slice is split into sequential batches.",
+      "description": "Character budget of one grouping-pass prompt, which shows entry index rows (docId, name, blurb, level, stored size) and never bodies.",
       "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
-      "defaultValue": 200
+      "defaultValue": 120000
+    },
+    {
+      "name": "easyai.memory.consolidation.max-sources-per-group",
+      "type": "java.lang.Integer",
+      "description": "Largest cluster one merged entry may absorb.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 8
+    },
+    {
+      "name": "easyai.memory.consolidation.max-group-source-chars",
+      "type": "java.lang.Integer",
+      "description": "Summed stored size of one cluster's sources; a larger cluster is trimmed and, if it cannot fit, refused.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 12000
+    },
+    {
+      "name": "easyai.memory.consolidation.clusters-per-merge-call",
+      "type": "java.lang.Integer",
+      "description": "Clusters answered by one merge-pass prompt. Each answer re-emits every merged body, so this bounds output, not context.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 3
+    },
+    {
+      "name": "easyai.memory.consolidation.max-merge-prompt-chars-per-call",
+      "type": "java.lang.Integer",
+      "description": "Character budget of one merge-pass prompt (the source bodies it must rewrite).",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 40000
     },
     {
       "name": "easyai.memory.consolidation.max-archives-per-run",
@@ -101,16 +129,23 @@
     {
       "name": "easyai.memory.consolidation.max-iterations",
       "type": "java.lang.Integer",
-      "description": "Cap on agent-loop iterations for one batch answer; there is no tool phase to fit.",
+      "description": "Cap on agent-loop iterations for one prompt; there is no tool phase to fit.",
       "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
       "defaultValue": 6
     },
     {
       "name": "easyai.memory.consolidation.run-timeout-ms",
       "type": "java.lang.Long",
-      "description": "Wall-clock budget for one consolidation task.",
+      "description": "Wall-clock budget for one consolidation task: one grouping pass plus the merge prompts it queues.",
       "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
-      "defaultValue": 600000
+      "defaultValue": 1500000
+    },
+    {
+      "name": "easyai.memory.consolidation.dry-run-timeout-ms",
+      "type": "java.lang.Long",
+      "description": "Wall-clock budget for a preview, which an HTTP request waits on synchronously; a preview is grouping-only.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 120000
     },
     {
       "name": "easyai.memory.consolidation.default-threshold",
@@ -125,6 +160,34 @@
       "description": "Default daily scan cron (six-field Spring syntax).",
       "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
       "defaultValue": "0 0 3 * * *"
+    },
+    {
+      "name": "easyai.memory.consolidation.max-tasks-per-tick-per-user",
+      "type": "java.lang.Integer",
+      "description": "Max consolidation tasks one scan tick may queue for a single user.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 5
+    },
+    {
+      "name": "easyai.memory.consolidation.max-level",
+      "type": "java.lang.Integer",
+      "description": "Consolidation depth at which an entry stops being mergeable material; it stays active and searchable.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 3
+    },
+    {
+      "name": "easyai.memory.consolidation.zero-gain-backoff-base-days",
+      "type": "java.lang.Integer",
+      "description": "First delay after a run that archived nothing, doubled per repeat.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 7
+    },
+    {
+      "name": "easyai.memory.consolidation.zero-gain-backoff-max-days",
+      "type": "java.lang.Integer",
+      "description": "Ceiling of that doubling, so a permanently unmergeable slice is retried occasionally.",
+      "sourceType": "com.easy.easyai.autoconfigure.rag.MemoryConsolidationProperties",
+      "defaultValue": 30
     }
   ],
   "hints": []

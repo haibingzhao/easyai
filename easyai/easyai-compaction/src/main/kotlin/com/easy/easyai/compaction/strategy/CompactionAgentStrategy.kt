@@ -2,6 +2,7 @@ package com.easy.easyai.compaction.strategy
 
 import com.easy.easyai.api.model.ModelOptions
 import com.easy.easyai.api.model.ModelProviderConfig
+import com.easy.easyai.api.model.SamplingIntent
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.compaction.estimator.TokenEstimator
 import com.easy.easyai.compaction.model.CompactionContext
@@ -172,6 +173,9 @@ Rules:
         val agentContext = AgentContext(
             agentId = "compaction-agent",
             modelConfig = disableThinking(context.modelConfig),
+            // Summarising a window that is about to disappear is extraction, not conversation:
+            // two runs over the same history should agree on the numbers they carry forward.
+            samplingIntent = SamplingIntent.DETERMINISTIC,
             sessionId = null,
             tools = tools,
             maxIterations = MAX_ITERATIONS,

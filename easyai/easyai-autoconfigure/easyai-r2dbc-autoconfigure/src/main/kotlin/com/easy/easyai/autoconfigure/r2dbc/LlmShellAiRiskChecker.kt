@@ -3,18 +3,26 @@ package com.easy.easyai.autoconfigure.r2dbc
 import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatOptions
+import com.easy.easyai.api.llm.DefaultChatOptions
 import com.easy.easyai.api.model.ModelProviderConfig
+import com.easy.easyai.api.model.SamplingIntent
+import com.easy.easyai.api.model.SamplingPolicy
 import com.easy.easyai.core.permission.AiRiskResult
 import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.permission.ShellAiRiskChecker
+import com.easy.easyai.core.validation.JsonExtractor
 import org.slf4j.LoggerFactory
 import com.easy.easyai.api.llm.SystemMessage
 import com.easy.easyai.api.llm.UserMessage
 import com.easy.easyai.api.llm.Prompt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * LLM-backed [ShellAiRiskChecker].
@@ -23,7 +31,7 @@ import java.util.concurrent.ConcurrentHashMap
  * permission rules to a user-selected model and expects a strict JSON verdict:
  * `{"risky": true|false, "reason": "..."}`.
  *
- * Any failure (missing config, no factory, malformed output) degrades to a
+ * Any failure (missing config, no factory, malformed output even after one re-ask) degrades to a
  * non-allowed result so the permission flow falls back to the regular ASK.
  */
 class LlmShellAiRiskChecker(
@@ -59,32 +67,92 @@ class LlmShellAiRiskChecker(
         // an edited config hashes to a new key and gets a fresh model. Superseded entries are
         // never evicted on purpose: neither the SPI nor the SDK clients expose a close hook.
         val chatModel = chatModelCache.computeIfAbsent(config) { factory.create(it) }
+        // A verdict is a judgement, not a conversation: pin sampling from the row instead of
+        // inheriting whatever temperature the user tuned chat with. The number travels on the
+        // request, so the cached client stays keyed on the connection.
+        val options = DefaultChatOptions(
+            temperature = SamplingPolicy.decide(config, SamplingIntent.DETERMINISTIC).temperature
+        )
+        val userPrompt = buildUserPrompt(command, projectPath, rules)
+
+        when (val first = askForVerdict(chatModel, options, userPrompt)) {
+            is RoundOutcome.Decided -> return first.result
+
+            // A round that ran out of its budget means a slow or gone model, not a badly phrased
+            // answer. Re-asking pays the same wait for the same verdict, and the caller — a bash
+            // command waiting to run — would sit on it: 15 s of serial LLM time doubles to 30 s
+            // before the flow falls back to ASK. Only the correction round is worth that.
+            RoundOutcome.TimedOut -> return AiRiskResult(allowed = false, reason = "AI 检查超时")
+
+            is RoundOutcome.Unparsable -> {
+                // One re-ask before degrading: an unparsable reply used to be thrown away outright, and
+                // the cost of giving up is an ASK prompt on a command that may well be safe.
+                logger.info("AI risk check produced no parsable verdict; re-asking once")
+                return when (val second = askForVerdict(chatModel, options, userPrompt + VERDICT_CORRECTION)) {
+                    is RoundOutcome.Decided -> second.result
+                    is RoundOutcome.TimedOut -> AiRiskResult(allowed = false, reason = "AI 检查超时")
+                    is RoundOutcome.Unparsable -> AiRiskResult(
+                        allowed = false,
+                        reason = "AI 检查输出无法解析"
+                    ).also {
+                        logger.warn("AI risk check still unparsable after the re-ask; treating as risky")
+                    }
+                }
+            }
+        }
+    }
+
+    /** One verdict round's answer: a verdict, or which kind of non-answer the caller has to weigh. */
+    private sealed interface RoundOutcome {
+        data class Decided(val result: AiRiskResult) : RoundOutcome
+        data object TimedOut : RoundOutcome
+        data object Unparsable : RoundOutcome
+    }
+
+    /**
+     * One verdict round. [RoundOutcome.TimedOut] is the round's own budget elapsing,
+     * [RoundOutcome.Unparsable] a reply that carried no parsable `{"risky": …}` payload, so the caller
+     * can tell a second opinion from a second wait; a transport failure propagates to the permission
+     * flow exactly as before.
+     *
+     * The budget is per round rather than shared: the caller may run this twice in series, and a
+     * first round that ate the whole allowance would make the re-ask a guaranteed timeout instead
+     * of a second opinion.
+     */
+    private suspend fun askForVerdict(
+        chatModel: ChatModel,
+        options: ChatOptions,
+        userPrompt: String
+    ): RoundOutcome = try {
+        withTimeout(VERDICT_ROUND_TIMEOUT_MS.milliseconds) {
+            askOnce(chatModel, options, userPrompt)?.let { RoundOutcome.Decided(it) } ?: RoundOutcome.Unparsable
+        }
+    } catch (e: TimeoutCancellationException) {
+        logger.info("AI risk check round timed out after {}ms", VERDICT_ROUND_TIMEOUT_MS)
+        RoundOutcome.TimedOut
+    }
+
+    private suspend fun askOnce(
+        chatModel: ChatModel,
+        options: ChatOptions,
+        userPrompt: String
+    ): AiRiskResult? {
         val prompt = Prompt(
             listOf(
                 SystemMessage(SYSTEM_PROMPT),
-                UserMessage(buildUserPrompt(command, projectPath, rules))
-            )
+                UserMessage(userPrompt)
+            ),
+            options
         )
-
         val response = withContext(Dispatchers.IO) {
             chatModel.call(prompt)
         }
-        val content = response.result?.output?.text ?: ""
-        return parseVerdict(content)
-    }
-
-    /** Extract the JSON payload and map it to an [AiRiskResult]; malformed output is treated as risky. */
-    private fun parseVerdict(text: String): AiRiskResult {
-        val json = extractJsonObject(text)
-        if (json == null) {
-            logger.warn("AI risk check produced no JSON payload; treating as risky")
-            return AiRiskResult(allowed = false, reason = "AI 检查输出无法解析")
-        }
+        val json = JsonExtractor.extract(response.result?.output?.text ?: "") ?: return null
         return try {
             parseVerdictJson(json)
         } catch (e: Exception) {
             logger.warn("AI risk check JSON parse failed: {}", e.message)
-            AiRiskResult(allowed = false, reason = "AI 检查输出无法解析")
+            null
         }
     }
 
@@ -125,14 +193,6 @@ class LlmShellAiRiskChecker(
         return sb.toString()
     }
 
-    /** Locate the outermost JSON object; tolerates stray prose around the payload. */
-    private fun extractJsonObject(text: String): String? {
-        val start = text.indexOf('{')
-        val end = text.lastIndexOf('}')
-        if (start !in 0..<end) return null
-        return text.substring(start, end + 1)
-    }
-
     private fun buildUserPrompt(command: String, projectPath: Path?, rules: List<PermissionRule>): String {
         val sb = StringBuilder()
         sb.appendLine("<command>")
@@ -151,8 +211,22 @@ class LlmShellAiRiskChecker(
     }
 
     private companion object {
+        /** Budget for one verdict round; the single re-ask gets a fresh one. */
+        private const val VERDICT_ROUND_TIMEOUT_MS = 15_000L
+
         private val RISKY_REGEX = Regex("\"risky\"\\s*:\\s*(true|false)")
         private val REASON_REGEX = Regex("\"reason\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
+
+        /**
+         * Appended to the same prompt for the single re-ask. The rejected reply is not replayed —
+         * the command being judged has not changed, only the output contract was violated.
+         */
+        private val VERDICT_CORRECTION = """
+
+            ---
+            Your previous answer could not be read as the required JSON object.
+            Reply with ONLY {"risky": true|false, "reason": "..."} — no prose, no code fences.
+        """.trimIndent()
 
         val SYSTEM_PROMPT = """
             You are a shell command security reviewer for an AI coding assistant.

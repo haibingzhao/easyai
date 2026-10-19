@@ -8,6 +8,7 @@ import com.easy.easyai.core.memory.MemoryConsolidationSettings
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.memory.consolidation.MemoryConsolidationRunLifecycle
 import com.easy.easyai.core.memory.consolidation.MemoryConsolidationSessionTitlePort
+import com.easy.easyai.core.memory.consolidation.MemoryConsolidationSettingsStore
 import com.easy.easyai.core.model.aux.AuxModelResolver
 import com.easy.easyai.core.skill.SkillStore
 import com.easy.easyai.core.task.AsyncTaskStore
@@ -91,13 +92,21 @@ class RagAutoConfiguration {
     fun memoryConsolidationSettings(properties: MemoryConsolidationProperties): MemoryConsolidationSettings =
         MemoryConsolidationSettings(
             available = properties.available,
-            maxEntriesPerBatch = properties.maxEntriesPerBatch,
+            maxGroupingPromptChars = properties.maxGroupingPromptChars,
+            maxSourcesPerGroup = properties.maxSourcesPerGroup,
+            maxGroupSourceChars = properties.maxGroupSourceChars,
+            clustersPerMergeCall = properties.clustersPerMergeCall,
+            maxMergePromptCharsPerCall = properties.maxMergePromptCharsPerCall,
             maxArchivesPerRun = properties.maxArchivesPerRun,
             maxIterations = properties.maxIterations,
             runTimeoutMs = properties.runTimeoutMs,
+            dryRunTimeoutMs = properties.dryRunTimeoutMs,
             defaultThreshold = properties.defaultThreshold,
             dailyCron = properties.dailyCron,
-            maxTasksPerTickPerUser = properties.maxTasksPerTickPerUser
+            maxTasksPerTickPerUser = properties.maxTasksPerTickPerUser,
+            maxLevel = properties.maxLevel,
+            zeroGainBackoffBaseDays = properties.zeroGainBackoffBaseDays,
+            zeroGainBackoffMaxDays = properties.zeroGainBackoffMaxDays
         )
 
     /**
@@ -160,12 +169,19 @@ class RagAutoConfiguration {
     )
     fun memoryConsolidationTaskHandler(
         agent: MemoryConsolidationAgent,
+        settings: MemoryConsolidationSettings,
         taskStore: ObjectProvider<AsyncTaskStore>,
-        titlePort: ObjectProvider<MemoryConsolidationSessionTitlePort>
+        titlePort: ObjectProvider<MemoryConsolidationSessionTitlePort>,
+        memoryStore: ObjectProvider<MemoryStore>,
+        settingsStore: ObjectProvider<MemoryConsolidationSettingsStore>
     ): MemoryConsolidationTaskHandler = MemoryConsolidationTaskHandler(
         agent = agent,
         taskStore = taskStore.ifAvailable,
-        titlePort = titlePort.ifAvailable
+        titlePort = titlePort.ifAvailable,
+        memoryStore = memoryStore.ifAvailable,
+        settingsStore = settingsStore.ifAvailable,
+        backoffBaseDays = settings.zeroGainBackoffBaseDays,
+        backoffMaxDays = settings.zeroGainBackoffMaxDays
     )
 
     @Bean

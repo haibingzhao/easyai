@@ -71,6 +71,11 @@ interface MemoryWriteArgs {
   operations?: MemoryWriteOp[];
 }
 
+interface MemoryReadArgs {
+  path?: string;
+  docIds?: string[];
+}
+
 // ---------------------------------------------------------------------------
 // Argument parsing
 // ---------------------------------------------------------------------------
@@ -442,10 +447,21 @@ function MemorySearchView({ toolCall, result, status, streamingOutput, compact }
 // memory_read
 // ---------------------------------------------------------------------------
 
+/**
+ * Both read modes label themselves in the row: a drill-down call carries docIds and has no path, and a
+ * row that falls back to "?" reads like a malformed call.
+ */
+function readArgsLabel(args: MemoryReadArgs | null): string {
+  if (args?.path) return args.path;
+  const ids = args?.docIds?.filter((id) => id.trim().length > 0) ?? [];
+  if (ids.length > 0) return `${ids.length} ${i18n('archived sources')}`;
+  return '?';
+}
+
 function MemoryReadView({ toolCall, result, status, streamingOutput, compact }: ToolMessageProps) {
   const [expanded, setExpanded] = useState(false);
   const markTouched = useStreamingRowExpand(status, setExpanded);
-  const parsed = parseArgs<{ path: string }>(toolCall.args);
+  const parsed = parseArgs<MemoryReadArgs>(toolCall.args);
   const output = extractResultOutput(result, streamingOutput);
   const { fields, tags, body } = parseMemoryDocument(output);
   const hasMeta = Object.keys(fields).length > 0;
@@ -457,7 +473,7 @@ function MemoryReadView({ toolCall, result, status, streamingOutput, compact }: 
       summary={
         <span className="flex items-center gap-1">
           <code className="text-xs bg-muted px-1 py-0.5 rounded text-foreground/80">
-            {parsed?.path ?? '?'}
+            {readArgsLabel(parsed)}
           </code>
         </span>
       }

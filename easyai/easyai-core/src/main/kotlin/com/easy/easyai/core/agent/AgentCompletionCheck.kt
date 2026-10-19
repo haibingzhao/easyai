@@ -29,6 +29,15 @@ fun interface AgentCompletionCheck {
      */
     fun maxNudges(): Int = DEFAULT_MAX_NUDGES
 
+    /**
+     * Whether the nudge that has just been honoured as the [attempts]-th one is this check's last:
+     * the round it starts is the final one the check will ask for before it gives up.
+     *
+     * The loop must not infer this from [maxNudges], because a check that stops itself earlier
+     * never reaches that cap. Each check reports its own counting instead.
+     */
+    fun isFinalNudge(attempts: Int): Boolean = attempts >= maxNudges()
+
     companion object {
         /** Default per-run nudge cap applied to checks that do not override [maxNudges]. */
         const val DEFAULT_MAX_NUDGES: Int = 3

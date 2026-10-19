@@ -1,5 +1,6 @@
 package com.easy.easyai.repository.session
 
+import com.easy.easyai.api.model.SamplingTrace
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.PersistedSession
 import com.easy.easyai.core.event.MessageUpdateField
@@ -14,6 +15,7 @@ import org.jetbrains.exposed.v1.r2dbc.*
 import org.jetbrains.exposed.v1.r2dbc.transactions.suspendTransaction
 import org.slf4j.LoggerFactory
 import tools.jackson.core.type.TypeReference
+import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
 import com.easy.easyai.common.util.SharedObjectMapper
 import java.time.Instant
@@ -793,9 +795,10 @@ class R2dbcAsyncSessionStore(
                 if (message.metadata.isEmpty()) null else objectMapper.writeValueAsString(message.metadata)
             }
             is AssistantMessage -> {
-                if (message.references != null) {
-                    objectMapper.writeValueAsString(message.toMetadataMap())
-                } else null
+                // Keyed on the map, not on one field: anything toMetadataMap() records (context
+                // references, the sampling this reply was generated under) has to reach the row.
+                val metadata = message.toMetadataMap()
+                if (metadata.isEmpty()) null else objectMapper.writeValueAsString(metadata)
             }
             else -> null
         }
@@ -818,14 +821,28 @@ class R2dbcAsyncSessionStore(
     }
 
     /**
-     * Extract ContextReferences from the metadata JSON column of an AssistantMessage row.
-     * Handles both legacy double-encoded format and the current single-level format.
+     * The metadata column as a tree, parsed once per row: an assistant row carries the flags, the
+     * context references and the sampling trace in the same JSON, and reading each of them off the
+     * raw text made a transcript load walk the same document three times.
+     * Returns null when the column is absent or unparseable.
      */
-    private fun parseReferencesFromMetadata(json: String?): ContextReferences? {
+    private fun readMetadataTree(json: String?): JsonNode? {
         if (json.isNullOrBlank()) return null
         return try {
-            val tree = objectMapper.readTree(json)
-            val refsNode = tree.get("references") ?: return null
+            objectMapper.readTree(json)
+        } catch (e: Exception) {
+            logger.warn("Failed to parse metadata: {}", json, e)
+            null
+        }
+    }
+
+    /**
+     * Extract ContextReferences from an AssistantMessage metadata tree.
+     * Handles both legacy double-encoded format and the current single-level format.
+     */
+    private fun parseReferencesFromMetadata(tree: JsonNode?): ContextReferences? {
+        val refsNode = tree?.get("references") ?: return null
+        return try {
             if (refsNode.isString) {
                 // Legacy double-encoded format: references value is a JSON string
                 objectMapper.readValue(refsNode.asString(), ContextReferences::class.java)
@@ -835,6 +852,23 @@ class R2dbcAsyncSessionStore(
             }
         } catch (e: Exception) {
             logger.warn("Failed to parse references from metadata: {}", e.message)
+            null
+        }
+    }
+
+    /**
+     * Extract the sampling a reply was generated under from its metadata tree.
+     *
+     * Read back rather than left as a SQL-only fact: replaying a run needs the temperature that was
+     * asked for and the one that was sent, and a row nobody can load through the domain is a row
+     * nobody checks.
+     */
+    private fun parseSamplingFromMetadata(tree: JsonNode?): SamplingTrace? {
+        val node = tree?.get("sampling") ?: return null
+        return try {
+            objectMapper.treeToValue(node, SamplingTrace::class.java)
+        } catch (e: Exception) {
+            logger.warn("Failed to parse sampling from metadata: {}", e.message)
             null
         }
     }
@@ -1009,7 +1043,8 @@ class R2dbcAsyncSessionStore(
         val stopReason = stopReasonStr?.let {
             try { StopReason.valueOf(it) } catch (_: IllegalArgumentException) { null }
         }
-        val metadata = parseMetadata(row[Tables.Message.metadata])
+        val metadataJson = row[Tables.Message.metadata]
+        val metadata = parseMetadata(metadataJson)
         val timestamp = row[Tables.Message.createdAt]
 
         // Read usage from DB columns (present for AssistantMessage and compaction summary UserMessages)
@@ -1027,13 +1062,15 @@ class R2dbcAsyncSessionStore(
         val message: EasyAiMessage? = when (role) {
             Role.USER -> UserMessage(id = messageId, content = contentBlocks, metadata = metadata, usage = if (hasUsage) usage else null)
             Role.ASSISTANT -> {
-                val references = parseReferencesFromMetadata(row[Tables.Message.metadata])
+                val metadataTree = readMetadataTree(metadataJson)
+                val references = parseReferencesFromMetadata(metadataTree)
                 AssistantMessage(
                     id = messageId,
                     content = contentBlocks,
                     stopReason = stopReason,
                     usage = usage,
-                    references = references
+                    references = references,
+                    sampling = parseSamplingFromMetadata(metadataTree)
                 )
             }
             Role.TOOL -> {

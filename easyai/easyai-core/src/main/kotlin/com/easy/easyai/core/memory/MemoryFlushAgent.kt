@@ -1,14 +1,19 @@
 package com.easy.easyai.core.memory
 
+import com.easy.easyai.api.llm.ChatModel
+import com.easy.easyai.api.llm.ChatOptions
+import com.easy.easyai.api.llm.DefaultChatOptions
+import com.easy.easyai.api.llm.Prompt
+import com.easy.easyai.api.model.SamplingIntent
+import com.easy.easyai.api.model.SamplingPolicy
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.model.*
+import com.easy.easyai.core.validation.JsonExtractor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
-import com.easy.easyai.api.llm.ChatModel
-import com.easy.easyai.api.llm.Prompt
 import java.security.MessageDigest
 import java.time.LocalDate
 import java.util.*
@@ -97,29 +102,42 @@ class MemoryFlushAgent(
             emptyMap()
         }
 
+        // Extraction is a judgement call, not a conversation: pin sampling from the session's own
+        // row rather than inheriting whatever temperature the user tuned chat with. A row with no
+        // options block stays untouched — inventing one would also invent maxTokens.
+        val flushOptions = agentContext.modelConfig?.let { config ->
+            DefaultChatOptions(temperature = SamplingPolicy.decide(config, SamplingIntent.DETERMINISTIC).temperature)
+        }
         val flushPrompt = buildFlushPrompt(recentMessages, existingByName.values)
-        val response = try {
-            withContext(Dispatchers.IO) {
-                chatModel.call(Prompt(flushPrompt))
-            }
-        } catch (e: Exception) {
-            logger.warn("Memory flush LLM call failed: {}", e.message)
-            return null
+        var text = callFlushModel(chatModel, flushPrompt, flushOptions)
+        var entries = parseEntries(text.orEmpty())
+        // A dropped flush used to be silent: the facts in that window were about to be compacted
+        // away, so one re-ask is worth the extra call. Only a reply that yielded no JSON earns it —
+        // an honest `{"memories": []}` is the prompt's own answer to "nothing durable this round",
+        // and re-asking it would both burn a call and claim a parse failure that never happened.
+        if (entries == null && text != null) {
+            logger.info(
+                "Memory flush output was not parseable ({} chars); asking once more at the pinned sampling",
+                text.length
+            )
+            text = callFlushModel(chatModel, flushPrompt + FLUSH_CORRECTION, flushOptions)
+            entries = parseEntries(text.orEmpty())
         }
 
-        val content = response.result?.output?.text ?: return null
-        if (content.isBlank()) return null
-
-        val entries = parseEntries(content).map(::capEntrySize)
-        if (entries.isEmpty()) {
-            logger.warn("Memory flush produced no parseable entries; skipping")
+        val cappedEntries = entries?.map(::capEntrySize).orEmpty()
+        if (cappedEntries.isEmpty()) {
+            if (entries == null) {
+                logger.warn("Memory flush produced no parseable entries; skipping")
+            } else {
+                logger.info("Memory flush found no durable facts in this window")
+            }
             // Mark the hash so the same context is not retried on every subsequent turn.
             flushedHashes.add(contextHash)
             return null
         }
 
         val counts = FlushCounts()
-        for (item in entries) {
+        for (item in cappedEntries) {
             when (applyEntry(item, existingByName, counts, memoryScope, owner)) {
                 ApplyOutcome.WRITTEN -> counts.written++
                 ApplyOutcome.UPDATED -> counts.updated++
@@ -312,16 +330,38 @@ class MemoryFlushAgent(
         }
     }
 
-    /** Extract the JSON payload from the LLM response and deserialize the memory list. */
-    private fun parseEntries(text: String): List<FlushEntry> {
-        val json = extractJsonObject(text) ?: return emptyList()
+    /**
+     * Extract the JSON payload from the LLM response and deserialize the memory list.
+     *
+     * @return the entries the reply carried — an empty list only when the reply legitimately reported
+     *   nothing worth remembering — or null when no readable JSON object was there at all.
+     */
+    private fun parseEntries(text: String): List<FlushEntry>? {
+        val json = JsonExtractor.extract(text) ?: return null
         return try {
-            val payload = objectMapper.readValue(json, FlushPayload::class.java)
-            payload.memories ?: emptyList()
+            objectMapper.readValue(json, FlushPayload::class.java).memories
         } catch (e: Exception) {
             logger.warn("Memory flush JSON parse failed: {}", e.message)
-            emptyList()
+            null
         }
+    }
+
+    /**
+     * One extraction attempt. Returns null when the call itself failed — the caller keeps its
+     * existing behaviour of not retrying a transport failure, since a broken connection re-asked
+     * just burns the turn.
+     */
+    private suspend fun callFlushModel(
+        chatModel: ChatModel,
+        promptText: String,
+        options: ChatOptions?
+    ): String? = try {
+        withContext(Dispatchers.IO) {
+            chatModel.call(Prompt(promptText, options)).result?.output?.text
+        }
+    } catch (e: Exception) {
+        logger.warn("Memory flush LLM call failed: {}", e.message)
+        null
     }
 
     /**
@@ -350,14 +390,6 @@ class MemoryFlushAgent(
             capped = capped.copy(description = description.take(MemoryContentLimits.DESCRIPTION_CAP_CHARS))
         }
         return capped
-    }
-
-    /** Locate the outermost JSON object; tolerates stray prose around the payload. */
-    private fun extractJsonObject(text: String): String? {
-        val start = text.indexOf('{')
-        val end = text.lastIndexOf('}')
-        if (start !in 0..<end) return null
-        return text.substring(start, end + 1)
     }
 
     /** Build a [MemoryEntry] from a parsed flush item, applying safe defaults. */
@@ -448,5 +480,17 @@ class MemoryFlushAgent(
 
         /** Hard limit on physical deletions per flush, even with removals enabled. */
         const val MAX_REMOVALS_PER_FLUSH = 3
+
+        /**
+         * Appended to the original prompt for the single re-ask. The first attempt's text is not
+         * replayed: the window to extract from is unchanged, only the output contract was violated,
+         * and echoing a rejected answer back invites the same shape again.
+         */
+        val FLUSH_CORRECTION = """
+
+            ---
+            Your previous answer could not be read as the required JSON object.
+            Answer again with ONLY that JSON object — no prose, no code fences, no trailing commentary.
+        """.trimIndent()
     }
 }

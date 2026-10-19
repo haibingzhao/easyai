@@ -104,14 +104,24 @@ data class ConsolidationReportDto(
     val type: String,
     val scope: String,
     val activeBefore: Int,
+    /** Clusters the grouping pass proposed and its validator accepted, whether or not a body was written. */
+    val clustersProposed: Int = 0,
     val mergedWritten: Int = 0,
     val archived: Int = 0,
     /** Sources a written cluster failed to archive, so they are still live duplicates of it. */
     val archiveShortfall: Int = 0,
     val skippedSingletons: Int = 0,
     val skippedOverCap: Int = 0,
-    /** Batches whose answer could not be applied: an unusable first answer, or an unusable re-ask. */
+    /** Groups refused for being too large to distill into one merged entry even after trimming. */
+    val droppedGroups: Int = 0,
+    /** Written bodies past the key-points target but inside the hard cap: stored, and worth reading. */
+    val overTarget: Int = 0,
+    /** Prompts whose answer could not be applied: an unusable first answer, or an unusable re-ask. */
     val rejectedBatches: Int = 0,
+    /** Prompts whose model call itself failed, so the model never answered at all. */
+    val llmFailures: Int = 0,
+    /** Why the first failed call failed, as the model client reported it. */
+    val llmFailureReason: String? = null,
     /** Sources the model neither clustered nor declared as leftovers. */
     val uncoveredDocIds: Int = 0,
     val dryRun: Boolean = false,

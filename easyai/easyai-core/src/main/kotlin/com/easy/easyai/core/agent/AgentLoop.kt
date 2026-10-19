@@ -291,8 +291,8 @@ internal class AgentLoop(
         val messageId = generateMessageId()
         push(MessageStartEvent(messageId, turnId, context.sessionId ?: "default"))
 
-        // Call LLM and build assistant message, with overflow retry handling
-        val rawAssistantMessage = callLLMWithOverflowHandling(
+        // Call LLM and build assistant message, with overflow recovery
+        val rawAssistantMessage = callLLMWithRecoveries(
             transcript = transcript,
             prompt = prompt,
             messageId = messageId,
@@ -536,6 +536,12 @@ internal class AgentLoop(
                         // Multi-turn: only enable API-level structured output when OutputSchemaCompletionCheck triggers
                         if (check is OutputSchemaCompletionCheck && context.outputSchemaMultiTurn && context.outputSchema != null) {
                             loopRunner.enableForcedStructuredOutput()
+                        }
+                        // The last nudge gets a cheaper shape than the rest — no tool schemas, pinned
+                        // sampling. It is the final attempt before the run stops, so spending a full
+                        // tool-capable ReAct iteration on it is the wrong trade.
+                        if (check is OutputSchemaCompletionCheck && check.isFinalNudge(attempts)) {
+                            loopRunner.beginRepairTurn()
                         }
                         // Grant bonus only if the next iteration will hit maxIterations
                         if (turnId + 1 >= context.maxIterations) {
@@ -860,11 +866,14 @@ internal class AgentLoop(
     }
 
     /**
-     * Call LLM with overflow error handling.
-     * If a context overflow error is detected, re-transform context with Overflow trigger
-     * and retry the LLM call.
+     * Call LLM with error recovery.
+     *
+     * One deterministic rejection is answered by rebuilding the request: a context overflow
+     * re-transforms the transcript with the Overflow trigger. Everything else propagates unchanged —
+     * notably a gateway that refuses the response format, which the runner already turns into a
+     * message naming the capability to fix rather than a field quietly dropped for the rest of the run.
      */
-    private suspend fun ProducerScope<AgentEvent, List<AssistantMessage>>.callLLMWithOverflowHandling(
+    private suspend fun ProducerScope<AgentEvent, List<AssistantMessage>>.callLLMWithRecoveries(
         transcript: MutableList<EasyAiMessage>,
         prompt: Prompt,
         messageId: String,

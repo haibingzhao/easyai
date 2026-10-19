@@ -1,34 +1,150 @@
 package com.easy.easyai.core.memory.consolidation
 
 import com.easy.easyai.core.memory.MemoryArchiveUpdate
+import com.easy.easyai.core.memory.MemoryConsolidationSettings
 import com.easy.easyai.core.memory.MemoryContentLimits
 import com.easy.easyai.core.memory.MemoryEntry
+import com.easy.easyai.core.memory.MemoryIndexEntry
 import com.easy.easyai.core.memory.MemoryStore
+import org.slf4j.LoggerFactory
 import java.time.LocalDate
 
 /**
- * Applies one consolidation batch's clusters to the memory store. This is the sole write path of a
- * consolidation run: the model only proposes clusters, and every decision to accept one is made here.
+ * Applies what a consolidation run's two passes proposed to the memory store. This is the sole write
+ * path of a run: the model proposes clusters and merged bodies, and every decision to accept one is
+ * made here.
  *
  * The shape checks (a cluster needs 2+ sources, bodies inside the caps) came straight from the commit
  * tool this replaced, and the set checks are the ones a JSON Schema cannot express: a docId the model
  * invented, a source another cluster already absorbed, and a source archived by an earlier run all
  * have to be caught against the store. Nothing is deleted — absorbed sources are archived and the
  * merged document references them through `ref_ids`.
+ *
+ * [planGroups] validates and queues; [writeBatch] writes. They are separate because the grouping pass
+ * decides membership from names and sizes alone, and a cluster that cannot survive its source sizes must
+ * be stopped there rather than after the run has paid for a merge prompt to discover it.
  */
-internal class MemoryConsolidationWriter(private val store: MemoryStore) {
+internal class MemoryConsolidationWriter(
+    private val store: MemoryStore,
+    private val settings: MemoryConsolidationSettings = MemoryConsolidationSettings()
+) {
+
+    private val logger = LoggerFactory.getLogger(javaClass)
 
     /**
-     * @param uncoveredDocIds docIds of the batch that appeared in neither a cluster nor the leftover set
-     *
      * Deliberately the only number here: per-batch commit counts duplicate what the run's own counters
      * already sum, and reporting a previewed cluster as "rejected" alongside genuinely rejected ones
      * made the same field mean two incompatible things.
+     *
+     * @param uncoveredDocIds docIds of the batch that appeared in neither an accepted cluster, nor the
+     *   batch's declared leftover set, nor a group this validator has already explained — a refusal, a
+     *   budget exhaustion, or a source an earlier cluster took. Those are decisions, and the model has
+     *   already answered the rows they contain; only a genuinely unaccounted source is a cue to ask again
+     *   *with its rows attached*.
+     */
+    data class GroupPlanOutcome(val uncoveredDocIds: List<String>)
+
+    /**
+     * @param uncoveredDocIds docIds of this merge prompt's clusters that appear in neither a written
+     *   cluster nor [MemoryConsolidationMergeOutput.unmergedDocIds]
      */
     data class BatchOutcome(val uncoveredDocIds: List<String>)
 
     /**
-     * Write (or, for a dry run, only plan) every cluster of one batch and fold the totals into
+     * Validate one grouping prompt's clusters, queue the survivors for the merge pass, and record the
+     * per-cluster numbers a preview shows.
+     *
+     * Every rule here exists because the grouping model cannot see what it is clustering: a cluster over
+     * the entry count or the combined body budget cannot be distilled into the key-points size the merge
+     * pass is asked for, so it is trimmed — and dropped outright when trimming leaves fewer than two
+     * sources. Nothing is written; a dry run ends here.
+     */
+    suspend fun planGroups(
+        batch: List<MemoryIndexEntry>,
+        output: MemoryConsolidationGroupingOutput,
+        state: MemoryConsolidationRunState
+    ): GroupPlanOutcome {
+        val byId = batch.associateBy { it.docId }
+        val claimedByModel = mutableSetOf<String>()
+        // A group the validator refused for size is a *decision*, not a gap: asking again shows the model
+        // the same rows against the same limits and earns the same answer, so its sources are settled for
+        // this run rather than counted as unaccounted for. The same holds for a group whose sources an
+        // earlier cluster took, and for one the preview ran out of archive budget on.
+        val settledByRefusal = mutableSetOf<String>()
+        val leftovers = output.leftoverDocIds.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+
+        output.groups.forEachIndexed { index, group ->
+            val requested = group.sourceDocIds.map { it.trim() }.filter { byId.containsKey(it) }.distinct()
+            if (requested.isEmpty()) return@forEachIndexed
+            val unclaimed = state.ungrouped(requested)
+            val unknownCount = group.sourceDocIds.count { it.isBlank() || !byId.containsKey(it.trim()) }
+            if (unclaimed.size < 2) {
+                state.stats.skippedSingletons.incrementAndGet()
+                // Sources an earlier cluster already took are accounted for, even when that cluster came
+                // from another batch's prompt — re-asking would show the model rows it has answered for.
+                // A source still free here stays a gap: two lone ones from two clusters can pair up.
+                settledByRefusal += requested.filterNot { it in unclaimed }
+                addGroupRow(
+                    index, group.title, unclaimed, sumChars(unclaimed, byId), maxLevelOf(unclaimed, byId), state,
+                    "skipped: ${requested.size - unclaimed.size} of ${requested.size} sources were already " +
+                        "placed in an earlier cluster"
+                )
+                return@forEachIndexed
+            }
+            val trimmed = trimToLimits(unclaimed, byId)
+            if (trimmed.size < 2) {
+                state.stats.droppedGroups.incrementAndGet()
+                settledByRefusal += unclaimed
+                addGroupRow(
+                    index, group.title, unclaimed, sumChars(unclaimed, byId), maxLevelOf(unclaimed, byId), state,
+                    "dropped: sources too large for one merged entry"
+                )
+                return@forEachIndexed
+            }
+            state.claimGrouped(trimmed)
+            claimedByModel += trimmed
+            state.stats.clustersProposed.incrementAndGet()
+            val title = group.title.trim().ifBlank { "merge-${byId.getValue(trimmed.first()).name}" }
+            state.stats.proposed.add(
+                ProposedCluster(
+                    title = title,
+                    sourceDocIds = trimmed,
+                    sourceChars = sumChars(trimmed, byId)
+                )
+            )
+            if (unknownCount > 0) {
+                logger.debug(
+                    "Dropped {} invented docId(s) from grouping cluster '{}'",
+                    unknownCount, title
+                )
+            }
+            if (state.dryRun) {
+                // A preview consumes the same budget as the write it describes and reports the same
+                // refusal: a real run defers a whole cluster that no longer fits, so charging a slice of
+                // one here would show a cluster the run would never merge.
+                val remaining = state.remainingArchives()
+                if (trimmed.size > remaining) {
+                    state.stats.skippedOverCap.incrementAndGet()
+                    settledByRefusal += trimmed
+                    addGroupRow(
+                        index, title, trimmed, sumChars(trimmed, byId), maxLevelOf(trimmed, byId), state,
+                        "deferred: ${trimmed.size} sources exceed the remaining budget of $remaining"
+                    )
+                } else {
+                    state.claim(trimmed)
+                    state.stats.plannedArchives.addAndGet(trimmed.size)
+                    addGroupRow(index, title, trimmed, sumChars(trimmed, byId), maxLevelOf(trimmed, byId), state)
+                }
+            }
+        }
+
+        val uncovered = batch.map { it.docId }
+            .filter { it.isNotEmpty() && it !in claimedByModel && it !in leftovers && it !in settledByRefusal }
+        return GroupPlanOutcome(uncovered)
+    }
+
+    /**
+     * Write (or, for a dry run, only plan) every cluster of one merge prompt and fold the totals into
      * [state]. A cluster that fails a check is reported and skipped; it never aborts the batch.
      *
      * [BatchOutcome.uncoveredDocIds] is returned rather than counted here: the caller may still be able
@@ -36,7 +152,7 @@ internal class MemoryConsolidationWriter(private val store: MemoryStore) {
      */
     suspend fun writeBatch(
         batchDocIds: List<String>,
-        output: MemoryConsolidationOutput,
+        output: MemoryConsolidationMergeOutput,
         state: MemoryConsolidationRunState
     ): BatchOutcome {
         val claimedByModel = mutableSetOf<String>()
@@ -46,8 +162,8 @@ internal class MemoryConsolidationWriter(private val store: MemoryStore) {
             cluster.sourceDocIds.map { it.trim() }.filter { it.isNotEmpty() }.let { claimedByModel += it }
         }
 
-        val leftovers = output.leftoverDocIds.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-        val uncovered = batchDocIds.filter { it.isNotEmpty() && it !in claimedByModel && it !in leftovers }
+        val unmerged = output.unmergedDocIds.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        val uncovered = batchDocIds.filter { it.isNotEmpty() && it !in claimedByModel && it !in unmerged }
         return BatchOutcome(uncoveredDocIds = uncovered)
     }
 
@@ -135,9 +251,9 @@ internal class MemoryConsolidationWriter(private val store: MemoryStore) {
             type = state.type,
             content = mergedContent,
             path = "${state.type.dirName}/$name.md",
-            // The merged body claims to keep every distinct fact, and retrieval filters and the Memories
-            // page read these tags: dropping them would make a merged entry harder to find than the
-            // sources it absorbed. Union in source order, without inventing any new tag.
+            // The merged body is a distillation, so the sources it compressed are the record: these tags
+            // must survive or retrieval filters and the Memories page would make a merged entry harder
+            // to find than the entries it absorbed. Union in source order, without inventing any new tag.
             keywords = absorbed.flatMap { it.keywords }.distinct(),
             scenarios = absorbed.flatMap { it.scenarios }.distinct(),
             created = absorbed.mapNotNull { it.created }.minOrNull() ?: LocalDate.now(),
@@ -147,9 +263,13 @@ internal class MemoryConsolidationWriter(private val store: MemoryStore) {
             refs = foundIds
         )
 
+        // Past the key-points target but inside the hard cap: stored, and counted, because a run that
+        // keeps landing here means the clusters were too big to distill and grouping should shrink them.
+        if (mergedContent.length > MemoryContentLimits.CONTENT_TARGET_CHARS) {
+            stats.overTarget.incrementAndGet()
+        }
+
         if (state.dryRun) {
-            // A preview consumes the same budget as the write it describes, otherwise it would
-            // promise every cluster it was shown while the real run defers the ones over the cap.
             state.claim(foundIds)
             stats.plannedArchives.addAndGet(foundIds.size)
             return mapOf(
@@ -194,8 +314,59 @@ internal class MemoryConsolidationWriter(private val store: MemoryStore) {
             "mergedDocId" to mergedId,
             "sourceDocIds" to foundIds,
             "archived" to archived,
-            "expectedArchives" to foundIds.size
+            "expectedArchives" to foundIds.size,
+            "contentChars" to mergedContent.length
         )
+    }
+
+    /**
+     * Shrink a proposed cluster to the merge pass's limits, dropping from the tail: the model lists a
+     * cluster's sources in reading order, so the tail is the least likely to carry the main thread.
+     */
+    private fun trimToLimits(
+        docIds: List<String>,
+        byId: Map<String, MemoryIndexEntry>
+    ): List<String> {
+        val budget = settings.maxGroupSourceChars.coerceAtLeast(MemoryContentLimits.CONTENT_TARGET_CHARS)
+        val maxSources = settings.maxSourcesPerGroup.coerceAtLeast(2)
+        var result = docIds.take(maxSources)
+        while (result.size >= 2 && sumChars(result, byId) > budget) {
+            result = result.dropLast(1)
+        }
+        return if (result.size < 2) emptyList() else result
+    }
+
+    private fun sumChars(docIds: List<String>, byId: Map<String, MemoryIndexEntry>): Int =
+        docIds.sumOf { byId[it]?.contentChars ?: 0 }
+
+    private fun maxLevelOf(docIds: List<String>, byId: Map<String, MemoryIndexEntry>): Int =
+        docIds.maxOfOrNull { byId[it]?.level ?: 0 } ?: 0
+
+    /**
+     * One previewed cluster's row. A real run's rows come from [commitCluster], which is the only thing
+     * that knows a docId and an archived count; grouping can report the shape of what it proposed — and,
+     * when a cluster never made the queue, why not.
+     */
+    private fun addGroupRow(
+        index: Int,
+        title: String,
+        sourceDocIds: List<String>,
+        sourceChars: Int,
+        level: Int,
+        state: MemoryConsolidationRunState,
+        reason: String? = null
+    ) {
+        if (!state.dryRun) return
+        val row = mutableMapOf<String, Any?>(
+            "index" to index,
+            "title" to title.trim(),
+            "sourceDocIds" to sourceDocIds,
+            "sourceChars" to sourceChars,
+            "level" to level + 1,
+            "dryRun" to true
+        )
+        if (reason != null) row["rejected"] = reason
+        state.stats.clusters.add(row)
     }
 
     /** One cluster's verdict row: what the report shows for a cluster that did not commit. */

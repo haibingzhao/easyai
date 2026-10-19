@@ -1,6 +1,8 @@
 package com.easy.easyai.core.agent
 
 import com.easy.easyai.api.model.ModelProviderConfig
+import com.easy.easyai.api.model.SamplingIntent
+import com.easy.easyai.core.agent.AgentContext.Companion.SYSTEM_KIND_ASYNC_TASK
 import com.easy.easyai.core.event.CustomEvent
 import com.easy.easyai.core.memory.MemoryAccessTracker
 import com.easy.easyai.core.model.EasyAiMessage
@@ -93,6 +95,13 @@ data class AgentContext(
      */
     val mcpConfigs: List<AgentToolConfig> = emptyList(),
     val tools: List<ToolDefinition> = emptyList(),
+    /**
+     * This run must be given no tools at all. [tools] cannot say it on its own: an empty list is also
+     * what every caller that wants the resolved default leaves in place, and the session manager reads
+     * that silence as "resolve" — which is how a schema-only background run came to carry 34 tool
+     * definitions next to a system prompt that tells the model it has none.
+     */
+    val noTools: Boolean = false,
     val maxIterations: Int = 100,
     val maxRetries: Int = 3,
     /** Master switch for cross-run tool-message folding (send-time projection). */
@@ -108,6 +117,13 @@ data class AgentContext(
     val thinkingHistoryEnabled: Boolean = false,
     val initialMessages: List<EasyAiMessage> = emptyList(),
     val modelContextLength: Int = 204_800,  // Default context window size (200K)
+    /**
+     * What this run needs from sampling. [modelConfig] carries one set of numbers for one
+     * connection, but the same row backs a human's chat turn and a background risk verdict; the
+     * intent says which of those this run is, and [com.easy.easyai.api.model.SamplingPolicy] turns
+     * intent + row into the temperature actually sent. Defaults to the row as configured.
+     */
+    val samplingIntent: SamplingIntent = SamplingIntent.FOLLOW_CONFIG,
     /** JSON Schema for structured output enforcement. Injected into ChatOptions and system prompt. */
     val outputSchema: String? = null,
     /** When true, defer structured output to final iteration after multi-turn tool calling. */

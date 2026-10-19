@@ -25,22 +25,38 @@ export const TASK_TYPE_REGISTRY: Record<string, TaskTypeDescriptor> = {
       if (!r) return outcome.error ?? '';
       const count = (value: unknown) => (typeof value === 'number' ? value : 0);
       const plan = Array.isArray(r.plan) ? (r.plan as ConsolidationPlanItem[]) : [];
+      // A preview is the grouping pass only: it says which entries would be merged, and never pays for
+      // bodies nobody was shown. Saying "clusters" alone made it read like a finished merge.
       if (r.dryRun === true) {
         const planned = plan.filter((item) => !item.rejected).length;
         const rejected = plan.length - planned;
-        const base = `${i18n('Preview')}: ${planned} ${i18n('clusters')}`;
+        const base = `${i18n('Preview')}: ${planned} ${i18n('clusters')} · ${i18n('no bodies written')}`;
         return rejected > 0 ? `${base} · ${i18n('Rejected')} ${rejected}` : base;
       }
+      // Proposed first, then what was written: a run that proposed 12 clusters and merged 3 is a
+      // different story from one that proposed 3 and merged 3, and the archived count cannot tell them.
       const parts = [
+        `${i18n('Proposed')} ${count(r.clustersProposed)}`,
         `${i18n('Merged')} ${count(r.mergedWritten)}`,
         `${i18n('Archived')} ${count(r.archived)}`,
       ];
+      // Refused groups are the silent failure of the two-pass design: grouping proposed something the
+      // size limits could not distill, so those entries stay exactly as they were.
+      if (count(r.droppedGroups) > 0) parts.push(`${i18n('Groups refused')} ${count(r.droppedGroups)}`);
+      // Over target but stored: the reader wants to know the digest came out long, not that it failed.
+      if (count(r.overTarget) > 0) parts.push(`${i18n('Over target')} ${count(r.overTarget)}`);
       // A merged document whose sources are still active means the entry is searchable twice; the
       // backend knows why only per id, so this is the one number that says the run left a duplicate.
       if (count(r.archiveShortfall) > 0) {
         parts.push(`${i18n('Not archived')} ${count(r.archiveShortfall)}`);
       }
       if (count(r.skippedOverCap) > 0) parts.push(`${i18n('Deferred')} ${count(r.skippedOverCap)}`);
+      // Counted apart from rejected batches on purpose: here the model never got the question, so the
+      // reason is the actionable part and travels with the count.
+      if (count(r.llmFailures) > 0) {
+        const reason = typeof r.llmFailureReason === 'string' ? ` (${r.llmFailureReason})` : '';
+        parts.push(`${i18n('Model calls failed')} ${count(r.llmFailures)}${reason}`);
+      }
       if (count(r.rejectedBatches) > 0) {
         parts.push(`${i18n('Rejected batches')} ${count(r.rejectedBatches)}`);
       }

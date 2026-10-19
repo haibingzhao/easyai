@@ -207,6 +207,46 @@ class MemoryFlushAgentTest {
     }
 
     @Test
+    fun `an unparsable answer earns exactly one re-ask with the correction appended`() = runTest {
+        val promptSlot = slot<Prompt>()
+        val chatModel = mockk<ChatModel>()
+        every { chatModel.call(capture(promptSlot)) } returns chatResponse("prose again")
+
+        val result = MemoryFlushAgent(store).maybeFlush(
+            agentContext = agentContext,
+            messages = messages,
+            modelContextLength = 100_000,
+            estimatedTokenCount = 90_000,
+            chatModel = chatModel
+        )
+
+        assertNull(result)
+        coVerify(exactly = 2) { chatModel.call(any()) }
+        val lastPrompt = promptSlot.captured.instructions.joinToString("\n") { it.text.orEmpty() }
+        assertContains(lastPrompt, "could not be read as the required JSON object")
+    }
+
+    @Test
+    fun `an honest empty memory list is accepted without a re-ask`() = runTest {
+        // The flush prompt tells the model to return {"memories": []} when nothing is worth keeping,
+        // so that answer is a valid result — re-asking it would burn a call on the highest-frequency
+        // path and claim a parse failure that never happened.
+        val chatModel = chatModelReturning("""{"memories": []}""")
+
+        val result = MemoryFlushAgent(store).maybeFlush(
+            agentContext = agentContext,
+            messages = messages,
+            modelContextLength = 100_000,
+            estimatedTokenCount = 90_000,
+            chatModel = chatModel
+        )
+
+        assertNull(result)
+        coVerify(exactly = 1) { chatModel.call(any()) }
+        coVerify(exactly = 0) { store.write(any(), any(), any()) }
+    }
+
+    @Test
     fun `flush returns null below threshold`() = runTest {
         val result = MemoryFlushAgent(store).maybeFlush(
             agentContext = agentContext,

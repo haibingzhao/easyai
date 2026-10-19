@@ -34,6 +34,44 @@ data class MemoryArchiveUpdate(
 )
 
 /**
+ * One active memory as the consolidation grouping pass sees it: identity and shape, never the body.
+ *
+ * The grouping pass decides *which* entries belong together and must not pay for every body to do it —
+ * a daily scheduler tick and a 300-entry slice both answer that question from names, sizes and depth.
+ * The merge pass that follows still reads the real bodies, for the few clusters it is rewriting.
+ *
+ * @property docId stable backend id the output must cite
+ * @property name entry file name without extension
+ * @property type the memory type this entry is filed under
+ * @property level consolidation depth; 0 for an untouched entry
+ * @property contentChars stored body length in characters, so a cluster's total size is known before
+ *   its bodies are ever fetched
+ * @property blurb one-line summary, or an empty string when the backend cannot supply one cheaply
+ */
+data class MemoryIndexEntry(
+    val docId: String,
+    val name: String,
+    val type: MemoryType,
+    val level: Int,
+    val contentChars: Int,
+    val blurb: String
+) {
+    companion object {
+        /**
+         * A change detector for "has anything happened in this slice since the last pass".
+         *
+         * Only membership matters: archiving a source and writing its merged entry are the run's own
+         * doing and must not re-dirty the slice, which is why the baseline is recomputed from the live
+         * set *after* each run rather than before it. Editing a body in place keeps its docId, so an
+         * edit alone never schedules a pass — that is the accepted cost of a cheap tick, and a user who
+         * wants a pass can run one.
+         */
+        @JvmStatic
+        fun fingerprint(docIds: Collection<String>): Int = docIds.filter { it.isNotEmpty() }.sorted().hashCode()
+    }
+}
+
+/**
  * Storage interface for the memory system.
  *
  * All operations are scope-aware: callers specify [MemoryScope.GLOBAL] or [MemoryScope.PROJECT].
@@ -173,17 +211,38 @@ interface MemoryStore {
     ): List<MemoryEntry>
 
     /**
-     * Count active entries per [MemoryType] for the given scope, without materializing any body.
+     * The active entries of one slice as [MemoryIndexEntry] rows: identity, depth and size, no bodies.
      *
-     * A scheduler that only compares counts against thresholds should use this instead of [list]:
-     * a listing may fetch the full stored document per entry, and repeating that on every tick reads
-     * the entire store to answer a question the backend can count. Implementations that can count at
-     * the source override this; the default measures a full listing, which is correct but costly.
+     * Two callers need exactly this and nothing more. The scheduler reads a slice per tick to compare
+     * counts against thresholds and to decide whether the set changed since the last pass — one listing
+     * answers both, so a separate counting call would be a second read of the same answer. The
+     * consolidation grouping pass builds its cluster proposals from it, and only the merge pass that
+     * follows goes back to [findByIds] for the handful of bodies it is actually rewriting.
+     *
+     * Implementations that can list this at the source override it; the default materializes every
+     * entry, which is correct but reads the whole store.
+     *
+     * @param scope Global or Project scope.
+     * @param owner Ownership context for backend isolation.
+     * @param type Optional type filter; null lists every type of the slice.
      */
-    suspend fun countActiveByType(
+    suspend fun listActiveIndex(
         scope: MemoryScope,
-        owner: MemoryOwnerContext = MemoryOwnerContext()
-    ): Map<MemoryType, Int> = list(scope, owner).groupBy { it.type }.mapValues { it.value.size }
+        owner: MemoryOwnerContext = MemoryOwnerContext(),
+        type: MemoryType? = null
+    ): List<MemoryIndexEntry> = list(scope, owner, type)
+        .mapNotNull { entry ->
+            entry.id?.let {
+                MemoryIndexEntry(
+                    docId = it,
+                    name = entry.name,
+                    type = entry.type,
+                    level = entry.level,
+                    contentChars = entry.content.length,
+                    blurb = entry.description
+                )
+            }
+        }
 
     /**
      * Read a specific memory entry by relative path, fully materialized.

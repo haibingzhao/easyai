@@ -2,10 +2,12 @@ package com.easy.easyai.autoconfigure.r2dbc
 
 import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.memory.MemoryConsolidationSettings
+import com.easy.easyai.core.memory.MemoryIndexEntry
 import com.easy.easyai.core.memory.MemoryOwnerContext
 import com.easy.easyai.core.memory.MemoryScope
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.memory.MemoryType
+import com.easy.easyai.core.memory.consolidation.MemoryConsolidationSliceState
 import com.easy.easyai.core.memory.consolidation.MemoryConsolidationUserSettings
 import com.easy.easyai.core.task.AsyncTask
 import com.easy.easyai.core.task.AsyncTaskType
@@ -17,17 +19,29 @@ import com.easy.easyai.repository.project.AsyncProjectStore
 import kotlinx.coroutines.flow.toList
 import org.slf4j.LoggerFactory
 import java.nio.file.Paths
+import java.time.ZoneId
 import java.util.UUID
 
 /**
  * Answers "which consolidation work is due for this user right now" for [ScheduledTaskRunner].
  *
  * A slice is one (scope, project, memory type): the user's GLOBAL memory plus one per non-temp project,
- * each measured against that type's threshold from the user's `params`. Measurement is a count
- * ([MemoryStore.countActiveByType]) rather than a listing, because this runs on every tick for every
- * opted-in user and only the number matters. Nothing is proposed for a slice that still has a
- * non-terminal task, so a tick landing while an earlier pass is queued or running does not
- * double-process the same entries.
+ * each measured against that type's threshold from the user's `params`. Measurement is one cheap listing
+ * per slice ([MemoryStore.listActiveIndex]) that answers three questions at once — how many active entries
+ * each type has, which docIds make up the slice, and therefore whether the slice changed at all since the
+ * last pass. Nothing is read per entry body, because this runs on every tick for every opted-in user.
+ *
+ * Three gates decide "due", and the last two exist because a count threshold on its own does not:
+ *
+ * 1. no unsettled task for the slice (a tick landing while an earlier pass is queued or running must not
+ *    double-process the same entries);
+ * 2. [MemoryConsolidationSliceState.nextEligibleAt] not in force — a run that archived nothing left the
+ *    count untouched, so without a delay the scan would re-ask the same question every day forever;
+ * 3. the active docId fingerprint differs from the one recorded when the last run **finished** — equal
+ *    means nothing arrived and nothing went away, so the same clustering answer would be recomputed.
+ *    Recomputing the baseline after each run is what stops a run's own archiving and merged writes from
+ *    re-dirtying the slice, which is the failure mode that had yesterday's digest being distilled into
+ *    level-2, then level-3, on a slice that gained two memories.
  *
  * Cron, tick timing and submission belong to the runner; this class deliberately holds no clock and
  * never submits, which is what keeps a second schedulable type from needing its own scheduler.
@@ -52,22 +66,41 @@ class MemoryConsolidationTaskPlanner(
         val user = MemoryConsolidationUserSettings.fromScheduled(context.setting)
         val pending = pendingKeys(context.pendingTasks)
         val memoryTypes = MemoryType.entriesFor(DomainCatalog.activeDomain)
+        val nowEpochMs = context.now.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val drafts = mutableListOf<TaskDraft>()
         for (slice in slicesOf(context.userId)) {
-            // A slice with every type already queued needs no measurement at all, so skip its read.
-            if (memoryTypes.all { pending.contains(keyOf(slice, it)) }) continue
-            // One count query per slice: the queued cap is the runner's single-count job, and a
-            // counting read is cheap enough that pre-truncating here would only duplicate it.
-            val activeByType = store.countActiveByType(slice.scope, slice.owner)
-            for (memoryType in memoryTypes) {
-                if (pending.contains(keyOf(slice, memoryType))) {
+            // Gates that need no store read are settled first, so a fully deferred or fully pending slice
+            // never costs a listing.
+            val candidates = memoryTypes.mapNotNull { memoryType ->
+                val key = MemoryConsolidationTaskHandler.sliceKey(slice.scope, slice.projectPath, memoryType)
+                if (pending.contains(key)) return@mapNotNull null
+                val state = user.sliceStates[key]
+                if (state != null && state.nextEligibleAt != null && nowEpochMs < state.nextEligibleAt!!) {
                     logger.debug(
-                        "Memory consolidation already pending for user={} scope={} project={} type={}",
-                        context.userId, slice.scope, slice.projectPath, memoryType.dirName
+                        "Memory consolidation deferred for user={} slice={} until {}",
+                        context.userId, key, state.nextEligibleAt
+                    )
+                    return@mapNotNull null
+                }
+                Triple(key, memoryType, state)
+            }
+            if (candidates.isEmpty()) continue
+            // One listing per (scope, project) answers every remaining type: counts, and the docId set each
+            // type's fingerprint is computed from. A memory added to one type must not re-dirty another.
+            val index = store.listActiveIndex(slice.scope, slice.owner)
+            if (index.isEmpty()) continue
+            for ((key, memoryType, state) in candidates) {
+                val typeIndex = index.filter { it.type == memoryType }
+                if (typeIndex.size < thresholdFor(user, memoryType)) continue
+                val fingerprint = MemoryIndexEntry.fingerprint(typeIndex.map { it.docId })
+                if (state?.activeFingerprint == fingerprint) {
+                    logger.debug(
+                        "Memory consolidation already current for user={} slice={}: no entry arrived or " +
+                            "left since the last pass",
+                        context.userId, key
                     )
                     continue
                 }
-                if ((activeByType[memoryType] ?: 0) < thresholdFor(user, memoryType)) continue
                 drafts += draft(context.userId, user.owners, slice, memoryType)
             }
         }
@@ -122,10 +155,6 @@ class MemoryConsolidationTaskPlanner(
         val owner: MemoryOwnerContext,
         val projectPath: String?
     )
-
-    /** Duplicate suppression is per slice, not per task: one slice is the unit of consolidation work. */
-    private fun keyOf(slice: Slice, memoryType: MemoryType): String =
-        MemoryConsolidationTaskHandler.sliceKey(slice.scope, slice.projectPath, memoryType)
 
     /** Keys of the slices this user already has unsettled work for, resolved once per plan. */
     private fun pendingKeys(tasks: List<AsyncTask>): Set<String> =

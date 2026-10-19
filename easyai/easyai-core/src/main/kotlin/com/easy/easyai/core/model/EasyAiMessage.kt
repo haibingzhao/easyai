@@ -1,5 +1,6 @@
 package com.easy.easyai.core.model
 
+import com.easy.easyai.api.model.SamplingTrace
 import com.easy.easyai.core.memory.MemoryRef
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonProperty
@@ -344,7 +345,9 @@ data class AssistantMessage(
     override val content: List<ContentBlock>,
     val stopReason: StopReason? = null,
     val usage: Usage = Usage(),
-    val references: ContextReferences? = null
+    val references: ContextReferences? = null,
+    /** Sampling this reply was generated under, recorded at the wire boundary. Null for non-LLM messages. */
+    val sampling: SamplingTrace? = null
 ) : EasyAiMessage {
     override val role: Role get() = Role.ASSISTANT
 
@@ -356,6 +359,7 @@ data class AssistantMessage(
     fun toMetadataMap(): Map<String, Any> {
         val map = mutableMapOf<String, Any>()
         if (references != null) map["references"] = references
+        if (sampling != null) map["sampling"] = sampling
         return map
     }
 }
