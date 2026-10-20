@@ -33,9 +33,11 @@ class RenderVisualToolTest {
     @Nested
     inner class Validation {
         @Test
-        fun `blank title is rejected`() {
+        fun `blank title is rejected with self-correcting guidance`() {
             val result = execute(mapOf("title" to "  ", "code" to "<svg></svg>"))
             assertTrue(result.isError)
+            val text = (result.content.first() as TextContent).text
+            assertTrue(text.contains("Call render_visual again"), text)
         }
 
         @Test
@@ -92,6 +94,14 @@ class RenderVisualToolTest {
             assertTrue(segment.contains("never repeat or summarize the fragment code"), segment)
             assertTrue(segment.contains("ONE continuous document"), segment)
             assertTrue(segment.contains("never rewrite, renumber or re-polish sections already delivered"), segment)
+        }
+
+        @Test
+        fun `parameter schema carries field descriptions and required markers`() {
+            val schema = tool.inputSchema
+            assertTrue(schema.contains("Short human-readable name for this visual"), schema)
+            assertTrue(schema.contains("Bare HTML or SVG fragment string"), schema)
+            assertTrue(schema.contains("\"required\""), schema)
         }
     }
 
