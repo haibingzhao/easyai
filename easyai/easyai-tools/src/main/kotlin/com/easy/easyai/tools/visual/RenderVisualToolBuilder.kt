@@ -15,6 +15,11 @@ import tools.jackson.databind.node.ObjectNode
 
 private const val RENDER_VISUAL_DESCRIPTION = """Render a self-contained HTML or SVG fragment inline in the conversation flow, for diagrams, charts, comparison cards and interactive demos.
 
+[PARAMETERS]
+- title (required): a short human-readable name for this visual, e.g. 'Quarterly revenue comparison'. It labels the rendered card and names exported files; never omit it or leave it empty.
+- code (required): the bare fragment to render; see [INPUT CONTRACT] and [STYLE CONTRACT] below.
+- loadingMessages (optional): 1-4 short messages rotated while the client renders.
+
 [WHEN TO USE] When the user needs to SEE rather than READ: explaining a concept, comparing options, showing an architecture, presenting the shape of data, describing a process, building an operable demo.
 
 [WHEN NOT TO USE]
@@ -50,7 +55,7 @@ client renders the fragment as a visual card at the exact position where you cal
 
 Call it in the MIDDLE of your narrative, not once at the end:
 1. Write the text that leads into the visual.
-2. Call `render_visual` with the fragment for that point in the story.
+2. Call `render_visual` with a short title plus the fragment for that point in the story.
 3. Continue with the text that follows it, and repeat steps 1-3 for each further visual.
 
 The tool returns only an acknowledgement — the fragment itself reaches the user through the

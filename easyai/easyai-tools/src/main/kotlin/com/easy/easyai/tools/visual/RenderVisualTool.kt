@@ -7,17 +7,24 @@ import com.easy.easyai.core.tool.ToolExecutionMode
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.tool.ToolUpdate
+import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import kotlinx.coroutines.CoroutineScope
 
 /**
  * Parameters for [RenderVisualTool].
  */
 data class RenderVisualParams(
-    /** Short identifier for this visual: card title and download file name. */
+    @param:JsonPropertyDescription(
+        "Required. Short human-readable name for this visual, e.g. 'Quarterly revenue comparison'. " +
+            "It labels the rendered card and names exported files; never omit it or leave it empty."
+    )
     val title: String,
-    /** Bare HTML or SVG fragment string (no document shell). */
+    @param:JsonPropertyDescription(
+        "Required. Bare HTML or SVG fragment string (no document shell); " +
+            "see the input and style contract in the tool description."
+    )
     val code: String,
-    /** Optional 1-4 short loading messages rotated while the client renders. */
+    @param:JsonPropertyDescription("Optional 1-4 short loading messages rotated while the client renders.")
     val loadingMessages: List<String>? = null
 )
 
@@ -44,7 +51,11 @@ class RenderVisualTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
     ): ToolResult {
         val title = args["title"] as? String
         if (title.isNullOrBlank()) {
-            return errorResult("Error: 'title' parameter is required and must not be empty")
+            return errorResult(
+                "Error: 'title' is missing or blank. It is a required short human-readable name for this visual " +
+                    "(e.g. 'Quarterly revenue comparison'), shown as the card header and used as the export file name. " +
+                    "Call render_visual again with both 'title' and 'code' set."
+            )
         }
         val code = args["code"] as? String
         if (code.isNullOrBlank()) {
