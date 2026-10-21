@@ -50,6 +50,10 @@ import com.easy.easyai.repository.todo.AsyncTodoStore
 import com.easy.easyai.repository.todo.R2dbcAsyncTodoStore
 import com.easy.easyai.repository.todo.TodoCompletionCheck
 import com.easy.easyai.repository.user.R2dbcUserStore
+import com.easy.easyai.core.knowledge.KnowledgeAccessStore
+import com.easy.easyai.core.knowledge.KnowledgeArticleStore
+import com.easy.easyai.repository.knowledge.R2dbcKnowledgeAccessStore
+import com.easy.easyai.repository.knowledge.R2dbcKnowledgeArticleStore
 import com.easy.easyai.skills.SkillPromptSource
 import com.easy.easyai.skills.SkillRegistry
 import com.easy.easyai.skills.command.BuiltinCommandHandler
@@ -545,5 +549,19 @@ class R2dbcRepositoryAutoConfiguration(
     @ConditionalOnProperty(prefix = "easyai.swarm", name = ["enabled"], havingValue = "true")
     fun swarmPresetStore(initializer: R2dbcDatabaseInitializer): SwarmPresetStore {
         return R2dbcSwarmPresetStore(initializer.getDatabase())
+    }
+
+    // ─── Knowledge Article Beans ─────────────────────────────────────────
+
+    @Bean
+    @ConditionalOnMissingBean(KnowledgeArticleStore::class)
+    fun knowledgeArticleStore(initializer: R2dbcDatabaseInitializer): KnowledgeArticleStore {
+        return R2dbcKnowledgeArticleStore(initializer.getDatabase())
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(KnowledgeAccessStore::class)
+    fun knowledgeAccessStore(initializer: R2dbcDatabaseInitializer): KnowledgeAccessStore {
+        return R2dbcKnowledgeAccessStore(initializer.getDatabase())
     }
 }

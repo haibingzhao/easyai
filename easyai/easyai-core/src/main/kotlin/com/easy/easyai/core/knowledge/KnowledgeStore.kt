@@ -141,4 +141,22 @@ interface KnowledgeStore {
      * List all distinct sources for the user.
      */
     suspend fun sources(userId: String): List<String>
+
+    /**
+     * Update the content of an existing knowledge entry and re-index it.
+     *
+     * @param userId owner user id for biz_id isolation
+     * @param key logical key `{source}/{relativePath}`
+     * @param content new full content (without frontmatter — wrapping is handled internally)
+     * @param title optional updated title
+     * @param kcategory optional updated category
+     * @return true if the entry existed and was updated
+     */
+    suspend fun update(
+        userId: String,
+        key: String,
+        content: String,
+        title: String? = null,
+        kcategory: String? = null
+    ): Boolean = false
 }

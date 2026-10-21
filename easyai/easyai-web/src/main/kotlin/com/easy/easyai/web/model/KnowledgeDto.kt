@@ -47,3 +47,115 @@ data class UploadResponseDto(
     val successCount: Int,
     val failedCount: Int
 )
+
+// ── Article editing DTOs ──────────────────────────────────────────────
+
+/**
+ * DTO for knowledge article list items (DB-backed).
+ */
+data class KnowledgeArticleDto(
+    val id: String,
+    val knowledgeKey: String,
+    val title: String,
+    val description: String?,
+    val category: String,
+    val source: String,
+    val relativePath: String,
+    val ext: String,
+    val visibility: String,
+    val origin: String,
+    val canWrite: Boolean,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+/**
+ * Request body for saving an article from text or chat.
+ */
+data class SaveArticleRequestDto(
+    val title: String,
+    val content: String,
+    val source: String = "chat-saved",
+    val relativePath: String? = null,
+    val category: String = "other",
+    val visibility: String = "private",
+    val origin: String = "chat_save",
+    val originSessionId: String? = null,
+    val originMessageId: String? = null,
+    val composedFrom: String? = null
+)
+
+/**
+ * Request body for updating article content.
+ */
+data class UpdateArticleRequestDto(
+    val key: String,
+    val content: String,
+    val title: String? = null,
+    val category: String? = null
+)
+
+/**
+ * Request body for AI rewrite operations.
+ */
+data class AiRewriteRequestDto(
+    val key: String,
+    val instruction: String,
+    val modelConfigId: String
+)
+
+/**
+ * Request body for AI selection modification.
+ */
+data class AiModifySelectionRequestDto(
+    val key: String,
+    val selectedText: String,
+    val instruction: String,
+    val modelConfigId: String
+)
+
+/**
+ * Request body for AI article composition from multiple materials.
+ */
+data class AiComposeRequestDto(
+    val sourceKeys: List<String>,
+    val guidance: String,
+    val style: String = "",
+    val modelConfigId: String
+)
+
+/**
+ * Response for AI operations.
+ */
+data class AiResultDto(
+    val content: String
+)
+
+/**
+ * Request body for granting access to an article.
+ */
+data class GrantAccessRequestDto(
+    val articleId: String,
+    val granteeId: String,
+    val permission: String
+)
+
+/**
+ * DTO for access grant entries.
+ */
+data class KnowledgeAccessDto(
+    val id: String,
+    val articleId: String,
+    val granteeId: String,
+    val permission: String,
+    val grantedBy: String,
+    val grantedAt: Long
+)
+
+/**
+ * Request body for updating article visibility.
+ */
+data class UpdateVisibilityRequestDto(
+    val articleId: String,
+    val visibility: String
+)
