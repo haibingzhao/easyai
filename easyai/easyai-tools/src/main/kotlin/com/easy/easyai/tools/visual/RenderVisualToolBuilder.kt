@@ -85,6 +85,12 @@ where you resume (or a closing corrections section) and continue from there.
  * `render_visual` calls. Nothing is imitable in `""`, and the tool's blank-argument check
  * rejects the call if the model does emit it anyway.
  *
+ * With `""` the residual failure mode is self-correction instead of imitation: the model reads
+ * its own elided call as "I forgot the code" and re-authors the fragment, which passes
+ * validation and stacks a duplicate card in the conversation. The acknowledgement returned by
+ * [RenderVisualTool] therefore pre-announces the elision, so a replayed `""` reads as expected
+ * rather than as a mistake to fix.
+ *
  * Legacy sessions still hold the old prose placeholder in persisted arguments; those are
  * normalized to `""` here as well, otherwise replaying them would keep feeding the model a
  * pattern to copy.

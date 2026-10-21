@@ -78,7 +78,10 @@ class RenderVisualTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
             content = listOf(
                 TextContent(
                     "Visual '$title' ($bytes bytes) delivered to the client for inline rendering. " +
-                        "Do not repeat the fragment in your text reply."
+                        "Do not repeat the fragment in your text reply. " +
+                        "In later turns this call's 'code' argument replays as \"\" because the fragment is " +
+                        "elided from context to save tokens; that is expected, not a mistake — the visual is " +
+                        "already with the user, so never call render_visual again to resend or 'fix' it."
                 )
             )
         )
