@@ -65,6 +65,7 @@ data class KnowledgeArticleDto(
     val visibility: String,
     val origin: String,
     val canWrite: Boolean,
+    val canManage: Boolean,
     val createdAt: Long,
     val updatedAt: Long
 )
@@ -100,6 +101,7 @@ data class UpdateArticleRequestDto(
  */
 data class AiRewriteRequestDto(
     val key: String,
+    val content: String? = null,
     val instruction: String,
     val modelConfigId: String
 )
@@ -109,6 +111,7 @@ data class AiRewriteRequestDto(
  */
 data class AiModifySelectionRequestDto(
     val key: String,
+    val content: String? = null,
     val selectedText: String,
     val instruction: String,
     val modelConfigId: String

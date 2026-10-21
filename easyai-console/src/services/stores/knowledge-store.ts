@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 import { knowledgeService } from '@/services/knowledge-service';
-import type { KnowledgeEntryDto, KnowledgeDetailDto, UploadResponseDto } from '@/services/knowledge-service';
+import { readErrorMessage } from '@/services/api-client';
+import type {
+  KnowledgeEntryDto, KnowledgeDetailDto, UploadResponseDto,
+  KnowledgeArticleDto, SaveArticleRequest, UpdateArticleRequest,
+  KnowledgeAccessDto, GrantAccessRequest, AiComposeRequest,
+} from '@/services/knowledge-service';
 
 /** Polling interval (ms) for checking indexing progress after upload. */
 const INDEXING_POLL_INTERVAL_MS = 3_000;
@@ -18,6 +23,20 @@ interface KnowledgeStore {
   indexingKeys: Set<string>;
   /** Derived progress: { done, total } — only meaningful when indexingKeys is non-empty. */
   indexingProgress: { done: number; total: number } | null;
+  /** DB-backed article list (from /articles endpoint). */
+  articles: KnowledgeArticleDto[];
+  articleLoading: boolean;
+  /** Content fetch state for a single article; separate so the list spinner does not flash. */
+  articleContentLoading: boolean;
+  /** Last article operation failure (load/save/delete/permissions). */
+  articleError: string | null;
+  /** Access grants for the currently selected article. */
+  accessGrants: KnowledgeAccessDto[];
+  accessLoading: boolean;
+  /** AI compose state. */
+  composing: boolean;
+  composeResult: string | null;
+  composeError: string | null;
 
   loadEntries: (source?: string, category?: string, q?: string) => Promise<void>;
   loadSources: () => Promise<void>;
@@ -25,6 +44,19 @@ interface KnowledgeStore {
   deleteEntry: (key: string) => Promise<void>;
   deleteSource: (source: string) => Promise<void>;
   upload: (files: File[], paths: string[], source: string, category?: string) => Promise<UploadResponseDto>;
+  saveToKnowledge: (request: SaveArticleRequest) => Promise<KnowledgeArticleDto>;
+  loadArticles: (source?: string, category?: string) => Promise<void>;
+  loadArticleContent: (key: string) => Promise<string>;
+  updateArticle: (request: UpdateArticleRequest) => Promise<KnowledgeArticleDto>;
+  deleteArticle: (key: string) => Promise<void>;
+  clearArticleError: () => void;
+  loadAccessGrants: (articleId: string) => Promise<void>;
+  grantAccess: (request: GrantAccessRequest) => Promise<void>;
+  revokeAccess: (articleId: string, granteeId: string) => Promise<void>;
+  updateVisibility: (articleId: string, visibility: string) => Promise<void>;
+  clearAccessGrants: () => void;
+  aiCompose: (request: AiComposeRequest) => Promise<string>;
+  clearComposeResult: () => void;
   /** Start polling for indexing progress of the given keys. */
   startIndexingPoll: (keys: string[]) => void;
   /** Stop polling and clear indexing state. */
@@ -54,6 +86,15 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => {
     uploadResult: null,
     indexingKeys: new Set(),
     indexingProgress: null,
+    articles: [],
+    articleLoading: false,
+    articleContentLoading: false,
+    articleError: null,
+    accessGrants: [],
+    accessLoading: false,
+    composing: false,
+    composeResult: null,
+    composeError: null,
 
   loadEntries: async (source, category, q) => {
     set({ loading: true, error: null });
@@ -123,6 +164,123 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => {
       throw e;
     }
   },
+
+  saveToKnowledge: async (request) => {
+    const article = await knowledgeService.saveToKnowledge(request);
+    // The article is already persisted; a list-refresh failure must not turn
+    // a successful save into an error for the caller.
+    await get().loadArticles().catch(() => undefined);
+    return article;
+  },
+
+  loadArticles: async (source, category) => {
+    set({ articleLoading: true, articleError: null });
+    try {
+      const articles = await knowledgeService.listArticles(source, category);
+      set({ articles, articleLoading: false });
+    } catch (e) {
+      set({ articleError: readErrorMessage(e), articleLoading: false });
+      throw e;
+    }
+  },
+
+  loadArticleContent: async (key) => {
+    set({ articleContentLoading: true, articleError: null });
+    try {
+      const content = await knowledgeService.getArticleContent(key);
+      set({ articleContentLoading: false });
+      return content;
+    } catch (e) {
+      set({ articleError: readErrorMessage(e), articleContentLoading: false });
+      throw e;
+    }
+  },
+
+  updateArticle: async (request) => {
+    set({ articleLoading: true, articleError: null });
+    try {
+      const article = await knowledgeService.updateArticle(request);
+      set({ articleLoading: false });
+      await get().loadArticles().catch(() => undefined);
+      return article;
+    } catch (e) {
+      set({ articleError: readErrorMessage(e), articleLoading: false });
+      throw e;
+    }
+  },
+
+  deleteArticle: async (key) => {
+    set({ articleError: null });
+    try {
+      await knowledgeService.deleteArticle(key);
+      await get().loadArticles().catch(() => undefined);
+    } catch (e) {
+      set({ articleError: readErrorMessage(e) });
+      throw e;
+    }
+  },
+
+  clearArticleError: () => set({ articleError: null }),
+
+  loadAccessGrants: async (articleId) => {
+    set({ accessLoading: true, articleError: null });
+    try {
+      const accessGrants = await knowledgeService.listAccess(articleId);
+      set({ accessGrants, accessLoading: false });
+    } catch (e) {
+      set({ articleError: readErrorMessage(e), accessLoading: false });
+      throw e;
+    }
+  },
+
+  grantAccess: async (request) => {
+    set({ articleError: null });
+    try {
+      await knowledgeService.grantAccess(request);
+      await get().loadAccessGrants(request.articleId);
+    } catch (e) {
+      set({ articleError: readErrorMessage(e) });
+      throw e;
+    }
+  },
+
+  revokeAccess: async (articleId, granteeId) => {
+    set({ articleError: null });
+    try {
+      await knowledgeService.revokeAccess(articleId, granteeId);
+      await get().loadAccessGrants(articleId);
+    } catch (e) {
+      set({ articleError: readErrorMessage(e) });
+      throw e;
+    }
+  },
+
+  updateVisibility: async (articleId, visibility) => {
+    set({ articleError: null });
+    try {
+      await knowledgeService.updateVisibility({ articleId, visibility });
+      await get().loadArticles().catch(() => undefined);
+    } catch (e) {
+      set({ articleError: readErrorMessage(e) });
+      throw e;
+    }
+  },
+
+  clearAccessGrants: () => set({ accessGrants: [] }),
+
+  aiCompose: async (request) => {
+    set({ composing: true, composeError: null, composeResult: null });
+    try {
+      const result = await knowledgeService.aiCompose(request);
+      set({ composing: false, composeResult: result.content });
+      return result.content;
+    } catch (e) {
+      set({ composeError: readErrorMessage(e), composing: false });
+      throw e;
+    }
+  },
+
+  clearComposeResult: () => set({ composeResult: null, composeError: null }),
 
   startIndexingPoll: (keys) => {
     stopPolling();

@@ -11,8 +11,11 @@ import pkg from './package.json'
  * Usage: npm run build:lib
  */
 
-// Externalize all dependencies + their sub-path imports (e.g. react/jsx-runtime)
-// but NOT @/ aliases which should be resolved and bundled
+// Externalize all runtime dependencies + their sub-path imports (e.g. react/jsx-runtime)
+// but NOT @/ aliases which should be resolved and bundled.
+//
+// The editor stack (@tiptap/*, tiptap-markdown, prosemirror-*) lives in devDependencies and is
+// bundled into dist-lib on purpose: hosts consume the library without installing tiptap.
 const depNames = new Set([
   ...Object.keys(pkg.dependencies || {}),
   ...Object.keys(pkg.peerDependencies || {}),

@@ -234,6 +234,7 @@ class KnowledgeController(
                     visibility = article.visibility,
                     origin = article.origin,
                     canWrite = service.canWrite(article, userId, groupUserId),
+                    canManage = service.canManage(article, userId, groupUserId),
                     createdAt = article.createdAt,
                     updatedAt = article.updatedAt
                 )
@@ -276,6 +277,7 @@ class KnowledgeController(
                 visibility = article.visibility,
                 origin = article.origin,
                 canWrite = true,
+                canManage = service.canManage(article, userId, groupUserId),
                 createdAt = article.createdAt,
                 updatedAt = article.updatedAt
             )
@@ -309,6 +311,7 @@ class KnowledgeController(
                 visibility = article.visibility,
                 origin = article.origin,
                 canWrite = true,
+                canManage = service.canManage(article, userId, groupUserId),
                 createdAt = article.createdAt,
                 updatedAt = article.updatedAt
             )
@@ -345,6 +348,7 @@ class KnowledgeController(
                 userId = getCurrentUserId(),
                 groupUserId = currentGroupUserId(),
                 key = request.key,
+                content = request.content,
                 instruction = request.instruction,
                 modelConfigId = request.modelConfigId
             )
@@ -361,6 +365,7 @@ class KnowledgeController(
                 userId = getCurrentUserId(),
                 groupUserId = currentGroupUserId(),
                 key = request.key,
+                content = request.content,
                 selectedText = request.selectedText,
                 instruction = request.instruction,
                 modelConfigId = request.modelConfigId
@@ -393,7 +398,8 @@ class KnowledgeController(
                 articleId = request.articleId,
                 granteeId = request.granteeId,
                 permission = request.permission,
-                grantedBy = getCurrentUserId()
+                grantedBy = getCurrentUserId(),
+                groupUserId = currentGroupUserId()
             )
             mapOf("success" to true)
         }
@@ -406,7 +412,7 @@ class KnowledgeController(
     ): Mono<Map<String, Boolean>> {
         return mono {
             val service = articleService ?: throw knowledgeNotEnabled()
-            service.revokeAccess(articleId, granteeId, getCurrentUserId())
+            service.revokeAccess(articleId, granteeId, getCurrentUserId(), currentGroupUserId())
             mapOf("success" to true)
         }
     }
@@ -415,7 +421,7 @@ class KnowledgeController(
     fun listAccess(@PathVariable articleId: String): Mono<List<KnowledgeAccessDto>> {
         return mono {
             val service = articleService ?: throw knowledgeNotEnabled()
-            service.listAccess(articleId, getCurrentUserId()).map { access ->
+            service.listAccess(articleId, getCurrentUserId(), currentGroupUserId()).map { access ->
                 KnowledgeAccessDto(
                     id = access.id,
                     articleId = access.articleId,
@@ -432,7 +438,7 @@ class KnowledgeController(
     fun updateVisibility(@RequestBody request: UpdateVisibilityRequestDto): Mono<Map<String, Boolean>> {
         return mono {
             val service = articleService ?: throw knowledgeNotEnabled()
-            service.updateVisibility(request.articleId, request.visibility, getCurrentUserId())
+            service.updateVisibility(request.articleId, request.visibility, getCurrentUserId(), currentGroupUserId())
             mapOf("success" to true)
         }
     }

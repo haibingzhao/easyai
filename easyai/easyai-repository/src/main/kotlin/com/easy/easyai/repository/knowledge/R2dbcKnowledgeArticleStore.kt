@@ -105,9 +105,33 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
                 ?.toArticle()
         }
 
+    override suspend fun findGrantedByKey(granteeId: String, knowledgeKey: String): KnowledgeArticle? =
+        suspendTransaction(db) {
+            val table = Tables.KnowledgeArticleTable
+            val accessTable = Tables.KnowledgeAccessTable
+
+            val grantedArticleIds = accessTable.selectAll()
+                .where { accessTable.granteeId eq granteeId }
+                .toList()
+                .map { it[accessTable.articleId] }
+
+            if (grantedArticleIds.isEmpty()) return@suspendTransaction null
+
+            table.selectAll()
+                .where {
+                    (table.knowledgeKey eq knowledgeKey) and (table.id inList grantedArticleIds)
+                }
+                .orderBy(table.updatedAt to SortOrder.DESC)
+                .limit(1)
+                .toList()
+                .firstOrNull()
+                ?.toArticle()
+        }
+
     override fun findAllVisible(
         userId: String,
         groupUserIds: List<String>,
+        sharedOwnerIds: List<String>,
         source: String?,
         category: String?
     ): Flow<KnowledgeArticle> = flow {
@@ -120,42 +144,30 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
                 .toList()
                 .map { it[accessTable.articleId] }
 
-            val ownFilter = UserScope.filterStrict(table.userId, userId)
+            val filters = mutableListOf<Op<Boolean>>(UserScope.filterStrict(table.userId, userId))
 
-            val groupFilter: Op<Boolean>? = if (groupUserIds.isNotEmpty()) {
-                (table.visibility eq "group") and (table.userId inList groupUserIds)
-            } else {
-                null
+            if (groupUserIds.isNotEmpty()) {
+                filters += (table.visibility eq "group") and (table.userId inList groupUserIds)
+            }
+            if (sharedOwnerIds.isNotEmpty()) {
+                filters += table.userId inList sharedOwnerIds
+            }
+            if (grantedArticleIds.isNotEmpty()) {
+                filters += table.id inList grantedArticleIds
             }
 
-            val grantedFilter: Op<Boolean>? = if (grantedArticleIds.isNotEmpty()) {
-                table.id inList grantedArticleIds
-            } else {
-                null
-            }
-
-            val baseFilter: Op<Boolean> = when {
-                groupFilter != null && grantedFilter != null -> ownFilter or groupFilter or grantedFilter
-                groupFilter != null -> ownFilter or groupFilter
-                grantedFilter != null -> ownFilter or grantedFilter
-                else -> ownFilter
-            }
-
-            var query = table.selectAll().where { baseFilter }
-
+            var condition = filters.reduce { acc, filter -> acc or filter }
             if (!source.isNullOrBlank()) {
-                query = table.selectAll().where { baseFilter and (table.articleSource eq source) }
+                condition = condition and (table.articleSource eq source)
             }
             if (!category.isNullOrBlank()) {
-                val prev = if (!source.isNullOrBlank()) {
-                    baseFilter and (table.articleSource eq source) and (table.category eq category)
-                } else {
-                    baseFilter and (table.category eq category)
-                }
-                query = table.selectAll().where { prev }
+                condition = condition and (table.category eq category)
             }
 
-            query.orderBy(table.updatedAt to SortOrder.DESC).toList()
+            table.selectAll()
+                .where { condition }
+                .orderBy(table.updatedAt to SortOrder.DESC)
+                .toList()
         }
 
         for (row in rows) {

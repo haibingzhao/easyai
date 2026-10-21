@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Copy, Check, MessageSquareQuote, Quote } from 'lucide-react';
+import { Copy, Check, MessageSquareQuote, Quote, Bookmark } from 'lucide-react';
 import { useSideAskStore } from '@/services/stores/side-ask-store';
 import { useCopyToast } from './tools/useCopyToast';
+import { SaveToKnowledgeDialog } from '@/components/knowledge/SaveToKnowledgeDialog';
 import { i18n } from '@/utils/i18n';
 
 const TOOLBAR_GAP_ABOVE = 8;
 const TOOLBAR_HEIGHT = 32;
-const HALF_WIDTH = 90;
+const HALF_WIDTH = 120;
 
 interface SelectionToolbarProps {
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -20,6 +21,8 @@ interface SelectionToolbarProps {
 export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({ containerRef }) => {
   const [anchor, setAnchor] = useState<{ top: number; center: number } | null>(null);
   const [selectedText, setSelectedText] = useState('');
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [saveContent, setSaveContent] = useState('');
   const openWithQuote = useSideAskStore((s) => s.openWithQuote);
   const requestQuoteToEditor = useSideAskStore((s) => s.requestQuoteToEditor);
   const { copyToClipboard, toast } = useCopyToast();
@@ -112,8 +115,25 @@ export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({ containerRef
           <Quote className="w-3.5 h-3.5" />
           <span>{i18n('Quote to input')}</span>
         </button>
+        <button
+          className={buttonClass}
+          title={i18n('Save to Knowledge')}
+          onClick={() => {
+            setSaveContent(selectedText);
+            setSaveDialogOpen(true);
+            hide();
+          }}
+        >
+          <Bookmark className="w-3.5 h-3.5" />
+          <span>{i18n('Save to Knowledge')}</span>
+        </button>
       </div>
       {toast}
+      <SaveToKnowledgeDialog
+        open={saveDialogOpen}
+        onClose={() => setSaveDialogOpen(false)}
+        content={saveContent}
+      />
     </>
   );
 };

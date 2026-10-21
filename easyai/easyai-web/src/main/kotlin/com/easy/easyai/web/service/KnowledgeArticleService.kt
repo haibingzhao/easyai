@@ -10,7 +10,9 @@ import com.easy.easyai.core.knowledge.KnowledgeArticleStore
 import com.easy.easyai.core.knowledge.KnowledgeOwnership
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.storage.ObjectStorageResolver
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -20,6 +22,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.web.server.ResponseStatusException
 import java.security.MessageDigest
+import java.sql.SQLException
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -59,44 +62,88 @@ class KnowledgeArticleService(
         val ossKey = buildOssKey(ownerId, source, relativePath)
         val now = System.currentTimeMillis()
 
-        writeToOss(ownerId, ossKey, content.toByteArray(Charsets.UTF_8), "text/markdown")
+        val existing = articleStore.findByKey(ownerId, knowledgeKey)
+        if (existing != null && origin != "upload") {
+            throw ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "An article with the same title already exists: $knowledgeKey"
+            )
+        }
 
-        val article = KnowledgeArticle(
-            id = UUID.randomUUID().toString(),
-            userId = ownerId,
-            knowledgeKey = knowledgeKey,
-            ossKey = ossKey,
-            title = title,
-            description = content.take(200),
-            category = category,
-            source = source,
-            relativePath = relativePath,
-            ext = ext,
-            contentHash = sha256(content),
-            visibility = visibility,
-            origin = origin,
-            originSessionId = originSessionId,
-            originMessageId = originMessageId,
-            composedFrom = composedFrom,
-            createdAt = now,
-            updatedAt = now
-        )
+        // Re-uploading the same source path updates the existing row instead of tripping the
+        // (user_id, knowledge_key) unique index.
+        val article = if (existing != null) {
+            existing.copy(
+                ossKey = existing.ossKey.ifBlank { ossKey },
+                title = title,
+                description = content.take(200),
+                category = category,
+                ext = ext,
+                contentHash = sha256(content),
+                origin = origin,
+                originSessionId = originSessionId,
+                originMessageId = originMessageId,
+                composedFrom = composedFrom,
+                updatedAt = now
+            )
+        } else {
+            KnowledgeArticle(
+                id = UUID.randomUUID().toString(),
+                userId = ownerId,
+                knowledgeKey = knowledgeKey,
+                ossKey = ossKey,
+                title = title,
+                description = content.take(200),
+                category = category,
+                source = source,
+                relativePath = relativePath,
+                ext = ext,
+                contentHash = sha256(content),
+                visibility = visibility,
+                origin = origin,
+                originSessionId = originSessionId,
+                originMessageId = originMessageId,
+                composedFrom = composedFrom,
+                createdAt = now,
+                updatedAt = now
+            )
+        }
 
-        articleStore.save(article)
+        val created = existing == null
+        try {
+            articleStore.save(article)
+        } catch (e: SQLException) {
+            // check-then-insert is racy; the unique index is the source of truth.
+            if (created && e.sqlState == UNIQUE_VIOLATION_SQLSTATE) {
+                throw ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "An article with the same title already exists: $knowledgeKey"
+                )
+            }
+            throw e
+        }
 
-        knowledgeStore?.update(ownerId, knowledgeKey, content, title, category)
+        try {
+            writeToOss(article.userId, article.ossKey, content.toByteArray(Charsets.UTF_8), "text/markdown")
+        } catch (e: Exception) {
+            if (created) {
+                withContext(NonCancellable) {
+                    runCatching { articleStore.delete(article.id) }
+                }
+            }
+            throw e
+        }
 
-        logger.info("Saved knowledge article: key={}, visibility={}, origin={}", knowledgeKey, visibility, origin)
+        knowledgeStore?.update(article.userId, knowledgeKey, content, title, category)
+
+        logger.info("Saved knowledge article: key={}, visibility={}, origin={}", knowledgeKey, article.visibility, origin)
         return article
     }
 
     suspend fun readContent(userId: String, groupUserId: String?, key: String): String? {
-        val ownerId = KnowledgeOwnership.ownerId(userId, groupUserId, sharedWithinGroup)
-        val article = articleStore.findByKey(ownerId, key) ?: return null
-
-        val storage = objectStorageResolver?.resolve(ownerId) ?: return null
-        val obj = storage.get(article.ossKey) ?: return null
-        return String(obj.bytes, Charsets.UTF_8)
+        val article = resolveVisibleArticle(userId, groupUserId, key) ?: return null
+        if (!canRead(article, userId, groupUserId)) return null
+        return readArticleContent(article)
     }
 
     suspend fun updateArticle(
@@ -107,16 +154,17 @@ class KnowledgeArticleService(
         title: String? = null,
         category: String? = null
     ): KnowledgeArticle {
-        val ownerId = KnowledgeOwnership.ownerId(userId, groupUserId, sharedWithinGroup)
-        val existing = articleStore.findByKey(ownerId, key)
+        val existing = resolveVisibleArticle(userId, groupUserId, key)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Article not found: $key")
 
         if (!canWrite(existing, userId, groupUserId)) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "No write permission on article: $key")
         }
 
-        val ossKey = existing.ossKey.ifBlank { buildOssKey(ownerId, existing.source, existing.relativePath) }
-        writeToOss(ownerId, ossKey, content.toByteArray(Charsets.UTF_8), "text/markdown")
+        val ossKey = existing.ossKey.ifBlank {
+            buildOssKey(existing.userId, existing.source, existing.relativePath)
+        }
+        writeToOss(existing.userId, ossKey, content.toByteArray(Charsets.UTF_8), "text/markdown")
 
         val updated = existing.copy(
             title = title ?: existing.title,
@@ -127,24 +175,23 @@ class KnowledgeArticleService(
         )
         articleStore.save(updated)
 
-        knowledgeStore?.update(ownerId, key, content, title, category)
+        knowledgeStore?.update(existing.userId, existing.knowledgeKey, content, title, category)
 
         logger.info("Updated knowledge article: key={}", key)
         return updated
     }
 
     suspend fun deleteArticle(userId: String, groupUserId: String?, key: String): Boolean {
-        val ownerId = KnowledgeOwnership.ownerId(userId, groupUserId, sharedWithinGroup)
-        val article = articleStore.findByKey(ownerId, key) ?: return false
+        val article = resolveVisibleArticle(userId, groupUserId, key) ?: return false
 
-        if (article.userId != userId) {
+        if (!isOwner(article, userId, groupUserId)) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Only the article owner can delete")
         }
 
-        objectStorageResolver?.resolve(ownerId)?.delete(article.ossKey)
+        objectStorageResolver?.resolve(article.userId)?.delete(article.ossKey)
         accessStore.deleteByArticle(article.id)
         articleStore.delete(article.id)
-        knowledgeStore?.delete(ownerId, key)
+        knowledgeStore?.delete(article.userId, article.knowledgeKey)
 
         logger.info("Deleted knowledge article: key={}", key)
         return true
@@ -161,22 +208,22 @@ class KnowledgeArticleService(
         } else {
             emptyList()
         }
+        // In shared mode the group bucket is co-owned: every row is visible, including
+        // rows saved as `private` when the sharing flag was off.
+        val sharedOwnerIds = if (sharedWithinGroup && !groupUserId.isNullOrBlank()) {
+            listOf(groupUserId)
+        } else {
+            emptyList()
+        }
 
-        val articles = articleStore.findAllVisible(userId, groupUserIds, source, category)
+        val articles = articleStore.findAllVisible(userId, groupUserIds, sharedOwnerIds, source, category)
         return articles.toList()
-    }
-
-    suspend fun findByKey(userId: String, groupUserId: String?, key: String): KnowledgeArticle? {
-        val ownerId = KnowledgeOwnership.ownerId(userId, groupUserId, sharedWithinGroup)
-        val article = articleStore.findByKey(ownerId, key) ?: return null
-        if (!canRead(article, userId, groupUserId)) return null
-        return article
     }
 
     // ── Permissions ───────────────────────────────────────────────────
 
     suspend fun canRead(article: KnowledgeArticle, userId: String, groupUserId: String?): Boolean {
-        if (article.userId == userId) return true
+        if (isOwner(article, userId, groupUserId)) return true
         if (article.visibility == "group" && sharedWithinGroup &&
             !groupUserId.isNullOrBlank() && article.userId == groupUserId) return true
         return accessStore.hasPermission(article.id, userId, "read") ||
@@ -184,20 +231,34 @@ class KnowledgeArticleService(
     }
 
     suspend fun canWrite(article: KnowledgeArticle, userId: String, groupUserId: String?): Boolean {
-        if (article.userId == userId) return true
+        if (isOwner(article, userId, groupUserId)) return true
         return accessStore.hasPermission(article.id, userId, "write")
     }
+
+    /**
+     * Whether the caller owns the article's bucket. With shared knowledge every group member
+     * co-owns the group bucket, which is what makes the shared slice writable for members.
+     */
+    fun canManage(article: KnowledgeArticle, userId: String, groupUserId: String?): Boolean =
+        isOwner(article, userId, groupUserId)
+
+    private fun isOwner(article: KnowledgeArticle, userId: String, groupUserId: String?): Boolean =
+        article.userId == KnowledgeOwnership.ownerId(userId, groupUserId, sharedWithinGroup)
 
     suspend fun grantAccess(
         articleId: String,
         granteeId: String,
         permission: String,
-        grantedBy: String
+        grantedBy: String,
+        groupUserId: String?
     ) {
         val article = articleStore.findById(articleId)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Article not found")
-        if (article.userId != grantedBy) {
+        if (!isOwner(article, grantedBy, groupUserId)) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Only the article owner can grant access")
+        }
+        if (permission != "read" && permission != "write") {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid permission: $permission")
         }
         accessStore.grant(
             KnowledgeAccess(
@@ -211,29 +272,32 @@ class KnowledgeArticleService(
         )
     }
 
-    suspend fun revokeAccess(articleId: String, granteeId: String, userId: String) {
+    suspend fun revokeAccess(articleId: String, granteeId: String, userId: String, groupUserId: String?) {
         val article = articleStore.findById(articleId)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Article not found")
-        if (article.userId != userId) {
+        if (!isOwner(article, userId, groupUserId)) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Only the article owner can revoke access")
         }
         accessStore.revoke(articleId, granteeId)
     }
 
-    suspend fun listAccess(articleId: String, userId: String): List<KnowledgeAccess> {
+    suspend fun listAccess(articleId: String, userId: String, groupUserId: String?): List<KnowledgeAccess> {
         val article = articleStore.findById(articleId)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Article not found")
-        if (article.userId != userId) {
+        if (!isOwner(article, userId, groupUserId)) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Only the article owner can view access list")
         }
         return accessStore.listByArticle(articleId)
     }
 
-    suspend fun updateVisibility(articleId: String, visibility: String, userId: String) {
+    suspend fun updateVisibility(articleId: String, visibility: String, userId: String, groupUserId: String?) {
         val article = articleStore.findById(articleId)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Article not found")
-        if (article.userId != userId) {
+        if (!isOwner(article, userId, groupUserId)) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Only the article owner can change visibility")
+        }
+        if (visibility != "private" && visibility != "group") {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid visibility: $visibility")
         }
         articleStore.save(article.copy(visibility = visibility, updatedAt = System.currentTimeMillis()))
     }
@@ -244,10 +308,12 @@ class KnowledgeArticleService(
         userId: String,
         groupUserId: String?,
         key: String,
+        content: String? = null,
         instruction: String,
         modelConfigId: String
     ): String {
-        val content = readContent(userId, groupUserId, key)
+        val articleContent = content?.takeIf { it.isNotBlank() }
+            ?: readContent(userId, groupUserId, key)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Article content not found: $key")
 
         val systemPrompt = """
@@ -260,7 +326,7 @@ Preserve the original structure (headings, lists, code blocks) unless the instru
         val userPrompt = """
 ## Original Article
 
-$content
+$articleContent
 
 ## Instruction
 
@@ -274,11 +340,13 @@ $instruction
         userId: String,
         groupUserId: String?,
         key: String,
+        content: String? = null,
         selectedText: String,
         instruction: String,
         modelConfigId: String
     ): String {
-        val content = readContent(userId, groupUserId, key)
+        val articleContent = content?.takeIf { it.isNotBlank() }
+            ?: readContent(userId, groupUserId, key)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Article content not found: $key")
 
         val systemPrompt = """
@@ -289,6 +357,10 @@ The output will replace the selected portion in the original article.
 """.trimIndent()
 
         val userPrompt = """
+## Original Article
+
+$articleContent
+
 ## Selected Text
 
 $selectedText
@@ -310,10 +382,9 @@ $instruction
         modelConfigId: String
     ): String {
         val materials = sourceKeys.mapNotNull { key ->
-            val content = readContent(userId, groupUserId, key) ?: return@mapNotNull null
-            val article = findByKey(userId, groupUserId, key)
-            val title = article?.title ?: key
-            "### Material: $title\n\n$content"
+            val article = resolveVisibleArticle(userId, groupUserId, key) ?: return@mapNotNull null
+            if (!canRead(article, userId, groupUserId)) return@mapNotNull null
+            "### Material: ${article.title}\n\n${readArticleContent(article)}"
         }
 
         if (materials.isEmpty()) {
@@ -378,12 +449,51 @@ $guidance$styleHint
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
     }
 
+    /**
+     * Resolve the article a key refers to for this caller: own/shared bucket first, then an
+     * explicit grant. Keys are only unique per owner, so an own row shadows a granted one.
+     */
+    private suspend fun resolveVisibleArticle(
+        userId: String,
+        groupUserId: String?,
+        key: String
+    ): KnowledgeArticle? {
+        val ownerId = KnowledgeOwnership.ownerId(userId, groupUserId, sharedWithinGroup)
+        articleStore.findByKey(ownerId, key)?.let { return it }
+        return articleStore.findGrantedByKey(userId, key)
+    }
+
+    /** Content always lives in the article owner's storage, never in the caller's. */
+    private suspend fun readArticleContent(article: KnowledgeArticle): String {
+        val storage = objectStorageResolver?.resolve(article.userId)
+            ?: throw ResponseStatusException(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "Object storage is not configured; article content is unavailable"
+            )
+        val obj = storage.get(article.ossKey)
+            ?: throw ResponseStatusException(
+                HttpStatus.NOT_FOUND,
+                "Article content is missing from storage: ${article.knowledgeKey}"
+            )
+        return String(obj.bytes, Charsets.UTF_8)
+    }
+
     private suspend fun writeToOss(ownerId: String, key: String, bytes: ByteArray, contentType: String) {
-        val storage = objectStorageResolver?.resolve(ownerId) ?: return
+        val storage = objectStorageResolver?.resolve(ownerId)
+            ?: throw ResponseStatusException(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "Object storage is not configured; article content cannot be saved"
+            )
         try {
             storage.put(key, bytes, contentType)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             logger.warn("Failed to write article to OSS: key={}, error={}", key, e.message)
+            throw ResponseStatusException(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "Failed to write article content to storage: ${e.message}"
+            )
         }
     }
 
@@ -391,5 +501,10 @@ $guidance$styleHint
         val digest = MessageDigest.getInstance("SHA-256")
         val hash = digest.digest(content.toByteArray(Charsets.UTF_8))
         return hash.joinToString("") { "%02x".format(it) }
+    }
+
+    private companion object {
+        /** Postgres/H2 unique-violation SQLState. */
+        const val UNIQUE_VIOLATION_SQLSTATE = "23505"
     }
 }

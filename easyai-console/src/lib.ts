@@ -184,6 +184,7 @@ export { MemoriesPage } from './pages/MemoriesPage';
 export { TasksPage } from './pages/TasksPage';
 export { TaskTranscriptPage } from './pages/TaskTranscriptPage';
 export { KnowledgePage } from './pages/KnowledgePage';
+export { ArticleEditorPage } from './pages/ArticleEditorPage';
 export { CommandsPage } from './pages/CommandsPage';
 export { SkillsPage } from './pages/SkillsPage';
 export { SettingsPage } from './pages/SettingsPage';

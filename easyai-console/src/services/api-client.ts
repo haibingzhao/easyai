@@ -176,8 +176,10 @@ export async function fetchVoid(url: string, options?: AuthFetchOptions): Promis
 export function readErrorMessage(e: unknown, fallback = 'Request failed'): string {
   if (!(e instanceof Error)) return fallback;
   try {
-    const body = JSON.parse(e.message) as { error?: unknown };
+    const body = JSON.parse(e.message) as { error?: unknown; detail?: unknown };
     if (typeof body.error === 'string' && body.error) return body.error;
+    // WebFlux renders ResponseStatusException as RFC 7807 problem details.
+    if (typeof body.detail === 'string' && body.detail) return body.detail;
   } catch {
     // Body wasn't a JSON error object — the message is already readable.
   }

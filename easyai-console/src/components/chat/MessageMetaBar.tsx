@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { GitBranch } from 'lucide-react';
+import { GitBranch, Bookmark } from 'lucide-react';
 import type { AssistantMessage } from '../../types/message';
 import { useChatStore } from '@/services/stores/chat-store';
 import { sessionService } from '@/services/session-service';
 import { switchToSession } from '@/services/session-switch';
+import { SaveToKnowledgeDialog } from '@/components/knowledge/SaveToKnowledgeDialog';
 import { i18n } from '@/utils/i18n';
 import { formatTokenCount } from '../../utils/format';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
@@ -23,11 +24,15 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
   const transcriptMode = useChatStore((s) => s.transcriptMode);
   const [forking, setForking] = useState(false);
   const [forkConfirmOpen, setForkConfirmOpen] = useState(false);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
 
   const forkTarget = [...messages].reverse().find((m) => m.messageId);
   // Forking branches into a new editable session; on a read-only background-task transcript there is
   // nothing sensible to branch from, so the action is hidden there.
   const canFork = !isStreaming && !transcriptMode && !!sessionId && !!forkTarget?.messageId;
+  const canSave = !isStreaming && messages.some((m) => m.content?.trim());
+  const saveContent = messages.map((m) => m.content).filter(Boolean).join('\n\n');
+  const saveMessageId = forkTarget?.messageId;
 
   let inputTokens = 0;
   let outputTokens = 0;
@@ -44,7 +49,7 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
     if (usage.modelName) modelName = usage.modelName;
   }
   const showUsage = outputTokens > 0;
-  if (!showUsage && !canFork) return null;
+  if (!showUsage && !canFork && !canSave) return null;
 
   const handleFork = async () => {
     if (!sessionId || !forkTarget?.messageId || forking) return;
@@ -110,6 +115,15 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
               <GitBranch className="w-3 h-3" />
             </button>
           )}
+          {canSave && (
+            <button
+              onClick={() => setSaveDialogOpen(true)}
+              className="p-1 -my-1 rounded hover:bg-muted hover:text-foreground transition-colors"
+              title={i18n('Save to Knowledge')}
+            >
+              <Bookmark className="w-3 h-3" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -122,6 +136,14 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
           handleFork();
         }}
         onCancel={() => setForkConfirmOpen(false)}
+      />
+
+      <SaveToKnowledgeDialog
+        open={saveDialogOpen}
+        onClose={() => setSaveDialogOpen(false)}
+        content={saveContent}
+        sessionId={sessionId ?? undefined}
+        messageId={saveMessageId}
       />
     </>
   );
