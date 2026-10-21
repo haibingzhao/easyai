@@ -179,6 +179,62 @@ body {
   line-height: 1.6;
 }
 
+/* ===== Tiptap editor ===== */
+.prose ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.prose ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.prose ul[data-type="taskList"] li > label {
+  flex-shrink: 0;
+  margin-top: 0.25rem;
+}
+
+.prose ul[data-type="taskList"] li > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.prose li[data-checked="true"] > div {
+  color: var(--color-muted-foreground);
+  text-decoration: line-through;
+}
+
+.prose .tableWrapper {
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+
+.prose .tableWrapper table {
+  margin: 0;
+}
+
+.prose .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background-color: var(--color-primary);
+  pointer-events: none;
+}
+
+.prose.resize-cursor {
+  cursor: col-resize;
+}
+
+.prose img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+}
+
 /* ===== App Layout ===== */
 .app-layout {
   transition: grid-template-columns 0.2s ease;

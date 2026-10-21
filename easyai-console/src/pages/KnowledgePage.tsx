@@ -1,20 +1,34 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { BookOpen, Brain, X } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { BookOpen, Brain, FileText, X } from 'lucide-react';
 import { KnowledgeSidebar } from '@/components/knowledge/KnowledgeSidebar';
 import { KnowledgeViewer } from '@/components/knowledge/KnowledgeViewer';
 import { UploadKnowledgeDialog } from '@/components/knowledge/UploadKnowledgeDialog';
+import { ArticleListPanel } from '@/components/knowledge/ArticleListPanel';
 import { MemoryPanel } from '@/components/knowledge/MemoryPanel';
 import { useKnowledgeStore } from '@/services/stores/knowledge-store';
 import { useResizable } from '@/hooks/useResizable';
 import { i18n } from '@/utils/i18n';
 
-type TabId = 'knowledge' | 'memory';
+type TabId = 'knowledge' | 'articles' | 'memory';
 
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX = 480;
 
+function isTabId(value: string | null): value is TabId {
+  return value === 'knowledge' || value === 'articles' || value === 'memory';
+}
+
 export const KnowledgePage: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<TabId>('knowledge');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const activeTab: TabId = isTabId(tabParam) ? tabParam : 'knowledge';
+
+  const setActiveTab = (tab: TabId) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('tab', tab);
+    setSearchParams(next, { replace: true });
+  };
 
   return (
     <div className="h-full flex flex-col bg-background min-h-0">
@@ -27,6 +41,12 @@ export const KnowledgePage: React.FC = () => {
           onClick={() => setActiveTab('knowledge')}
         />
         <TabButton
+          active={activeTab === 'articles'}
+          icon={<FileText className="size-3.5" />}
+          label={i18n('Articles')}
+          onClick={() => setActiveTab('articles')}
+        />
+        <TabButton
           active={activeTab === 'memory'}
           icon={<Brain className="size-3.5" />}
           label={i18n('Memories')}
@@ -36,7 +56,13 @@ export const KnowledgePage: React.FC = () => {
 
       {/* Tab content */}
       <div className="flex-1 min-h-0">
-        {activeTab === 'knowledge' ? <KnowledgePanel /> : <MemoryPanel />}
+        {activeTab === 'knowledge' ? (
+          <KnowledgePanel />
+        ) : activeTab === 'articles' ? (
+          <ArticleListPanel />
+        ) : (
+          <MemoryPanel />
+        )}
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { HashRouter, Routes, Route } from 'react-router-dom';
+import { HashRouter, Routes, Route, useParams } from 'react-router-dom';
 import { AppLayout } from './components/layout/AppLayout';
 import { ChatPanel } from './components/chat/ChatPanel';
 import { WorkflowPage } from './pages/WorkflowPage';
@@ -12,6 +12,7 @@ import { MemoriesPage } from './pages/MemoriesPage';
 import { TasksPage } from './pages/TasksPage';
 import { TaskTranscriptPage } from './pages/TaskTranscriptPage';
 import { KnowledgePage } from './pages/KnowledgePage';
+import { ArticleEditorPage } from './pages/ArticleEditorPage';
 import { CommandsPage } from './pages/CommandsPage';
 import { SkillsPage } from './pages/SkillsPage';
 import { SwarmPresetEditorPage } from './pages/SwarmPresetEditorPage';
@@ -35,6 +36,13 @@ import './index.css';
 // The connection badge is a plugin: it mounts through the same registry a host uses for its own
 // top-bar entries, so nothing in the layout knows about it.
 if (!TOPBAR_EXTRA_ITEMS.includes(ConnectionPill)) TOPBAR_EXTRA_ITEMS.push(ConnectionPill);
+
+// Remount the editor when the article changes so per-article state (content,
+// title, dirty flag) never leaks between routes.
+const ArticleEditorRoute = () => {
+  const { articleKey } = useParams<{ articleKey: string }>();
+  return <ArticleEditorPage key={articleKey ?? ''} />;
+};
 
 function App() {
   const loadSettings = useSettingsStore((state) => state.loadSettings);
@@ -171,6 +179,10 @@ function App() {
           <Route
             path="/knowledge"
             element={<KnowledgePage />}
+          />
+          <Route
+            path="/knowledge/editor/:articleKey"
+            element={<ArticleEditorRoute />}
           />
           <Route
             path="/commands"

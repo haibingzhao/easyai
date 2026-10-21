@@ -279,6 +279,67 @@ internal class RagKnowledgeStore(
         }.distinct().sorted()
     }
 
+    // ── update ─────────────────────────────────────────────────────────
+
+    override suspend fun update(
+        userId: String,
+        key: String,
+        content: String,
+        title: String?,
+        kcategory: String?
+    ): Boolean {
+        val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
+        val externalId = RagConstants.externalIdOf(key)
+
+        val existing = client.readByExternalId(externalId, bizId) ?: return false
+
+        val oldMeta = parseFrontmatter(splitFrontmatter(existing.content ?: "").first)
+        val source = key.substringBefore('/')
+        val relativePath = key.substringAfter('/')
+        val ext = relativePath.substringAfterLast('.', "").lowercase()
+        val now = Instant.now()
+
+        val resolvedTitle = title ?: oldMeta["title"] ?: extractTitle(content, relativePath)
+        val resolvedDescription = oldMeta["description"] ?: extractDescription(content)
+        val resolvedCategory = kcategory ?: oldMeta["kcategory"] ?: "other"
+
+        val wrappedContent = buildFileContent(
+            title = resolvedTitle,
+            description = resolvedDescription,
+            source = source,
+            kcategory = resolvedCategory,
+            ext = ext,
+            updatedMillis = now.toEpochMilli(),
+            body = stripFrontmatter(content)
+        )
+
+        val metadata = buildMap<String, String> {
+            put("source", source)
+            put("kcategory", resolvedCategory)
+            put("ext", ext)
+            put("title", resolvedTitle)
+        }
+
+        val options = processingOptionsFor(ext) ?: RagProcessingOptions(skipKg = false)
+
+        val doc = RagDocument(
+            key = key,
+            content = wrappedContent,
+            metadata = metadata,
+            createTime = now.epochSecond,
+            options = options
+        )
+
+        return try {
+            client.upsert(doc, bizId, awaitIndexing = false)
+            logger.debug("Knowledge entry updated: {}", externalId)
+            true
+        } catch (e: RagException) {
+            logger.warn("Knowledge update failed for {}: {}", key, e.message)
+            false
+        }
+    }
+
     // ── Processing profile registry ────────────────────────────────────
 
     private fun processingOptionsFor(ext: String): RagProcessingOptions? = when (ext) {

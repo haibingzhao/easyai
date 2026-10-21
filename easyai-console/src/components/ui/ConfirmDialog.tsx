@@ -6,6 +6,7 @@ interface ConfirmDialogProps {
   open: boolean;
   message: string;
   confirmLabel?: string;
+  cancelLabel?: string;
   danger?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -15,6 +16,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   open,
   message,
   confirmLabel,
+  cancelLabel,
   danger = false,
   onConfirm,
   onCancel,
@@ -38,7 +40,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
       >
         <p className="text-sm">{message}</p>
         <div className="mt-4 flex justify-end gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={onCancel}>{i18n('Cancel')}</Button>
+          <Button type="button" variant="outline" size="sm" onClick={onCancel}>{cancelLabel ?? i18n('Cancel')}</Button>
           <Button type="button" variant={danger ? 'destructive' : 'default'} size="sm" onClick={onConfirm}>
             {confirmLabel ?? i18n('Confirm')}
           </Button>
