@@ -71,6 +71,8 @@ class RenderVisualToolTest {
             val text = (result.content.first() as TextContent).text
             assertTrue(text.contains("diagram"))
             assertTrue(text.contains("Do not repeat"))
+            assertTrue(text.contains("elided from context"), text)
+            assertTrue(text.contains("never call render_visual again"), text)
         }
     }
 
