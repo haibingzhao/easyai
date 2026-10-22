@@ -43,6 +43,7 @@ class QuickAskStreamServiceTest {
     private lateinit var agentService: AgentService
     private lateinit var configStore: ModelProviderConfigStore
     private lateinit var service: QuickAskStreamService
+    private val defaultOwners = listOf("u1", "system")
 
     @BeforeEach
     fun setUp() {
@@ -78,31 +79,31 @@ class QuickAskStreamServiceTest {
 
         @Test
         fun `blank question emits error without resolving config`() = runTest {
-            val events = service.stream("u1", request(question = "  ")).asFlow().toList()
+            val events = service.stream("u1", request(question = "  "), defaultOwners).asFlow().toList()
 
             assertEquals(1, events.size)
             val error = assertIs<ChatStreamEvent.Error>(events.single().data())
             assertTrue(error.errorMessage!!.contains("blank", ignoreCase = true))
-            coVerify(exactly = 0) { configStore.getConfig(any(), any<String>()) }
+            coVerify(exactly = 0) { configStore.getConfig(any(), any<Collection<String>>()) }
         }
 
         @Test
         fun `oversized selection emits error without resolving config`() = runTest {
-            val events = service.stream("u1", request(selectedText = "x".repeat(20_001))).asFlow().toList()
+            val events = service.stream("u1", request(selectedText = "x".repeat(20_001)), defaultOwners).asFlow().toList()
 
             val error = assertIs<ChatStreamEvent.Error>(events.single().data())
             assertTrue(error.errorMessage!!.contains("20000"))
-            coVerify(exactly = 0) { configStore.getConfig(any(), any<String>()) }
+            coVerify(exactly = 0) { configStore.getConfig(any(), any<Collection<String>>()) }
         }
 
         @Test
         fun `oversized history emits error without resolving config`() = runTest {
             val history = List(21) { LlmMessage(role = "user", content = "q$it") }
 
-            val events = service.stream("u1", request(history = history)).asFlow().toList()
+            val events = service.stream("u1", request(history = history), defaultOwners).asFlow().toList()
 
             assertIs<ChatStreamEvent.Error>(events.single().data())
-            coVerify(exactly = 0) { configStore.getConfig(any(), any<String>()) }
+            coVerify(exactly = 0) { configStore.getConfig(any(), any<Collection<String>>()) }
         }
 
         @Test
@@ -116,12 +117,24 @@ class QuickAskStreamServiceTest {
 
         @Test
         fun `unknown model config emits error and never runs the agent`() = runTest {
-            coEvery { configStore.getConfig("cfg-1", "u1") } returns null
+            coEvery { configStore.getConfig("cfg-1", defaultOwners) } returns null
 
-            val events = service.stream("u1", request()).asFlow().toList()
+            val events = service.stream("u1", request(), defaultOwners).asFlow().toList()
 
             val error = assertIs<ChatStreamEvent.Error>(events.single().data())
             assertTrue(error.errorMessage!!.contains("Model config not found"))
+        }
+
+        @Test
+        fun `group-owned model resolves across the caller's owner set`() = runTest {
+            val owners = listOf("u1", "grp-1", "system")
+            coEvery { configStore.getConfig("cfg-1", owners) } returns null
+
+            val events = service.stream("u1", request(), owners).asFlow().toList()
+
+            val error = assertIs<ChatStreamEvent.Error>(events.single().data())
+            assertTrue(error.errorMessage!!.contains("Model config not found"))
+            coVerify(exactly = 1) { configStore.getConfig("cfg-1", owners) }
         }
     }
 
@@ -147,9 +160,9 @@ class QuickAskStreamServiceTest {
             every { chatModel.stream(any()) } returns hangingStream
             every { agentService.supportsProtocol(any()) } returns true
             every { agentService.createChatModel(any(), any()) } returns chatModel
-            coEvery { configStore.getConfig("cfg-1", "u1") } returns config()
+            coEvery { configStore.getConfig("cfg-1", defaultOwners) } returns config()
 
-            val subscription = service.stream("u1", request()).subscribe()
+            val subscription = service.stream("u1", request(), defaultOwners).subscribe()
             runBlocking {
                 withTimeout(DISCONNECT_TIMEOUT_MS) { modelStarted.await() }
                 subscription.dispose()

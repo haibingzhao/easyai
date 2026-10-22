@@ -11,6 +11,7 @@ import com.easy.easyai.swarm.runtime.SwarmRuntime
 import com.easy.easyai.swarm.store.SwarmRunStore
 import com.easy.easyai.web.model.SessionDetail
 import com.easy.easyai.web.model.SessionMessagesAfterResponse
+import com.easy.easyai.web.security.currentOwners
 import com.easy.easyai.web.security.getCurrentUserId
 import com.easy.easyai.web.service.SessionService
 import jakarta.annotation.PreDestroy
@@ -834,7 +835,7 @@ class SwarmController(
                 ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Swarm run not found: $runId")
             val sessionId = sessionStore?.findSessionIdBySwarmTask(runId, taskId)
                 ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found for task: $taskId")
-            sessionService?.getSessionDetail(sessionId, userId)
+            sessionService?.getSessionDetail(sessionId, userId, currentOwners())
                 ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Session detail not available")
         }
     }

@@ -310,7 +310,8 @@ class KnowledgeArticleService(
         key: String,
         content: String? = null,
         instruction: String,
-        modelConfigId: String
+        modelConfigId: String,
+        owners: Collection<String>
     ): String {
         val articleContent = content?.takeIf { it.isNotBlank() }
             ?: readContent(userId, groupUserId, key)
@@ -333,7 +334,7 @@ $articleContent
 $instruction
 """.trimIndent()
 
-        return callLlm(userId, modelConfigId, systemPrompt, userPrompt)
+        return callLlm(modelConfigId, systemPrompt, userPrompt, owners)
     }
 
     suspend fun aiModifySelection(
@@ -343,7 +344,8 @@ $instruction
         content: String? = null,
         selectedText: String,
         instruction: String,
-        modelConfigId: String
+        modelConfigId: String,
+        owners: Collection<String>
     ): String {
         val articleContent = content?.takeIf { it.isNotBlank() }
             ?: readContent(userId, groupUserId, key)
@@ -370,7 +372,7 @@ $selectedText
 $instruction
 """.trimIndent()
 
-        return callLlm(userId, modelConfigId, systemPrompt, userPrompt)
+        return callLlm(modelConfigId, systemPrompt, userPrompt, owners)
     }
 
     suspend fun aiCompose(
@@ -379,7 +381,8 @@ $instruction
         sourceKeys: List<String>,
         guidance: String,
         style: String,
-        modelConfigId: String
+        modelConfigId: String,
+        owners: Collection<String>
     ): String {
         val materials = sourceKeys.mapNotNull { key ->
             val article = resolveVisibleArticle(userId, groupUserId, key) ?: return@mapNotNull null
@@ -409,18 +412,20 @@ ${materials.joinToString("\n\n---\n\n")}
 $guidance$styleHint
 """.trimIndent()
 
-        return callLlm(userId, modelConfigId, systemPrompt, userPrompt)
+        return callLlm(modelConfigId, systemPrompt, userPrompt, owners)
     }
 
     // ── Internal helpers ──────────────────────────────────────────────
 
     private suspend fun callLlm(
-        userId: String,
         modelConfigId: String,
         systemPrompt: String,
-        userPrompt: String
+        userPrompt: String,
+        owners: Collection<String>
     ): String {
-        val config = configStore.getConfig(modelConfigId, userId)
+        // The caller passes its complete read-visibility set (self → group → system); the single-id
+        // lookup would hide a shared model from every group member.
+        val config = configStore.getConfig(modelConfigId, owners)
             ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Model config not found: $modelConfigId")
 
         val factory = modelFactories.firstOrNull { it.supports(config.protocol) }

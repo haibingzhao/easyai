@@ -1,6 +1,6 @@
 package com.easy.easyai.web.controller
 
-import com.easy.easyai.web.security.getCurrentUserId
+import com.easy.easyai.web.security.currentGroupOwners
 import com.easy.easyai.web.service.AsrService
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.mono
@@ -24,7 +24,8 @@ import reactor.core.publisher.Mono
  * - POST /api/asr/transcribe - one WAV segment (multipart `file`) → its transcription text
  * - POST /api/asr/refine     - a dictation round's text + editor context → the context-aware rewrite
  *
- * Feature availability is decided by the user's Task Models choices (asr / dictation_refine);
+ * Feature availability is decided by the caller's effective Task Models choices (asr /
+ * dictation_refine), read across the same self → group owner set the settings page writes to;
  * both endpoints answer 409 when the backing task is unconfigured.
  */
 @RestController
@@ -38,7 +39,7 @@ class AsrController(
         @RequestPart("file") filePart: FilePart,
         @RequestParam(name = "language", required = false) language: String?
     ): Mono<AsrTextDto> = mono {
-        val userId = getCurrentUserId()
+        val owners = currentGroupOwners()
         val bytes = try {
             DataBufferUtils.join(filePart.content(), MAX_SEGMENT_BYTES).awaitSingle()
         } catch (e: DataBufferLimitException) {
@@ -49,15 +50,15 @@ class AsrController(
         } finally {
             DataBufferUtils.release(bytes)
         }
-        AsrTextDto(asrService.transcribe(userId, audio, language))
+        AsrTextDto(asrService.transcribe(owners, audio, language))
     }
 
     @PostMapping("/refine", consumes = [MediaType.APPLICATION_JSON_VALUE])
     fun refine(@RequestBody request: AsrRefineRequest): Mono<AsrTextDto> = mono {
-        val userId = getCurrentUserId()
+        val owners = currentGroupOwners()
         AsrTextDto(
             asrService.refine(
-                userId = userId,
+                owners = owners,
                 text = request.text,
                 contextBefore = request.contextBefore,
                 contextAfter = request.contextAfter

@@ -36,6 +36,7 @@ import com.easy.easyai.web.model.UpdateMemoryConfigRequest
 import com.easy.easyai.web.model.UpdateMemoryConsolidationSettingsRequest
 import com.easy.easyai.web.model.UpdateMemoryRequest
 import com.easy.easyai.web.security.currentGroupOwners
+import com.easy.easyai.web.security.currentOwners
 import com.easy.easyai.web.security.getCurrentUserId
 import com.easy.easyai.web.service.DefaultWorkspaceService
 import com.easy.easyai.web.service.SessionService
@@ -433,7 +434,7 @@ class MemoryController(
      */
     private suspend fun releasePreviewSession(sessionId: String) {
         val service = sessionService ?: return
-        runCatching { service.deleteSession(sessionId, getCurrentUserId()) }
+        runCatching { service.deleteSession(sessionId, getCurrentUserId(), currentOwners()) }
             .onFailure {
                 logger.warn(
                     "Failed to release memory consolidation preview session {}: {}", sessionId, it.message

@@ -109,9 +109,16 @@ interface SessionManager {
      * Get the ChatContext for a session (agentId, modelId, mode, projectPath).
      * Returns null if the session is not found or context is unavailable.
      * Used to construct the context needed for saveSessionMessages.
-     * @param userId Optional user ID for data isolation during DB restoration.
+     * @param userId Optional user ID for data isolation during DB restoration. It decides which
+     *   session is addressed.
+     * @param owners Read-visibility set for shared assets resolved while restoring — the model
+     *   config and other owner-scoped lookups. It does not affect session ownership.
      */
-    suspend fun getSessionContext(sessionId: String, userId: String = "system"): AgentContext? = null
+    suspend fun getSessionContext(
+        sessionId: String,
+        userId: String = "system",
+        owners: Collection<String> = emptyList()
+    ): AgentContext? = null
 
     /**
      * Get message timestamps for a session.

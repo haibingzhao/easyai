@@ -33,10 +33,12 @@ interface AuxModelResolver {
     suspend fun resolveConfig(userId: String?, task: AuxModelTask): ModelProviderConfig?
 
     /**
-     * Group-aware [resolve]: the choice is read across [owners] (self → group, first hit wins) and
-     * the referenced config is resolved against the same set. Aux choices never fold in the `system`
-     * layer, so callers with an [com.easy.easyai.core.agent.AgentContext] pass `auxOwners` (not
-     * `effectiveOwners`), matching the web boundary's `currentGroupOwners()`.
+     * Group-aware [resolve]: the choice is read across [owners] (self → group, first hit wins).
+     * Aux choices themselves never fold in the `system` layer, so callers with an
+     * [com.easy.easyai.core.agent.AgentContext] pass `auxOwners` (not `effectiveOwners`), matching
+     * the web boundary's `currentGroupOwners()`. The config a choice references is different: it is
+     * a shared asset, so resolution adds the `system` layer — the same set the settings page lists
+     * and validates choices against.
      *
      * One caller deliberately passes the wider set: skill routing resolves the `SKILL_SELECTION` model
      * with the same owner set it reads the skill catalog with, because the catalog must see `system`

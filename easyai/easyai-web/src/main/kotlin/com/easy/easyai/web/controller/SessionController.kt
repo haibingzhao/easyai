@@ -5,6 +5,7 @@ import com.easy.easyai.web.model.ForkSessionRequest
 import com.easy.easyai.web.model.SessionDetail
 import com.easy.easyai.web.model.SessionResponse
 import com.easy.easyai.web.model.UpdateSessionTagsRequest
+import com.easy.easyai.web.security.currentOwners
 import com.easy.easyai.web.security.getCurrentUserId
 import com.easy.easyai.web.service.SessionService
 import kotlinx.coroutines.reactor.mono
@@ -48,7 +49,7 @@ class SessionController(
     fun getSessionDetail(@PathVariable id: String): Mono<SessionDetail> {
         return mono {
             val userId = getCurrentUserId()
-            sessionService.getSessionDetail(id, userId) ?: throw IllegalArgumentException("Session not found")
+            sessionService.getSessionDetail(id, userId, currentOwners()) ?: throw IllegalArgumentException("Session not found")
         }
     }
 
@@ -94,7 +95,7 @@ class SessionController(
     fun deleteSession(@PathVariable id: String): Mono<Void> {
         return mono {
             val userId = getCurrentUserId()
-            sessionService.deleteSession(id, userId)
+            sessionService.deleteSession(id, userId, currentOwners())
         }.then()
     }
 }

@@ -7,6 +7,7 @@ import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.knowledge.KnowledgeUploadItem
 import com.easy.easyai.web.model.*
 import com.easy.easyai.web.security.currentGroupUserId
+import com.easy.easyai.web.security.currentOwners
 import com.easy.easyai.web.security.getCurrentUserId
 import com.easy.easyai.web.service.KnowledgeArticleService
 import kotlinx.coroutines.reactor.awaitSingleOrNull
@@ -350,7 +351,8 @@ class KnowledgeController(
                 key = request.key,
                 content = request.content,
                 instruction = request.instruction,
-                modelConfigId = request.modelConfigId
+                modelConfigId = request.modelConfigId,
+                owners = currentOwners()
             )
             AiResultDto(content = result)
         }
@@ -368,7 +370,8 @@ class KnowledgeController(
                 content = request.content,
                 selectedText = request.selectedText,
                 instruction = request.instruction,
-                modelConfigId = request.modelConfigId
+                modelConfigId = request.modelConfigId,
+                owners = currentOwners()
             )
             AiResultDto(content = result)
         }
@@ -384,7 +387,8 @@ class KnowledgeController(
                 sourceKeys = request.sourceKeys,
                 guidance = request.guidance,
                 style = request.style,
-                modelConfigId = request.modelConfigId
+                modelConfigId = request.modelConfigId,
+                owners = currentOwners()
             )
             AiResultDto(content = result)
         }

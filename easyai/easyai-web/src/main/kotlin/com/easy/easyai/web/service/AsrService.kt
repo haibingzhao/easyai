@@ -29,10 +29,11 @@ import kotlin.time.Duration.Companion.seconds
  * Backend for chat-input dictation: raw audio-segment transcription plus the post-dictation
  * context-aware rewrite.
  *
- * Both capabilities are gated on the user's Task Models settings — an unconfigured `asr` task
- * means voice input is off, an unconfigured `dictation_refine` task means the rewrite step is
- * skipped. The frontend discovers this through GET /api/aux-models; these endpoints answer 409
- * as the authoritative backstop.
+ * Both capabilities are gated on the caller's effective Task Models settings — an unconfigured
+ * `asr` task means voice input is off, an unconfigured `dictation_refine` task means the rewrite
+ * step is skipped. Choices are resolved over the caller's full owner set (self → group bucket),
+ * matching the settings page and every other group-shared consumer. The frontend discovers this
+ * through GET /api/aux-models; these endpoints answer 409 as the authoritative backstop.
  */
 @Service
 class AsrService(
@@ -43,14 +44,14 @@ class AsrService(
     private val logger = LoggerFactory.getLogger(javaClass)
 
     /** Transcribes one audio segment (16 kHz mono WAV from the browser) via the configured ASR row. */
-    suspend fun transcribe(userId: String, bytes: ByteArray, language: String?): String {
+    suspend fun transcribe(owners: Collection<String>, bytes: ByteArray, language: String?): String {
         if (bytes.isEmpty()) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Empty audio segment")
         }
         if (bytes.size > MAX_SEGMENT_BYTES) {
             throw ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "Audio segment exceeds 2 MB")
         }
-        val config = auxModelResolver?.resolveConfig(userId, AuxModelTask.ASR)
+        val config = auxModelResolver?.resolveConfig(owners, AuxModelTask.ASR)
             ?: throw ResponseStatusException(HttpStatus.CONFLICT, MSG_NO_ASR)
         return try {
             OpenAiCompatibleClient(config.asAsrSettings())
@@ -58,7 +59,7 @@ class AsrService(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("ASR transcription failed for user '{}': {}", userId, e.message)
+            logger.warn("ASR transcription failed for owners '{}': {}", owners, e.message)
             throw ResponseStatusException(HttpStatus.BAD_GATEWAY, "Transcription failed: ${e.message ?: "provider error"}")
         }
     }
@@ -67,7 +68,7 @@ class AsrService(
      * Rewrites one dictation round's text against its surrounding editor context.
      * Only [text] may appear in the result; the context is reference material for the model.
      */
-    suspend fun refine(userId: String, text: String, contextBefore: String, contextAfter: String): String {
+    suspend fun refine(owners: Collection<String>, text: String, contextBefore: String, contextAfter: String): String {
         val target = text.trim()
         if (target.isEmpty()) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Nothing to refine")
@@ -75,7 +76,7 @@ class AsrService(
         if (target.length > MAX_REFINE_CHARS) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Dictation text exceeds $MAX_REFINE_CHARS characters")
         }
-        val resolved = auxModelResolver?.resolve(userId, AuxModelTask.DICTATION_REFINE)
+        val resolved = auxModelResolver?.resolve(owners, AuxModelTask.DICTATION_REFINE)
             ?: throw ResponseStatusException(HttpStatus.CONFLICT, MSG_NO_REFINE)
         val messages: List<Message> = listOf(
             SystemMessage(REFINE_SYSTEM_PROMPT),
@@ -90,7 +91,7 @@ class AsrService(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("Dictation refine failed for user '{}': {}", userId, e.message)
+            logger.warn("Dictation refine failed for owners '{}': {}", owners, e.message)
             throw ResponseStatusException(HttpStatus.BAD_GATEWAY, "Refine failed: ${e.message ?: "model error"}")
         }
         val refined = stripCodeFence(output.result?.output?.text.orEmpty()).trim()

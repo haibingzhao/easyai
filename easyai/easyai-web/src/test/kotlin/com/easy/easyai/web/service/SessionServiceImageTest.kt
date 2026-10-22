@@ -1,5 +1,9 @@
 package com.easy.easyai.web.service
 
+import com.easy.easyai.api.config.ModelProviderConfigStore
+import com.easy.easyai.api.model.ModelOptions
+import com.easy.easyai.api.model.ModelProviderConfig
+import com.easy.easyai.api.model.ModelProviderInfo.Protocol
 import com.easy.easyai.core.agent.PersistedSession
 import com.easy.easyai.core.agent.SessionManager
 import com.easy.easyai.core.model.FileRefContent
@@ -7,6 +11,7 @@ import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.model.UserMessage
 import com.easy.easyai.core.storage.StoredFileReference
 import com.easy.easyai.repository.session.AsyncSessionStore
+import com.easy.easyai.repository.session.LastMessageConfig
 import com.easy.easyai.repository.session.MessageWithTimestamp
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -32,6 +37,19 @@ class SessionServiceImageTest {
     ))
     private val messages = listOf(MessageWithTimestamp(message, 100L), MessageWithTimestamp(message.copy(id = "second"), 200L))
     private val service = SessionService(manager, store, fileStorageService = files)
+    private val configStore = mockk<ModelProviderConfigStore>()
+    private val serviceWithConfig = SessionService(manager, store, fileStorageService = files, configStore = configStore)
+    private val aliceOwners = listOf("alice", "system")
+    private val bobOwners = listOf("bob", "system")
+    private val groupModel = ModelProviderConfig(
+        id = "cfg-1",
+        name = "Family model",
+        protocol = Protocol.OPENAI,
+        isCustom = true,
+        modelId = "m-1",
+        options = ModelOptions(contextToken = 128_000),
+        userId = "g_fam-1"
+    )
 
     @BeforeEach
     fun setup() {
@@ -49,7 +67,7 @@ class SessionServiceImageTest {
 
     @Test
     fun `full and incremental responses refresh deduplicated URLs without changing content`() = runTest {
-        val detail = assertNotNull(service.getSessionDetail("session-1", "alice"))
+        val detail = assertNotNull(service.getSessionDetail("session-1", "alice", aliceOwners))
         val incremental = assertNotNull(service.getSessionMessagesAfter("session-1", 0L, "alice"))
         detail.messages.forEach {
             assertEquals(mapOf(reference to "https://example.test/image?signature=one"), it.fileUrls)
@@ -65,7 +83,7 @@ class SessionServiceImageTest {
     @Test
     fun `single image failure leaves text history available and is deduplicated`() = runTest {
         coEvery { files.resolveImageUrl(reference, "alice") } throws IllegalStateException("storage unavailable")
-        val detail = assertNotNull(service.getSessionDetail("session-1", "alice"))
+        val detail = assertNotNull(service.getSessionDetail("session-1", "alice", aliceOwners))
         assertEquals(2, detail.messages.size)
         assertEquals(TextContent("Look at this"), detail.messages.first().content.first())
         assertNull(detail.messages.first().fileUrls)
@@ -76,7 +94,7 @@ class SessionServiceImageTest {
     fun `does not sign inaccessible session images`() = runTest {
         coEvery { manager.getSessionDetail("session-1", "bob") } returns null
         coEvery { store.findContentUpdatedAt("session-1", "bob") } returns null
-        assertNull(service.getSessionDetail("session-1", "bob"))
+        assertNull(service.getSessionDetail("session-1", "bob", bobOwners))
         assertNull(service.getSessionMessagesAfter("session-1", 0L, "bob"))
         coVerify(exactly = 0) { files.resolveImageUrl(any(), any()) }
     }
@@ -84,6 +102,32 @@ class SessionServiceImageTest {
     @Test
     fun `does not swallow request cancellation`() = runTest {
         coEvery { files.resolveImageUrl(reference, "alice") } throws CancellationException("cancelled")
-        assertFailsWith<CancellationException> { service.getSessionDetail("session-1", "alice") }
+        assertFailsWith<CancellationException> { service.getSessionDetail("session-1", "alice", aliceOwners) }
+    }
+
+    @Test
+    fun `resolves the last message config across the caller's owner set`() = runTest {
+        coEvery { store.getLastMessageConfig("session-1") } returns
+            LastMessageConfig(agentId = "agent-1", configId = "cfg-1", modelId = "m-1")
+        coEvery { store.findModelOverrides("session-1") } returns null
+        coEvery { configStore.getConfig("cfg-1", aliceOwners) } returns groupModel
+
+        val detail = assertNotNull(serviceWithConfig.getSessionDetail("session-1", "alice", aliceOwners))
+
+        assertEquals(128_000, detail.modelContextLength)
+        coVerify(exactly = 1) { configStore.getConfig("cfg-1", aliceOwners) }
+    }
+
+    @Test
+    fun `empty owner set falls back to the caller plus system`() = runTest {
+        coEvery { store.getLastMessageConfig("session-1") } returns
+            LastMessageConfig(agentId = "agent-1", configId = "cfg-1", modelId = "m-1")
+        coEvery { store.findModelOverrides("session-1") } returns null
+        coEvery { configStore.getConfig("cfg-1", setOf("alice", "system")) } returns groupModel
+
+        val detail = assertNotNull(serviceWithConfig.getSessionDetail("session-1", "alice", emptyList()))
+
+        assertEquals(128_000, detail.modelContextLength)
+        coVerify(exactly = 1) { configStore.getConfig("cfg-1", setOf("alice", "system")) }
     }
 }

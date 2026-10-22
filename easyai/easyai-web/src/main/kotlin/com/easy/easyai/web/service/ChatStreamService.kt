@@ -898,7 +898,7 @@ class ChatStreamService(
     suspend fun allowPermissionAndResume(sessionId: String, userId: String = "system", toolCallId: String, remember: Boolean, permission: String?, pattern: String?, owners: Collection<String> = emptyList()): Flow<ServerSentEvent<ChatStreamEvent>> {
         // If remember=true, save the allow rule before resuming
         if (remember && permissionService != null && permission != null) {
-            val context = sessionManager.getSessionContext(sessionId, userId)
+            val context = sessionManager.getSessionContext(sessionId, userId, owners)
             context?.projectId?.let { projectId ->
                 permissionService.addAllowRule(projectId, permission, pattern ?: "*")
                 logger.info("Saved allow rule for {} {} in project {}", permission, pattern, projectId)
@@ -931,7 +931,7 @@ class ChatStreamService(
     suspend fun denyPermissionAndResume(sessionId: String, userId: String = "system", toolCallId: String, remember: Boolean, reason: String?, permission: String?, pattern: String?, owners: Collection<String> = emptyList()): Flow<ServerSentEvent<ChatStreamEvent>> {
         // If remember=true, save the deny rule before resuming
         if (remember && permissionService != null && permission != null) {
-            val context = sessionManager.getSessionContext(sessionId, userId)
+            val context = sessionManager.getSessionContext(sessionId, userId, owners)
             context?.projectId?.let { projectId ->
                 permissionService.addDenyRule(projectId, permission, pattern ?: "*")
                 logger.info("Saved deny rule for {} {} in project {}", permission, pattern, projectId)

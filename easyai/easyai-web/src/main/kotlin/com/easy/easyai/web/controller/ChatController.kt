@@ -101,8 +101,8 @@ class ChatController(
     fun quickAsk(
         @RequestBody request: QuickAskRequest
     ): Flux<ServerSentEvent<ChatStreamEvent>> {
-        return mono { getCurrentUserId() }
-            .flatMapMany { userId -> quickAskStreamService.stream(userId, request) }
+        return mono { getCurrentUserId() to currentOwners() }
+            .flatMapMany { (userId, owners) -> quickAskStreamService.stream(userId, request, owners) }
     }
 
     /**
@@ -598,7 +598,7 @@ class ChatController(
     fun getCheckpoints(@PathVariable sessionId: String): Mono<List<CheckpointSummary>> {
         return mono {
             val userId = verifyOwnership(sessionId)
-            sessionService.getCheckpoints(sessionId, userId)
+            sessionService.getCheckpoints(sessionId, userId, currentOwners())
         }
     }
 
@@ -650,7 +650,7 @@ class ChatController(
     ): Mono<List<DiffResponse>> {
         return mono {
             val userId = verifyOwnership(sessionId)
-            sessionService.getSessionDiffWithMembers(sessionId, userId).map { it.toDiffResponse() }
+            sessionService.getSessionDiffWithMembers(sessionId, userId, currentOwners()).map { it.toDiffResponse() }
         }
     }
 
@@ -731,11 +731,12 @@ class ChatController(
      */
     private suspend fun resolveProjectPath(sessionId: String): java.nio.file.Path {
         val userId = verifyOwnership(sessionId)
-        val context = sessionManager.getSessionContext(sessionId, userId)
+        val owners = currentOwners()
+        val context = sessionManager.getSessionContext(sessionId, userId, owners)
         val path = context?.projectPath
         if (path != null) return path
         // Fallback: try full session restoration
-        val session = sessionManager.getSession(sessionId, userId)
+        val session = sessionManager.getSession(sessionId, userId, owners)
             ?: throw IllegalStateException("Session not found: $sessionId")
         return session.agentContext.projectPath
             ?: throw IllegalStateException("Project path not available for session: $sessionId")
@@ -878,7 +879,7 @@ class ChatController(
 
             // 3. Get projectPath BEFORE deleting messages (session may not be in memory for historical sessions)
             val userId = getCurrentUserId()
-            val sessionContext = sessionManager.getSessionContext(sessionId, userId)
+            val sessionContext = sessionManager.getSessionContext(sessionId, userId, currentOwners())
             val projectPath = sessionContext?.projectPath
 
             // 4. Delete messages (exclude preserved compaction indicators)
