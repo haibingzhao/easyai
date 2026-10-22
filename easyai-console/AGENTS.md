@@ -58,7 +58,7 @@ Event types: `start`, `text_delta`, `thinking_delta`, `toolcall_start/delta/end`
 
 ## ANTI-PATTERNS
 - No `any` types (check node_modules for external types instead of guessing)
-- No inline imports — no `await import()`, no `import("pkg").Type`
+- No inline imports — no `await import()`, no `import("pkg").Type`. The one exception is route-level lazy loading: `lazy(() => import('./Page'))` at a route boundary (see `src/pages/ArticleEditorPageLazy.tsx`).
 - Never remove/downgrade code to fix type errors from outdated deps — upgrade the dep
 - `npm run dev/build/preview` forbidden in agent workflows
 - Zero frontend tests — don't assume test patterns exist

@@ -1,7 +1,7 @@
 /*
  * Mobile (iPhone) layer styles.
  *
- * Imported from src/index.css — never from a .tsx file. The lib build names every CSS
+ * Imported from src/theme.css — never from a .tsx file. The lib build names every CSS
  * asset `style.[ext]` (vite.lib.config.ts), so a second stylesheet emitted from a component
  * import would overwrite the first one.
  *

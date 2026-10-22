@@ -12,7 +12,7 @@ import { MemoriesPage } from './pages/MemoriesPage';
 import { TasksPage } from './pages/TasksPage';
 import { TaskTranscriptPage } from './pages/TaskTranscriptPage';
 import { KnowledgePage } from './pages/KnowledgePage';
-import { ArticleEditorPage } from './pages/ArticleEditorPage';
+import { ArticleEditorPage } from './pages/ArticleEditorPageLazy';
 import { CommandsPage } from './pages/CommandsPage';
 import { SkillsPage } from './pages/SkillsPage';
 import { SwarmPresetEditorPage } from './pages/SwarmPresetEditorPage';
