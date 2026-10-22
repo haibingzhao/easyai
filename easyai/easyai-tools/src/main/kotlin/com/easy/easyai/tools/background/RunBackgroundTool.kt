@@ -60,7 +60,9 @@ class RunBackgroundTool(
             projectPath = agentContext.projectPath,
             toolName = toolName,
             arguments = toolArgs,
-            userId = agentContext.userId
+            userId = agentContext.userId,
+            projectKind = agentContext.projectKind,
+            owners = agentContext.effectiveOwners
         )
 
         when (permissionResult.action) {

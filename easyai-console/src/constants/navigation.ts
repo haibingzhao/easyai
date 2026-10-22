@@ -107,4 +107,12 @@ export const APP_CONFIG = {
    * throwaway temporary workspace) can drop the two tabs; Summary and History stay.
    */
   showWorkspacePanels: true,
+  /**
+   * Host predicate deciding whether the composer offers the auto-approve (shield) panel.
+   *
+   * Evaluated on every render; returning `false` hides the entry point. The panel itself already
+   * requires a real project — a temporary workspace's rules die with its session — so this hook
+   * exists for host policy, e.g. only letting the household owner change tool permissions.
+   */
+  canConfigureAutoApprove: undefined as (() => boolean) | undefined,
 };

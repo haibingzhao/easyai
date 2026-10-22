@@ -48,12 +48,22 @@ class LlmShellAiRiskChecker(
         projectPath: Path?,
         userId: String?,
         modelConfigId: String,
-        rules: List<PermissionRule>
+        rules: List<PermissionRule>,
+        owners: Collection<String>
     ): AiRiskResult {
         val effectiveUserId = userId ?: "system"
-        val config = configStore.getConfig(modelConfigId, effectiveUserId)
+        // A rule stored in a group's shared bucket may name the owner's personal model config.
+        // The visibility set lets a member resolve it; an empty set keeps the legacy lookup.
+        val config = if (owners.isEmpty()) {
+            configStore.getConfig(modelConfigId, effectiveUserId)
+        } else {
+            configStore.getConfig(modelConfigId, owners)
+        }
         if (config == null) {
-            logger.warn("AI risk check model config '{}' not found for user {}", modelConfigId, effectiveUserId)
+            logger.warn(
+                "AI risk check model config '{}' not found for user {} (owners {})",
+                modelConfigId, effectiveUserId, owners
+            )
             return AiRiskResult(allowed = false, reason = "AI 检查模型配置不存在")
         }
         val factory = modelFactories.firstOrNull { it.supports(config.protocol) }

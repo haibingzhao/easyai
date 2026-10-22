@@ -60,7 +60,11 @@ data class PermissionSettingsDto(
     val writeOtherPaths: List<String>,
     val otherCommands: List<String>,
     /** Model config id for AI shell risk checks; null disables the feature. */
-    val aiCheckModelId: String? = null
+    val aiCheckModelId: String? = null,
+    /** True when these are a group's shared project-less defaults rather than a personal bucket. */
+    val sharedWithGroup: Boolean = false,
+    /** False when the caller may read this bucket but not write it (a member viewing the group's). */
+    val canEdit: Boolean = true
 )
 
 /**

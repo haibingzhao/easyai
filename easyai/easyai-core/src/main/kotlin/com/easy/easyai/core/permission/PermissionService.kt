@@ -1,5 +1,6 @@
 package com.easy.easyai.core.permission
 
+import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.tool.ToolBuilder
 import com.easy.easyai.core.tool.ToolFactory
 import kotlinx.coroutines.CancellationException
@@ -53,6 +54,8 @@ class PermissionService(
      * @param toolName The name of the tool being called
      * @param arguments The tool call arguments
      * @param userId Session owner, used for user-scoped lookups (AI risk check model config)
+     * @param projectKind Kind of the bound project; a temporary workspace reads the default bucket
+     * @param owners Chat boundary's read-visibility set, used to find the group default bucket
      * @return The permission check result
      */
     suspend fun evaluateWithContext(
@@ -60,13 +63,16 @@ class PermissionService(
         projectPath: Path?,
         toolName: String,
         arguments: Map<String, Any?>,
-        userId: String? = null
+        userId: String? = null,
+        projectKind: ProjectKind = ProjectKind.USER,
+        owners: Collection<String> = emptySet()
     ): PermissionCheckResult {
+        val ruleScope = PermissionScope.forProject(projectId, projectKind, userId, owners)
         val builder = findBuilder(toolName)
         if (builder == null) {
             // MCP tools have no ToolBuilder; evaluate the mcp.use rule instead.
             if (isMcpTool(toolName)) {
-                return evaluateMcpPermission(projectId, toolName, arguments)
+                return evaluateMcpPermission(ruleScope, toolName, arguments)
             }
             logger.debug("No builder found for tool '{}', skipping permission check", toolName)
             return PermissionCheckResult(
@@ -76,11 +82,11 @@ class PermissionService(
             )
         }
         val evaluator = builder.permissionEvaluator
-        val userRules = ruleStore.loadRules(projectId)
+        val userRules = ruleStore.loadRules(ruleScope)
         val defaults = builder.defaultPermissionRules
         val rules = defaults + userRules
 
-        val ctx = PermissionEvalContext(rules, projectPath, arguments, this, userId)
+        val ctx = PermissionEvalContext(rules, projectPath, arguments, this, userId, owners)
         val result = evaluator.evaluate(ctx)
         if(result.action == PermissionAction.DENY) {
             logger.debug("Permission check DENY for tool '{}', project '{}', arguments: {}", toolName, projectId, arguments)
@@ -101,7 +107,9 @@ class PermissionService(
         arguments: Map<String, Any?>,
         projectId: String?,
         projectPath: Path?,
-        userId: String? = null
+        userId: String? = null,
+        projectKind: ProjectKind = ProjectKind.USER,
+        owners: Collection<String> = emptySet()
     ): PermissionCheckResult {
         if (projectId == null) {
             logger.debug("No projectId in BeforeToolCallContext, allowing tool call {} ({})", toolName, toolCallId)
@@ -111,7 +119,7 @@ class PermissionService(
                 pattern = extractPattern(toolName, arguments)
             )
         }
-        return evaluateWithContext(projectId, projectPath, toolName, arguments, userId)
+        return evaluateWithContext(projectId, projectPath, toolName, arguments, userId, projectKind, owners)
     }
 
     /**
@@ -157,14 +165,83 @@ class PermissionService(
 
     /**
      * Update a single permission setting for a project.
-     * Adds or removes rules to match the desired setting value.
+     *
+     * Only the rules addressed by [key] are rewritten; every other rule in the bucket is preserved.
+     * Rewriting the whole bucket through [DefaultPermissionSettings.toUserRules] would drop rules
+     * the settings UI cannot express (e.g. `tool.execute.*` or pattern-specific DENY rules). That is
+     * especially destructive for the shared default bucket, where project-less sessions also record
+     * "always allow/deny" rules.
      */
     suspend fun updateSetting(projectId: String, key: String, value: Any?) {
-        val currentSettings = getEffectiveSettings(projectId)
-        val updatedSettings = applySettingUpdate(currentSettings, key, value)
-        val newRules = DefaultPermissionSettings.toUserRules(updatedSettings)
-        ruleStore.saveRules(projectId, newRules)
+        val current = ruleStore.loadRules(projectId)
+        val merged = when (key) {
+            "readFileProject" -> replaceToggle(current, "file.read.project", value as Boolean, PermissionAction.DENY)
+            "readFileAll" -> replaceToggle(current, "file.read.all", value as Boolean, PermissionAction.ALLOW)
+            "writeFileProject" -> replaceToggle(current, "file.write.project", value as Boolean, PermissionAction.DENY)
+            "writeFileAll" -> replaceToggle(current, "file.write.all", value as Boolean, PermissionAction.ALLOW)
+            "executeSafeCommands" -> replaceToggle(current, "shell.safe", value as Boolean, PermissionAction.DENY)
+            "executeAllCommands" -> replaceToggle(current, "shell.all", value as Boolean, PermissionAction.ALLOW)
+            "useBrowser" -> replaceToggle(current, "browser.use", value as Boolean, PermissionAction.DENY)
+            "useMcp" -> replaceToggle(current, "mcp.use", value as Boolean, PermissionAction.DENY)
+            "readOtherPaths" -> replaceAllowRules(
+                current, "file.read.other", @Suppress("UNCHECKED_CAST") (value as List<String>)
+            )
+            "writeOtherPaths" -> replaceAllowRules(
+                current, "file.write.other", @Suppress("UNCHECKED_CAST") (value as List<String>)
+            )
+            "otherCommands" -> replaceAllowRules(
+                current,
+                "shell.other",
+                @Suppress("UNCHECKED_CAST") (value as List<String>)
+                    .map { if (it.endsWith("*")) it else "$it*" }
+            )
+            "aiCheckModelId" -> replaceAiCheckModel(current, value as? String)
+            // Unknown keys must not rewrite the bucket; a no-op is safer than dropping rules.
+            else -> return
+        }
+        ruleStore.saveRules(projectId, merged)
         logger.info("Updated setting {} for project {}", key, projectId)
+    }
+
+    /**
+     * Replace the whole-permission rule a boolean setting owns, leaving other permissions untouched.
+     * [nonDefaultAction] is the action the setting writes when it differs from its default:
+     * DENY for toggles that default to enabled, ALLOW for toggles that default to disabled.
+     */
+    private fun replaceToggle(
+        rules: List<PermissionRule>,
+        permission: String,
+        enabled: Boolean,
+        nonDefaultAction: PermissionAction
+    ): List<PermissionRule> {
+        val remaining = rules.filterNot { it.permission == permission }
+        val needsRule = if (nonDefaultAction == PermissionAction.ALLOW) enabled else !enabled
+        return if (needsRule) {
+            remaining + PermissionRule(permission, "*", nonDefaultAction)
+        } else {
+            remaining
+        }
+    }
+
+    /** Replace the ALLOW rules that represent a list setting, preserving DENY rules for the same permission. */
+    private fun replaceAllowRules(
+        rules: List<PermissionRule>,
+        permission: String,
+        patterns: List<String>
+    ): List<PermissionRule> {
+        val remaining = rules.filterNot { it.permission == permission && it.action == PermissionAction.ALLOW }
+        return remaining + patterns.distinct().map { PermissionRule(permission, it, PermissionAction.ALLOW) }
+    }
+
+    private fun replaceAiCheckModel(rules: List<PermissionRule>, modelId: String?): List<PermissionRule> {
+        val remaining = rules.filterNot {
+            it.permission == "shell.ai" && it.action == PermissionAction.ALLOW
+        }
+        return if (modelId.isNullOrBlank()) {
+            remaining
+        } else {
+            remaining + PermissionRule("shell.ai", modelId, PermissionAction.ALLOW)
+        }
     }
 
     // --- SharedPermissionEvaluator implementation ---
@@ -251,7 +328,8 @@ class PermissionService(
         rules: List<PermissionRule>,
         projectPath: Path?,
         arguments: Map<String, Any?>,
-        userId: String?
+        userId: String?,
+        owners: Collection<String>
     ): PermissionCheckResult {
         val command = extractCommand(arguments)
         val pattern = command ?: "*"
@@ -320,7 +398,7 @@ class PermissionService(
                     INVISIBLE_SCRIPT_REASON
                 )
             }
-            val aiResult = checkAiRisk(command, projectPath, userId, aiModelConfigId, rules)
+            val aiResult = checkAiRisk(command, projectPath, userId, aiModelConfigId, rules, owners)
             if (aiResult.allowed) {
                 return PermissionCheckResult(PermissionAction.ALLOW, "shell.ai", pattern, aiResult.reason)
             }
@@ -339,7 +417,8 @@ class PermissionService(
         projectPath: Path?,
         userId: String?,
         modelConfigId: String,
-        rules: List<PermissionRule>
+        rules: List<PermissionRule>,
+        owners: Collection<String>
     ): AiRiskResult {
         val checker = aiRiskChecker ?: return AiRiskResult(allowed = false)
         val cacheKey = "$command|$modelConfigId|${rules.hashCode()}"
@@ -347,7 +426,7 @@ class PermissionService(
 
         val result = try {
             withTimeout(AI_CHECK_TIMEOUT_MS.milliseconds) {
-                checker.checkRisk(command, projectPath, userId, modelConfigId, rules)
+                checker.checkRisk(command, projectPath, userId, modelConfigId, rules, owners)
             }
         } catch (e: TimeoutCancellationException) {
             logger.warn("AI risk check timed out for command '{}'", command)
@@ -466,27 +545,6 @@ class PermissionService(
         return null
     }
 
-    /**
-     * Apply a setting update to produce new settings.
-     */
-    private fun applySettingUpdate(current: DefaultPermissionSettings.Settings, key: String, value: Any?): DefaultPermissionSettings.Settings {
-        return when (key) {
-            "readFileProject" -> current.copy(readFileProject = value as Boolean)
-            "readFileAll" -> current.copy(readFileAll = value as Boolean)
-            "writeFileProject" -> current.copy(writeFileProject = value as Boolean)
-            "writeFileAll" -> current.copy(writeFileAll = value as Boolean)
-            "executeSafeCommands" -> current.copy(executeSafeCommands = value as Boolean)
-            "executeAllCommands" -> current.copy(executeAllCommands = value as Boolean)
-            "useBrowser" -> current.copy(useBrowser = value as Boolean)
-            "useMcp" -> current.copy(useMcp = value as Boolean)
-            "readOtherPaths" -> current.copy(readOtherPaths = @Suppress("UNCHECKED_CAST") (value as List<String>))
-            "writeOtherPaths" -> current.copy(writeOtherPaths = @Suppress("UNCHECKED_CAST") (value as List<String>))
-            "otherCommands" -> current.copy(otherCommands = @Suppress("UNCHECKED_CAST") (value as List<String>))
-            "aiCheckModelId" -> current.copy(aiCheckModelId = value as? String)
-            else -> current
-        }
-    }
-
     companion object {
         private val DEFAULT_PATTERN_KEYS = listOf("command", "cmd", "path", "file", "filepath", "file_path", "url")
 
@@ -515,18 +573,18 @@ class PermissionService(
      * evaluation directly against stored rules.
      */
     private suspend fun evaluateMcpPermission(
-        projectId: String,
+        ruleScope: String,
         toolName: String,
         arguments: Map<String, Any?>
     ): PermissionCheckResult {
-        val userRules = ruleStore.loadRules(projectId)
+        val userRules = ruleStore.loadRules(ruleScope)
         val result = PermissionEvaluator.evaluate("mcp.use", "*", userRules)
         val pattern = extractPattern(toolName, arguments)
         if (result.action == PermissionAction.DENY) {
-            logger.debug("MCP permission DENY for tool '{}', project '{}'", toolName, projectId)
+            logger.debug("MCP permission DENY for tool '{}', scope '{}'", toolName, ruleScope)
             return PermissionCheckResult(PermissionAction.DENY, "mcp.use", pattern)
         }
-        logger.trace("MCP permission check: project={}, tool={}, action={}", projectId, toolName, result.action)
+        logger.trace("MCP permission check: scope={}, tool={}, action={}", ruleScope, toolName, result.action)
         return PermissionCheckResult(PermissionAction.ALLOW, "mcp.use", pattern)
     }
 }

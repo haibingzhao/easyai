@@ -50,6 +50,10 @@ export interface PermissionSettingsDto {
   otherCommands: string[];
   /** Model config id for AI shell risk checks; null disables the feature. */
   aiCheckModelId: string | null;
+  /** True when these are a group's shared project-less defaults rather than a personal bucket. */
+  sharedWithGroup?: boolean;
+  /** False when the caller may read this bucket but not write it (a member viewing the group's). */
+  canEdit?: boolean;
 }
 
 /**

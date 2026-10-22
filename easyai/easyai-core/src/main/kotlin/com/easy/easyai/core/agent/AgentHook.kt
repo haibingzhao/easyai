@@ -2,6 +2,7 @@ package com.easy.easyai.core.agent
 
 import com.easy.easyai.core.event.AgentEvent
 import com.easy.easyai.core.model.ContentBlock
+import com.easy.easyai.core.model.ProjectKind
 import java.nio.file.Path
 
 // ==================== Context & Result Types ====================
@@ -13,7 +14,11 @@ data class BeforeToolCallContext(
     val projectId: String? = null,
     val projectPath: Path? = null,
     val parentAgentId: String? = null,
-    val userId: String? = null
+    val userId: String? = null,
+    /** Kind of the bound project; [ProjectKind.TEMP] reads the default permission bucket. */
+    val projectKind: ProjectKind = ProjectKind.USER,
+    /** Read-visibility owner set; the group bucket in it scopes project-less permission defaults. */
+    val owners: Set<String> = emptySet()
 )
 
 sealed interface BeforeToolCallResult {
