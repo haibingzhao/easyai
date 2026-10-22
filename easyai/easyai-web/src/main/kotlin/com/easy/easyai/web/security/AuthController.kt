@@ -70,7 +70,7 @@ class AuthController(
     fun refresh(
         exchange: ServerWebExchange
     ): Mono<AuthResponseDto> = mono {
-        val refreshToken = exchange.request.cookies.getFirst(AuthConstants.REFRESH_TOKEN_COOKIE)?.value
+        val refreshToken = exchange.request.cookies.getFirst(authProperties.refreshCookieName)?.value
             ?: throw AuthException("Refresh token not found in cookie", 401)
         val response = authService.refresh(refreshToken)
         setRefreshTokenCookie(exchange, response.refreshToken)
@@ -87,7 +87,7 @@ class AuthController(
         @RequestBody request: SwitchGroupRequest,
         exchange: ServerWebExchange
     ): Mono<AuthResponseDto> = mono {
-        val refreshToken = exchange.request.cookies.getFirst(AuthConstants.REFRESH_TOKEN_COOKIE)?.value
+        val refreshToken = exchange.request.cookies.getFirst(authProperties.refreshCookieName)?.value
             ?: throw AuthException("Refresh token not found in cookie", 401)
         val response = authService.switchGroup(refreshToken, request.groupId)
         setRefreshTokenCookie(exchange, response.refreshToken)
@@ -97,7 +97,7 @@ class AuthController(
 
     @PostMapping("/logout")
     fun logout(exchange: ServerWebExchange): Mono<Map<String, String>> = mono {
-        val refreshToken = exchange.request.cookies.getFirst(AuthConstants.REFRESH_TOKEN_COOKIE)?.value
+        val refreshToken = exchange.request.cookies.getFirst(authProperties.refreshCookieName)?.value
         authService.logout(refreshToken)
         clearRefreshTokenCookie(exchange)
         mapOf("status" to "ok")
@@ -150,7 +150,7 @@ class AuthController(
 
     private fun setRefreshTokenCookie(exchange: ServerWebExchange, refreshToken: String) {
         val isSecure = exchange.request.uri.scheme == "https"
-        val cookie = ResponseCookie.from(AuthConstants.REFRESH_TOKEN_COOKIE, refreshToken)
+        val cookie = ResponseCookie.from(authProperties.refreshCookieName, refreshToken)
             .httpOnly(true)
             .secure(isSecure)
             .path("/api/auth")
@@ -161,7 +161,7 @@ class AuthController(
     }
 
     private fun clearRefreshTokenCookie(exchange: ServerWebExchange) {
-        val cookie = ResponseCookie.from(AuthConstants.REFRESH_TOKEN_COOKIE, "")
+        val cookie = ResponseCookie.from(authProperties.refreshCookieName, "")
             .httpOnly(true)
             .path("/api/auth")
             .maxAge(0)
