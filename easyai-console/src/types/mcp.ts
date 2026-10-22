@@ -31,6 +31,8 @@ export interface McpPromptInfo {
 }
 
 export interface McpServerDto extends McpServerConfig {
+  /** Owning bucket: the caller's user id for a personal server, the group bucket id for a shared one. */
+  ownerId: string
   status: McpServerStatus
   error?: string
   tools: McpToolInfo[]

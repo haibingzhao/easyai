@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAgentStore } from '@/services/stores/agent-store';
-import type { AgentDto } from '@/types/agent';
+import { isChatSelectable, visibleChatAgents } from '@/utils/chat-agents';
 import { Check, Plus, Bot, ChevronDown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -10,7 +10,7 @@ interface AgentSelectorProps {
 
 export const AgentSelector: React.FC<AgentSelectorProps> = ({ onSelect }) => {
   const navigate = useNavigate();
-  const { agents, selectedAgentId, selectAgent } = useAgentStore();
+  const { agents, selectedAgentId, selectAgent, chatPreference } = useAgentStore();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -27,13 +27,10 @@ export const AgentSelector: React.FC<AgentSelectorProps> = ({ onSelect }) => {
     }
   }, [dropdownOpen]);
 
-  const allAgents: AgentDto[] = React.useMemo(() => {
-    return agents.filter(a =>
-      a.agentType !== 'SUBAGENT' &&
-      (a.agentContext === 'CHAT' || a.agentContext === 'BOTH') &&
-      a.enabled
-    );
-  }, [agents]);
+  const chatAgents = React.useMemo(
+    () => visibleChatAgents(agents, chatPreference?.hiddenAgentIds ?? []),
+    [agents, chatPreference],
+  );
 
   const handleSelect = (agentId: string) => {
     selectAgent(agentId);
@@ -41,7 +38,11 @@ export const AgentSelector: React.FC<AgentSelectorProps> = ({ onSelect }) => {
     setDropdownOpen(false);
   };
 
-  const selectedAgent = allAgents.find(a => a.id === selectedAgentId);
+  // An old session can carry an agent the preference now hides; still show its real name —
+  // hiding only trims the picker, it does not invalidate existing conversations. Sub-agents and
+  // disabled agents stay out of that fallback so the header never names one of them.
+  const selectedAgent = chatAgents.find(a => a.id === selectedAgentId)
+    ?? agents.find(a => a.id === selectedAgentId && isChatSelectable(a));
 
   return (
     <div ref={dropdownRef} className="relative">
@@ -54,15 +55,15 @@ export const AgentSelector: React.FC<AgentSelectorProps> = ({ onSelect }) => {
             <Bot className="w-3 h-3" />
           </span>
         )}
-        {selectedAgent ? selectedAgent.name : 'Code'}
+        {selectedAgent ? selectedAgent.name : 'Agent'}
         <ChevronDown className={`w-3 h-3 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
       </button>
 
       {dropdownOpen && (
         <div className="absolute bottom-full left-0 mb-2 min-w-[200px] bg-popover border border-border rounded-md shadow-lg z-50 p-2">
-          <div className="text-xs text-muted-foreground font-medium px-2 py-1">内置智能体</div>
+          <div className="text-xs text-muted-foreground font-medium px-2 py-1">智能体</div>
           <div className="flex flex-col gap-1">
-            {allAgents.map((agent) => {
+            {chatAgents.map((agent) => {
               const isSelected = selectedAgentId === agent.id;
               return (
                 <button

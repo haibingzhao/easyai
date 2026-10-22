@@ -115,10 +115,12 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
               <GitBranch className="w-3 h-3" />
             </button>
           )}
+          {/* Phones reuse this bar without the `.mobile-app` scope when a desktop build is opened on
+              a touch screen, so the save action is cut by pointer capability rather than mobile.css. */}
           {canSave && (
             <button
               onClick={() => setSaveDialogOpen(true)}
-              className="p-1 -my-1 rounded hover:bg-muted hover:text-foreground transition-colors"
+              className="p-1 -my-1 rounded hover:bg-muted hover:text-foreground transition-colors [@media(hover:none)]:hidden"
               title={i18n('Save to Knowledge')}
             >
               <Bookmark className="w-3 h-3" />

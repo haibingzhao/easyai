@@ -606,6 +606,8 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     // Drop events from a replaced stream: a stale 'done' would clear isStreaming and
     // reconcile a stale snapshot over this turn's optimistic user message.
     const isStaleStream = () => ownService !== null && getCurrentSendService() !== ownService;
+    // The conversation already has messages; a later default change must not re-target it.
+    useAgentStore.getState().markAgentSelectionTouched();
     ownService = sendMessageToBackend({
       message: finalMessage,
       sessionId: sid,

@@ -5,9 +5,8 @@ import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.tools.mcp.McpServerConfig
 import com.easy.easyai.tools.mcp.McpServerStatus
 import com.easy.easyai.web.security.currentGroupOwners
-import com.easy.easyai.web.security.getCurrentUserId
-import com.easy.easyai.web.security.isGroupOwner
 import com.easy.easyai.web.security.parseAssetScope
+import com.easy.easyai.web.security.resolveReadOwner
 import com.easy.easyai.web.security.resolveWriteOwner
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import io.modelcontextprotocol.spec.McpSchema
@@ -22,6 +21,11 @@ import java.util.UUID
 
 data class McpServerDto(
     val name: String,
+    /**
+     * Bucket that owns this row: the caller's user id for a personal server, the group bucket id for
+     * a shared one. `name` repeats across buckets, so the console addresses a row by (ownerId, name).
+     */
+    val ownerId: String,
     val type: String,
     val command: List<String>? = null,
     val env: Map<String, String> = emptyMap(),
@@ -117,6 +121,11 @@ data class McpServerImportEntry(
  * POST   /api/mcp/servers/{name}/connect    - Reconnect
  * POST   /api/mcp/servers/{name}/disconnect - Disconnect
  * GET    /api/mcp/servers/{name}/tools      - List tools for a specific server
+ * GET    /api/mcp/servers/{name}/prompts    - List prompts for a specific server
+ *
+ * Every row-addressed endpoint accepts `?scope=group` for the shared bucket; omitted (or
+ * `?scope=personal`) targets the caller's own bucket. A server name is unique only within a bucket,
+ * so callers that know the row's owner must name the scope instead of relying on a lookup.
  */
 @RestController
 @RequestMapping("/api/mcp/servers")
@@ -179,17 +188,17 @@ class McpServerController(
         for ((name, entry) in request.mcpServers.orEmpty()) {
             try {
                 if (name.isBlank()) {
-                    results.add(McpServerDto(name = name, type = "unknown", status = "failed", error = "Server name must not be blank"))
+                    results.add(McpServerDto(name = name, ownerId = owner, type = "unknown", status = "failed", error = "Server name must not be blank"))
                     continue
                 }
                 val resolvedCmd = entry.resolvedCommand()
                 val type = if (entry.url != null) "remote" else "local"
                 if (type == "local" && resolvedCmd.isNullOrEmpty()) {
-                    results.add(McpServerDto(name = name, type = type, status = "failed", error = "Local server must specify a command"))
+                    results.add(McpServerDto(name = name, ownerId = owner, type = type, status = "failed", error = "Local server must specify a command"))
                     continue
                 }
                 if (type == "remote" && entry.url.isNullOrBlank()) {
-                    results.add(McpServerDto(name = name, type = type, status = "failed", error = "Remote server must specify a URL"))
+                    results.add(McpServerDto(name = name, ownerId = owner, type = type, status = "failed", error = "Remote server must specify a URL"))
                     continue
                 }
                 val config = McpServerConfig(
@@ -216,6 +225,7 @@ class McpServerController(
                 // Skip failed entries but continue with others
                 results.add(McpServerDto(
                     name = name,
+                    ownerId = owner,
                     type = if (entry.url != null) "remote" else "local",
                     status = "failed",
                     error = e.message
@@ -272,57 +282,64 @@ class McpServerController(
     }.then()
 
     @PostMapping("/{name}/connect")
-    fun reconnect(@PathVariable name: String): Mono<McpServerDto> = mono {
-        val config = mcpServerStore.findByName(name, currentGroupOwners())
+    fun reconnect(
+        @PathVariable name: String,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<McpServerDto> = mono {
+        // `name` is not unique across the personal and group buckets, so the scope — not a fan-out
+        // lookup — decides which row this call targets. The write gate also refuses a member's
+        // group-scoped toggle, since reconnecting a shared server affects every member.
+        val owner = resolveWriteOwner(parseAssetScope(scope))
+        val config = mcpServerStore.findByName(name, owner)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "MCP server not found: $name")
-        // Connect under the config's true owner so a group server is shared, not duplicated per member.
-        val owner = config.userId
-        assertCanToggle(owner)
         val status = mcpClientManager.connect(config, owner)
         config.toDto(status, mcpClientManager.getToolDefs(owner, name), owner)
     }
 
     @PostMapping("/{name}/disconnect")
-    fun disconnect(@PathVariable name: String): Mono<McpServerDto> = mono {
-        val config = mcpServerStore.findByName(name, currentGroupOwners())
+    fun disconnect(
+        @PathVariable name: String,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<McpServerDto> = mono {
+        val owner = resolveWriteOwner(parseAssetScope(scope))
+        val config = mcpServerStore.findByName(name, owner)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "MCP server not found: $name")
-        val owner = config.userId
-        assertCanToggle(owner)
         mcpClientManager.disconnect(name, owner)
         config.toDto(McpServerStatus.Disabled, emptyList(), owner)
     }
 
     @GetMapping("/{name}/tools")
-    fun getTools(@PathVariable name: String): Mono<List<McpToolInfoDto>> = mono {
-        val config = mcpServerStore.findByName(name, currentGroupOwners())
+    fun getTools(
+        @PathVariable name: String,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<List<McpToolInfoDto>> = mono {
+        // Reads may target the group bucket as a member, so this uses the read resolver: membership is
+        // enough. `scope` names a bucket kind, not an owner id — only the caller's own bucket and the
+        // active group's are addressable (an unknown value reads as personal, `group` without a group
+        // is a 400), so no foreign bucket can be reached even by a hand-written query string.
+        val owner = resolveReadOwner(parseAssetScope(scope))
+        mcpServerStore.findByName(name, owner)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "MCP server not found: $name")
-        // Read the tools under the server's own bucket: the tool cache is keyed `owner:name`, so a
-        // name-keyed lookup across the whole visibility set could answer from a same-named server
-        // belonging to another visible bucket.
-        val tools = mcpClientManager.getToolDefs(config.userId, name)
+        // The tool cache is keyed `owner:name`, so the lookup must use the targeted bucket; a
+        // name-keyed search across the visibility set could answer from a same-named server.
+        val tools = mcpClientManager.getToolDefs(owner, name)
         tools.map { McpToolInfoDto(name = it.name(), description = it.description() ?: "") }
     }
 
     @GetMapping("/{name}/prompts")
-    fun getPrompts(@PathVariable name: String): Mono<List<McpPromptInfoDto>> = mono {
-        val config = mcpServerStore.findByName(name, currentGroupOwners())
+    fun getPrompts(
+        @PathVariable name: String,
+        @RequestParam(required = false) scope: String? = null
+    ): Mono<List<McpPromptInfoDto>> = mono {
+        val owner = resolveReadOwner(parseAssetScope(scope))
+        mcpServerStore.findByName(name, owner)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "MCP server not found: $name")
-        // Prompts are cached under the connected owner's key. A group server is connected as the group
-        // bucket, so query by config.userId — not the caller — or a member sees an empty list.
-        mcpClientManager.getServerPrompts(name, config.userId).map { toPromptDto(it) }
+        // A group server is connected under the group bucket, so query by that owner — not the
+        // caller — or a member sees an empty prompt list.
+        mcpClientManager.getServerPrompts(name, owner).map { toPromptDto(it) }
     }
 
     // ─── Helpers ───────────────────────────────────────────────────────────────
-
-    /**
-     * Connect/disconnect a server owned by the group bucket affects every member, so it is a group
-     * write: only the group owner may toggle it. A caller's own server is always toggleable.
-     */
-    private suspend fun assertCanToggle(owner: String) {
-        if (owner != getCurrentUserId() && !isGroupOwner()) {
-            throw ResponseStatusException(HttpStatus.FORBIDDEN, "Only the group owner can manage a shared MCP server")
-        }
-    }
 
     private fun validateCreateRequest(request: McpServerCreateRequest) {
         if (request.name.isBlank()) {
@@ -354,9 +371,10 @@ class McpServerController(
     private fun McpServerConfig.toDto(
         status: McpServerStatus,
         tools: List<McpSchema.Tool>,
-        userId: String = "system"
+        ownerId: String
     ) = McpServerDto(
         name = name,
+        ownerId = ownerId,
         type = type,
         command = command,
         env = env,
@@ -372,7 +390,7 @@ class McpServerController(
         },
         error = (status as? McpServerStatus.Failed)?.error,
         tools = tools.map { McpToolInfoDto(name = it.name(), description = it.description() ?: "") },
-        prompts = mcpClientManager.getServerPrompts(name, userId).map { toPromptDto(it) }
+        prompts = mcpClientManager.getServerPrompts(name, ownerId).map { toPromptDto(it) }
     )
 
     private fun toPromptDto(prompt: McpSchema.Prompt) = McpPromptInfoDto(

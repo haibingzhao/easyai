@@ -175,6 +175,7 @@ export const ChatPanel: React.FC = () => {
   const handleNewSession = () => {
     clearChat();
     resetTeam();
+    useAgentStore.getState().resetAgentSelection();
     useNavStore.getState().setSelectedFile(null);
   };
 

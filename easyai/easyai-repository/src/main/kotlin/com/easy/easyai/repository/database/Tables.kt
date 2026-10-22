@@ -476,6 +476,23 @@ object Tables {
     }
 
     /**
+     * Per-owner Chat surface preferences — one row per `user_id`, edited from the console's
+     * Settings → Chat Agents tab. `default_agent_id` is the agent a fresh chat starts with (null =
+     * built-in default); `hidden_agent_ids` is a JSON array of selectable agents the composer's
+     * picker must not offer. Group sharing follows the `aux_model_settings` precedent: a group-owned
+     * row applies to every member that has no personal row of their own.
+     */
+    object ChatPreferenceTable : Table("chat_preference") {
+        val userId = varchar("user_id", 255)
+        val defaultAgentId = varchar("default_agent_id", 255).nullable()
+        val hiddenAgentIds = text("hidden_agent_ids").default("[]")
+        val createdAt = long("created_at")
+        val updatedAt = long("updated_at")
+
+        override val primaryKey = PrimaryKey(userId)
+    }
+
+    /**
      * Per-user scheduled-task opt-in — one row per `(user, task_type)`, the configuration side of
      * [AsyncTaskTable]. Mirrors the user-scoped [AuxModelSettingsTable] precedent. `params` is a JSON
      * blob owned by that type's planner, so a new schedulable type adds neither a column nor a table;

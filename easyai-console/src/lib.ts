@@ -39,6 +39,7 @@ export { modelConfigService } from './services/model-config-service';
 export { mcpService, McpService } from './services/mcp-service';
 export { SkillService, SHARED_OWNER_ID } from './services/skill-service';
 export { auxModelConfigService } from './services/aux-model-config-service';
+export { chatPreferenceService } from './services/chat-preference-service';
 export { storageConfigService } from './services/storage-config-service';
 
 export {
@@ -145,6 +146,8 @@ export type {
 } from './types/settings';
 
 export type { NavItem } from './types/layout';
+
+export type { ChatPreference, ChatPreferenceSource, SaveChatPreferenceRequest } from './types/agent';
 
 // === Navigation constants ===
 export {

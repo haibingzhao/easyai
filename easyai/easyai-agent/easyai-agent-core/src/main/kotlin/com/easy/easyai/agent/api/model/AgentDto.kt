@@ -25,6 +25,8 @@ data class InlineAgentSpec(
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class AgentDto(
     val id: String,
+    /** Bucket that owns this row: the caller's user id, the group bucket id, or `system`. */
+    val ownerId: String,
     val name: String,
     val agentType: AgentType = AgentType.PRIMARY,
     val agentContext: AgentEnv = AgentEnv.CHAT,

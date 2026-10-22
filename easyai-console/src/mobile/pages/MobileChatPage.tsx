@@ -9,6 +9,7 @@ import { PermissionBar } from '@/components/chat/PermissionBar';
 import { RevertBanner } from '@/components/chat/RevertBanner';
 import { TeamMemberDetail } from '@/components/chat/team/TeamMemberDetail';
 import { useChatStore } from '@/services/stores/chat-store';
+import { useAgentStore } from '@/services/stores/agent-store';
 import { useTeamStore } from '@/services/stores/team-store';
 import { useNavStore } from '@/services/stores/nav-store';
 import { useDisplaySessions } from '@/hooks/useDisplaySessions';
@@ -117,6 +118,7 @@ export const MobileChatPage: React.FC = () => {
     if (isStreaming) return;
     clearChat();
     resetTeam();
+    useAgentStore.getState().resetAgentSelection();
     useNavStore.getState().setSelectedFile(null);
   };
 

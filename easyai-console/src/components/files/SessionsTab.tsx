@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { SessionItem } from '../ui/SessionItem';
 import { useSessionStore } from '@/services/stores/session-store';
 import { useChatStore } from '@/services/stores/chat-store';
+import { useAgentStore } from '@/services/stores/agent-store';
 import { useProjectStore } from '@/services/stores/project-store';
 import { useNavStore } from '@/services/stores/nav-store';
 import { useDisplaySessions } from '@/hooks/useDisplaySessions';
@@ -62,6 +63,7 @@ export const SessionsTab: React.FC = () => {
       await deleteRemoteSession(sessionId);
       if (isCurrentSession) {
         clearChat();
+        useAgentStore.getState().resetAgentSelection();
         useNavStore.getState().setSelectedFile(null);
         setCurrentSessionId(null);
       }
