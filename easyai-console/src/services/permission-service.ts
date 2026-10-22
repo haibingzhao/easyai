@@ -60,22 +60,27 @@ export async function fetchToolPermissions(
 }
 
 /**
- * Get effective permission settings for a project (defaults + user rules).
+ * Get effective permission settings.
+ *
+ * With a [projectId] this is the project's bucket; without one it is the caller's project-less
+ * default bucket, which temporary-workspace sessions evaluate against.
  */
 export async function fetchPermissionSettings(
-  projectId: string
+  projectId?: string
 ): Promise<PermissionSettingsDto> {
-  return fetchJson<PermissionSettingsDto>(`${API_BASE}/settings/${projectId}`);
+  return fetchJson<PermissionSettingsDto>(
+    projectId ? `${API_BASE}/settings/${projectId}` : `${API_BASE}/settings`
+  );
 }
 
 /**
  * Update a single permission setting (checkbox toggle).
  */
 export async function updatePermissionSetting(
-  projectId: string,
+  projectId: string | undefined,
   request: UpdateSettingRequest
 ): Promise<void> {
-  return fetchVoid(`${API_BASE}/settings/${projectId}`, {
+  return fetchVoid(projectId ? `${API_BASE}/settings/${projectId}` : `${API_BASE}/settings`, {
     method: 'PATCH',
     headers: JSON_HEADERS,
     body: JSON.stringify(request),

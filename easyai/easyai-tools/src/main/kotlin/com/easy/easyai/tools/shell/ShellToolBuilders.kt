@@ -50,7 +50,7 @@ Parameters:
         capabilities = setOf(ToolCapability.SHELL_EXECUTION)
     )
     override val permissionEvaluator = ToolPermissionEvaluator { ctx ->
-        ctx.sharedEvaluator.evaluateShellPermission(ctx.rules, ctx.projectPath, ctx.arguments, ctx.userId)
+        ctx.sharedEvaluator.evaluateShellPermission(ctx.rules, ctx.projectPath, ctx.arguments, ctx.userId, ctx.owners)
     }
     override val defaultPermissionRules = listOf(
         PermissionRule("shell.safe", "*", PermissionAction.ALLOW),

@@ -31,14 +31,17 @@ class ShellAiRiskCheckTest {
         private val error: Exception? = null
     ) : ShellAiRiskChecker {
         val calls = mutableListOf<Pair<String, String?>>()
+        val ownerSets = mutableListOf<Collection<String>>()
         override suspend fun checkRisk(
             command: String,
             projectPath: Path?,
             userId: String?,
             modelConfigId: String,
-            rules: List<PermissionRule>
+            rules: List<PermissionRule>,
+            owners: Collection<String>
         ): AiRiskResult {
             calls.add(command to userId)
+            ownerSets.add(owners)
             error?.let { throw it }
             return result ?: error("no result configured")
         }
@@ -63,6 +66,15 @@ class ShellAiRiskCheckTest {
             assertEquals("仅运行项目内脚本", result.reason)
             assertEquals(1, checker.calls.size)
             assertEquals("rm -rf ./output" to "user-1", checker.calls.first())
+        }
+
+        @Test
+        fun `checker receives the chat owner set`() = runBlocking {
+            val checker = FakeChecker(result = AiRiskResult(allowed = true))
+            val owners = setOf("bob", "grp_1", "system")
+            service(checker).evaluateShellPermission(aiRule, null, args, "bob", owners)
+
+            assertEquals(listOf<Collection<String>>(owners), checker.ownerSets)
         }
 
         @Test

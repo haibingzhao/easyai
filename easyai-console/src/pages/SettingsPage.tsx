@@ -9,6 +9,7 @@ import { RagTab } from '@/components/settings/RagTab';
 import { StorageTab } from '@/components/settings/StorageTab';
 import { AuxModelsTab } from '@/components/settings/AuxModelsTab';
 import { ChatAgentsTab } from '@/components/settings/ChatAgentsTab';
+import { AutoApprovePanel } from '@/components/chat/AutoApprovePanel';
 import { ReadOnlyBanner } from '@/components/ui/ReadOnlyBanner';
 import { UserAvatar } from '@/components/user/UserAvatar';
 import { ProfileEditDialog } from '@/components/user/ProfileEditDialog';
@@ -29,7 +30,8 @@ import {
   Globe,
   Layers,
   Cpu,
-  Bot
+  Bot,
+  ShieldCheck
 } from 'lucide-react';
 
 export interface SettingsMenuItem {
@@ -54,6 +56,7 @@ export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
   { id: 'storage', label: 'Storage', icon: <HardDrive className="w-4 h-4" /> },
   { id: 'aux-models', label: 'Task Models', icon: <Cpu className="w-4 h-4" /> },
   { id: 'chat-agents', label: 'Chat Agents', icon: <Bot className="w-4 h-4" /> },
+  { id: 'permissions', label: 'Tool Permissions', icon: <ShieldCheck className="w-4 h-4" /> },
   { id: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
 ];
 
@@ -61,6 +64,9 @@ export const SettingsPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const activeTab = searchParams.get('tab') || 'general';
+  // The tool-permissions tab edits the project-less default bucket. It stays visible in every
+  // deployment: even when project selection is enabled, "No Project" sessions run in temporary
+  // workspaces and evaluate this bucket, so it is their only editable entry point.
 
   // Redirect removed tabs to their new standalone pages
   useEffect(() => {
@@ -108,8 +114,20 @@ export const SettingsPage: React.FC = () => {
         {activeTab === 'storage' && <StorageTab />}
         {activeTab === 'aux-models' && <AuxModelsTab />}
         {activeTab === 'chat-agents' && <ChatAgentsTab />}
+        {activeTab === 'permissions' && <ToolPermissionsTab />}
         {activeTab === 'about' && <AboutTab />}
       </main>
+    </div>
+  );
+};
+
+const ToolPermissionsTab: React.FC = () => {
+  return (
+    <div className="max-w-2xl space-y-4">
+      <p className="text-sm text-muted-foreground">
+        {i18n('控制 AI 在聊天中可以自动执行哪些操作。未绑定项目时，这些设置作为默认权限，应用于无项目会话。')}
+      </p>
+      <AutoApprovePanel defaultScope />
     </div>
   );
 };

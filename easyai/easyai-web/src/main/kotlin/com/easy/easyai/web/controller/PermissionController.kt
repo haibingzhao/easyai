@@ -2,16 +2,20 @@ package com.easy.easyai.web.controller
 
 import com.easy.easyai.agent.registry.ToolRegistry
 import com.easy.easyai.common.util.ProcessExecutor
+import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.permission.PermissionAction
 import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.permission.PermissionRuleStore
+import com.easy.easyai.core.permission.PermissionScope
 import com.easy.easyai.core.permission.PermissionService
 import com.easy.easyai.core.skill.SkillCatalogEntry
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.skills.SkillConfig
 import com.easy.easyai.skills.SkillPaths
 import com.easy.easyai.web.model.*
+import com.easy.easyai.web.security.currentGroupUserId
 import com.easy.easyai.web.security.getCurrentUserId
+import com.easy.easyai.web.security.isGroupOwner
 import kotlinx.coroutines.reactor.mono
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.core.io.FileSystemResource
@@ -38,6 +42,8 @@ import java.nio.file.Path
  * - GET /api/permission/tools/{projectId} - Get tools with their permission status
  * - GET /api/permission/settings/{projectId} - Get effective permission settings
  * - PATCH /api/permission/settings/{projectId} - Update a single setting
+ * - GET /api/permission/settings - Get the caller's project-less default settings
+ * - PATCH /api/permission/settings - Update the caller's project-less default settings
  * - GET /api/permission/project-structure/{projectId} - Get project directory tree
  * - POST /api/permission/create-directory - Create a directory inside the project tree
  * - GET /api/permission/server-platform - Get the backend host platform
@@ -96,7 +102,8 @@ class PermissionController(
     @GetMapping("/rules/{projectId}")
     fun getRules(@PathVariable projectId: String): Mono<List<PermissionRuleDto>> {
         return mono {
-            permissionService.getRules(projectId).map { it.toDto() }
+            requireProjectScope(projectId)
+            permissionService.getRules(projectRuleScope(projectId)).map { it.toDto() }
         }
     }
 
@@ -109,8 +116,9 @@ class PermissionController(
         @RequestBody request: SaveRulesRequest
     ): Mono<Map<String, String>> {
         return mono {
+            requireProjectScope(projectId)
             val rules = request.rules.map { it.toDomain() }
-            ruleStore.saveRules(projectId, rules)
+            ruleStore.saveRules(mutableRuleScope(projectId), rules)
             mapOf("status" to "saved", "count" to rules.size.toString())
         }
     }
@@ -124,8 +132,9 @@ class PermissionController(
         @RequestBody request: AddRuleRequest
     ): Mono<Map<String, String>> {
         return mono {
+            requireProjectScope(projectId)
             val rule = request.toDomain()
-            ruleStore.addRule(projectId, rule)
+            ruleStore.addRule(mutableRuleScope(projectId), rule)
             mapOf("status" to "added")
         }
     }
@@ -140,7 +149,8 @@ class PermissionController(
         @RequestParam pattern: String
     ): Mono<Map<String, String>> {
         return mono {
-            ruleStore.deleteRule(projectId, permission, pattern)
+            requireProjectScope(projectId)
+            ruleStore.deleteRule(mutableRuleScope(projectId), permission, pattern)
             mapOf("status" to "deleted")
         }
     }
@@ -152,8 +162,11 @@ class PermissionController(
     @GetMapping("/tools/{projectId}")
     fun getToolPermissions(@PathVariable projectId: String): Mono<List<ToolPermissionInfoDto>> {
         return mono {
-            val rules = permissionService.getRules(projectId)
+            requireProjectScope(projectId)
+            val ruleScope = projectRuleScope(projectId)
+            val rules = permissionService.getRules(ruleScope)
             val tools = toolRegistry.getAllTools()
+            logger.trace("Loaded {} permission rules for tool status of scope {}", rules.size, ruleScope)
 
             tools.map { tool ->
                 ToolPermissionInfoDto(
@@ -172,23 +185,8 @@ class PermissionController(
     @GetMapping("/settings/{projectId}")
     fun getSettings(@PathVariable projectId: String): Mono<PermissionSettingsDto> {
         return mono {
-            val settings = permissionService.getEffectiveSettings(projectId)
-            val projectPath = resolveProjectPath(projectId)
-            PermissionSettingsDto(
-                projectPath = projectPath ?: "",
-                readFileProject = settings.readFileProject,
-                readFileAll = settings.readFileAll,
-                writeFileProject = settings.writeFileProject,
-                writeFileAll = settings.writeFileAll,
-                executeSafeCommands = settings.executeSafeCommands,
-                executeAllCommands = settings.executeAllCommands,
-                useBrowser = settings.useBrowser,
-                useMcp = settings.useMcp,
-                readOtherPaths = settings.readOtherPaths,
-                writeOtherPaths = settings.writeOtherPaths,
-                otherCommands = settings.otherCommands,
-                aiCheckModelId = settings.aiCheckModelId
-            )
+            requireProjectScope(projectId)
+            toSettingsDto(projectRuleScope(projectId), resolveProjectPath(projectId) ?: "")
         }
     }
 
@@ -201,7 +199,36 @@ class PermissionController(
         @RequestBody request: UpdateSettingRequest
     ): Mono<Map<String, String>> {
         return mono {
-            permissionService.updateSetting(projectId, request.key, request.value)
+            requireProjectScope(projectId)
+            permissionService.updateSetting(mutableRuleScope(projectId), request.key, request.value)
+            mapOf("status" to "updated")
+        }
+    }
+
+    /**
+     * Get the default settings for project-less sessions.
+     *
+     * Project-less deployments run every chat in a temporary workspace, whose rules die with the
+     * session; these defaults are what those sessions actually evaluate against. A group-backed
+     * login (a family) shares one bucket, so this is the policy the owner configured for everyone.
+     */
+    @GetMapping("/settings")
+    fun getDefaultSettings(): Mono<PermissionSettingsDto> {
+        return mono {
+            toSettingsDto(defaultRuleScope(), projectPath = "")
+        }
+    }
+
+    /**
+     * Update one setting of the default settings for project-less sessions.
+     *
+     * A group-backed bucket is writable by the group owner only: the members' sessions evaluate it,
+     * so letting any member rewrite it would let them lift the family's safety policy.
+     */
+    @PatchMapping("/settings")
+    fun updateDefaultSetting(@RequestBody request: UpdateSettingRequest): Mono<Map<String, String>> {
+        return mono {
+            permissionService.updateSetting(mutableRuleScope(null), request.key, request.value)
             mapOf("status" to "updated")
         }
     }
@@ -419,10 +446,11 @@ class PermissionController(
         }
         val projectPath = resolveProjectPath(projectId)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found: $projectId")
+        val ruleScope = projectRuleScope(projectId)
         val projectDir = Path.of(projectPath).toAbsolutePath().normalize()
         // Resolve relative paths against the project directory; absolute paths used as-is
         val filePath = (if (rawPath.isAbsolute) rawPath else projectDir.resolve(rawPath)).normalize()
-        if (!filePath.startsWith(projectDir) && !isPathAllowedByRules(projectId, filePath, projectDir)) {
+        if (!filePath.startsWith(projectDir) && !isPathAllowedByRules(ruleScope, filePath, projectDir)) {
             logger.warn("Access denied: path outside project directory: {} (project: {})", filePath, projectDir)
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Access denied: path is outside project directory")
         }
@@ -457,11 +485,92 @@ class PermissionController(
     }
 
     /**
+     * Reject reserved default-scope ids on project-shaped routes.
+     *
+     * A project-less default bucket is reachable through `/settings` (no path variable). Accepting
+     * a `user-default:`/`group-default:` id here would let any authenticated caller read or rewrite
+     * someone else's bucket just by knowing the id.
+     */
+    private fun requireProjectScope(projectId: String) {
+        if (PermissionScope.isDefaultScope(projectId)) {
+            throw ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found: $projectId")
+        }
+    }
+
+    /**
+     * Effective rule bucket for a project-shaped route.
+     *
+     * Temporary workspaces are mapped to the default bucket on purpose: permission evaluation
+     * ignores per-session rules (they are deleted with the workspace), so addressing the temp id
+     * directly must read/write the same bucket instead of silently editing rules nothing evaluates.
+     *
+     * An unknown id is a 404 when the store is present. Falling back to the raw id would let any
+     * authenticated caller read or inject rules into another user's project bucket by knowing its id.
+     */
+    private suspend fun projectRuleScope(projectId: String): String {
+        val userId = getCurrentUserId()
+        val project = projectStore?.findById(projectId, userId)
+        if (projectStore != null && project == null) {
+            throw ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found: $projectId")
+        }
+        return if (project?.kind == ProjectKind.TEMP) defaultRuleScope() else projectId
+    }
+
+    /**
+     * Rule bucket a write may target.
+     *
+     * Reads stay open to group members so they can inspect the policy their sessions evaluate, but
+     * a shared group bucket is writable by its owner only. [projectId] is null for the project-less
+     * `/settings` route; a temporary workspace id is mapped to the same default bucket.
+     */
+    private suspend fun mutableRuleScope(projectId: String?): String {
+        val scope = if (projectId == null) defaultRuleScope() else projectRuleScope(projectId)
+        if (PermissionScope.isGroupDefault(scope) && !isGroupOwner()) {
+            throw ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Only the group owner can change the shared tool permissions"
+            )
+        }
+        return scope
+    }
+
+    /** Default bucket of the current login: the group's shared one when group-backed, else personal. */
+    private suspend fun defaultRuleScope(): String {
+        val groupUserId = currentGroupUserId()
+        return if (groupUserId != null) {
+            PermissionScope.groupDefault(groupUserId)
+        } else {
+            PermissionScope.userDefault(getCurrentUserId())
+        }
+    }
+
+    private suspend fun toSettingsDto(scopeId: String, projectPath: String): PermissionSettingsDto {
+        val settings = permissionService.getEffectiveSettings(scopeId)
+        return PermissionSettingsDto(
+            projectPath = projectPath,
+            readFileProject = settings.readFileProject,
+            readFileAll = settings.readFileAll,
+            writeFileProject = settings.writeFileProject,
+            writeFileAll = settings.writeFileAll,
+            executeSafeCommands = settings.executeSafeCommands,
+            executeAllCommands = settings.executeAllCommands,
+            useBrowser = settings.useBrowser,
+            useMcp = settings.useMcp,
+            readOtherPaths = settings.readOtherPaths,
+            writeOtherPaths = settings.writeOtherPaths,
+            otherCommands = settings.otherCommands,
+            aiCheckModelId = settings.aiCheckModelId,
+            sharedWithGroup = PermissionScope.isGroupDefault(scopeId),
+            canEdit = !PermissionScope.isGroupDefault(scopeId) || isGroupOwner()
+        )
+    }
+
+    /**
      * Check if a path outside the project directory is allowed by the project's permission rules.
      * Reuses the same evaluation logic as the agent loop (file.read/file.write rules).
      */
-    private suspend fun isPathAllowedByRules(projectId: String, filePath: Path, projectDir: Path): Boolean {
-        val rules = ruleStore.loadRules(projectId)
+    private suspend fun isPathAllowedByRules(ruleScope: String, filePath: Path, projectDir: Path): Boolean {
+        val rules = ruleStore.loadRules(ruleScope)
         val args = mapOf("path" to filePath.toString())
         val readAllowed = permissionService.evaluateFilePermission(rules, projectDir, args, read = true)
         if (readAllowed.action == PermissionAction.ALLOW) return true

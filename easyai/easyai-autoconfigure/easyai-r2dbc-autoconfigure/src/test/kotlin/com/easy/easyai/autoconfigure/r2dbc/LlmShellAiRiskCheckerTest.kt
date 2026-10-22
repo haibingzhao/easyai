@@ -50,6 +50,24 @@ class LlmShellAiRiskCheckerTest {
             listOfNotNull(config).filter { it.modelType == modelType }
     }
 
+    /** Exposes the config only to its owner (or system), like the real store's user-scoped lookup. */
+    private class OwnerScopedConfigStore(
+        private val owner: String,
+        private val config: ModelProviderConfig?
+    ) : ModelProviderConfigStore {
+        override suspend fun getConfig(id: String, userId: String): ModelProviderConfig? =
+            config.takeIf { userId == owner || userId == "system" }
+
+        override suspend fun saveConfig(config: ModelProviderConfig, userId: String) {}
+        override suspend fun deleteConfig(id: String, userId: String): Boolean = false
+        override suspend fun getAllConfigs(userId: String): List<ModelProviderConfig> =
+            getModelConfigs(ModelType.CHAT, userId)
+
+        override suspend fun getModelConfigs(modelType: ModelType, userId: String): List<ModelProviderConfig> =
+            listOfNotNull(config.takeIf { userId == owner || userId == "system" })
+                .filter { it.modelType == modelType }
+    }
+
     private fun checkerWithModel(
         error: Exception? = null,
         responseText: (() -> String)? = null
@@ -63,6 +81,20 @@ class LlmShellAiRiskCheckerTest {
         every { factory.supports(Protocol.OPENAI) } returns true
         every { factory.create(any(), any()) } returns chatModel
         return LlmShellAiRiskChecker(FakeConfigStore(config), listOf(factory))
+    }
+
+    private fun checkerWithStore(
+        store: ModelProviderConfigStore,
+        responseText: () -> String
+    ): LlmShellAiRiskChecker {
+        val chatModel = mockk<ChatModel>()
+        every { chatModel.call(any<Prompt>()) } answers {
+            ChatResponse(listOf(Generation(AssistantMessage(responseText()))))
+        }
+        val factory = mockk<ChatModelFactory>()
+        every { factory.supports(Protocol.OPENAI) } returns true
+        every { factory.create(any(), any()) } returns chatModel
+        return LlmShellAiRiskChecker(store, listOf(factory))
     }
 
     private val rules = listOf(PermissionRule("shell.ai", "model-1", PermissionAction.ALLOW))
@@ -117,6 +149,34 @@ class LlmShellAiRiskCheckerTest {
 
             assertFalse(result.allowed)
             assertEquals("""命令包含 "rm -rf"""", result.reason)
+        }
+    }
+
+    @Nested
+    inner class `group-shared model config` {
+
+        @Test
+        fun `a member resolves the owner's config through the chat owners`() = runBlocking {
+            val store = OwnerScopedConfigStore("grp_1", config)
+            val checker = checkerWithStore(store) { """{"risky": false, "reason": "safe"}""" }
+
+            val result = checker.checkRisk(
+                "ls", null, "bob", "model-1", rules, setOf("bob", "grp_1", "system")
+            )
+
+            assertTrue(result.allowed)
+            assertEquals("safe", result.reason)
+        }
+
+        @Test
+        fun `legacy user-only lookup still misses the owner's config`() = runBlocking {
+            val store = OwnerScopedConfigStore("grp_1", config)
+            val checker = checkerWithStore(store) { """{"risky": false}""" }
+
+            val result = checker.checkRisk("ls", null, "bob", "model-1", rules)
+
+            assertFalse(result.allowed)
+            assertEquals("AI 检查模型配置不存在", result.reason)
         }
     }
 

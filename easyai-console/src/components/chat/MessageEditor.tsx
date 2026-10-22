@@ -6,6 +6,7 @@ import { useSideAskStore } from '@/services/stores/side-ask-store';
 import { useProjectStore, adoptHandshakeWorkspace } from '@/services/stores/project-store';
 import { useNavStore } from '@/services/stores/nav-store';
 import { useSettingsStore } from '@/services/stores/settings-store';
+import { canConfigureAutoApprove } from './auto-approve-policy';
 import { sanitizeOverrides } from '@/components/models/model-overrides';
 import { pathToFile, IMAGE_EXTS } from '@/services/file-browser-service';
 import { sendMessageToBackend, abortAllActiveStreams, cancelChat, requireStreamingStatus, getCurrentSendService, type ChatService } from '../../services/chat-service';
@@ -172,6 +173,14 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
   const currentProjectId = useProjectStore((state) =>
     state.currentProject?.kind === 'temp' ? undefined : state.currentProject?.id
   );
+
+  // Auto-approve rules are per-project; a temporary workspace has none to configure, and the host
+  // may reserve the setting for a particular role/view. The shield is the panel's only entry point.
+  const autoApproveVisible = canConfigureAutoApprove(currentProjectId);
+
+  useEffect(() => {
+    if (!autoApproveVisible) setShowAutoApprove(false);
+  }, [autoApproveVisible]);
 
   // Slash command autocomplete (must be after selectedAgentId is defined)
   const slashCommand = useSlashCommand(selectedAgentId);
@@ -1464,7 +1473,7 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
               <Paperclip className="w-4 h-4" />
             </button>
           )}
-          {!isMobile && (
+          {!isMobile && autoApproveVisible && (
             <div className="relative">
               <button
                 onMouseDown={(e) => e.stopPropagation()}
@@ -1500,7 +1509,7 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
       )}
 
       {/* AutoApprovePanel overlay - full width, bottom aligned with textarea */}
-      {showAutoApprove && (
+      {showAutoApprove && autoApproveVisible && (
         <div
           className="absolute inset-x-0 z-50"
           style={{ bottom: `${toolbarHeight + 8}px` }}

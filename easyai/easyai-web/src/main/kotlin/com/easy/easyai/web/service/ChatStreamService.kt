@@ -19,6 +19,7 @@ import com.easy.easyai.core.goal.GoalStatusListener
 import com.easy.easyai.core.goal.GoalStatusNotifier
 import com.easy.easyai.core.goal.GoalStore
 import com.easy.easyai.core.model.*
+import com.easy.easyai.core.permission.PermissionScope
 import com.easy.easyai.core.permission.PermissionService
 import com.easy.easyai.core.tool.ScriptEnvProvider
 import com.easy.easyai.repository.project.AsyncProjectStore
@@ -900,8 +901,12 @@ class ChatStreamService(
         if (remember && permissionService != null && permission != null) {
             val context = sessionManager.getSessionContext(sessionId, userId, owners)
             context?.projectId?.let { projectId ->
-                permissionService.addAllowRule(projectId, permission, pattern ?: "*")
-                logger.info("Saved allow rule for {} {} in project {}", permission, pattern, projectId)
+                // Temporary workspaces keep no durable rules; their "always allow" lands in the
+                // default bucket (the family's shared one when the login is group-backed), which
+                // every project-less session of that scope reads.
+                val ruleScope = PermissionScope.forProject(projectId, context.projectKind, userId, owners)
+                permissionService.addAllowRule(ruleScope, permission, pattern ?: "*")
+                logger.info("Saved allow rule for {} {} in scope {}", permission, pattern, ruleScope)
             }
         }
 
@@ -933,8 +938,9 @@ class ChatStreamService(
         if (remember && permissionService != null && permission != null) {
             val context = sessionManager.getSessionContext(sessionId, userId, owners)
             context?.projectId?.let { projectId ->
-                permissionService.addDenyRule(projectId, permission, pattern ?: "*")
-                logger.info("Saved deny rule for {} {} in project {}", permission, pattern, projectId)
+                val ruleScope = PermissionScope.forProject(projectId, context.projectKind, userId, owners)
+                permissionService.addDenyRule(ruleScope, permission, pattern ?: "*")
+                logger.info("Saved deny rule for {} {} in scope {}", permission, pattern, ruleScope)
             }
         }
 

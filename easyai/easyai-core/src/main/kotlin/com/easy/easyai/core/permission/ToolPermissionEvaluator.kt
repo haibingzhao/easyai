@@ -22,13 +22,16 @@ fun interface ToolPermissionEvaluator {
  * @property arguments Tool call arguments for pattern extraction
  * @property sharedEvaluator Hook to PermissionService's shared evaluation utilities
  * @property userId Owner of the session, used for user-scoped lookups (e.g. AI risk check model config)
+ * @property owners Read-visibility owners (caller, group bucket, system), used to resolve
+ *   group-shared model configs
  */
 data class PermissionEvalContext(
     val rules: List<PermissionRule>,
     val projectPath: Path?,
     val arguments: Map<String, Any?>,
     val sharedEvaluator: SharedPermissionEvaluator,
-    val userId: String? = null
+    val userId: String? = null,
+    val owners: Collection<String> = emptySet()
 )
 
 /**
@@ -48,7 +51,8 @@ interface SharedPermissionEvaluator {
         rules: List<PermissionRule>,
         projectPath: Path?,
         arguments: Map<String, Any?>,
-        userId: String? = null
+        userId: String? = null,
+        owners: Collection<String> = emptySet()
     ): PermissionCheckResult
 
     fun evaluateSimplePermission(

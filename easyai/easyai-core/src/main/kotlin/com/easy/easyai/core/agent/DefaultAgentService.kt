@@ -89,7 +89,9 @@ class DefaultAgentService(
                 arguments = context.arguments,
                 projectId = context.projectId,
                 projectPath = context.projectPath,
-                userId = context.userId
+                userId = context.userId,
+                projectKind = context.projectKind,
+                owners = context.owners
             )
             return when (result.action) {
                 PermissionAction.ALLOW -> BeforeToolCallResult.Allow

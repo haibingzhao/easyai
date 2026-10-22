@@ -77,21 +77,31 @@ const COMMON_COMMANDS: string[] = [
 // ---------------------------------------------------------------------------
 
 interface AutoApprovePanelProps {
-  onClose: () => void;
+  /** Called when the composer panel should close; omit when the panel is embedded in a page. */
+  onClose?: () => void;
+  /**
+   * Always edit the project-less default bucket, even when a project is selected.
+   * The Settings tab sets this; the composer follows the active project instead.
+   */
+  defaultScope?: boolean;
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) => {
-  // Permission rules are stored per project. A temporary workspace is deleted with its session,
-  // so rules attached to it would be orphaned — treat it as having no project and rely on defaults.
-  const currentProjectId = useProjectStore((s) =>
+export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose, defaultScope = false }) => {
+  // Rules are stored per project. A temporary workspace is per-session scratch and its rules are
+  // deleted with it, so project-less sessions read the caller's default bucket instead — the same
+  // bucket Settings edits when no project is bound.
+  const selectedProjectId = useProjectStore((s) =>
     (s.currentProject?.kind === 'temp' ? undefined : s.currentProject?.id));
+  const currentProjectId = defaultScope ? undefined : selectedProjectId;
 
   const [settings, setSettings] = useState<PermissionSettingsDto | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  /** A member can inspect the group's shared bucket but the server rejects writes. */
+  const readOnly = settings?.canEdit === false;
   const [error, setError] = useState<string | null>(null);
   const [savingKeys, setSavingKeys] = useState<Set<string>>(new Set());
   /** Tracks which list sections are expanded (checkbox toggles expand/collapse). */
@@ -104,10 +114,6 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
 
   // ---- Load settings on mount ----
   useEffect(() => {
-    if (!currentProjectId) {
-      setIsLoading(false);
-      return;
-    }
     (async () => {
       try {
         setIsLoading(true);
@@ -141,8 +147,9 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
     })();
   }, []);
 
-  // ---- Close on outside click / escape ----
+  // ---- Close on outside click / escape (composer only) ----
   useEffect(() => {
+    if (!onClose) return;
     const onClick = (e: MouseEvent) => {
       if (panelRef.current && !panelRef.current.contains(e.target as Node)) onClose();
     };
@@ -167,11 +174,6 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
   // ---- Debounced API call ----
   const debouncedUpdate = useCallback(
     (key: string, value: boolean | string[] | string | null) => {
-      console.log('[AutoApprovePanel] debouncedUpdate called:', { key, value, currentProjectId });
-      if (!currentProjectId) {
-        console.warn('[AutoApprovePanel] debouncedUpdate: currentProjectId is null, skipping');
-        return;
-      }
       // Clear existing timer for this key
       const existing = debounceTimers.current.get(key);
       if (existing) clearTimeout(existing);
@@ -210,8 +212,7 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
   // ---- Toggle a boolean setting (with cascade) ----
   const handleToggle = useCallback(
     (key: keyof PermissionSettingsDto, checked: boolean) => {
-      console.log('[AutoApprovePanel] handleToggle called:', { key, checked, hasSettings: !!settings });
-      if (!settings) return;
+      if (!settings || settings.canEdit === false) return;
 
       // Cascade: when a parent is unchecked, force children off
       const updates: Partial<PermissionSettingsDto> = { [key]: checked };
@@ -259,7 +260,7 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
   // ---- Toggle a list section's expand/collapse ----
   const handleListToggle = useCallback(
     (key: keyof PermissionSettingsDto, checked: boolean) => {
-      if (!settings) return;
+      if (!settings || settings.canEdit === false) return;
 
       // Guard: don't allow toggling when disabled by parent
       if (key === 'readOtherPaths' && readOtherPathsDisabled) return;
@@ -286,7 +287,7 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
   // ---- Update a list setting (paths / commands) ----
   const handleListChange = useCallback(
     (key: keyof PermissionSettingsDto, list: string[]) => {
-      if (!settings) return;
+      if (!settings || settings.canEdit === false) return;
       setSettings((prev) => (prev ? { ...prev, [key]: list } : prev));
       debouncedUpdate(key, list);
     },
@@ -296,7 +297,7 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
   // ---- Select the AI risk check model (null = disabled) ----
   const handleAiModelChange = useCallback(
     (value: string) => {
-      if (!settings) return;
+      if (!settings || settings.canEdit === false) return;
       const modelId: string | null = value || null;
       setSettings((prev) => (prev ? { ...prev, aiCheckModelId: modelId } : prev));
       debouncedUpdate('aiCheckModelId', modelId);
@@ -318,10 +319,7 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
         type="checkbox"
         checked={checked}
         disabled={disabled}
-        onChange={(e) => {
-          console.log('[AutoApprovePanel] BoolCheckbox onChange:', { settingKey, checked: e.target.checked, disabled });
-          handleToggle(settingKey, e.target.checked);
-        }}
+        onChange={(e) => handleToggle(settingKey, e.target.checked)}
         className="rounded border-border accent-primary"
       />
       <span className="text-sm">{label}</span>
@@ -351,6 +349,20 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
       )}
     </label>
   );
+
+  /** Static chips replace an interactive editor when the shared bucket is read-only. */
+  const ReadOnlyValues: React.FC<{ values: string[] }> = ({ values }) => {
+    if (values.length === 0) return null;
+    return (
+      <div className="flex flex-wrap gap-1">
+        {values.map((value) => (
+          <span key={value} className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground">
+            {value}
+          </span>
+        ))}
+      </div>
+    );
+  };
 
   // ---- Render ----
   if (isLoading) {
@@ -386,6 +398,16 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
         </div>
       )}
 
+      {!currentProjectId && (
+        <p className="px-4 py-2 text-xs text-muted-foreground border-b border-border">
+          {settings.sharedWithGroup
+            ? (readOnly
+                ? i18n('未绑定项目：以下设置由户主配置，家庭成员的无项目会话共用；仅户主可修改')
+                : i18n('未绑定项目：以下设置由户主配置，家庭成员的无项目会话共用'))
+            : i18n('未绑定项目：以下设置作为默认权限，应用于你的所有无项目会话')}
+        </p>
+      )}
+
       {/* Settings body */}
       <div className="p-4 max-h-[420px] overflow-y-auto">
         <div className="flex flex-col gap-4">
@@ -395,17 +417,21 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
             <FolderOpen className="w-4 h-4" />
             {i18n('读取文件')}
           </div>
-          <BoolCheckbox settingKey="readFileProject" checked={settings.readFileProject} label={i18n('读取项目文件')} />
-          <BoolCheckbox settingKey="readFileAll" checked={settings.readFileAll} label={i18n('读取所有文件')} disabled={readFileAllDisabled} />
-          <ListCheckbox settingKey="readOtherPaths" expanded={expandedLists.has('readOtherPaths')} label={i18n('读取其它路径')} disabled={readOtherPathsDisabled} />
+          <BoolCheckbox settingKey="readFileProject" checked={settings.readFileProject} label={i18n('读取项目文件')} disabled={readOnly} />
+          <BoolCheckbox settingKey="readFileAll" checked={settings.readFileAll} label={i18n('读取所有文件')} disabled={readOnly || readFileAllDisabled} />
+          <ListCheckbox settingKey="readOtherPaths" expanded={expandedLists.has('readOtherPaths')} label={i18n('读取其它路径')} disabled={readOnly || readOtherPathsDisabled} />
           {expandedLists.has('readOtherPaths') && (
             <div className="mt-1 ml-6">
-              <FileBrowserDropdown
-                values={settings.readOtherPaths}
-                onChange={(v) => handleListChange('readOtherPaths', v)}
-                initialPath={settings.projectPath}
-                placeholder={i18n('浏览并选择路径...')}
-              />
+              {readOnly ? (
+                <ReadOnlyValues values={settings.readOtherPaths} />
+              ) : (
+                <FileBrowserDropdown
+                  values={settings.readOtherPaths}
+                  onChange={(v) => handleListChange('readOtherPaths', v)}
+                  initialPath={settings.projectPath}
+                  placeholder={i18n('浏览并选择路径...')}
+                />
+              )}
             </div>
           )}
         </section>
@@ -416,17 +442,21 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
             <FolderCog className="w-4 h-4" />
             {i18n('写入文件')}
           </div>
-          <BoolCheckbox settingKey="writeFileProject" checked={settings.writeFileProject} label={i18n('写入项目文件')} />
-          <BoolCheckbox settingKey="writeFileAll" checked={settings.writeFileAll} label={i18n('写入所有文件')} disabled={writeFileAllDisabled} />
-          <ListCheckbox settingKey="writeOtherPaths" expanded={expandedLists.has('writeOtherPaths')} label={i18n('写入其它路径')} disabled={writeOtherPathsDisabled} />
+          <BoolCheckbox settingKey="writeFileProject" checked={settings.writeFileProject} label={i18n('写入项目文件')} disabled={readOnly} />
+          <BoolCheckbox settingKey="writeFileAll" checked={settings.writeFileAll} label={i18n('写入所有文件')} disabled={readOnly || writeFileAllDisabled} />
+          <ListCheckbox settingKey="writeOtherPaths" expanded={expandedLists.has('writeOtherPaths')} label={i18n('写入其它路径')} disabled={readOnly || writeOtherPathsDisabled} />
           {expandedLists.has('writeOtherPaths') && (
             <div className="mt-1 ml-6">
-              <FileBrowserDropdown
-                values={settings.writeOtherPaths}
-                onChange={(v) => handleListChange('writeOtherPaths', v)}
-                initialPath={settings.projectPath}
-                placeholder={i18n('浏览并选择路径...')}
-              />
+              {readOnly ? (
+                <ReadOnlyValues values={settings.writeOtherPaths} />
+              ) : (
+                <FileBrowserDropdown
+                  values={settings.writeOtherPaths}
+                  onChange={(v) => handleListChange('writeOtherPaths', v)}
+                  initialPath={settings.projectPath}
+                  placeholder={i18n('浏览并选择路径...')}
+                />
+              )}
             </div>
           )}
         </section>
@@ -441,29 +471,34 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
             settingKey="executeSafeCommands"
             checked={settings.executeSafeCommands}
             label={i18n('执行安全命令')}
+            disabled={readOnly}
           />
           <BoolCheckbox
             settingKey="executeAllCommands"
             checked={settings.executeAllCommands}
             label={i18n('执行所有命令')}
-            disabled={executeAllDisabled}
+            disabled={readOnly || executeAllDisabled}
           />
           <ListCheckbox
             settingKey="otherCommands"
             expanded={expandedLists.has('otherCommands')}
             label={i18n('执行其它命令')}
-            disabled={otherCommandsDisabled}
+            disabled={readOnly || otherCommandsDisabled}
           />
           {expandedLists.has('otherCommands') && (
             <div className="mt-1 ml-6">
-              <MultiSelectDropdown
-                values={settings.otherCommands}
-                onChange={(v) => handleListChange('otherCommands', v)}
-                options={COMMON_COMMANDS}
-                placeholder={i18n('选择或输入命令前缀...')}
-                allowCustom
-                variant="compact"
-              />
+              {readOnly ? (
+                <ReadOnlyValues values={settings.otherCommands} />
+              ) : (
+                <MultiSelectDropdown
+                  values={settings.otherCommands}
+                  onChange={(v) => handleListChange('otherCommands', v)}
+                  options={COMMON_COMMANDS}
+                  placeholder={i18n('选择或输入命令前缀...')}
+                  allowCustom
+                  variant="compact"
+                />
+              )}
             </div>
           )}
         </section>
@@ -474,7 +509,7 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
             <Globe className="w-4 h-4" />
             {i18n('浏览器')}
           </div>
-          <BoolCheckbox settingKey="useBrowser" checked={settings.useBrowser} label={i18n('允许使用浏览器')} />
+          <BoolCheckbox settingKey="useBrowser" checked={settings.useBrowser} label={i18n('允许使用浏览器')} disabled={readOnly} />
         </section>
 
         {/* ---- 5. AI Risk Check ---- */}
@@ -486,7 +521,7 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
           <div className="flex items-center gap-2 py-1">
             <select
               value={settings.aiCheckModelId ?? ''}
-              disabled={settings.executeAllCommands || modelConfigs.length === 0}
+              disabled={readOnly || settings.executeAllCommands || modelConfigs.length === 0}
               onChange={(e) => handleAiModelChange(e.target.value)}
               className="flex-1 text-sm bg-background border border-border rounded px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -510,7 +545,7 @@ export const AutoApprovePanel: React.FC<AutoApprovePanelProps> = ({ onClose }) =
             <Plug className="w-4 h-4" />
             {i18n('MCP 服务')}
           </div>
-          <BoolCheckbox settingKey="useMcp" checked={settings.useMcp} label={i18n('允许使用 MCP 服务')} />
+          <BoolCheckbox settingKey="useMcp" checked={settings.useMcp} label={i18n('允许使用 MCP 服务')} disabled={readOnly} />
           </section>
         </div>
       </div>

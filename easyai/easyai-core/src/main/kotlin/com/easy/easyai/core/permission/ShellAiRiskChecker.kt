@@ -21,6 +21,10 @@ interface ShellAiRiskChecker {
      * @param projectPath Project root path for path-scoped rules
      * @param userId Owner of the model config being used
      * @param modelConfigId Model config selected by the user for AI checking
+     * @param rules Effective permission rules the command is evaluated against
+     * @param owners Read-visibility owners (caller, group bucket, system). A shared rule bucket may
+     *   name a model config owned by another member of the same group, so resolution must use this
+     *   set when it is present; an empty set keeps the legacy user-scoped lookup.
      * @return [AiRiskResult.allowed]=true when the command is deemed safe
      */
     suspend fun checkRisk(
@@ -28,7 +32,8 @@ interface ShellAiRiskChecker {
         projectPath: Path?,
         userId: String?,
         modelConfigId: String,
-        rules: List<PermissionRule>
+        rules: List<PermissionRule>,
+        owners: Collection<String> = emptySet()
     ): AiRiskResult
 }
 
