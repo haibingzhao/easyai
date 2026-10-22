@@ -17,6 +17,8 @@ data class OpenAiChatOptions(
     override val maxTokens: Int? = null,
     val maxCompletionTokens: Int? = null,
     val reasoningEffort: String? = null,
+    /** Explicit `enable_thinking` for OpenAI-compatible gateways; null means "do not send". */
+    val enableThinking: Boolean? = null,
     val responseFormatKind: OpenAiResponseFormatKind? = null,
     val stop: List<String> = emptyList(),
     val parallelToolCalls: Boolean? = null,

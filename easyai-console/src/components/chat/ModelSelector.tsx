@@ -3,7 +3,10 @@ import { createPortal } from 'react-dom';
 import { useSettingsStore } from '@/services/stores/settings-store';
 import { modelConfigService } from '@/services/model-config-service';
 import { storageService } from '@/services/storage-service';
-import type { ModelProviderConfig, ModelCapabilities } from '@/types/settings';
+import { effortLabel } from '@/components/models/reasoning-controls';
+import { sanitizeOverrides } from '@/components/models/model-overrides';
+import { ModelParamPanel } from './ModelParamPanel';
+import type { ModelProviderConfig, ModelCapabilities, ModelOverrides } from '@/types/settings';
 import { i18n } from '@/utils/i18n';
 import { ChevronDown } from 'lucide-react';
 
@@ -13,20 +16,48 @@ interface ModelSelectorProps {
   selectedId?: string | null;
   /** Controlled mode: skip writing the selection to settings store / localStorage. */
   persistSelection?: boolean;
+  /**
+   * Hover (desktop) / long-press (touch) parameter panel for effort and the working context
+   * window. Off by default: consumers whose request has no override channel must not show it.
+   */
+  enableParamOverrides?: boolean;
 }
 
-export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange, selectedId, persistSelection = true }) => {
+const PANEL_GAP = 8;
+const HOVER_OPEN_MS = 180;
+const HOVER_CLOSE_MS = 180;
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_SLOP = 12;
+
+export const ModelSelector: React.FC<ModelSelectorProps> = ({
+  onModelChange,
+  selectedId,
+  persistSelection = true,
+  enableParamOverrides = false,
+}) => {
   const [enabledConfigs, setEnabledConfigs] = useState<ModelProviderConfig[]>([]);
   const [groupNames, setGroupNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [dropdownPos, setDropdownPos] = useState<{ bottom: number; left: number } | null>(null);
   const [pendingAnchor, setPendingAnchor] = useState<{ top: number; right: number } | null>(null);
+  const [overrides, setOverrides] = useState<Record<string, ModelOverrides>>({});
+  const [hoveredConfig, setHoveredConfig] = useState<ModelProviderConfig | null>(null);
+  const [hoverAnchor, setHoverAnchor] = useState<{ top: number; left: number; right: number } | null>(null);
+  const [panelPos, setPanelPos] = useState<{ top: number; left: number } | null>(null);
+  const [sheetConfig, setSheetConfig] = useState<ModelProviderConfig | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const hoverOpenTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pressStart = useRef<{ x: number; y: number } | null>(null);
+  const pressFired = useRef(false);
 
   const selectedModelConfigId = useSettingsStore((state) => state.selectedModelConfigId);
   const setSelectedModelConfig = useSettingsStore((state) => state.setSelectedModelConfig);
+  const setModelConfigs = useSettingsStore((state) => state.setModelConfigs);
 
   useEffect(() => {
     const loadConfigs = async () => {
@@ -38,11 +69,25 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange, sel
         ]);
         const enabled = configs.filter(c => c.enabled !== false);
         setEnabledConfigs(enabled);
+        setModelConfigs(enabled);
         const nameMap: Record<string, string> = {};
         for (const g of groups) {
           nameMap[g.id] = g.name;
         }
         setGroupNames(nameMap);
+
+        if (enableParamOverrides) {
+          const loaded: Record<string, ModelOverrides> = {};
+          for (const config of enabled) {
+            const raw = storageService.getModelOverrides(config.id);
+            const clean = sanitizeOverrides(config, raw);
+            if (raw && (!clean || raw.effort !== clean.effort || raw.contextToken !== clean.contextToken)) {
+              storageService.saveModelOverrides(config.id, clean);
+            }
+            if (clean) loaded[config.id] = clean;
+          }
+          setOverrides(loaded);
+        }
 
         if (enabled.length > 0) {
           // Read directly from localStorage to avoid race condition:
@@ -100,19 +145,100 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange, sel
     setDropdownPos({ bottom, left });
   }, [dropdownOpen, pendingAnchor]);
 
-  // Close dropdown on outside click or scroll
+  // Measure the hover panel once it exists, then place it beside the row.
+  useLayoutEffect(() => {
+    if (!hoveredConfig || !hoverAnchor || !panelRef.current) return;
+    const width = panelRef.current.offsetWidth;
+    const height = panelRef.current.offsetHeight;
+    let left = hoverAnchor.left - width - PANEL_GAP;
+    if (left < PANEL_GAP) left = hoverAnchor.right + PANEL_GAP;
+    left = Math.min(left, window.innerWidth - width - PANEL_GAP);
+    const top = Math.max(PANEL_GAP, Math.min(hoverAnchor.top, window.innerHeight - height - PANEL_GAP));
+    setPanelPos({ top, left });
+  }, [hoveredConfig, hoverAnchor]);
+
+  const clearHoverTimers = () => {
+    if (hoverOpenTimer.current !== null) clearTimeout(hoverOpenTimer.current);
+    if (hoverCloseTimer.current !== null) clearTimeout(hoverCloseTimer.current);
+    hoverOpenTimer.current = null;
+    hoverCloseTimer.current = null;
+  };
+
+  const scheduleHoverOpen = (config: ModelProviderConfig, rect: DOMRect) => {
+    if (!enableParamOverrides) return;
+    if (hoverCloseTimer.current !== null) clearTimeout(hoverCloseTimer.current);
+    if (hoverOpenTimer.current !== null) clearTimeout(hoverOpenTimer.current);
+    hoverOpenTimer.current = setTimeout(() => {
+      setHoverAnchor({ top: rect.top, left: rect.left, right: rect.right });
+      setPanelPos(null);
+      setHoveredConfig(config);
+    }, HOVER_OPEN_MS);
+  };
+
+  const scheduleHoverClose = () => {
+    if (!enableParamOverrides) return;
+    if (hoverOpenTimer.current !== null) clearTimeout(hoverOpenTimer.current);
+    if (hoverCloseTimer.current !== null) clearTimeout(hoverCloseTimer.current);
+    hoverCloseTimer.current = setTimeout(() => {
+      setHoveredConfig(null);
+      setPanelPos(null);
+    }, HOVER_CLOSE_MS);
+  };
+
+  const clearPress = () => {
+    if (pressTimer.current !== null) clearTimeout(pressTimer.current);
+    pressTimer.current = null;
+    pressStart.current = null;
+  };
+
+  const touchHandlers = (config: ModelProviderConfig) => ({
+    onTouchStart: (e: React.TouchEvent) => {
+      if (!enableParamOverrides || e.touches.length !== 1) return;
+      const touch = e.touches[0];
+      pressStart.current = { x: touch.clientX, y: touch.clientY };
+      pressFired.current = false;
+      pressTimer.current = setTimeout(() => {
+        pressFired.current = true;
+        setSheetConfig(config);
+      }, LONG_PRESS_MS);
+    },
+    onTouchMove: (e: React.TouchEvent) => {
+      const start = pressStart.current;
+      if (!start) return;
+      const touch = e.touches[0];
+      if (Math.abs(touch.clientX - start.x) > LONG_PRESS_SLOP || Math.abs(touch.clientY - start.y) > LONG_PRESS_SLOP) {
+        clearPress();
+      }
+    },
+    onTouchEnd: clearPress,
+    onTouchCancel: clearPress,
+    onContextMenu: (e: React.MouseEvent) => {
+      if (enableParamOverrides) e.preventDefault();
+    },
+  });
+
+  // Close dropdown on outside click or scroll. The hover panel is portaled separately and
+  // must count as "inside" or moving the pointer into it would dismiss everything.
   useEffect(() => {
     if (!dropdownOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (
-        dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
-        buttonRef.current && !buttonRef.current.contains(e.target as Node)
-      ) {
+      const target = e.target as Node;
+      // A missing ref means that surface is not rendered; treat it as "outside" so the
+      // dropdown still closes when the hover panel is absent.
+      const outsideDropdown = !dropdownRef.current || !dropdownRef.current.contains(target);
+      const outsidePanel = !panelRef.current || !panelRef.current.contains(target);
+      const outsideButton = !buttonRef.current || !buttonRef.current.contains(target);
+      if (outsideDropdown && outsidePanel && outsideButton) {
         setDropdownOpen(false);
+        setHoveredConfig(null);
       }
     };
     const handleScroll = (e: Event) => {
+      // The hover panel is anchored to a one-shot rect; scrolling the list would leave it stale.
+      setHoveredConfig(null);
+      setPanelPos(null);
       if (dropdownRef.current && dropdownRef.current.contains(e.target as Node)) return;
+      if (panelRef.current && panelRef.current.contains(e.target as Node)) return;
       setDropdownOpen(false);
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -122,6 +248,31 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange, sel
       document.removeEventListener('scroll', handleScroll, true);
     };
   }, [dropdownOpen]);
+
+  useEffect(() => {
+    if (!dropdownOpen) {
+      clearHoverTimers();
+      setHoveredConfig(null);
+      setPanelPos(null);
+    }
+  }, [dropdownOpen]);
+
+  // Long-press/hover timers must not fire after the selector unmounts.
+  useEffect(() => () => {
+    if (hoverOpenTimer.current !== null) clearTimeout(hoverOpenTimer.current);
+    if (hoverCloseTimer.current !== null) clearTimeout(hoverCloseTimer.current);
+    if (pressTimer.current !== null) clearTimeout(pressTimer.current);
+  }, []);
+
+  const applyOverride = (configId: string, next: ModelOverrides | null) => {
+    storageService.saveModelOverrides(configId, next);
+    setOverrides(prev => {
+      const copy = { ...prev };
+      if (next) copy[configId] = next;
+      else delete copy[configId];
+      return copy;
+    });
+  };
 
   const effectiveSelectedId = selectedId !== undefined ? selectedId : selectedModelConfigId;
   const selectedConfig = enabledConfigs.find(c => c.id === effectiveSelectedId);
@@ -159,6 +310,55 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange, sel
     );
   }
 
+  const renderRow = (config: ModelProviderConfig) => {
+    const override = overrides[config.id];
+    const effort = override?.effort ?? config.options?.effort;
+    return (
+      <button
+        key={config.id}
+        onClick={() => {
+          if (pressFired.current) {
+            pressFired.current = false;
+            return;
+          }
+          handleSelect(config);
+        }}
+        onMouseEnter={(e) => scheduleHoverOpen(config, e.currentTarget.getBoundingClientRect())}
+        onMouseLeave={scheduleHoverClose}
+        {...touchHandlers(config)}
+        className={`w-full text-left px-3 py-2 hover:bg-muted transition-colors select-none ${
+          effectiveSelectedId === config.id ? 'bg-muted' : ''
+        }`}
+      >
+        <div className="text-sm font-medium truncate">{config.name}</div>
+        <div className="text-xs text-muted-foreground mt-0.5 truncate flex items-center gap-1">
+          <span className="truncate">{config.modelName || config.modelId}</span>
+          {effort && (
+            <span className="shrink-0 px-1 rounded bg-muted text-[10px]">{effortLabel(effort)}</span>
+          )}
+        </div>
+      </button>
+    );
+  };
+
+  const selectedEffort = selectedConfig
+    ? overrides[selectedConfig.id]?.effort ?? selectedConfig.options?.effort
+    : undefined;
+  const renderPanel = (config: ModelProviderConfig) => (
+    <ModelParamPanel
+      config={config}
+      value={overrides[config.id]}
+      onChange={(next) => applyOverride(config.id, sanitizeOverrides(config, next))}
+      onClose={() => {
+        pressFired.current = false;
+        setHoveredConfig(null);
+        setPanelPos(null);
+        setSheetConfig(null);
+      }}
+      sheet={!!sheetConfig}
+    />
+  );
+
   return (
     <div>
       <button
@@ -167,49 +367,64 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange, sel
         className="flex items-center gap-1 px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-muted transition-colors"
       >
         {selectedConfig ? (selectedConfig.name || selectedConfig.modelName || selectedConfig.modelId) : i18n('Select Model')}
+        {selectedEffort && <span className="text-[10px] opacity-80">· {effortLabel(selectedEffort)}</span>}
         <ChevronDown className={`w-3 h-3 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
       </button>
 
       {dropdownOpen && pendingAnchor && createPortal(
-        <div
-          ref={dropdownRef}
-          className="fixed w-[240px] max-h-[320px] overflow-y-auto bg-popover border border-border rounded-md shadow-lg z-[9999]"
-          style={dropdownPos
-            ? { bottom: `${dropdownPos.bottom}px`, left: `${dropdownPos.left}px` }
-            : { bottom: `${window.innerHeight - pendingAnchor.top}px`, left: 0, visibility: 'hidden' }
-          }
-        >
-          {[...grouped.byGroup.entries()].map(([groupId, configs]) => (
-            <div key={groupId}>
-              <div className="px-3 pt-2 pb-1 text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wide truncate">
-                {groupNames[groupId]}
+        <>
+          <div
+            ref={dropdownRef}
+            className="fixed w-[240px] max-h-[320px] overflow-y-auto bg-popover border border-border rounded-md shadow-lg z-[9999]"
+            style={dropdownPos
+              ? { bottom: `${dropdownPos.bottom}px`, left: `${dropdownPos.left}px` }
+              : { bottom: `${window.innerHeight - pendingAnchor.top}px`, left: 0, visibility: 'hidden' }
+            }
+          >
+            {[...grouped.byGroup.entries()].map(([groupId, configs]) => (
+              <div key={groupId}>
+                <div className="px-3 pt-2 pb-1 text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wide truncate">
+                  {groupNames[groupId]}
+                </div>
+                {configs.map(config => renderRow(config))}
               </div>
-              {configs.map(config => (
-                <button
-                  key={config.id}
-                  onClick={() => handleSelect(config)}
-                  className={`w-full text-left px-3 py-2 hover:bg-muted transition-colors ${
-                    effectiveSelectedId === config.id ? 'bg-muted' : ''
-                  }`}
-                >
-                  <div className="text-sm font-medium truncate">{config.name}</div>
-                  <div className="text-xs text-muted-foreground mt-0.5 truncate">{config.modelName || config.modelId}</div>
-                </button>
-              ))}
-            </div>
-          ))}
-          {grouped.ungrouped.map(config => (
-            <button
-              key={config.id}
-              onClick={() => handleSelect(config)}
-              className={`w-full text-left px-3 py-2 hover:bg-muted transition-colors ${
-                effectiveSelectedId === config.id ? 'bg-muted' : ''
-              }`}
+            ))}
+            {grouped.ungrouped.map(config => renderRow(config))}
+          </div>
+
+          {enableParamOverrides && hoveredConfig && (
+            <div
+              ref={panelRef}
+              onMouseEnter={() => {
+                if (hoverCloseTimer.current !== null) clearTimeout(hoverCloseTimer.current);
+              }}
+              onMouseLeave={scheduleHoverClose}
+              className="fixed w-[280px] bg-popover border border-border rounded-md shadow-lg z-[10000]"
+              style={panelPos ? { top: `${panelPos.top}px`, left: `${panelPos.left}px` } : { top: 0, left: 0, visibility: 'hidden' }}
             >
-              <div className="text-sm font-medium truncate">{config.name}</div>
-              <div className="text-xs text-muted-foreground mt-0.5 truncate">{config.modelName || config.modelId}</div>
-            </button>
-          ))}
+              {renderPanel(hoveredConfig)}
+            </div>
+          )}
+        </>,
+        document.body
+      )}
+
+      {sheetConfig && createPortal(
+        <div
+          className="fixed inset-0 z-[10000] bg-black/40 flex items-end"
+          onClick={() => {
+            // The click that follows a consumed long press may never fire on some mobile
+            // browsers; clearing here keeps the flag from swallowing the next real tap.
+            pressFired.current = false;
+            setSheetConfig(null);
+          }}
+        >
+          <div
+            className="w-full bg-card border-t border-border rounded-t-xl p-4 space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {renderPanel(sheetConfig)}
+          </div>
         </div>,
         document.body
       )}

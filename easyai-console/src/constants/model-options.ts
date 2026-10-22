@@ -62,6 +62,17 @@ export function initialModelOptions(): ModelOptions {
   return { temperature: DEFAULT_FORM_TEMPERATURE };
 }
 
+/**
+ * Quick-pick token sizes for the three limits, matching TokenInput's K/M convention
+ * (K = 1024, M = 1024²). `contextToken` is the working input window, `maxTokens` the reply cap,
+ * and `maxContextTokens` the model's hard window — keep them under those meanings.
+ */
+export const TOKEN_PRESETS = {
+  contextToken: [32_768, 65_536, 131_072, 262_144, 1_048_576],
+  maxTokens: [16_384, 32_768, 65_536, 131_072, 262_144],
+  maxContextTokens: [131_072, 262_144, 524_288, 1_048_576],
+} as const;
+
 /** ModelOptions defaults on the backend (easyai-api ModelProviderConfig.kt). */
 const DEFAULT_MAX_CONTEXT_TOKENS = 204_800;
 const DEFAULT_CONTEXT_TOKENS = 204_800;

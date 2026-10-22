@@ -1,5 +1,6 @@
 package com.easy.easyai.web.model
 
+import com.easy.easyai.api.model.ModelOverrides
 import com.fasterxml.jackson.annotation.JsonInclude
 
 /**
@@ -50,7 +51,15 @@ data class ChatRequest(
      * File attachments (images, text files) sent with the user message.
      * Images are forwarded to the LLM as Media objects; text files are inlined into the message.
      */
-    val attachments: List<ChatAttachment>? = null
+    val attachments: List<ChatAttachment>? = null,
+
+    /**
+     * Composer overrides for this run's effort and working context window. Null means "no overrides
+     * for this run": the stored model config applies unchanged. An empty object clears any overrides
+     * recorded on the session. Recorded overrides are replayed when a session is resumed, not by this
+     * request path. The stored model config is never modified.
+     */
+    val modelOverrides: ModelOverrides? = null
 )
 
 /**

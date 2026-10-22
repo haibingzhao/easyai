@@ -5,6 +5,8 @@ import com.easy.easyai.api.model.CatalogCapabilities
 import com.easy.easyai.api.model.CatalogOptions
 import com.easy.easyai.api.model.ModelCatalogEntry
 import com.easy.easyai.api.model.ModelPricing
+import com.easy.easyai.api.model.ReasoningProfile
+import com.easy.easyai.api.model.ReasoningProfiles
 import com.easy.easyai.api.model.StructuredOutputSupport
 import com.easy.easyai.common.util.SharedObjectMapper
 import java.net.URI
@@ -54,10 +56,22 @@ class ModelCatalogService(
     private val logger = LoggerFactory.getLogger(javaClass)
 
     suspend fun lookup(modelId: String): ModelCatalogEntry? =
-        catalogStore?.getByModelId(modelId)
+        catalogStore?.getByModelId(modelId)?.let { enrichReasoning(it) }
 
     suspend fun list(): List<ModelCatalogEntry> =
-        catalogStore?.listAll() ?: emptyList()
+        (catalogStore?.listAll() ?: emptyList()).map { enrichReasoning(it) }
+
+    /** Profile for a model id, including ids the catalog does not carry (e.g. deepseek-v4-pro). */
+    fun resolveReasoning(modelId: String, catalogThinking: Boolean? = null): ReasoningProfile =
+        ReasoningProfiles.resolve(modelId, catalogThinking)
+
+    /**
+     * Rows written before profiles existed have no value; resolve one on read instead of writing
+     * back, so a catalog refresh stays the only writer.
+     */
+    private fun enrichReasoning(entry: ModelCatalogEntry): ModelCatalogEntry =
+        if (entry.reasoningProfile != null) entry
+        else entry.copy(reasoningProfile = ReasoningProfiles.resolve(entry.modelId, entry.capabilities?.thinking))
 
     /**
      * Pull every catalog page from Bailian and upsert by model id. Rows the upstream retired are
@@ -117,6 +131,7 @@ class ModelCatalogService(
         val features = stringSet(item.path("features"))
         val requestModality = stringSet(item.path("inferenceMetadata").path("request_modality"))
         val capabilities = stringSet(item.path("capabilities"))
+        val thinking = "Reasoning" in capabilities
         return ModelCatalogEntry(
             modelId = modelId,
             vendor = VENDOR_BAILIAN,
@@ -128,12 +143,13 @@ class ModelCatalogService(
                 if ("structured-outputs" in features) StructuredOutputSupport.JSON_SCHEMA
                 else StructuredOutputSupport.NONE,
                 supportsToolCalling = "function-calling" in features,
-                thinking = "Reasoning" in capabilities
+                thinking = thinking
             ),
             defaultOptions = CatalogOptions(
                 maxTokens = intOf(item, "maxOutputTokens"),
                 maxContextTokens = intOf(item, "contextWindow")
             ),
+            reasoningProfile = ReasoningProfiles.resolve(modelId, thinking),
             pricing = mapPricing(item.path("prices")),
             source = SOURCE_BAILIAN_REFRESH,
             rawPayload = item.toString()

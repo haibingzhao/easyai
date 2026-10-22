@@ -6,6 +6,7 @@ import com.alibaba.dashscope.protocol.ConnectionOptions
 import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.api.model.ReasoningMode
 import com.easy.easyai.api.model.SamplingPolicy
 import com.easy.easyai.api.model.StructuredOutputPolicy
 import com.easy.easyai.api.model.StructuredOutputSupport
@@ -78,19 +79,49 @@ class DashScopeChatModelFactory : ChatModelFactory {
             // per-call ChatOptions can only override a null temperature by inheriting them — it
             // cannot say "omit". So a model declaring sampling NOT_SETTABLE has to be stopped here.
             builder.temperature(SamplingPolicy.rowTemperature(config))
-            if (options.thinking) {
-                builder.enableThinking(true)
-                    .thinkingBudget(DEFAULT_THINKING_BUDGET_TOKENS)
-                    // The budget is part of the output, so max_tokens has to leave room for it.
-                    .maxTokens(maxOf(options.maxTokens, DEFAULT_THINKING_BUDGET_TOKENS + 1))
-            } else {
-                // Hybrid-reasoning qwen models reason by default; omitting enable_thinking leaves
-                // it on, so disabling has to be sent explicitly.
-                builder.enableThinking(false)
-                // `reasoning_effort` and `thinking_budget` are rejected together by Bailian, so
-                // effort only travels when thinking is off.
-                options.effort?.let { builder.reasoningEffort(it) }
-                builder.maxTokens(options.maxTokens)
+            when (config.capabilities?.reasoning?.mode) {
+                ReasoningMode.NONE -> {
+                    // NONE declares no reasoning support, so enable_thinking is omitted: a truly
+                    // non-reasoning model may reject the parameter. A manual NONE on a hybrid would
+                    // need an explicit false; that source-aware distinction is not applied yet.
+                    builder.maxTokens(options.maxTokens)
+                }
+
+                ReasoningMode.TOGGLEABLE, ReasoningMode.ALWAYS_ON -> {
+                    val thinking = config.capabilities?.reasoning?.mode == ReasoningMode.ALWAYS_ON ||
+                        options.thinking
+                    if (thinking) {
+                        builder.enableThinking(true)
+                        if (options.effort != null) {
+                            // Bailian rejects reasoning_effort together with thinking_budget; the
+                            // declared effort picks the level, so no explicit budget is sent.
+                            builder.reasoningEffort(options.effort)
+                            builder.maxTokens(options.maxTokens)
+                        } else {
+                            builder.thinkingBudget(DEFAULT_THINKING_BUDGET_TOKENS)
+                                // The budget is part of the output, so max_tokens has to leave room for it.
+                                .maxTokens(maxOf(options.maxTokens, DEFAULT_THINKING_BUDGET_TOKENS + 1))
+                        }
+                    } else {
+                        // Hybrid-reasoning qwen models reason by default; omitting enable_thinking
+                        // leaves it on, so disabling has to be sent explicitly.
+                        builder.enableThinking(false)
+                        builder.maxTokens(options.maxTokens)
+                    }
+                }
+
+                ReasoningMode.UNKNOWN, null -> {
+                    if (options.thinking) {
+                        builder.enableThinking(true)
+                            .thinkingBudget(DEFAULT_THINKING_BUDGET_TOKENS)
+                            .maxTokens(maxOf(options.maxTokens, DEFAULT_THINKING_BUDGET_TOKENS + 1))
+                    } else {
+                        builder.enableThinking(false)
+                        // Legacy rows only send effort while thinking is off.
+                        options.effort?.let { builder.reasoningEffort(it) }
+                        builder.maxTokens(options.maxTokens)
+                    }
+                }
             }
         }
 

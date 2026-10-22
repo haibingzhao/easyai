@@ -5,6 +5,7 @@ import com.easy.easyai.api.model.CatalogCapabilities
 import com.easy.easyai.api.model.CatalogOptions
 import com.easy.easyai.api.model.ModelCatalogEntry
 import com.easy.easyai.api.model.ModelPricing
+import com.easy.easyai.api.model.ReasoningProfile
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.repository.database.Tables
 import kotlinx.coroutines.flow.firstOrNull
@@ -55,10 +56,15 @@ class R2dbcModelCatalogStore(
         return suspendTransaction(db) {
             val now = System.currentTimeMillis()
             val existing = Tables.ModelCatalogTable
-                .select(Tables.ModelCatalogTable.modelId)
+                .select(Tables.ModelCatalogTable.modelId, Tables.ModelCatalogTable.reasoningProfile)
                 .where { Tables.ModelCatalogTable.modelId eq entry.modelId }
                 .limit(1)
                 .firstOrNull()
+            // A hand-declared matrix outranks the vendor-doc resolver: refreshes must not undo it.
+            val preservedProfile = existing?.get(Tables.ModelCatalogTable.reasoningProfile)
+                ?.takeIf { parseProfile(it)?.source == ReasoningProfile.SOURCE_MANUAL }
+            val profileJson = preservedProfile
+                ?: entry.reasoningProfile?.let { objectMapper.writeValueAsString(it) }
             if (existing != null) {
                 Tables.ModelCatalogTable.update(
                     where = { Tables.ModelCatalogTable.modelId eq entry.modelId }
@@ -68,6 +74,7 @@ class R2dbcModelCatalogStore(
                     it[description] = entry.description
                     it[capabilities] = entry.capabilities?.let { c -> objectMapper.writeValueAsString(c) }
                     it[defaultOptions] = entry.defaultOptions?.let { o -> objectMapper.writeValueAsString(o) }
+                    it[reasoningProfile] = profileJson
                     it[pricing] = entry.pricing?.let { p -> objectMapper.writeValueAsString(p) }
                     it[catalogSource] = entry.source
                     it[rawPayload] = entry.rawPayload
@@ -82,6 +89,7 @@ class R2dbcModelCatalogStore(
                     it[description] = entry.description
                     it[capabilities] = entry.capabilities?.let { c -> objectMapper.writeValueAsString(c) }
                     it[defaultOptions] = entry.defaultOptions?.let { o -> objectMapper.writeValueAsString(o) }
+                    it[reasoningProfile] = profileJson
                     it[pricing] = entry.pricing?.let { p -> objectMapper.writeValueAsString(p) }
                     it[catalogSource] = entry.source
                     it[rawPayload] = entry.rawPayload
@@ -92,6 +100,9 @@ class R2dbcModelCatalogStore(
             }
         }
     }
+
+    private fun parseProfile(json: String): ReasoningProfile? =
+        runCatching { objectMapper.readValue(json, ReasoningProfile::class.java) }.getOrNull()
 
     private fun mapRow(row: ResultRow): ModelCatalogEntry {
         return ModelCatalogEntry(
@@ -104,6 +115,9 @@ class R2dbcModelCatalogStore(
             },
             defaultOptions = row[Tables.ModelCatalogTable.defaultOptions]?.let {
                 objectMapper.readValue(it, CatalogOptions::class.java)
+            },
+            reasoningProfile = row[Tables.ModelCatalogTable.reasoningProfile]?.let {
+                objectMapper.readValue(it, ReasoningProfile::class.java)
             },
             pricing = row[Tables.ModelCatalogTable.pricing]?.let {
                 objectMapper.readValue(it, ModelPricing::class.java)

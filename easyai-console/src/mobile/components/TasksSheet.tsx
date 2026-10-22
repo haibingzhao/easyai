@@ -9,6 +9,7 @@ import { ReferencePanel } from '@/components/chat/ReferencePanel';
 import { ForkBranchesSection } from '@/components/chat/ForkBranchesSection';
 import { TeamMemberPanel } from '@/components/chat/team/TeamMemberPanel';
 import { i18n } from '@/utils/i18n';
+import { APP_CONFIG } from '@/constants/navigation';
 import { MobileSheet } from './MobileSheet';
 import { MOBILE_SHEET_ITEMS } from '../registries';
 import { useMobileUiStore } from '../stores/mobile-ui-store';
@@ -68,7 +69,9 @@ export const TasksSheet: React.FC = () => {
         </React.Fragment>
       ))}
       <p className="mt-3 text-[11px] text-muted-foreground">
-        {i18n('Review diffs, the file tree and workflow editing live on the desktop console.')}
+        {APP_CONFIG.showWorkspacePanels
+          ? i18n('Review diffs, the file tree and workflow editing live on the desktop console.')
+          : i18n('Workflow editing lives on the desktop console.')}
       </p>
     </MobileSheet>
   );

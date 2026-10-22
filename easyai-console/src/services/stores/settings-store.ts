@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Settings } from '@/types/settings';
+import type { ModelProviderConfig, Settings } from '@/types/settings';
 import { storageService } from '@/services/storage-service';
 import { setLanguage } from '@/utils/i18n';
 import { setTheme } from '@/utils/theme';
@@ -7,12 +7,15 @@ import { setTheme } from '@/utils/theme';
 interface SettingsState extends Settings {
   activeModelConfigId: string;
   selectedModelConfigId: string;
+  /** Snapshot of the enabled model configs, shared by the selector and the send path. */
+  modelConfigs: ModelProviderConfig[];
   loadSettings: () => void;
   updateSettings: (updates: Partial<Settings>) => void;
   saveSettings: () => void;
   setApiKey: (provider: string, key: string) => void;
   setActiveModelConfig: (configId: string) => void;
   setSelectedModelConfig: (configId: string) => void;
+  setModelConfigs: (configs: ModelProviderConfig[]) => void;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -23,6 +26,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   apiKey: {},
   activeModelConfigId: '',
   selectedModelConfigId: '',
+  modelConfigs: [],
 
   loadSettings: () => {
     const settings = storageService.getSettings();
@@ -65,4 +69,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ selectedModelConfigId: configId });
     storageService.saveSelectedModelConfigId(configId);
   },
+
+  setModelConfigs: (configs: ModelProviderConfig[]) => set({ modelConfigs: configs }),
 }));

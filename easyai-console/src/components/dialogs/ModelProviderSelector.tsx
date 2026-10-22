@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react';
 import { i18n } from '../../utils/i18n';
 import { TokenInput } from '../TokenInput';
 import { modelConfigService } from '@/services/model-config-service';
@@ -9,7 +9,11 @@ import { AddModelToGroupForm } from '@/components/models/AddModelToGroupForm';
 import { GroupEditDialog } from '@/components/models/GroupEditDialog';
 import { ToolCallingToggle } from '@/components/ui/ToolCallingToggle';
 import { SamplingToggle } from '@/components/ui/SamplingToggle';
-import { DEFAULT_FORM_TEMPERATURE, MODEL_FIELD_HINTS, temperatureMax, validateContextTokenBounds, validateTemperature } from '@/constants/model-options';
+import { ReasoningCapabilityFields } from '@/components/models/ReasoningCapabilityFields';
+import { ReasoningOptionsFields } from '@/components/models/ReasoningOptionsFields';
+import { useResolvedReasoning } from '@/components/models/useResolvedReasoning';
+import { sanitizeReasoningOptions } from '@/components/models/reasoning-controls';
+import { DEFAULT_FORM_TEMPERATURE, MODEL_FIELD_HINTS, TOKEN_PRESETS, temperatureMax, validateContextTokenBounds, validateTemperature } from '@/constants/model-options';
 import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, ModelConfigGroup, SaveModelProviderConfigRequest, SaveModelConfigGroupRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
 
 interface ModelProviderSelectorProps {
@@ -101,7 +105,9 @@ export const ModelProviderSelector = forwardRef<ModelProviderSelectorRef, ModelP
           modelName: config.modelName,
           isCustomModel: config.isCustomModel,
           enabled: !config.enabled,
-          options: config.options,
+          options: config.options
+            ? sanitizeReasoningOptions(config.options, config.capabilities?.reasoning, config.protocol)
+            : config.options,
           capabilities: config.capabilities,
           groupId: config.groupId,
         };
@@ -422,6 +428,33 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
   const [showOptions, setShowOptions] = useState(!!config.options && Object.keys(config.options).length > 0);
   const [capabilities, setCapabilities] = useState<ModelCapabilities>(config.capabilities || {});
 
+  // Existing rows keep their own declaration; older rows resolve the matrix from their model id.
+  // The stored declaration only belongs to the row's original id — once the user picks another
+  // model it must not gate (or be saved onto) the new one.
+  const originalModelId = ((config.isCustom || config.isCustomModel)
+    ? (config.modelName || config.modelId)
+    : config.modelId).trim();
+  const effectiveModelId = (isCustomModel || config.isCustom)
+    ? customModelName.trim()
+    : (selectedModelId || config.modelId);
+  const resolvedReasoning = useResolvedReasoning(
+    effectiveModelId,
+    config.capabilities?.reasoning,
+    originalModelId
+  );
+  const reasoningProfile = capabilities.reasoning ?? resolvedReasoning;
+
+  // A model change invalidates the row's stored matrix and its effort. Clearing them here makes
+  // both the controls and the save path use the new id's resolved profile instead of the previous
+  // model's; thinking stays as the row's runtime switch.
+  const previousModelIdRef = useRef(effectiveModelId);
+  useEffect(() => {
+    if (previousModelIdRef.current === effectiveModelId) return;
+    previousModelIdRef.current = effectiveModelId;
+    setCapabilities(prev => (prev.reasoning === undefined ? prev : { ...prev, reasoning: undefined }));
+    setOptions(prev => (prev.effort === undefined ? prev : { ...prev, effort: undefined }));
+  }, [effectiveModelId]);
+
   const loadModels = useCallback(async (providerId: string) => {
     if (!providerId) {
       setAvailableModels([]);
@@ -450,12 +483,15 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
       alert(i18n('Please enter Model Name'));
       return;
     }
-    const boundError = validateContextTokenBounds(options);
+    // A legacy row may carry effort alongside a gate that now forbids it (the old controls were
+    // independent). Drop the value instead of failing the backend's strict save check.
+    const optionsToSave = sanitizeReasoningOptions(options, reasoningProfile, config.protocol);
+    const boundError = validateContextTokenBounds(optionsToSave);
     if (boundError) {
       alert(i18n(boundError));
       return;
     }
-    const temperatureError = validateTemperature(options, config.protocol);
+    const temperatureError = validateTemperature(optionsToSave, config.protocol);
     if (temperatureError) {
       alert(i18n(temperatureError));
       return;
@@ -471,6 +507,9 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
       modelName = model?.name;
     }
 
+    const reasoningToSave = capabilities.reasoning
+      ?? (resolvedReasoning.mode !== 'UNKNOWN' ? resolvedReasoning : undefined);
+    const capabilitiesToSave: ModelCapabilities = { ...capabilities, reasoning: reasoningToSave };
     const request: SaveModelProviderConfigRequest = {
       id: config.id,
       name: configName.trim(),
@@ -482,8 +521,8 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
       modelName,
       isCustomModel,
       enabled: config.enabled,
-      options: Object.keys(options).length > 0 ? options : undefined,
-      capabilities: (capabilities.vision || capabilities.structuredOutput || capabilities.sampling || capabilities.supportsToolCalling === false) ? capabilities : undefined,
+      options: Object.keys(optionsToSave).length > 0 ? optionsToSave : undefined,
+      capabilities: (capabilitiesToSave.vision || capabilitiesToSave.structuredOutput || capabilitiesToSave.sampling || capabilitiesToSave.supportsToolCalling === false || capabilitiesToSave.reasoning) ? capabilitiesToSave : undefined,
       groupId: config.groupId,
     };
 
@@ -613,6 +652,14 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
             }))}
           />
 
+          <ReasoningCapabilityFields
+            profile={reasoningProfile}
+            onChange={({ profile, applyDefaults, thinking, effort }) => {
+              setCapabilities(prev => ({ ...prev, reasoning: profile }));
+              if (applyDefaults) setOptions(prev => ({ ...prev, thinking, effort }));
+            }}
+          />
+
           <div>
             <button
               onClick={() => setShowOptions(!showOptions)}
@@ -651,49 +698,24 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
                     value={options.maxTokens}
                     onChange={(v) => setOptions(prev => ({ ...prev, maxTokens: v }))}
                     placeholder="16"
+                    presets={TOKEN_PRESETS.maxTokens}
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                   />
                   <p className="mt-1 text-[11px] leading-tight text-muted-foreground">{i18n(MODEL_FIELD_HINTS.maxTokens)}</p>
                 </div>
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-medium">{i18n('Thinking')}</label>
-                  <button
-                    onClick={() => setOptions(prev => ({ ...prev, thinking: !prev.thinking }))}
-                    className={`relative w-9 h-5 rounded-full transition-colors ${
-                      options.thinking ? 'bg-green-500' : 'bg-muted-foreground/30'
-                    }`}
-                  >
-                    <div
-                      className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                        options.thinking ? 'translate-x-4' : 'translate-x-0.5'
-                      }`}
-                    />
-                  </button>
-                </div>
-                <div>
-                  <label className="text-xs font-medium mb-1 block">{i18n('Effort')}</label>
-                  <select
-                    value={options.effort || ''}
-                    onChange={(e) => setOptions(prev => ({
-                      ...prev,
-                      effort: (e.target.value || undefined) as ModelOptions['effort'],
-                    }))}
-                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
-                  >
-                    <option value="">{i18n('Default')}</option>
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                    <option value="xhigh">XHigh</option>
-                    <option value="max">Max</option>
-                  </select>
-                </div>
+                <ReasoningOptionsFields
+                  profile={reasoningProfile}
+                  protocol={config.protocol}
+                  options={options}
+                  setOptions={setOptions}
+                />
                 <div>
                   <label className="text-xs font-medium mb-1 block">{i18n('Max Context Tokens')}</label>
                   <TokenInput
                     value={options.maxContextTokens}
                     onChange={(v) => setOptions(prev => ({ ...prev, maxContextTokens: v }))}
                     placeholder="200"
+                    presets={TOKEN_PRESETS.maxContextTokens}
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                   />
                   <p className="mt-1 text-[11px] leading-tight text-muted-foreground">{i18n(MODEL_FIELD_HINTS.maxContextTokens)}</p>
@@ -704,6 +726,7 @@ const EditModelDialog: React.FC<EditModelDialogProps> = ({ config, onSave, onClo
                     value={options.contextToken}
                     onChange={(v) => setOptions(prev => ({ ...prev, contextToken: v }))}
                     placeholder="200"
+                    presets={TOKEN_PRESETS.contextToken}
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                   />
                   <p className="mt-1 text-[11px] leading-tight text-muted-foreground">{i18n(MODEL_FIELD_HINTS.contextToken)}</p>

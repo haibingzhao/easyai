@@ -113,6 +113,22 @@ class R2dbcAsyncSessionStoreForkTest {
         }
 
         @Test
+        fun `copies recorded model overrides`() = runTest {
+            val source = "src-${UUID.randomUUID()}"
+            createSession(source)
+            val message = userMessage("m-${UUID.randomUUID()}", "hello")
+            store.upsertMessages(ctx(source), source, listOf(message))
+            store.saveModelOverrides(source, """{"effort":"high","contextToken":123456}""")
+
+            val forkedId = store.createFork(source, message.id)!!
+
+            assertEquals(
+                """{"effort":"high","contextToken":123456}""",
+                store.findModelOverrides(forkedId)
+            )
+        }
+
+        @Test
         fun `remaps parentMessageId to copied messages`() = runTest {
             val source = "src-${UUID.randomUUID()}"
             createSession(source)

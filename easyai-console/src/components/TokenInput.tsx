@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { formatTokenWindow } from '@/utils/format';
 
 interface TokenInputProps {
   /** Value in raw tokens */
@@ -6,6 +7,8 @@ interface TokenInputProps {
   onChange: (value: number | undefined) => void;
   placeholder?: string;
   className?: string;
+  /** Quick-pick sizes in raw tokens, rendered as chips below the field. */
+  presets?: readonly number[];
 }
 
 type Unit = 'K' | 'M';
@@ -14,7 +17,7 @@ type Unit = 'K' | 'M';
  * A number input with a K/M unit selector.
  * The value is always stored/emitted in raw tokens; the display converts to/from the selected unit.
  */
-export function TokenInput({ value, onChange, placeholder, className }: TokenInputProps) {
+export function TokenInput({ value, onChange, placeholder, className, presets }: TokenInputProps) {
   const [unit, setUnit] = useState<Unit>(detectUnit(value));
   const [raw, setRaw] = useState(() => toDisplay(value, detectUnit(value)));
 
@@ -48,26 +51,46 @@ export function TokenInput({ value, onChange, placeholder, className }: TokenInp
   };
 
   return (
-    <div className="flex gap-1">
-      <input
-        type="number"
-        min="1"
-        step="1"
-        value={raw}
-        onChange={(e) => setRaw(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => { if (e.key === 'Enter') commit(); }}
-        placeholder={placeholder}
-        className={className}
-      />
-      <select
-        value={unit}
-        onChange={(e) => switchUnit(e.target.value as Unit)}
-        className="h-9 rounded-md border border-input bg-transparent px-1.5 text-sm"
-      >
-        <option value="K">K</option>
-        <option value="M">M</option>
-      </select>
+    <div>
+      <div className="flex gap-1">
+        <input
+          type="number"
+          min="1"
+          step="1"
+          value={raw}
+          onChange={(e) => setRaw(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => { if (e.key === 'Enter') commit(); }}
+          placeholder={placeholder}
+          className={className}
+        />
+        <select
+          value={unit}
+          onChange={(e) => switchUnit(e.target.value as Unit)}
+          className="h-9 rounded-md border border-input bg-transparent px-1.5 text-sm"
+        >
+          <option value="K">K</option>
+          <option value="M">M</option>
+        </select>
+      </div>
+      {presets && presets.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {presets.map(preset => (
+            <button
+              key={preset}
+              type="button"
+              onClick={() => onChange(preset)}
+              className={`px-1.5 py-0.5 rounded border text-[11px] transition-colors ${
+                value === preset
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-border text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {formatTokenWindow(preset)}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

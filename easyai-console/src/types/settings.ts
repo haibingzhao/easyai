@@ -45,9 +45,30 @@ export interface ModelOptions {
   temperature?: number;
   maxTokens?: number;
   thinking?: boolean;
-  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /** One of the profile's effortLevels; the level set is model-specific. */
+  effort?: string;
   maxContextTokens?: number;
   contextToken?: number;
+}
+
+/**
+ * How a model exposes thinking. `UNKNOWN` keeps the controls editable and lets the adapters fall
+ * back to their legacy behavior; profiles are resolved from the model id for known families.
+ */
+export type ReasoningMode = 'NONE' | 'TOGGLEABLE' | 'ALWAYS_ON' | 'UNKNOWN';
+
+/** Source of a reasoning profile: vendor documentation, catalog fallback, or a user declaration. */
+export type ReasoningSource = 'vendor-doc' | 'catalog' | 'manual' | 'unknown';
+
+/** Thinking/effort matrix shared by catalog rows, provider configs and the composer picker. */
+export interface ReasoningProfile {
+  mode: ReasoningMode;
+  /** Canonical order low→max; empty means the model exposes no effort knob. */
+  effortLevels: string[];
+  defaultThinking: boolean;
+  /** Undefined/null means "automatic" — the provider/request default applies. */
+  defaultEffort?: string;
+  source: ReasoningSource;
 }
 
 export type StructuredOutputSupport = 'JSON_SCHEMA' | 'JSON_OBJECT' | 'NONE';
@@ -66,6 +87,14 @@ export interface ModelCapabilities {
   sampling?: SamplingSupport;
   /** Reasoning / tool-calling support. Undefined or true = capable; false marks decision models. */
   supportsToolCalling?: boolean;
+  /** Thinking/effort matrix; undefined on rows not saved since profiles were introduced. */
+  reasoning?: ReasoningProfile;
+}
+
+/** Per-chat overrides sent from the composer's model picker; never written to the model config. */
+export interface ModelOverrides {
+  effort?: string;
+  contextToken?: number;
 }
 
 export interface ModelProviderConfig {
@@ -168,6 +197,8 @@ export interface ModelCatalogEntry {
   description?: string;
   capabilities?: CatalogCapabilities;
   defaultOptions?: CatalogOptions;
+  /** Resolved thinking matrix; the lookup endpoint also returns one for ids the catalog lacks. */
+  reasoningProfile?: ReasoningProfile;
   pricing?: ModelPricing;
   /** Which pipeline wrote the row: 'bailian-refresh' today. */
   source: string;

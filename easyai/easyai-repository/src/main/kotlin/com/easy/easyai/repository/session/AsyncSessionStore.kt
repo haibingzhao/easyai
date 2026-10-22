@@ -246,6 +246,16 @@ interface AsyncSessionStore {
     suspend fun getLastMessageConfig(sessionId: String): LastMessageConfig? = null
 
     /**
+     * Record the model option overrides applied to this session (JSON), or clear them with null.
+     * The value is the override payload, not the effective options, so non-overridden fields keep
+     * following the model config.
+     */
+    suspend fun saveModelOverrides(sessionId: String, overridesJson: String?) {}
+
+    /** Read the overrides recorded by [saveModelOverrides]; null when none were ever applied. */
+    suspend fun findModelOverrides(sessionId: String): String? = null
+
+    /**
      * Undo compaction that occurred at or after [messageCreatedAt].
      * Entry point: compaction indicators (CUSTOM role) with createdAt >= messageCreatedAt.
      * Traces indicator → summary → compactedMessageIds to precisely restore only the messages

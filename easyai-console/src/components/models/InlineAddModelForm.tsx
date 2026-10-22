@@ -5,10 +5,13 @@ import { modelConfigService } from '@/services/model-config-service';
 import { ChevronRight, ChevronDown, Trash2 } from 'lucide-react';
 import { ToolCallingToggle } from '@/components/ui/ToolCallingToggle';
 import { SamplingToggle } from '@/components/ui/SamplingToggle';
-import { DEFAULT_FORM_TEMPERATURE, MODEL_FIELD_HINTS, initialModelOptions, temperatureMax, validateContextTokenBounds, validateTemperature } from '@/constants/model-options';
+import { DEFAULT_FORM_TEMPERATURE, MODEL_FIELD_HINTS, TOKEN_PRESETS, initialModelOptions, temperatureMax, validateContextTokenBounds, validateTemperature } from '@/constants/model-options';
 import { useModelCatalogPrefill } from './useModelCatalogPrefill';
 import { ModelCatalogHint } from './ModelCatalogHint';
-import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, ModelConfigGroup, Protocol, SaveModelProviderConfigRequest, ModelOptions, ModelCapabilities } from '@/types/settings';
+import { ReasoningCapabilityFields } from './ReasoningCapabilityFields';
+import { ReasoningOptionsFields } from './ReasoningOptionsFields';
+import { sanitizeReasoningOptions } from './reasoning-controls';
+import type { ModelProviderInfo, ModelInfo, ModelProviderConfig, ModelConfigGroup, Protocol, SaveModelProviderConfigRequest, ModelCapabilities } from '@/types/settings';
 
 interface InlineAddModelFormProps {
   availableProviders: ModelProviderInfo[];
@@ -39,11 +42,14 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
   const {
     state: catalogState,
     entry: catalogEntry,
+    reasoning,
     options,
     setOptions,
     capabilities,
     setCapabilities,
-  } = useModelCatalogPrefill(effectiveModelId);
+  } = useModelCatalogPrefill(effectiveModelId, selectedProtocol);
+
+  const reasoningProfile = capabilities.reasoning ?? reasoning;
 
   // ─── State ─────────────────────────────────────────────────────────────────
   const [loading, setLoading] = useState(false);
@@ -141,6 +147,7 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
       alert(i18n(temperatureError));
       return;
     }
+    const optionsToSave = sanitizeReasoningOptions(options, reasoningProfile, selectedProtocol);
 
     const effectiveIsCustomModel = isCustomModel || isCustomProvider || !selectedModelId;
     const modelId = effectiveIsCustomModel ? customModelName.trim() : selectedModelId;
@@ -178,8 +185,8 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
         modelName,
         isCustomModel: effectiveIsCustomModel,
         enabled: true,
-        options: Object.keys(options).length > 0 ? options : undefined,
-        capabilities: (capabilities.vision || capabilities.structuredOutput || capabilities.sampling || capabilities.supportsToolCalling === false) ? capabilities : undefined,
+        options: Object.keys(optionsToSave).length > 0 ? optionsToSave : undefined,
+        capabilities: (capabilities.vision || capabilities.structuredOutput || capabilities.sampling || capabilities.supportsToolCalling === false || capabilities.reasoning) ? capabilities : undefined,
         groupId: currentGroupId,
       };
 
@@ -440,6 +447,14 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
             }))}
           />
 
+          <ReasoningCapabilityFields
+            profile={reasoningProfile}
+            onChange={({ profile, applyDefaults, thinking, effort }) => {
+              setCapabilities(prev => ({ ...prev, reasoning: profile }));
+              if (applyDefaults) setOptions(prev => ({ ...prev, thinking, effort }));
+            }}
+          />
+
           <div>
             <button
               onClick={() => setShowOptions(!showOptions)}
@@ -478,49 +493,24 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
                     value={options.maxTokens}
                     onChange={(v) => setOptions(prev => ({ ...prev, maxTokens: v }))}
                     placeholder="16"
+                    presets={TOKEN_PRESETS.maxTokens}
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                   />
                   <p className="mt-1 text-[11px] leading-tight text-muted-foreground">{i18n(MODEL_FIELD_HINTS.maxTokens)}</p>
                 </div>
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-medium">{i18n('Thinking')}</label>
-                  <button
-                    onClick={() => setOptions(prev => ({ ...prev, thinking: !prev.thinking }))}
-                    className={`relative w-9 h-5 rounded-full transition-colors ${
-                      options.thinking ? 'bg-green-500' : 'bg-muted-foreground/30'
-                    }`}
-                  >
-                    <div
-                      className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                        options.thinking ? 'translate-x-4' : 'translate-x-0.5'
-                      }`}
-                    />
-                  </button>
-                </div>
-                <div>
-                  <label className="text-xs font-medium mb-1 block">{i18n('Effort')}</label>
-                  <select
-                    value={options.effort || ''}
-                    onChange={(e) => setOptions(prev => ({
-                      ...prev,
-                      effort: (e.target.value || undefined) as ModelOptions['effort'],
-                    }))}
-                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
-                  >
-                    <option value="">{i18n('Default')}</option>
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                    <option value="xhigh">XHigh</option>
-                    <option value="max">Max</option>
-                  </select>
-                </div>
+                <ReasoningOptionsFields
+                  profile={reasoningProfile}
+                  protocol={selectedProtocol}
+                  options={options}
+                  setOptions={setOptions}
+                />
                 <div>
                   <label className="text-xs font-medium mb-1 block">{i18n('Max Context Tokens')}</label>
                   <TokenInput
                     value={options.maxContextTokens}
                     onChange={(v) => setOptions(prev => ({ ...prev, maxContextTokens: v }))}
                     placeholder="200"
+                    presets={TOKEN_PRESETS.maxContextTokens}
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                   />
                   <p className="mt-1 text-[11px] leading-tight text-muted-foreground">{i18n(MODEL_FIELD_HINTS.maxContextTokens)}</p>
@@ -531,6 +521,7 @@ export const InlineAddModelForm: React.FC<InlineAddModelFormProps> = ({ availabl
                     value={options.contextToken}
                     onChange={(v) => setOptions(prev => ({ ...prev, contextToken: v }))}
                     placeholder="200"
+                    presets={TOKEN_PRESETS.contextToken}
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                   />
                   <p className="mt-1 text-[11px] leading-tight text-muted-foreground">{i18n(MODEL_FIELD_HINTS.contextToken)}</p>

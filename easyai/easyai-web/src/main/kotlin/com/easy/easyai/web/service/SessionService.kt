@@ -1,6 +1,8 @@
 package com.easy.easyai.web.service
 
 import com.easy.easyai.api.config.ModelProviderConfigStore
+import com.easy.easyai.api.model.ModelOverridePolicy
+import com.easy.easyai.api.model.ModelOverrides
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.SessionManager
@@ -94,9 +96,16 @@ class SessionService(
 
         // Resolve the last message's model context window so the frontend token bar
         // renders the real usage percentage instead of a hardcoded default (best-effort).
+        // Composer overrides recorded on the session take precedence over the model config.
         val modelContextLength = lastConfig?.configId?.let { configId ->
             try {
-                configStore?.getConfig(configId, userId)?.options?.contextToken
+                val config = configStore?.getConfig(configId, userId)
+                val overrides = sessionStore.findModelOverrides(id)?.let {
+                    objectMapper.readValue(it, ModelOverrides::class.java)
+                }
+                config?.let {
+                    ModelOverridePolicy.applyRecorded(it, overrides).options?.contextToken
+                }
             } catch (e: Exception) {
                 logger.warn("Failed to resolve model config {} for session {}: {}", configId, id, e.message)
                 null

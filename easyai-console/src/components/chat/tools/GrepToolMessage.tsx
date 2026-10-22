@@ -7,9 +7,12 @@ import { Search, ChevronDown } from 'lucide-react';
 import type { ToolMessageProps } from './types';
 import { parseGrepOutput, extractOutput, getGrepPattern, getToolRowSummary } from './parsers';
 import { ToolTooltip } from '@/components/agent/ToolItem';
+import { CopyableText } from './CopyableText';
+import { useCopyToast } from './useCopyToast';
 import { getToolDisplayName } from './icons';
 import { ToolRowHeader } from './ToolRowHeader';
 import { useNavStore } from '@/services/stores/nav-store';
+import { APP_CONFIG } from '@/constants/navigation';
 
 export function GrepToolMessage({ 
   toolCall, 
@@ -22,6 +25,8 @@ export function GrepToolMessage({
   const [isCollapsed, setIsCollapsed] = useState(true);
   const userTouchedRef = useRef(false);
   const openFile = useNavStore((s) => s.openFile);
+  const workspacePanelsEnabled = APP_CONFIG.showWorkspacePanels;
+  const { copyToClipboard, toast } = useCopyToast();
   
   const pattern = getGrepPattern(toolCall.args);
   const isStreaming = status === 'RUNNING' || status === 'PENDING';
@@ -101,26 +106,31 @@ export function GrepToolMessage({
                   ? match.filePath
                   : workDir ? `${workDir}/${match.filePath}` : match.filePath;
                 return (
-                  <ToolTooltip key={index} name={match.content}>
-                    <div
-                      className="text-sm font-mono p-2 bg-muted rounded hover:bg-muted/80"
-                    >
-                      <span
-                        className="text-blue-600 cursor-pointer hover:underline"
-                        onClick={(e) => { e.stopPropagation(); openFile(absolutePath); }}
-                      >
-                        {match.filePath}
-                      </span>
+                  <div
+                    key={index}
+                    className="text-sm font-mono p-2 bg-muted rounded hover:bg-muted/80"
+                  >
+                    <div className="flex items-center min-w-0">
+                      <CopyableText
+                        text={match.filePath}
+                        copyText={absolutePath}
+                        title={match.filePath}
+                        className={workspacePanelsEnabled ? 'text-blue-600' : ''}
+                        onCopy={copyToClipboard}
+                        onFileOpen={workspacePanelsEnabled ? () => openFile(absolutePath) : undefined}
+                      />
                       {match.lineNum > 0 && (
-                        <span className="text-muted-foreground">:{match.lineNum}</span>
+                        <span className="text-muted-foreground shrink-0">:{match.lineNum}</span>
                       )}
-                      {match.content && (
+                    </div>
+                    {match.content && (
+                      <ToolTooltip name={match.content}>
                         <span className="text-muted-foreground block truncate">
                           {match.content}
                         </span>
-                      )}
-                    </div>
-                  </ToolTooltip>
+                      </ToolTooltip>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -134,6 +144,8 @@ export function GrepToolMessage({
           {rawOutput}
         </div>
       )}
+
+      {toast}
     </div>
   );
 }

@@ -18,6 +18,8 @@ data class ModelCatalogEntry(
     val description: String? = null,
     val capabilities: CatalogCapabilities? = null,
     val defaultOptions: CatalogOptions? = null,
+    /** Thinking/effort matrix resolved from vendor documentation; null on rows written before it existed. */
+    val reasoningProfile: ReasoningProfile? = null,
     val pricing: ModelPricing? = null,
     /** Which pipeline wrote the row: `bailian-refresh` today; `manual`/`probed` are reserved. */
     val source: String,

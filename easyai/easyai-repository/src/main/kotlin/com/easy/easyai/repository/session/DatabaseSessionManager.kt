@@ -2,7 +2,10 @@ package com.easy.easyai.repository.session
 
 import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.config.ModelProviderConfigStore
+import com.easy.easyai.api.model.ModelOverridePolicy
+import com.easy.easyai.api.model.ModelOverrides
 import com.easy.easyai.api.model.ModelProviderConfig
+import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.model.EasyAiMessage
 import com.easy.easyai.core.model.ProjectKind
@@ -403,6 +406,19 @@ class DatabaseSessionManager(
     }
 
     /**
+     * Replay the composer overrides recorded on the session. The config may have changed since the
+     * values were written, so effort is re-gated against the current profile and the context window
+     * is clamped; unsupported values are dropped instead of making the session unresumable.
+     */
+    private suspend fun applyStoredOverrides(config: ModelProviderConfig, sessionId: String): ModelProviderConfig {
+        val json = runCatching { sessionStore.findModelOverrides(sessionId) }.getOrNull() ?: return config
+        val overrides = runCatching {
+            SharedObjectMapper.instance.readValue(json, ModelOverrides::class.java)
+        }.getOrNull() ?: return config
+        return ModelOverridePolicy.applyRecorded(config, overrides)
+    }
+
+    /**
      * Restore session from database with config recovery from last message.
      */
     private suspend fun restoreSessionFromDatabase(
@@ -421,12 +437,15 @@ class DatabaseSessionManager(
 
         // Get config from last message's configId (stored per-message, not on session)
         val configId = lastConfig?.configId
-        val config = if (configId != null) {
+        val storedConfig = if (configId != null) {
             configStore?.getConfig(configId, userId)
                 ?: throw IllegalStateException("Config not found for id=$configId, session=$sessionId")
         } else {
             throw IllegalStateException("No configId found in last message for session $sessionId")
         }
+        // Resume must replay the composer overrides the session last ran with, or the working
+        // window/effort silently drop back to the model config mid-conversation.
+        val config = applyStoredOverrides(storedConfig, sessionId)
 
         // Restore session with correct agent configuration
         val restoredKind = project?.kind ?: ProjectKind.USER
@@ -640,7 +659,7 @@ class DatabaseSessionManager(
                 ?: throw IllegalStateException("Config not found for id=$configId, session=$sessionId")
         } else {
             null
-        }
+        }?.let { applyStoredOverrides(it, sessionId) }
         val project = toolResolver.resolveProject(persistedSession.projectId, userId)
         val projectPath = project?.path?.let { Path.of(it).toAbsolutePath().normalize() }
 

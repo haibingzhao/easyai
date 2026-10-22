@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { APP_CONFIG } from '@/constants/navigation';
 
 export type RightPanelTab = 'summary' | 'review' | 'files' | 'sessions' | 'team';
 
@@ -66,12 +67,18 @@ export const useNavStore = create<NavState>()(persist(
       setSidebarWidth: (w) => set({ sidebarWidth: w }),
       setRightPanelWidth: (w) => set({ rightPanelWidth: w }),
       setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
-      openFile: (path) => set({ selectedFile: path, rightPanelOpen: true, rightPanelTab: 'files' as RightPanelTab }),
-      openReviewTab: (path) => set({
-        rightPanelOpen: true,
-        rightPanelTab: 'review' as RightPanelTab,
-        reviewFilePath: path ?? null,
-      }),
+      openFile: (path) => {
+        if (!APP_CONFIG.showWorkspacePanels) return;
+        set({ selectedFile: path, rightPanelOpen: true, rightPanelTab: 'files' as RightPanelTab });
+      },
+      openReviewTab: (path) => {
+        if (!APP_CONFIG.showWorkspacePanels) return;
+        set({
+          rightPanelOpen: true,
+          rightPanelTab: 'review' as RightPanelTab,
+          reviewFilePath: path ?? null,
+        });
+      },
       openSessionsTab: () => set({
         rightPanelOpen: true,
         rightPanelTab: 'sessions' as RightPanelTab,

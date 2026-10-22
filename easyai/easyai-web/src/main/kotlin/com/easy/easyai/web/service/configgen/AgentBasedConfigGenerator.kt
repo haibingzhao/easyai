@@ -125,10 +125,10 @@ class AgentBasedConfigGenerator(
         }
 
         // 1. Build specialized tools
-        val tools = buildTools(request.configType, userId, finalizeAction)
+        val tools = buildTools(request.configType, owners, finalizeAction)
 
         // 2. Resolve model config
-        val modelConfig = resolveModelConfig(request.modelConfigId, userId)
+        val modelConfig = resolveModelConfig(request.modelConfigId, owners)
 
         // 3. Build AgentContext (dry-run: no persistence, no default system prompt)
         val context = AgentContext(
@@ -279,6 +279,11 @@ class AgentBasedConfigGenerator(
                 }
             }
 
+            // A producer failure before its first event (e.g. the model config could not be
+            // resolved) closes the event flow without throwing here; result() rethrows it so the
+            // catch below reports an error instead of a successful empty config.
+            stream.result()
+
             // Flush remaining buffers (skip if error occurred)
             if (!hasError) {
                 if (isThinkingPhase && thinkingBuffer.isNotEmpty()) {
@@ -338,9 +343,13 @@ class AgentBasedConfigGenerator(
         }
     }
 
-    private fun buildTools(configType: String, userId: String, finalizeAction: suspend (String?) -> String): List<ToolDefinition> {
+    private fun buildTools(
+        configType: String,
+        owners: Collection<String>,
+        finalizeAction: suspend (String?) -> String,
+    ): List<ToolDefinition> {
         val listResources = ListResourcesTool(
-            toolRegistry, agentStore, skillAccessResolver, mcpClientManager, modelConfigStore, userId, configType,
+            toolRegistry, agentStore, skillAccessResolver, mcpClientManager, modelConfigStore, owners, configType,
             swarmContext = configType == "swarm",
             toolFactory = toolFactory
         )
@@ -348,10 +357,13 @@ class AgentBasedConfigGenerator(
         return listOf(listResources, SubmitConfigBlockTool(), FinalizeConfigTool(finalizeAction))
     }
 
-    private suspend fun resolveModelConfig(modelConfigId: String?, userId: String): ModelProviderConfig? {
+    private suspend fun resolveModelConfig(modelConfigId: String?, owners: Collection<String>): ModelProviderConfig? {
         if (modelConfigId == null) return null
         return try {
-            modelConfigStore.getConfig(modelConfigId, userId)
+            // The picker shows models by visibility, so resolution must use the same owner set.
+            // A family/group bucket is not the caller's own id, and a single-id lookup would
+            // silently miss exactly those shared configs.
+            modelConfigStore.getConfig(modelConfigId, owners)
         } catch (_: Exception) {
             logger.warn("Failed to resolve model config '{}', using default", modelConfigId)
             null

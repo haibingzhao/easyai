@@ -185,6 +185,8 @@ object Tables {
          * (an `async_task` row) being deleted.
          */
         val systemKind = varchar("system_kind", 32).nullable()
+        /** JSON of the model option overrides actually applied to this session (effort/contextToken). */
+        val modelOverrides = text("model_overrides").nullable()
 
         override val primaryKey = PrimaryKey(id)
 
@@ -310,6 +312,7 @@ object Tables {
         val description = text("description").nullable()
         val capabilities = text("capabilities").nullable()       // JSON CatalogCapabilities
         val defaultOptions = text("default_options").nullable()  // JSON CatalogOptions
+        val reasoningProfile = text("reasoning_profile").nullable() // JSON ReasoningProfile
         val pricing = text("pricing").nullable()                 // JSON ModelPricing
         val catalogSource = varchar("source", 64)
         val rawPayload = text("raw_payload").nullable()          // vendor item JSON as fetched

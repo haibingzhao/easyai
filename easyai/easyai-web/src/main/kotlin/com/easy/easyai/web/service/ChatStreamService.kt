@@ -2,6 +2,8 @@ package com.easy.easyai.web.service
 
 import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.config.ModelProviderConfigStore
+import com.easy.easyai.api.model.ModelOverridePolicy
+import com.easy.easyai.api.model.ModelOverrides
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.auth.AuthConstants
 import com.easy.easyai.common.util.SharedObjectMapper
@@ -310,13 +312,25 @@ class ChatStreamService(
         // system) so a member can chat with a group-owned config. Empty owners (internal/test callers)
         // fall back to the pre-group {userId, system}.
         val readOwners = owners.ifEmpty { setOf(userId, AuthConstants.SYSTEM_USER_ID) }
-        val config = try {
+        val storedConfig = try {
             configStore.getConfig(configId, readOwners)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             return flowOf(errorSse(e.message))
         } ?: return flowOf(errorSse("Config not found: $configId"))
+
+        // Composer overrides are validated against the stored row's declared profile and then
+        // folded into a per-run copy — the saved config is never touched.
+        val overrides = request.modelOverrides
+        if (overrides != null) {
+            try {
+                ModelOverridePolicy.validate(storedConfig, overrides)
+            } catch (e: IllegalArgumentException) {
+                return flowOf(errorSse(e.message ?: "Invalid model overrides"))
+            }
+        }
+        val config = ModelOverridePolicy.apply(storedConfig, overrides)
 
         val factory = modelFactories.firstOrNull { it.supports(config.protocol) }
             ?: return flowOf(errorSse("No ChatModelFactory for protocol: ${config.protocol}"))
@@ -344,11 +358,30 @@ class ChatStreamService(
                 config = config,
                 chatOptionsFactory = factory
             )
+            // Recorded after the row exists: resume/answer paths reload the config from DB and must
+            // replay the same window/effort. A `{}` payload clears a previous selection.
+            if (overrides != null) persistModelOverrides(sessionId, overrides)
             chatFlow(agentContext, session, request.message, request.attachments)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             flowOf(errorSse(e.message))
+        }
+    }
+
+    /**
+     * Persist the applied overrides on the session row. Best-effort: the current run already uses
+     * them in memory, and losing this record only affects a later resume/history view.
+     */
+    private suspend fun persistModelOverrides(sessionId: String, overrides: ModelOverrides) {
+        val store = sessionStore ?: return
+        try {
+            val json = if (overrides.isEmpty()) null else objectMapper.writeValueAsString(overrides)
+            store.saveModelOverrides(sessionId, json)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("Failed to persist model overrides for session {}: {}", sessionId, e.message)
         }
     }
 

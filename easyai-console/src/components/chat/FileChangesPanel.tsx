@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { FileChangeItem, FileChangesPanelState, FileDiff } from '../../types/checkpoint';
 import { DiffViewer } from './DiffViewer';
 import { useNavStore } from '@/services/stores/nav-store';
+import { APP_CONFIG } from '@/constants/navigation';
 import { GitCompare } from 'lucide-react';
 import { i18n } from '@/utils/i18n';
 
@@ -46,6 +47,7 @@ export const FileChangesPanel: React.FC<FileChangesPanelProps> = ({
   const [expanded, setExpanded] = useState(false);
   const [hoveredFile, setHoveredFile] = useState<string | null>(null);
   const openReviewTab = useNavStore((s) => s.openReviewTab);
+  const workspacePanelsEnabled = APP_CONFIG.showWorkspacePanels;
 
   /** When additions === deletions, treat as deleted for display */
   const effectiveStatus = (file: FileChangeItem): FileChangeItem['status'] => {
@@ -229,7 +231,7 @@ export const FileChangesPanel: React.FC<FileChangesPanelProps> = ({
           <span className="text-sm font-medium truncate">
             {files.length} {i18n('changed files')}
           </span>
-          {state === 'applied' && files.length > 0 && (
+          {workspacePanelsEnabled && state === 'applied' && files.length > 0 && (
             <button
               className="text-xs text-primary hover:underline ml-2"
               onClick={(e) => { e.stopPropagation(); openReviewTab(); }}
@@ -256,10 +258,12 @@ export const FileChangesPanel: React.FC<FileChangesPanelProps> = ({
               onMouseLeave={() => setHoveredFile(null)}
             >
               <span
-                className={`flex-1 truncate font-mono text-xs cursor-pointer hover:text-foreground ${
+                className={`flex-1 truncate font-mono text-xs ${
+                  workspacePanelsEnabled ? 'cursor-pointer hover:text-foreground' : ''
+                } ${
                   effectiveStatus(file) === 'deleted' ? 'line-through text-muted-foreground' : ''
                 }`}
-                onClick={() => openReviewTab(file.path)}
+                onClick={workspacePanelsEnabled ? () => openReviewTab(file.path) : undefined}
                 title={file.path}
               >
                 {file.path}

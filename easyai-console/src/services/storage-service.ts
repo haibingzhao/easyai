@@ -1,4 +1,4 @@
-import type { Settings, SessionMetadata } from '../types/settings';
+import type { Settings, SessionMetadata, ModelOverrides } from '../types/settings';
 import type { Message } from '../types/message';
 import type { Artifact } from '../types/artifact';
 
@@ -8,6 +8,7 @@ const STORAGE_KEYS = {
   MESSAGES: 'easyai_messages_',
   ARTIFACTS: 'easyai_artifacts_',
   SELECTED_MODEL: 'easyai_selected_model',
+  MODEL_OVERRIDES: 'easyai_model_overrides',
 };
 
 export class StorageService {
@@ -34,6 +35,35 @@ export class StorageService {
 
   saveSelectedModelConfigId(configId: string): void {
     localStorage.setItem(STORAGE_KEYS.SELECTED_MODEL, configId);
+  }
+
+  /** Effort/context-window override saved from the model picker, or null when none is set. */
+  getModelOverrides(configId: string): ModelOverrides | null {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.MODEL_OVERRIDES);
+      if (!data) return null;
+      const map = JSON.parse(data) as Record<string, ModelOverrides>;
+      return map[configId] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Persist (or clear, with null/empty) the picker overrides for one model config. */
+  saveModelOverrides(configId: string, overrides: ModelOverrides | null): void {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.MODEL_OVERRIDES);
+      const map = data ? (JSON.parse(data) as Record<string, ModelOverrides>) : {};
+      if (!overrides || (!overrides.effort && overrides.contextToken == null)) {
+        delete map[configId];
+      } else {
+        map[configId] = overrides;
+      }
+      if (Object.keys(map).length === 0) localStorage.removeItem(STORAGE_KEYS.MODEL_OVERRIDES);
+      else localStorage.setItem(STORAGE_KEYS.MODEL_OVERRIDES, JSON.stringify(map));
+    } catch {
+      /* quota / private mode: the preference is simply not kept */
+    }
   }
 
   getSwarmPresetModel(presetName: string): string {

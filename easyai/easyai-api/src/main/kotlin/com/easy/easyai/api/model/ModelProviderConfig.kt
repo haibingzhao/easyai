@@ -91,7 +91,9 @@ data class SaveModelProviderConfigRequest(
  * @property maxTokens Maximum output tokens in raw token count (e.g. 16384 = 16K). Default 16384.
  * @property thinking Whether to enable extended thinking / reasoning. Default false.
  * @property effort Controls overall token budget across all response types (text, tools, thinking).
- *   Values: "low", "medium", "high", "xhigh", "max". Independent of [thinking]. Default null (not set).
+ *   Values: "low", "medium", "high", "xhigh", "max". Whether it may be sent is decided by the
+ *   model's reasoning profile and the protocol gate: Anthropic carries it outside the thinking
+ *   budget, while the other protocols carry it while thinking is on. Default null (not set).
  * @property maxContextTokens Model's maximum supported context window in raw tokens. Hard upper bound. Default 204800 (200K).
  * @property contextToken Active working context window in raw tokens. Compaction triggers when this is reached.
  *   Must be <= maxContextTokens. Default 204800 (200K).
@@ -134,7 +136,13 @@ data class ModelCapabilities(
      * decision-model-preview) that answer structured classification queries instead of chat.
      * Metadata only — surfaced in the model pickers, it never gates tool registration.
      */
-    val supportsToolCalling: Boolean? = null
+    val supportsToolCalling: Boolean? = null,
+    /**
+     * Thinking/effort matrix for this model. Null in the stored row means undeclared; the repository
+     * fills known families from [ReasoningProfiles] on read, so adapters only see null for ids with
+     * no family rule (and then keep their legacy wire behavior instead of guessing).
+     */
+    val reasoning: ReasoningProfile? = null
 )
 
 /**

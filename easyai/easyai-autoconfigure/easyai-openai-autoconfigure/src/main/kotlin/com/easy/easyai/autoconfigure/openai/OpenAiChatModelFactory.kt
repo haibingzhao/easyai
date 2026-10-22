@@ -7,6 +7,7 @@ import com.easy.easyai.api.llm.ToolCallback
 import com.easy.easyai.api.llm.observation.ObservationChatModel
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.api.model.ReasoningMode
 import com.easy.easyai.api.model.SamplingPolicy
 import com.easy.easyai.api.model.StructuredOutputPolicy
 import com.easy.easyai.api.model.StructuredOutputSupport
@@ -76,24 +77,64 @@ class OpenAiChatModelFactory : ChatModelFactory {
             timeoutSeconds = config.timeoutSeconds
         )
 
-        config.options?.let {
-            // Use effort if set, otherwise fall back to thinking -> "high"
-            val effortValue = it.effort ?: if (it.thinking) "high" else null
-            if (effortValue != null) {
-                // OpenAI reasoning models (o-series) only support low/medium/high
-                val mapped = when (effortValue.lowercase()) {
-                    "low" -> "low"
-                    "medium" -> "medium"
-                    else -> "high"  // high/xhigh/max all map to "high"
+        config.options?.let { opts ->
+            when (config.capabilities?.reasoning?.mode) {
+                ReasoningMode.NONE -> {
+                    // NONE declares no reasoning support, so the thinking switch and effort are
+                    // omitted: non-reasoning models may reject enable_thinking. A manual NONE on a
+                    // hybrid would need an explicit false; that distinction is not applied yet.
+                    options = options.copy(
+                        temperature = SamplingPolicy.rowTemperature(config),
+                        maxTokens = opts.maxTokens
+                    )
                 }
-                options = options.copy(reasoningEffort = mapped, maxCompletionTokens = it.maxTokens)
-            } else {
-                // Gated, not read straight off the row: a model that declares sampling NOT_SETTABLE
-                // must never see the row number, whichever caller built these options.
-                options = options.copy(
-                    temperature = SamplingPolicy.rowTemperature(config),
-                    maxTokens = it.maxTokens
-                )
+
+                ReasoningMode.TOGGLEABLE -> {
+                    // Hybrid models reason by default on several gateways, so the switch has to be
+                    // explicit; effort is meaningless while thinking is off.
+                    options = if (opts.thinking) {
+                        options.copy(
+                            enableThinking = true,
+                            reasoningEffort = opts.effort,
+                            maxCompletionTokens = opts.maxTokens
+                        )
+                    } else {
+                        options.copy(
+                            enableThinking = false,
+                            temperature = SamplingPolicy.rowTemperature(config),
+                            maxTokens = opts.maxTokens
+                        )
+                    }
+                }
+
+                // Thinking is not switchable; effort still is. Sending no enable flag keeps whichever
+                // gateway default is already on and avoids the "enable_thinking=false is rejected" trap.
+                ReasoningMode.ALWAYS_ON -> {
+                    options = options.copy(
+                        reasoningEffort = opts.effort,
+                        maxCompletionTokens = opts.maxTokens
+                    )
+                }
+
+                // Undeclared rows keep the pre-profile mapping byte-for-byte.
+                ReasoningMode.UNKNOWN, null -> {
+                    val effortValue = opts.effort ?: if (opts.thinking) "high" else null
+                    if (effortValue != null) {
+                        val mapped = when (effortValue.lowercase()) {
+                            "low" -> "low"
+                            "medium" -> "medium"
+                            else -> "high"
+                        }
+                        options = options.copy(reasoningEffort = mapped, maxCompletionTokens = opts.maxTokens)
+                    } else {
+                        options = options.copy(
+                            // Gated, not read straight off the row: a model that declares sampling NOT_SETTABLE
+                            // must never see the row number, whichever caller built these options.
+                            temperature = SamplingPolicy.rowTemperature(config),
+                            maxTokens = opts.maxTokens
+                        )
+                    }
+                }
             }
         }
 
