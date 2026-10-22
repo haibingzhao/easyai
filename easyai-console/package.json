@@ -18,7 +18,8 @@
       "types": "./dist-lib/lib.d.ts",
       "import": "./dist-lib/index.js"
     },
-    "./style.css": "./dist-lib/style.css"
+    "./style.css": "./dist-lib/style.css",
+    "./theme.css": "./dist-lib/theme.css"
   },
   "files": ["dist-lib"],
   "scripts": {

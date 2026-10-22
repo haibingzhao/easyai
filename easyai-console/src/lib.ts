@@ -6,7 +6,11 @@
  *
  * Usage:
  *   import { ChatPanel, useChatStore, authFetch } from '@easyai/console';
- *   import '@easyai/console/style.css';
+ *
+ * Hosts that run Tailwind add this to their CSS entry (after `@import "tailwindcss"`):
+ *   @import "@easyai/console/theme.css";
+ *   plus an @source glob covering every JS chunk in the package's dist-lib directory.
+ * Consumers without Tailwind can still import the pre-built '@easyai/console/style.css'.
  */
 
 import './index.css';
@@ -184,7 +188,7 @@ export { MemoriesPage } from './pages/MemoriesPage';
 export { TasksPage } from './pages/TasksPage';
 export { TaskTranscriptPage } from './pages/TaskTranscriptPage';
 export { KnowledgePage } from './pages/KnowledgePage';
-export { ArticleEditorPage } from './pages/ArticleEditorPage';
+export { ArticleEditorPage } from './pages/ArticleEditorPageLazy';
 export { CommandsPage } from './pages/CommandsPage';
 export { SkillsPage } from './pages/SkillsPage';
 export { SettingsPage } from './pages/SettingsPage';
