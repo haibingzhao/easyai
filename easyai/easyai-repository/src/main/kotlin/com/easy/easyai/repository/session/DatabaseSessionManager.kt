@@ -438,7 +438,9 @@ class DatabaseSessionManager(
         // Get config from last message's configId (stored per-message, not on session)
         val configId = lastConfig?.configId
         val storedConfig = if (configId != null) {
-            configStore?.getConfig(configId, userId)
+            // Resolve across the caller's whole visibility set: a session running on a group-owned
+            // chat model must stay resumable for every member, not just its author.
+            configStore?.getConfig(configId, configLookupOwners(userId, owners))
                 ?: throw IllegalStateException("Config not found for id=$configId, session=$sessionId")
         } else {
             throw IllegalStateException("No configId found in last message for session $sessionId")
@@ -646,7 +648,11 @@ class DatabaseSessionManager(
      * Get the ChatContext for a session.
      * Always loads from DB — no cross-request cache.
      */
-    override suspend fun getSessionContext(sessionId: String, userId: String): AgentContext? {
+    override suspend fun getSessionContext(
+        sessionId: String,
+        userId: String,
+        owners: Collection<String>
+    ): AgentContext? {
         val persistedSession = sessionStore.findById(sessionId, userId)
             ?: return null
 
@@ -655,7 +661,7 @@ class DatabaseSessionManager(
 
         val configId = lastConfig?.configId
         val modelConfig = if (configId != null) {
-            configStore?.getConfig(configId, userId)
+            configStore?.getConfig(configId, configLookupOwners(userId, owners))
                 ?: throw IllegalStateException("Config not found for id=$configId, session=$sessionId")
         } else {
             null
@@ -674,6 +680,14 @@ class DatabaseSessionManager(
             modelContextLength = modelConfig?.options?.contextToken ?: 204_800
         )
     }
+
+    /**
+     * Owner set for a model-config lookup: the caller's visibility set plus `system`, which the
+     * single-id store lookup always folded in. The collection overload does NOT add `system`
+     * implicitly, so it must be spelled out here.
+     */
+    private fun configLookupOwners(userId: String, owners: Collection<String>): List<String> =
+        (owners + userId + UserScope.SYSTEM_USER_ID).distinct()
 
     private fun createNewVirtualSession(id: String): ChatSession {
         logger.info("Creating new virtual session: {}", id)

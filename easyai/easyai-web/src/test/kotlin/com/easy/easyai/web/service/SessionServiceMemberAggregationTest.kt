@@ -33,6 +33,7 @@ class SessionServiceMemberAggregationTest {
     private val sessionId = "parent-session-1"
     private val memberSessionId = "member-session-abc"
     private val memberId = "researcher"
+    private val owners = listOf("system")
 
     private fun createContext(): AgentContext = AgentContext(
         agentId = "team-agent",
@@ -79,7 +80,7 @@ class SessionServiceMemberAggregationTest {
         fun `aggregates member checkpoints with correct synthetic key`() = runTest {
             val service = createService()
 
-            coEvery { sessionManager.getSessionContext(sessionId, any()) } returns createContext()
+            coEvery { sessionManager.getSessionContext(sessionId, any(), any()) } returns createContext()
             every { snapshotService.isEnabled(projectPath) } returns true
             // Parent session has no checkpoints
             coEvery { snapshotService.listCheckpoints(projectPath, sessionId) } returns emptyList()
@@ -101,7 +102,7 @@ class SessionServiceMemberAggregationTest {
             // Team execution store returns member execution
             coEvery { teamExecutionStore.getExecutions(sessionId) } returns listOf(createMemberExecution())
 
-            val result = service.getCheckpoints(sessionId)
+            val result = service.getCheckpoints(sessionId, owners = owners)
 
             assertEquals(1, result.size)
             val memberCp = result[0]
@@ -120,12 +121,12 @@ class SessionServiceMemberAggregationTest {
         fun `no impact when teamExecutionStore is null`() = runTest {
             val service = createService(withTeamStore = false)
 
-            coEvery { sessionManager.getSessionContext(sessionId, any()) } returns createContext()
+            coEvery { sessionManager.getSessionContext(sessionId, any(), any()) } returns createContext()
             every { snapshotService.isEnabled(projectPath) } returns true
             coEvery { snapshotService.listCheckpoints(projectPath, sessionId) } returns emptyList()
             coEvery { snapshotService.getStagedChanges(projectPath, sessionId) } returns emptyList()
 
-            val result = service.getCheckpoints(sessionId)
+            val result = service.getCheckpoints(sessionId, owners = owners)
 
             assertTrue(result.isEmpty())
         }
@@ -134,7 +135,7 @@ class SessionServiceMemberAggregationTest {
         fun `skips member with no checkpoints gracefully`() = runTest {
             val service = createService()
 
-            coEvery { sessionManager.getSessionContext(sessionId, any()) } returns createContext()
+            coEvery { sessionManager.getSessionContext(sessionId, any(), any()) } returns createContext()
             every { snapshotService.isEnabled(projectPath) } returns true
             coEvery { snapshotService.listCheckpoints(projectPath, sessionId) } returns emptyList()
             coEvery { snapshotService.getStagedChanges(projectPath, sessionId) } returns emptyList()
@@ -143,7 +144,7 @@ class SessionServiceMemberAggregationTest {
             coEvery { snapshotService.listCheckpoints(projectPath, memberSessionId) } returns emptyList()
             coEvery { teamExecutionStore.getExecutions(sessionId) } returns listOf(createMemberExecution())
 
-            val result = service.getCheckpoints(sessionId)
+            val result = service.getCheckpoints(sessionId, owners = owners)
 
             assertTrue(result.isEmpty())
         }
@@ -152,7 +153,7 @@ class SessionServiceMemberAggregationTest {
         fun `skips member when baseline fails`() = runTest {
             val service = createService()
 
-            coEvery { sessionManager.getSessionContext(sessionId, any()) } returns createContext()
+            coEvery { sessionManager.getSessionContext(sessionId, any(), any()) } returns createContext()
             every { snapshotService.isEnabled(projectPath) } returns true
             coEvery { snapshotService.listCheckpoints(projectPath, sessionId) } returns emptyList()
             coEvery { snapshotService.getStagedChanges(projectPath, sessionId) } returns emptyList()
@@ -162,7 +163,7 @@ class SessionServiceMemberAggregationTest {
             coEvery { snapshotService.ensureBaseline(projectPath, memberSessionId) } throws RuntimeException("no baseline")
             coEvery { teamExecutionStore.getExecutions(sessionId) } returns listOf(createMemberExecution())
 
-            val result = service.getCheckpoints(sessionId)
+            val result = service.getCheckpoints(sessionId, owners = owners)
 
             assertTrue(result.isEmpty())
         }
@@ -171,7 +172,7 @@ class SessionServiceMemberAggregationTest {
         fun `skips member with empty diff`() = runTest {
             val service = createService()
 
-            coEvery { sessionManager.getSessionContext(sessionId, any()) } returns createContext()
+            coEvery { sessionManager.getSessionContext(sessionId, any(), any()) } returns createContext()
             every { snapshotService.isEnabled(projectPath) } returns true
             coEvery { snapshotService.listCheckpoints(projectPath, sessionId) } returns emptyList()
             coEvery { snapshotService.getStagedChanges(projectPath, sessionId) } returns emptyList()
@@ -182,7 +183,7 @@ class SessionServiceMemberAggregationTest {
             coEvery { snapshotService.diff(projectPath, "baseline", "hash1") } returns emptyList()
             coEvery { teamExecutionStore.getExecutions(sessionId) } returns listOf(createMemberExecution())
 
-            val result = service.getCheckpoints(sessionId)
+            val result = service.getCheckpoints(sessionId, owners = owners)
 
             assertTrue(result.isEmpty())
         }
@@ -191,7 +192,7 @@ class SessionServiceMemberAggregationTest {
         fun `deduplicates member sessions by memberSessionId`() = runTest {
             val service = createService()
 
-            coEvery { sessionManager.getSessionContext(sessionId, any()) } returns createContext()
+            coEvery { sessionManager.getSessionContext(sessionId, any(), any()) } returns createContext()
             every { snapshotService.isEnabled(projectPath) } returns true
             coEvery { snapshotService.listCheckpoints(projectPath, sessionId) } returns emptyList()
             coEvery { snapshotService.getStagedChanges(projectPath, sessionId) } returns emptyList()
@@ -209,7 +210,7 @@ class SessionServiceMemberAggregationTest {
                 createMemberExecution().copy(id = "exec-2", round = 2)
             )
 
-            val result = service.getCheckpoints(sessionId)
+            val result = service.getCheckpoints(sessionId, owners = owners)
 
             // Should only produce ONE aggregated checkpoint
             assertEquals(1, result.size)
@@ -220,7 +221,7 @@ class SessionServiceMemberAggregationTest {
         fun `member aggregation failure does not affect parent checkpoints`() = runTest {
             val service = createService()
 
-            coEvery { sessionManager.getSessionContext(sessionId, any()) } returns createContext()
+            coEvery { sessionManager.getSessionContext(sessionId, any(), any()) } returns createContext()
             every { snapshotService.isEnabled(projectPath) } returns true
 
             // Parent has a checkpoint
@@ -240,7 +241,7 @@ class SessionServiceMemberAggregationTest {
             // Team store throws
             coEvery { teamExecutionStore.getExecutions(sessionId) } throws RuntimeException("DB error")
 
-            val result = service.getCheckpoints(sessionId)
+            val result = service.getCheckpoints(sessionId, owners = owners)
 
             // Parent checkpoint still returned
             assertEquals(1, result.size)
@@ -255,7 +256,7 @@ class SessionServiceMemberAggregationTest {
         fun `aggregates member-only file diffs`() = runTest {
             val service = createService()
 
-            coEvery { sessionManager.getSessionContext(sessionId, any()) } returns createContext()
+            coEvery { sessionManager.getSessionContext(sessionId, any(), any()) } returns createContext()
             every { snapshotService.isEnabled(projectPath) } returns true
 
             // Parent diff
@@ -277,7 +278,7 @@ class SessionServiceMemberAggregationTest {
 
             coEvery { teamExecutionStore.getExecutions(sessionId) } returns listOf(createMemberExecution())
 
-            val result = service.getSessionDiffWithMembers(sessionId)
+            val result = service.getSessionDiffWithMembers(sessionId, owners = owners)
 
             // shared.kt from parent + member-only.kt from member
             assertEquals(2, result.size)
@@ -289,7 +290,7 @@ class SessionServiceMemberAggregationTest {
         fun `returns empty when snapshotService is null`() = runTest {
             val service = createService(withSnapshot = false)
 
-            val result = service.getSessionDiffWithMembers(sessionId)
+            val result = service.getSessionDiffWithMembers(sessionId, owners = owners)
 
             assertTrue(result.isEmpty())
         }

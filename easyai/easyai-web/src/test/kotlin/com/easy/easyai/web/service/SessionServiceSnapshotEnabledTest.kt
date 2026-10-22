@@ -24,6 +24,7 @@ class SessionServiceSnapshotEnabledTest {
 
     private val projectPath: Path = Path.of("/tmp/test-project")
     private val sessionId = "session-1"
+    private val owners = listOf("system")
 
     private fun createService(withSnapshot: Boolean = true): SessionService = SessionService(
         sessionManager = sessionManager,
@@ -44,7 +45,7 @@ class SessionServiceSnapshotEnabledTest {
     }
 
     private fun stubContext(projectPath: Path?) {
-        coEvery { sessionManager.getSessionContext(sessionId, any()) } returns AgentContext(
+        coEvery { sessionManager.getSessionContext(sessionId, any(), any()) } returns AgentContext(
             agentId = "default",
             sessionId = sessionId,
             projectPath = projectPath
@@ -60,7 +61,7 @@ class SessionServiceSnapshotEnabledTest {
             stubContext(projectPath)
             every { snapshotService.isEnabled(projectPath) } returns true
 
-            val detail = createService().getSessionDetail(sessionId)!!
+            val detail = createService().getSessionDetail(sessionId, owners = owners)!!
 
             assertTrue(detail.snapshotEnabled)
         }
@@ -71,7 +72,7 @@ class SessionServiceSnapshotEnabledTest {
             stubContext(projectPath)
             every { snapshotService.isEnabled(projectPath) } returns false
 
-            val detail = createService().getSessionDetail(sessionId)!!
+            val detail = createService().getSessionDetail(sessionId, owners = owners)!!
 
             assertFalse(detail.snapshotEnabled)
         }
@@ -81,7 +82,7 @@ class SessionServiceSnapshotEnabledTest {
             stubSession()
             stubContext(projectPath)
 
-            val detail = createService(withSnapshot = false).getSessionDetail(sessionId)!!
+            val detail = createService(withSnapshot = false).getSessionDetail(sessionId, owners = owners)!!
 
             assertFalse(detail.snapshotEnabled)
         }
@@ -91,7 +92,7 @@ class SessionServiceSnapshotEnabledTest {
             stubSession()
             stubContext(null)
 
-            val detail = createService().getSessionDetail(sessionId)!!
+            val detail = createService().getSessionDetail(sessionId, owners = owners)!!
 
             assertFalse(detail.snapshotEnabled)
         }
@@ -99,10 +100,10 @@ class SessionServiceSnapshotEnabledTest {
         @Test
         fun `is false when context resolution fails`() = runTest {
             stubSession()
-            coEvery { sessionManager.getSessionContext(sessionId, any()) } throws
+            coEvery { sessionManager.getSessionContext(sessionId, any(), any()) } throws
                 IllegalStateException("Config not found")
 
-            val detail = createService().getSessionDetail(sessionId)!!
+            val detail = createService().getSessionDetail(sessionId, owners = owners)!!
 
             assertFalse(detail.snapshotEnabled)
         }

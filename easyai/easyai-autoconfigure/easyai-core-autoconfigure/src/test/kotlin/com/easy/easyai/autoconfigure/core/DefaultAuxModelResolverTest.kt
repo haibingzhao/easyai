@@ -32,7 +32,7 @@ class DefaultAuxModelResolverTest {
 
     private fun stubResolvedConfig(protocol: Protocol = Protocol.OPENAI) {
         every { config.protocol } returns protocol
-        coEvery { configStore.getConfig("cfg-1", "user-1") } returns config
+        coEvery { configStore.getConfig("cfg-1", listOf("user-1", "system")) } returns config
         every { factory.supports(protocol) } returns true
         every { factory.create(config, any()) } returns chatModel
     }
@@ -85,9 +85,20 @@ class DefaultAuxModelResolverTest {
         fun `deleted config returns null`() = runTest {
             coEvery { store.get("user-1", AuxModelTask.COMPACTION) } returns
                 AuxModelSettings(AuxModelTask.COMPACTION.key, "cfg-1")
-            coEvery { configStore.getConfig("cfg-1", "user-1") } returns null
+            coEvery { configStore.getConfig("cfg-1", listOf("user-1", "system")) } returns null
 
             assertNull(resolver(factory).resolve("user-1", AuxModelTask.COMPACTION))
+        }
+
+        @Test
+        fun `single-id resolve still sees a system-owned config`() = runTest {
+            coEvery { store.get("user-1", AuxModelTask.COMPACTION) } returns
+                AuxModelSettings(AuxModelTask.COMPACTION.key, "cfg-system")
+            coEvery { configStore.getConfig("cfg-system", listOf("user-1", "system")) } returns config
+
+            assertSame(config, resolver(factory).resolveConfig("user-1", AuxModelTask.COMPACTION))
+
+            coVerify(exactly = 1) { configStore.getConfig("cfg-system", listOf("user-1", "system")) }
         }
 
         @Test
@@ -95,7 +106,7 @@ class DefaultAuxModelResolverTest {
             coEvery { store.get("user-1", AuxModelTask.COMPACTION) } returns
                 AuxModelSettings(AuxModelTask.COMPACTION.key, "cfg-1")
             every { config.protocol } returns Protocol.ANTHROPIC
-            coEvery { configStore.getConfig("cfg-1", "user-1") } returns config
+            coEvery { configStore.getConfig("cfg-1", listOf("user-1", "system")) } returns config
             every { factory.supports(Protocol.ANTHROPIC) } returns false
 
             assertNull(resolver(factory).resolve("user-1", AuxModelTask.COMPACTION))
@@ -115,7 +126,7 @@ class DefaultAuxModelResolverTest {
             r.resolve("user-1", AuxModelTask.COMPACTION)
             r.resolve("user-1", AuxModelTask.COMPACTION)
 
-            coVerify(exactly = 1) { configStore.getConfig("cfg-1", "user-1") }
+            coVerify(exactly = 1) { configStore.getConfig("cfg-1", listOf("user-1", "system")) }
         }
 
         @Test
@@ -129,7 +140,7 @@ class DefaultAuxModelResolverTest {
             r.refresh("user-1", AuxModelTask.COMPACTION)
             r.resolve("user-1", AuxModelTask.COMPACTION)
 
-            coVerify(exactly = 2) { configStore.getConfig("cfg-1", "user-1") }
+            coVerify(exactly = 2) { configStore.getConfig("cfg-1", listOf("user-1", "system")) }
         }
 
         @Test
@@ -153,7 +164,7 @@ class DefaultAuxModelResolverTest {
         private fun stubSelectionConfig() {
             coEvery { store.get("user-1", AuxModelTask.SKILL_SELECTION) } returns
                 AuxModelSettings(AuxModelTask.SKILL_SELECTION.key, "cfg-1")
-            coEvery { configStore.getConfig("cfg-1", "user-1") } returns config
+            coEvery { configStore.getConfig("cfg-1", listOf("user-1", "system")) } returns config
         }
 
         @Test
@@ -174,11 +185,11 @@ class DefaultAuxModelResolverTest {
 
             r.resolveConfig("user-1", AuxModelTask.SKILL_SELECTION)
             r.resolveConfig("user-1", AuxModelTask.SKILL_SELECTION)
-            coVerify(exactly = 1) { configStore.getConfig("cfg-1", "user-1") }
+            coVerify(exactly = 1) { configStore.getConfig("cfg-1", listOf("user-1", "system")) }
 
             r.refresh("user-1", AuxModelTask.SKILL_SELECTION)
             r.resolveConfig("user-1", AuxModelTask.SKILL_SELECTION)
-            coVerify(exactly = 2) { configStore.getConfig("cfg-1", "user-1") }
+            coVerify(exactly = 2) { configStore.getConfig("cfg-1", listOf("user-1", "system")) }
         }
 
         @Test
@@ -193,7 +204,7 @@ class DefaultAuxModelResolverTest {
 
             coEvery { store.get("user-1", AuxModelTask.SKILL_SELECTION) } returns
                 AuxModelSettings(AuxModelTask.SKILL_SELECTION.key, "cfg-1")
-            coEvery { configStore.getConfig("cfg-1", "user-1") } returns null
+            coEvery { configStore.getConfig("cfg-1", listOf("user-1", "system")) } returns null
             assertNull(r.resolveConfig("user-1", AuxModelTask.SKILL_SELECTION))
 
             assertNull(r.resolveConfig(null, AuxModelTask.SKILL_SELECTION))
@@ -220,16 +231,17 @@ class DefaultAuxModelResolverTest {
         fun `self choice wins over the group bucket`() = runTest {
             coEvery { store.get("alice", AuxModelTask.COMPACTION) } returns
                 AuxModelSettings(AuxModelTask.COMPACTION.key, "cfg-self")
-            coEvery { configStore.getConfig("cfg-self", "alice") } returns config
+            val owners = listOf("alice", "grp-1", "system")
+            coEvery { configStore.getConfig("cfg-self", owners) } returns config
             every { config.protocol } returns Protocol.OPENAI
             every { factory.supports(Protocol.OPENAI) } returns true
             every { factory.create(config, any()) } returns chatModel
             val r = resolver(factory)
 
-            assertSame(chatModel, r.resolve(listOf("alice", "grp-1", "system"), AuxModelTask.COMPACTION)?.chatModel)
+            assertSame(chatModel, r.resolve(owners, AuxModelTask.COMPACTION)?.chatModel)
 
             coVerify(exactly = 0) { store.get("grp-1", any()) }
-            coVerify(exactly = 1) { configStore.getConfig("cfg-self", "alice") }
+            coVerify(exactly = 1) { configStore.getConfig("cfg-self", owners) }
         }
 
         @Test
@@ -237,25 +249,29 @@ class DefaultAuxModelResolverTest {
             coEvery { store.get("alice", AuxModelTask.COMPACTION) } returns null
             coEvery { store.get("grp-1", AuxModelTask.COMPACTION) } returns
                 AuxModelSettings(AuxModelTask.COMPACTION.key, "cfg-grp")
-            coEvery { configStore.getConfig("cfg-grp", "grp-1") } returns config
+            val owners = listOf("alice", "grp-1", "system")
+            coEvery { configStore.getConfig("cfg-grp", owners) } returns config
             every { config.protocol } returns Protocol.OPENAI
             every { factory.supports(Protocol.OPENAI) } returns true
             every { factory.create(config, any()) } returns chatModel
             val r = resolver(factory)
 
-            assertSame(config, r.resolve(listOf("alice", "grp-1", "system"), AuxModelTask.COMPACTION)?.modelConfig)
+            assertSame(config, r.resolve(owners, AuxModelTask.COMPACTION)?.modelConfig)
 
-            coVerify(exactly = 1) { configStore.getConfig("cfg-grp", "grp-1") }
+            coVerify(exactly = 1) { configStore.getConfig("cfg-grp", owners) }
             coVerify(exactly = 0) { store.get("system", any()) }
         }
 
         @Test
         fun `refresh on the group bucket evicts every member resolution`() = runTest {
+            val aliceLookup = listOf("alice", "grp-1", "system")
+            val bobLookup = listOf("bob", "grp-1", "system")
             coEvery { store.get("alice", AuxModelTask.COMPACTION) } returns null
             coEvery { store.get("bob", AuxModelTask.COMPACTION) } returns null
             coEvery { store.get("grp-1", AuxModelTask.COMPACTION) } returns
                 AuxModelSettings(AuxModelTask.COMPACTION.key, "cfg-grp")
-            coEvery { configStore.getConfig("cfg-grp", "grp-1") } returns config
+            coEvery { configStore.getConfig("cfg-grp", aliceLookup) } returns config
+            coEvery { configStore.getConfig("cfg-grp", bobLookup) } returns config
             every { config.protocol } returns Protocol.OPENAI
             every { factory.supports(Protocol.OPENAI) } returns true
             every { factory.create(config, any()) } returns chatModel
@@ -263,12 +279,56 @@ class DefaultAuxModelResolverTest {
 
             r.resolve(listOf("alice", "grp-1"), AuxModelTask.COMPACTION)
             r.resolve(listOf("bob", "grp-1"), AuxModelTask.COMPACTION)
-            coVerify(exactly = 2) { configStore.getConfig("cfg-grp", "grp-1") }
+            coVerify(exactly = 1) { configStore.getConfig("cfg-grp", aliceLookup) }
+            coVerify(exactly = 1) { configStore.getConfig("cfg-grp", bobLookup) }
 
             r.refresh("grp-1", AuxModelTask.COMPACTION)
             r.resolve(listOf("alice", "grp-1"), AuxModelTask.COMPACTION)
             r.resolve(listOf("bob", "grp-1"), AuxModelTask.COMPACTION)
-            coVerify(exactly = 4) { configStore.getConfig("cfg-grp", "grp-1") }
+            coVerify(exactly = 2) { configStore.getConfig("cfg-grp", aliceLookup) }
+            coVerify(exactly = 2) { configStore.getConfig("cfg-grp", bobLookup) }
+        }
+
+        @Test
+        fun `group-only owner set still resolves a system-owned config`() = runTest {
+            coEvery { store.get("alice", AuxModelTask.ASR) } returns
+                AuxModelSettings(AuxModelTask.ASR.key, "cfg-system")
+            coEvery { configStore.getConfig("cfg-system", listOf("alice", "grp-1", "system")) } returns config
+            val r = resolver(factory)
+
+            assertSame(config, r.resolveConfig(listOf("alice", "grp-1"), AuxModelTask.ASR))
+
+            coVerify(exactly = 1) { configStore.getConfig("cfg-system", listOf("alice", "grp-1", "system")) }
+        }
+
+        @Test
+        fun `personal choice resolves a group-owned config`() = runTest {
+            val owners = listOf("alice", "grp-1", "system")
+            coEvery { store.get("alice", AuxModelTask.COMPACTION) } returns
+                AuxModelSettings(AuxModelTask.COMPACTION.key, "cfg-grp")
+            coEvery { configStore.getConfig("cfg-grp", owners) } returns config
+            every { config.protocol } returns Protocol.OPENAI
+            every { factory.supports(Protocol.OPENAI) } returns true
+            every { factory.create(config, any()) } returns chatModel
+            val r = resolver(factory)
+
+            assertSame(chatModel, r.resolve(owners, AuxModelTask.COMPACTION)?.chatModel)
+
+            coVerify(exactly = 0) { store.get("grp-1", any()) }
+            coVerify(exactly = 1) { configStore.getConfig("cfg-grp", owners) }
+        }
+
+        @Test
+        fun `personal choice resolves a group-owned config for resolveConfig`() = runTest {
+            val owners = listOf("alice", "grp-1", "system")
+            coEvery { store.get("alice", AuxModelTask.ASR) } returns
+                AuxModelSettings(AuxModelTask.ASR.key, "cfg-grp")
+            coEvery { configStore.getConfig("cfg-grp", owners) } returns config
+            val r = resolver(factory)
+
+            assertSame(config, r.resolveConfig(owners, AuxModelTask.ASR))
+
+            coVerify(exactly = 1) { configStore.getConfig("cfg-grp", owners) }
         }
 
         @Test

@@ -3,6 +3,7 @@ package com.easy.easyai.web.service
 import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.api.model.ModelOverridePolicy
 import com.easy.easyai.api.model.ModelOverrides
+import com.easy.easyai.auth.AuthConstants
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.SessionManager
@@ -80,7 +81,14 @@ class SessionService(
     suspend fun listSessionTags(projectId: String? = null, userId: String = "system", tempWorkspace: Boolean = false): List<String> =
         sessionStore.findAllTags(projectId, userId, tempWorkspaceOnly = tempWorkspace)
 
-    suspend fun getSessionDetail(id: String, userId: String = "system"): SessionDetail? {
+    suspend fun getSessionDetail(
+        id: String,
+        userId: String = "system",
+        owners: Collection<String>
+    ): SessionDetail? {
+        // Same fallback as DatabaseSessionManager: an empty visibility set still sees the caller's
+        // own rows plus the shared system layer, so the token bar never silently loses its window.
+        val readOwners = owners.ifEmpty { setOf(userId, AuthConstants.SYSTEM_USER_ID) }
         val session = sessionManager.getSessionDetail(id, userId) ?: return null
 
         // Load messages with their original timestamps from the database
@@ -99,13 +107,16 @@ class SessionService(
         // Composer overrides recorded on the session take precedence over the model config.
         val modelContextLength = lastConfig?.configId?.let { configId ->
             try {
-                val config = configStore?.getConfig(configId, userId)
+                // Group-aware: a session on a family-owned chat model still reports its real window.
+                val config = configStore?.getConfig(configId, readOwners)
                 val overrides = sessionStore.findModelOverrides(id)?.let {
                     objectMapper.readValue(it, ModelOverrides::class.java)
                 }
                 config?.let {
                     ModelOverridePolicy.applyRecorded(it, overrides).options?.contextToken
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 logger.warn("Failed to resolve model config {} for session {}: {}", configId, id, e.message)
                 null
@@ -122,7 +133,7 @@ class SessionService(
         val tags = sessionStore.findTagsMap(listOf(id), userId)[id] ?: emptyList()
 
         // Agent context carries the project — or temporary workspace — this session runs in.
-        val context = resolveSessionContext(id, userId)
+        val context = resolveSessionContext(id, userId, readOwners)
 
         return SessionDetail(
             id = session.id,
@@ -151,8 +162,12 @@ class SessionService(
      * Best-effort agent context of a session: carries the project (or temporary workspace)
      * the session runs in. Never fails the detail load.
      */
-    private suspend fun resolveSessionContext(sessionId: String, userId: String): AgentContext? = try {
-        sessionManager.getSessionContext(sessionId, userId)
+    private suspend fun resolveSessionContext(
+        sessionId: String,
+        userId: String,
+        owners: Collection<String>
+    ): AgentContext? = try {
+        sessionManager.getSessionContext(sessionId, userId, owners)
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -229,9 +244,13 @@ class SessionService(
      * Get checkpoint summaries for a session.
      * Used to restore file change information when loading a historical session.
      */
-    suspend fun getCheckpoints(sessionId: String, userId: String = "system"): List<CheckpointSummary> {
+    suspend fun getCheckpoints(
+        sessionId: String,
+        userId: String = "system",
+        owners: Collection<String>
+    ): List<CheckpointSummary> {
         if (snapshotService == null) return emptyList()
-        val context = sessionManager.getSessionContext(sessionId, userId) ?: return emptyList()
+        val context = sessionManager.getSessionContext(sessionId, userId, owners) ?: return emptyList()
         val projectPath = context.projectPath ?: return emptyList()
         if (!snapshotService.isEnabled(projectPath)) return emptyList()
 
@@ -405,9 +424,13 @@ class SessionService(
      * Get session-level file diffs including team member changes.
      * Extends the parent session's baseline→latest diff with member-only file patches.
      */
-    suspend fun getSessionDiffWithMembers(sessionId: String, userId: String = "system"): List<FileDiff> {
+    suspend fun getSessionDiffWithMembers(
+        sessionId: String,
+        userId: String = "system",
+        owners: Collection<String>
+    ): List<FileDiff> {
         if (snapshotService == null) return emptyList()
-        val context = sessionManager.getSessionContext(sessionId, userId) ?: return emptyList()
+        val context = sessionManager.getSessionContext(sessionId, userId, owners) ?: return emptyList()
         val projectPath = context.projectPath ?: return emptyList()
         if (!snapshotService.isEnabled(projectPath)) return emptyList()
 
@@ -584,9 +607,9 @@ class SessionService(
         }
     }
 
-    suspend fun deleteSession(id: String, userId: String = "system") {
+    suspend fun deleteSession(id: String, userId: String = "system", owners: Collection<String>) {
         // Resolve project context once for all file-based cleanups
-        val context = resolveSessionContext(id, userId)
+        val context = resolveSessionContext(id, userId, owners)
         val projectPath = context?.projectPath
 
         // Clean up snapshot session files before closing

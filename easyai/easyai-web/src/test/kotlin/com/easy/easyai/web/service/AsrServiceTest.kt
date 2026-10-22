@@ -52,7 +52,7 @@ class AsrServiceTest {
         @Test
         fun `rejects an empty segment with 400`() = runTest {
             val service = AsrService(mockk(relaxed = true))
-            val e = assertFailsWith<ResponseStatusException> { service.transcribe("alice", ByteArray(0), null) }
+            val e = assertFailsWith<ResponseStatusException> { service.transcribe(listOf("alice"), ByteArray(0), null) }
             assertEquals(HttpStatus.BAD_REQUEST, e.statusCode)
         }
 
@@ -60,7 +60,7 @@ class AsrServiceTest {
         fun `rejects an oversized segment with 413`() = runTest {
             val service = AsrService(mockk(relaxed = true))
             val e = assertFailsWith<ResponseStatusException> {
-                service.transcribe("alice", ByteArray(2 * 1024 * 1024 + 1), null)
+                service.transcribe(listOf("alice"), ByteArray(2 * 1024 * 1024 + 1), null)
             }
             assertEquals(HttpStatus.PAYLOAD_TOO_LARGE, e.statusCode)
         }
@@ -68,9 +68,9 @@ class AsrServiceTest {
         @Test
         fun `answers 409 when the asr task is unconfigured`() = runTest {
             val resolver = mockk<AuxModelResolver>()
-            coEvery { resolver.resolveConfig("alice", AuxModelTask.ASR) } returns null
+            coEvery { resolver.resolveConfig(listOf("alice"), AuxModelTask.ASR) } returns null
             val e = assertFailsWith<ResponseStatusException> {
-                AsrService(resolver).transcribe("alice", byteArrayOf(1, 2, 3), null)
+                AsrService(resolver).transcribe(listOf("alice"), byteArrayOf(1, 2, 3), null)
             }
             assertEquals(HttpStatus.CONFLICT, e.statusCode)
         }
@@ -78,7 +78,7 @@ class AsrServiceTest {
         @Test
         fun `answers 409 when persistence is absent`() = runTest {
             val e = assertFailsWith<ResponseStatusException> {
-                AsrService(null).transcribe("alice", byteArrayOf(1, 2, 3), null)
+                AsrService(null).transcribe(listOf("alice"), byteArrayOf(1, 2, 3), null)
             }
             assertEquals(HttpStatus.CONFLICT, e.statusCode)
         }
@@ -86,21 +86,31 @@ class AsrServiceTest {
         @Test
         fun `transcribes through the configured row`() = runTest {
             val resolver = mockk<AuxModelResolver>()
-            coEvery { resolver.resolveConfig("alice", AuxModelTask.ASR) } returns sampleConfig
+            coEvery { resolver.resolveConfig(listOf("alice"), AuxModelTask.ASR) } returns sampleConfig
             mockkConstructor(OpenAiCompatibleClient::class)
             coEvery { anyConstructed<OpenAiCompatibleClient>().transcribe(any(), any(), any()) } returns "你好世界"
-            assertEquals("你好世界", AsrService(resolver).transcribe("alice", byteArrayOf(1, 2, 3), "zh"))
+            assertEquals("你好世界", AsrService(resolver).transcribe(listOf("alice"), byteArrayOf(1, 2, 3), "zh"))
+        }
+
+        @Test
+        fun `keeps the family bucket in the resolution owner set`() = runTest {
+            val resolver = mockk<AuxModelResolver>()
+            val owners = listOf("alice", "g_fam-1")
+            coEvery { resolver.resolveConfig(owners, AuxModelTask.ASR) } returns sampleConfig
+            mockkConstructor(OpenAiCompatibleClient::class)
+            coEvery { anyConstructed<OpenAiCompatibleClient>().transcribe(any(), any(), any()) } returns "你好世界"
+            assertEquals("你好世界", AsrService(resolver).transcribe(owners, byteArrayOf(1, 2, 3), null))
         }
 
         @Test
         fun `maps provider errors onto 502`() = runTest {
             val resolver = mockk<AuxModelResolver>()
-            coEvery { resolver.resolveConfig("alice", AuxModelTask.ASR) } returns sampleConfig
+            coEvery { resolver.resolveConfig(listOf("alice"), AuxModelTask.ASR) } returns sampleConfig
             mockkConstructor(OpenAiCompatibleClient::class)
             coEvery { anyConstructed<OpenAiCompatibleClient>().transcribe(any(), any(), any()) } throws
                 IllegalStateException("provider exploded")
             val e = assertFailsWith<ResponseStatusException> {
-                AsrService(resolver).transcribe("alice", byteArrayOf(1, 2, 3), null)
+                AsrService(resolver).transcribe(listOf("alice"), byteArrayOf(1, 2, 3), null)
             }
             assertEquals(HttpStatus.BAD_GATEWAY, e.statusCode)
         }
@@ -112,7 +122,7 @@ class AsrServiceTest {
         @Test
         fun `rejects blank text with 400`() = runTest {
             val e = assertFailsWith<ResponseStatusException> {
-                AsrService(mockk(relaxed = true)).refine("alice", "   ", "", "")
+                AsrService(mockk(relaxed = true)).refine(listOf("alice"), "   ", "", "")
             }
             assertEquals(HttpStatus.BAD_REQUEST, e.statusCode)
         }
@@ -120,9 +130,9 @@ class AsrServiceTest {
         @Test
         fun `answers 409 when the refine task is unconfigured`() = runTest {
             val resolver = mockk<AuxModelResolver>()
-            coEvery { resolver.resolve("alice", AuxModelTask.DICTATION_REFINE) } returns null
+            coEvery { resolver.resolve(listOf("alice"), AuxModelTask.DICTATION_REFINE) } returns null
             val e = assertFailsWith<ResponseStatusException> {
-                AsrService(resolver).refine("alice", "你好", "前文", "")
+                AsrService(resolver).refine(listOf("alice"), "你好", "前文", "")
             }
             assertEquals(HttpStatus.CONFLICT, e.statusCode)
         }
@@ -137,9 +147,9 @@ class AsrServiceTest {
             val response = mockk<ChatResponse> { every { result } returns generation }
             coEvery { chatModel.call(any<Prompt>()) } returns response
             val resolver = mockk<AuxModelResolver>()
-            coEvery { resolver.resolve("alice", AuxModelTask.DICTATION_REFINE) } returns
+            coEvery { resolver.resolve(listOf("alice"), AuxModelTask.DICTATION_REFINE) } returns
                 ResolvedAuxModel(chatModel, sampleConfig)
-            val refined = AsrService(resolver).refine("alice", "你好世界", "前文", "后文")
+            val refined = AsrService(resolver).refine(listOf("alice"), "你好世界", "前文", "后文")
             assertEquals("你好，世界。", refined)
         }
 
@@ -152,10 +162,10 @@ class AsrServiceTest {
             coEvery { chatModel.call(any<Prompt>()) } throws
                 IllegalStateException("boom")
             val resolver = mockk<AuxModelResolver>()
-            coEvery { resolver.resolve("alice", AuxModelTask.DICTATION_REFINE) } returns
+            coEvery { resolver.resolve(listOf("alice"), AuxModelTask.DICTATION_REFINE) } returns
                 ResolvedAuxModel(chatModel, sampleConfig)
             val e = assertFailsWith<ResponseStatusException> {
-                AsrService(resolver).refine("alice", "你好", "", "")
+                AsrService(resolver).refine(listOf("alice"), "你好", "", "")
             }
             assertEquals(HttpStatus.BAD_GATEWAY, e.statusCode)
         }
@@ -169,14 +179,14 @@ class AsrServiceTest {
             val prompts = slot<Prompt>()
             coEvery { chatModel.call(capture(prompts)) } returns response
             val resolver = mockk<AuxModelResolver>()
-            coEvery { resolver.resolve("alice", AuxModelTask.DICTATION_REFINE) } returns
+            coEvery { resolver.resolve(listOf("alice"), AuxModelTask.DICTATION_REFINE) } returns
                 ResolvedAuxModel(chatModel, sampleConfig.copy(options = ModelOptions(thinking = true)))
             val factory = mockk<ChatModelFactory>()
             every { factory.supports(Protocol.OPENAI) } returns true
             val options = mockk<ChatOptions>()
             val configs = slot<ModelProviderConfig>()
             every { factory.build(capture(configs), emptyList()) } returns options
-            val refined = AsrService(resolver, listOf(factory)).refine("alice", "你好世界", "", "")
+            val refined = AsrService(resolver, listOf(factory)).refine(listOf("alice"), "你好世界", "", "")
             assertEquals("你好，世界。", refined)
             assertEquals(false, configs.captured.options?.thinking)
             assertSame(options, prompts.captured.options)

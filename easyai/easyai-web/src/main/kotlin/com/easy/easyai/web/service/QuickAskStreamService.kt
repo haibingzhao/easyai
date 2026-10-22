@@ -39,10 +39,16 @@ class QuickAskStreamService(
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
 
-    fun stream(userId: String, request: QuickAskRequest): Flux<ServerSentEvent<ChatStreamEvent>> {
+    fun stream(
+        userId: String,
+        request: QuickAskRequest,
+        owners: Collection<String>
+    ): Flux<ServerSentEvent<ChatStreamEvent>> {
         validate(request)?.let { return Flux.just(errorSse(it)) }
         return flow {
-            val config = configStore.getConfig(request.modelConfigId, userId)
+            // The caller passes its complete read-visibility set (self → group → system); the
+            // single-id lookup would hide a family-owned model from every member.
+            val config = configStore.getConfig(request.modelConfigId, owners)
             if (config == null) {
                 emit(errorSse("Model config not found: ${request.modelConfigId}"))
                 return@flow

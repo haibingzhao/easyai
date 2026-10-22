@@ -17,9 +17,11 @@ import java.util.concurrent.ConcurrentHashMap
  * the matching [ChatModelFactory].
  *
  * Group sharing: the owners overloads walk the caller's visibility set in order (self → group →
- * system) and take the first owner that has a choice, then resolve that owner's referenced config
- * (which still folds in the shared `system` layer). The single-id forms delegate with just
- * `{userId}`, preserving the historical self-only behaviour for callers that carry no group claims.
+ * system) and take the first owner that has a choice; the referenced config is then resolved
+ * across that set plus the shared `system` layer, so a personal choice may point at a group- or
+ * system-shared model. The single-id forms delegate with just `{userId}` — their choice lookup
+ * stays owner-only, while the config they reference still falls back to `system`, matching the
+ * store's single-id semantics and the settings page's write validation.
  *
  * Every miss — no store (persistence off), unconfigured task, blank/null owner, deleted config, or no
  * factory for the protocol — returns null so the caller keeps its own default. Successful builds are
@@ -58,11 +60,11 @@ class DefaultAuxModelResolver(
         val key = keyOf(owners, task) ?: return null
         cache[key]?.let { return it }
 
-        val (settings, matchedOwner) = firstChoice(key.owners, task) ?: return null
+        val settings = firstChoice(key.owners, task) ?: return null
         val modelConfigId = settings.modelConfigId
         if (modelConfigId.isBlank()) return null
 
-        val config = configFor(modelConfigId, matchedOwner, task) ?: return null
+        val config = configFor(modelConfigId, key.owners, task) ?: return null
         val factory = modelFactories.firstOrNull { it.supports(config.protocol) }
         if (factory == null) {
             logger.warn("No ChatModelFactory for protocol '{}' (aux task '{}'); using default", config.protocol, task.key)
@@ -78,11 +80,11 @@ class DefaultAuxModelResolver(
         val key = keyOf(owners, task) ?: return null
         configCache[key]?.let { return it }
 
-        val (settings, matchedOwner) = firstChoice(key.owners, task) ?: return null
+        val settings = firstChoice(key.owners, task) ?: return null
         val modelConfigId = settings.modelConfigId
         if (modelConfigId.isBlank()) return null
 
-        val config = configFor(modelConfigId, matchedOwner, task) ?: return null
+        val config = configFor(modelConfigId, key.owners, task) ?: return null
         configCache[key] = config
         return config
     }
@@ -95,22 +97,33 @@ class DefaultAuxModelResolver(
         configCache.keys.filter { it.task == task && userId in it.owners }.forEach { configCache.remove(it) }
     }
 
-    /** The first owner in priority order that has a non-blank choice for [task], with that owner id. */
-    private suspend fun firstChoice(owners: List<String>, task: AuxModelTask): Pair<AuxModelSettings, String>? {
+    /** The first owner in priority order that has a non-blank choice for [task]. */
+    private suspend fun firstChoice(owners: List<String>, task: AuxModelTask): AuxModelSettings? {
         val store = settingsStore ?: return null
         for (owner in owners) {
             val settings = store.get(owner, task) ?: continue
-            if (settings.modelConfigId.isNotBlank()) return settings to owner
+            if (settings.modelConfigId.isNotBlank()) return settings
         }
         return null
     }
 
-    /** Resolve the referenced config within the matched owner's bucket (which folds in `system`). */
-    private suspend fun configFor(modelConfigId: String, matchedOwner: String, task: AuxModelTask): ModelProviderConfig? {
+    /**
+     * Resolve the referenced config across the caller's whole visibility set plus the shared
+     * `system` layer. The owner that supplied the choice only decides *which* row won; it does not
+     * narrow what that row may reference.
+     *
+     * The aux *choice* never folds in `system` (see [AuxModelSettingsStore]), but the model config
+     * it points at is a shared asset: the settings page lists and validates choices against
+     * `currentOwners()` (self + group + system). Without `system` here a system-owned model could
+     * be saved yet never resolve at runtime — ASR/refine would answer 409, curation would report
+     * unavailable and compaction would silently fall back to the session model.
+     */
+    private suspend fun configFor(modelConfigId: String, owners: List<String>, task: AuxModelTask): ModelProviderConfig? {
         val configs = configStore ?: return null
-        val config = configs.getConfig(modelConfigId, matchedOwner)
+        val lookupOwners = (owners + SYSTEM_OWNER).distinct()
+        val config = configs.getConfig(modelConfigId, lookupOwners)
         if (config == null) {
-            logger.warn("Aux model config '{}' not found for task '{}' (owner '{}'); using default", modelConfigId, task.key, matchedOwner)
+            logger.warn("Aux model config '{}' not found for task '{}' (owners '{}'); using default", modelConfigId, task.key, lookupOwners)
         }
         return config
     }
@@ -118,5 +131,10 @@ class DefaultAuxModelResolver(
     private fun keyOf(owners: Collection<String>, task: AuxModelTask): Key? {
         val ordered = owners.filter { it.isNotBlank() }.distinct()
         return if (ordered.isEmpty()) null else Key(ordered, task)
+    }
+
+    private companion object {
+        /** Mirrors `UserScope.SYSTEM_USER_ID`; this module has no dependency on the repository constant. */
+        const val SYSTEM_OWNER = "system"
     }
 }
