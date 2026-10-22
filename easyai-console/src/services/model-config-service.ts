@@ -1,8 +1,15 @@
-import type { ModelProviderInfo, ModelProviderConfig, ModelConfigGroup, SaveModelProviderConfigRequest, SaveModelConfigGroupRequest, ModelType, ModelConfigTestResult, ModelCatalogEntry, CatalogRefreshResult } from '@/types/settings';
+import type { ModelProviderInfo, ModelProviderConfig, ModelConfigGroup, SaveModelProviderConfigRequest, SaveModelConfigGroupRequest, ModelType, ModelConfigTestResult, ModelCatalogEntry, CatalogRefreshResult, ReasoningProfile } from '@/types/settings';
+import { UNKNOWN_REASONING_PROFILE } from '@/constants/reasoning';
 import { fetchJson, fetchVoid, scopeQuery, JSON_HEADERS } from '@/services/api-client';
 import type { AssetScope } from '@/services/api-client';
 
 const API_BASE = '/api/chat';
+
+/** Catalog lookup envelope: the row (when present) plus the resolved reasoning matrix. */
+export interface ModelCatalogLookup {
+  entry: ModelCatalogEntry | null;
+  reasoning: ReasoningProfile;
+}
 
 export const modelConfigService = {
   /**
@@ -101,11 +108,15 @@ export const modelConfigService = {
   /**
    * Exact catalog lookup for add-model prefill; null when the catalog does not carry the id.
    */
-  async lookupModelCatalog(modelId: string): Promise<ModelCatalogEntry | null> {
-    const data = await fetchJson<{ entry?: ModelCatalogEntry }>(
+  async lookupModelCatalog(modelId: string): Promise<ModelCatalogLookup> {
+    const data = await fetchJson<{ entry?: ModelCatalogEntry; reasoning?: ReasoningProfile }>(
       `${API_BASE}/model-catalog/lookup?modelId=${encodeURIComponent(modelId)}`
     );
-    return data.entry ?? null;
+    return {
+      entry: data.entry ?? null,
+      // Always answered: known ids resolve, unknown ones come back as UNKNOWN for the fallback UI.
+      reasoning: data.reasoning ?? UNKNOWN_REASONING_PROFILE,
+    };
   },
 
   /**

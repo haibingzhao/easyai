@@ -20,6 +20,7 @@
 import React from 'react';
 import { Copy } from 'lucide-react';
 import { ToolTooltip } from '@/components/agent/ToolItem';
+import { APP_CONFIG } from '@/constants/navigation';
 
 interface CopyableTextProps {
   text: string;
@@ -33,8 +34,10 @@ interface CopyableTextProps {
 }
 
 export const CopyableText: React.FC<CopyableTextProps> = ({ text, copyText, title, className = '', onCopy, onFileOpen }) => {
+  // Without the workspace panels there is nothing to open, so fall back to copying the path.
+  const canOpenFile = APP_CONFIG.showWorkspacePanels && !!onFileOpen;
   const handleClick = (e: React.MouseEvent) => {
-    if (onFileOpen) {
+    if (canOpenFile) {
       e.stopPropagation();
       onFileOpen();
     } else {
@@ -45,7 +48,7 @@ export const CopyableText: React.FC<CopyableTextProps> = ({ text, copyText, titl
   return (
     <ToolTooltip
       name={title ?? text}
-      description={onFileOpen ? 'Click to open' : 'Click to copy'}
+      description={canOpenFile ? 'Click to open' : 'Click to copy'}
       className="flex-1 min-w-0"
     >
       <span
@@ -56,7 +59,7 @@ export const CopyableText: React.FC<CopyableTextProps> = ({ text, copyText, titl
           <span className="block truncate [direction:rtl] [text-align:left] flex-1 min-w-0">
             <bdi className="[direction:ltr]">{text}</bdi>
           </span>
-          {onFileOpen && (
+          {canOpenFile && (
             <button
               type="button"
               className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-0.5 rounded hover:bg-muted text-muted-foreground"

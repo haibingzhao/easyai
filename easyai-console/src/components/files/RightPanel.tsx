@@ -11,6 +11,7 @@ import { TeamMemberPanel } from '../chat/team/TeamMemberPanel';
 import { useProjectStore } from '@/services/stores/project-store';
 import { useChatStore } from '@/services/stores/chat-store';
 import { useNavStore, type RightPanelTab } from '@/services/stores/nav-store';
+import { APP_CONFIG } from '@/constants/navigation';
 import { i18n } from '@/utils/i18n';
 import { X } from 'lucide-react';
 import type { ContextReferences } from '@/types/message';
@@ -54,21 +55,22 @@ export const RightPanel: React.FC<RightPanelProps> = ({ onClose, references, ses
   const snapshotCapability = useChatStore((s) => s.snapshotCapability);
   // Review needs both: the backend's snapshot system is real (global probe, covers the
   // no-session startup state) AND active for the current session (per-detail flag).
-  const reviewVisible = snapshotEnabled && snapshotCapability;
+  const reviewVisible = APP_CONFIG.showWorkspacePanels && snapshotEnabled && snapshotCapability;
 
   const rootPath = currentProject?.path || '';
   const projectId = currentProject?.id || '';
 
-  // Team tab only visible for TEAM agents; Review tab only when the snapshot system is visible.
-  // Fall back to summary if a hidden tab is stale-active.
+  // Team tab only for TEAM agents; workspace tabs only when the host offers them and, for
+  // Review, when the snapshot system is visible. Fall back to summary if a hidden tab is stale-active.
   const tabs = [
     ...(isTeamAgent ? [TEAM_TAB] : []),
-    ...(reviewVisible ? BASE_TABS : BASE_TABS.filter((tab) => tab.id !== 'review')),
+    ...BASE_TABS.filter((tab) => {
+      if (tab.id === 'files') return APP_CONFIG.showWorkspacePanels;
+      if (tab.id === 'review') return reviewVisible;
+      return true;
+    }),
   ];
-  const effectiveTab =
-    (activeTab === 'team' && !isTeamAgent) || (activeTab === 'review' && !reviewVisible)
-      ? 'summary'
-      : activeTab;
+  const effectiveTab = tabs.some((tab) => tab.id === activeTab) ? activeTab : 'summary';
 
   return (
     <div className="h-full flex flex-col bg-background border-l border-border">

@@ -99,4 +99,12 @@ export const APP_CONFIG = {
    * workspaces would otherwise keep a read-only workspace badge in the bar).
    */
   showProjectSelector: true,
+  /**
+   * Whether the chat right panel offers the workspace panels (Review and Files tabs).
+   *
+   * Both inspect the agent's working directory: Files browses the tree, Review diffs its
+   * snapshots. A host whose product never exposes that directory (every chat runs in a
+   * throwaway temporary workspace) can drop the two tabs; Summary and History stay.
+   */
+  showWorkspacePanels: true,
 };

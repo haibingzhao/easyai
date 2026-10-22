@@ -15,6 +15,17 @@ export function formatTokenCount(count: number, base: 1000 | 1024 = 1000): strin
   return count.toString();
 }
 
+/**
+ * Whole-unit K/M label for a token window: `200K`, `1M`. Uses the binary base the model-config
+ * convention is defined in, without decimals.
+ */
+export function formatTokenWindow(count: number): string {
+  if (count <= 0) return count.toString();
+  if (count % (1024 * 1024) === 0) return `${count / (1024 * 1024)}M`;
+  if (count >= 1024) return `${Math.floor(count / 1024)}K`;
+  return count.toString();
+}
+
 export function formatUsage(usage: { inputTokens: number; outputTokens: number; totalTokens: number }): string {
   return `${formatTokenCount(usage.inputTokens)} in / ${formatTokenCount(usage.outputTokens)} out / ${formatTokenCount(usage.totalTokens)} total`;
 }

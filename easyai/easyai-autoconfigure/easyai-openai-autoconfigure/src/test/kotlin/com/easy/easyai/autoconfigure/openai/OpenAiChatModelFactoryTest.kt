@@ -2,12 +2,18 @@ package com.easy.easyai.autoconfigure.openai
 
 import com.easy.easyai.api.llm.ToolCallback
 import com.easy.easyai.api.model.ModelCapabilities
+import com.easy.easyai.api.model.ModelOptions
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.api.model.ReasoningMode
+import com.easy.easyai.api.model.ReasoningProfile
 import com.easy.easyai.api.model.StructuredOutputSupport
 import io.micrometer.observation.ObservationRegistry
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.Arguments
+import org.junit.jupiter.params.provider.MethodSource
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -97,6 +103,97 @@ class OpenAiChatModelFactoryTest {
     }
 
     @Nested
+    inner class `reasoning profile` {
+
+        private fun row(
+            mode: ReasoningMode,
+            thinking: Boolean,
+            effort: String? = null,
+            levels: List<String> = listOf("low", "medium", "high", "xhigh", "max")
+        ) = config(ModelCapabilities(reasoning = ReasoningProfile(mode, levels, thinking, effort)))
+            .copy(options = ModelOptions(thinking = thinking, effort = effort, maxTokens = 4096))
+
+        @Test
+        fun `toggleable thinking on sends the switch and the raw effort`() {
+            val built = factory.build(row(ReasoningMode.TOGGLEABLE, thinking = true, effort = "xhigh"), emptyList(), null)
+                as OpenAiChatOptions
+
+            assertEquals(true, built.enableThinking)
+            assertEquals("xhigh", built.reasoningEffort, "declared levels must not be collapsed to high")
+            assertEquals(4096, built.maxCompletionTokens)
+        }
+
+        @Test
+        fun `toggleable thinking off disables thinking and drops effort`() {
+            val built = factory.build(row(ReasoningMode.TOGGLEABLE, thinking = false, effort = "max"), emptyList(), null)
+                as OpenAiChatOptions
+
+            assertEquals(false, built.enableThinking)
+            assertNull(built.reasoningEffort, "effort is meaningless while thinking is off")
+            assertEquals(4096, built.maxTokens)
+        }
+
+        @Test
+        fun `none sends neither thinking nor effort`() {
+            val built = factory.build(row(ReasoningMode.NONE, thinking = true, effort = "max"), emptyList(), null)
+                as OpenAiChatOptions
+
+            assertNull(built.enableThinking)
+            assertNull(built.reasoningEffort)
+        }
+
+        @Test
+        fun `always on sends effort without an enable flag`() {
+            val built = factory.build(row(ReasoningMode.ALWAYS_ON, thinking = false, effort = "max"), emptyList(), null)
+                as OpenAiChatOptions
+
+            assertNull(built.enableThinking, "an always-on model must not receive enable_thinking=false")
+            assertEquals("max", built.reasoningEffort)
+        }
+
+        @Test
+        fun `undeclared rows keep the legacy collapse`() {
+            val legacy = config(null).copy(options = ModelOptions(thinking = true, effort = "xhigh", maxTokens = 1000))
+            val built = factory.build(legacy, emptyList(), null) as OpenAiChatOptions
+
+            assertNull(built.enableThinking)
+            assertEquals("high", built.reasoningEffort)
+        }
+    }
+
+    @Nested
+    inner class `protocol matrix` {
+
+        @ParameterizedTest(name = "{0} thinking={1} effort={2}")
+        @MethodSource("com.easy.easyai.autoconfigure.openai.OpenAiChatModelFactoryTest#reasoningMatrix")
+        fun `thinking switch and effort follow the mode`(
+            mode: ReasoningMode?,
+            thinking: Boolean,
+            effort: String?,
+            expectedEnableThinking: Boolean?,
+            expectedEffort: String?
+        ) {
+            val caps = mode?.let {
+                ModelCapabilities(
+                    reasoning = ReasoningProfile(
+                        it,
+                        listOf("low", "medium", "high", "xhigh", "max"),
+                        defaultThinking = true
+                    )
+                )
+            }
+            val built = factory.build(
+                config(caps).copy(options = ModelOptions(thinking = thinking, effort = effort, maxTokens = 1000)),
+                emptyList(),
+                null
+            ) as OpenAiChatOptions
+
+            assertEquals(expectedEnableThinking, built.enableThinking)
+            assertEquals(expectedEffort, built.reasoningEffort)
+        }
+    }
+
+    @Nested
     inner class `client assembly` {
 
         @Test
@@ -111,5 +208,24 @@ class OpenAiChatModelFactoryTest {
             assertEquals("test-model", built.model)
             assertEquals(42L, built.timeoutSeconds)
         }
+    }
+
+    companion object {
+        /** protocol × mode × thinking × effort matrix. */
+        @JvmStatic
+        fun reasoningMatrix(): List<Arguments> = listOf(
+            Arguments.of(ReasoningMode.TOGGLEABLE, true, "xhigh", true, "xhigh"),
+            Arguments.of(ReasoningMode.TOGGLEABLE, false, "max", false, null),
+            Arguments.of(ReasoningMode.TOGGLEABLE, true, null, true, null),
+            Arguments.of(ReasoningMode.ALWAYS_ON, true, "max", null, "max"),
+            Arguments.of(ReasoningMode.ALWAYS_ON, false, "max", null, "max"),
+            Arguments.of(ReasoningMode.ALWAYS_ON, true, null, null, null),
+            Arguments.of(ReasoningMode.NONE, true, "max", null, null),
+            Arguments.of(ReasoningMode.UNKNOWN, true, "xhigh", null, "high"),
+            Arguments.of(ReasoningMode.UNKNOWN, false, "low", null, "low"),
+            Arguments.of(null, true, null, null, "high"),
+            Arguments.of(null, false, "max", null, "high"),
+            Arguments.of(null, false, null, null, null),
+        )
     }
 }

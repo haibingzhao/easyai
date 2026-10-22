@@ -1,3 +1,5 @@
+import type { ModelOverrides } from './settings';
+
 export interface ChatAttachment {
   name: string;
   mimeType: string;
@@ -14,6 +16,8 @@ export interface ChatRequest {
   model?: string;
   inputData?: Record<string, unknown>;
   attachments?: ChatAttachment[];
+  /** Composer overrides for this run; an empty object clears what the session recorded. */
+  modelOverrides?: ModelOverrides;
 }
 
 export interface SessionResponse {

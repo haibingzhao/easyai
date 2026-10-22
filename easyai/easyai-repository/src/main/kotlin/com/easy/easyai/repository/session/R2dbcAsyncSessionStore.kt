@@ -1159,6 +1159,28 @@ class R2dbcAsyncSessionStore(
         logger.debug("Saved pending permission for session {}: {}", sessionId, if (permissionJson != null) "set" else "cleared")
     }
 
+    override suspend fun saveModelOverrides(sessionId: String, overridesJson: String?) {
+        suspendTransaction(db) {
+            Tables.Session.update(
+                where = { Tables.Session.id eq sessionId }
+            ) {
+                it[Tables.Session.modelOverrides] = overridesJson
+            }
+        }
+        logger.debug("Saved model overrides for session {}: {}", sessionId, if (overridesJson != null) "set" else "cleared")
+    }
+
+    override suspend fun findModelOverrides(sessionId: String): String? {
+        return suspendTransaction(db) {
+            Tables.Session
+                .select(Tables.Session.modelOverrides)
+                .where { Tables.Session.id eq sessionId }
+                .limit(1)
+                .firstOrNull()
+                ?.get(Tables.Session.modelOverrides)
+        }
+    }
+
     override suspend fun findPendingPermission(sessionId: String): String? {
         return suspendTransaction(db) {
             val row = Tables.Session
@@ -1322,6 +1344,7 @@ class R2dbcAsyncSessionStore(
                 it[Tables.Session.forkedFromSessionId] = sourceSessionId
                 it[Tables.Session.forkedFromMessageId] = anchorMessageId
                 it[Tables.Session.forkRootSessionId] = sourceRow[Tables.Session.forkRootSessionId] ?: sourceSessionId
+                it[Tables.Session.modelOverrides] = sourceRow[Tables.Session.modelOverrides]
             }
 
             var skippedIndicators = 0

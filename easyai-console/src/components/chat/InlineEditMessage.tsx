@@ -4,9 +4,12 @@ import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { useProjectStore, adoptHandshakeWorkspace } from '@/services/stores/project-store';
 import { useNavStore } from '@/services/stores/nav-store';
+import { useSettingsStore } from '@/services/stores/settings-store';
+import { sanitizeOverrides } from '@/components/models/model-overrides';
 import { pathToFile, IMAGE_EXTS } from '@/services/file-browser-service';
 import { sendMessageToBackend, getCurrentSendService, type ChatService } from '../../services/chat-service';
 import { sessionService } from '../../services/session-service';
+import { storageService } from '@/services/storage-service';
 import { editMessage, getCheckpoints } from '@/services/checkpoint-service';
 import type { CheckpointInfo } from '@/types/checkpoint';
 import { ModelSelector } from './ModelSelector';
@@ -44,6 +47,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
   const [error, setError] = useState<string | null>(null);
   const [currentModelId, setCurrentModelId] = useState('');
   const [currentCapabilities, setCurrentCapabilities] = useState<ModelCapabilities | undefined>();
+  const modelConfigs = useSettingsStore((state) => state.modelConfigs);
   const [isModelLoading, setIsModelLoading] = useState(true);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [pendingRevertFiles, setPendingRevertFiles] = useState<{ path: string; additions: number }[]>([]);
@@ -608,6 +612,13 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     const isStaleStream = () => ownService !== null && getCurrentSendService() !== ownService;
     // The conversation already has messages; a later default change must not re-target it.
     useAgentStore.getState().markAgentSelectionTouched();
+    const storedOverrides = storageService.getModelOverrides(currentModelId);
+    const selectedConfig = modelConfigs.find(c => c.id === currentModelId);
+    const sanitized = selectedConfig ? sanitizeOverrides(selectedConfig, storedOverrides) : storedOverrides;
+    if (selectedConfig && JSON.stringify(storedOverrides ?? null) !== JSON.stringify(sanitized)) {
+      storageService.saveModelOverrides(currentModelId, sanitized);
+    }
+
     ownService = sendMessageToBackend({
       message: finalMessage,
       sessionId: sid,
@@ -615,6 +626,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
       modelId: currentModelId,
       projectId: currentProjectId,
       attachments: chatAttachments.length > 0 ? chatAttachments : undefined,
+      modelOverrides: sanitized ?? {},
       onEvent: (event) => {
         if (isStaleStream()) return;
         if (event.type === 'session_context') adoptHandshakeWorkspace(event);
@@ -637,7 +649,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
       onError: (event) => { if (!isStaleStream()) handleEvent(event); },
     });
     setAttachments([]);
-  }, [sessionId, messageIndex, truncateMessagesFrom, setRevertState, addMessage, setStreaming, handleEvent, selectedAgentId, currentModelId, currentProjectId, onSubmit, attachments, setAttachments, uploadPendingAttachments, visionSupported, validateCommand, isCurrentContext]);
+  }, [sessionId, messageIndex, truncateMessagesFrom, setRevertState, addMessage, setStreaming, handleEvent, selectedAgentId, currentModelId, currentProjectId, onSubmit, attachments, setAttachments, uploadPendingAttachments, visionSupported, validateCommand, isCurrentContext, modelConfigs]);
 
   /** Phase 1: Validate and show confirm dialog if files will be reverted */
   const handleSubmit = useCallback(async () => {
@@ -982,7 +994,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
               <Paperclip className="w-4 h-4" />
             </button>
             <AgentSelector onSelect={handleAgentSelect} />
-            <ModelSelector onModelChange={handleModelChange} />
+            <ModelSelector onModelChange={handleModelChange} enableParamOverrides />
           </div>
           <div className="flex items-center gap-1.5">
             <button

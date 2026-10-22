@@ -23,7 +23,16 @@ function capabilityBadges(entry: ModelCatalogEntry): string[] {
   if (caps.vision) out.push(i18n('vision'));
   if (caps.supportsToolCalling) out.push(i18n('tool calling'));
   if (caps.structuredOutput && caps.structuredOutput !== 'NONE') out.push(i18n('structured output'));
-  if (caps.thinking) out.push(i18n('thinking'));
+  const profile = entry.reasoningProfile;
+  if (profile && profile.mode !== 'NONE') {
+    const mode = profile.mode === 'ALWAYS_ON'
+      ? i18n('thinking: always on')
+      : profile.mode === 'TOGGLEABLE' ? i18n('thinking: toggleable') : i18n('thinking: unknown');
+    const levels = profile.effortLevels.length > 0 ? ` (${profile.effortLevels.join('/')})` : '';
+    out.push(`${mode}${levels}`);
+  } else if (caps.thinking) {
+    out.push(i18n('thinking'));
+  }
   return out;
 }
 

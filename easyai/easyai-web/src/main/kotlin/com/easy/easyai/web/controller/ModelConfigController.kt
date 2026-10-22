@@ -7,6 +7,7 @@ import com.easy.easyai.api.model.ModelInfo
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo
 import com.easy.easyai.api.model.ModelType
+import com.easy.easyai.api.model.ReasoningProfile
 import com.easy.easyai.api.model.SaveModelConfigGroupRequest
 import com.easy.easyai.api.model.SaveModelProviderConfigRequest
 import com.easy.easyai.core.media.MediaProviderResolver
@@ -195,7 +196,12 @@ class ModelConfigController(
         mono {
             val service = modelCatalogService
                 ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Model catalog is not available in this deployment")
-            ModelCatalogLookupDto(service.lookup(modelId))
+            val entry = service.lookup(modelId)
+            ModelCatalogLookupDto(
+                entry = entry,
+                // Also answered for ids the catalog lacks (deepseek-v4-pro): the resolver knows them.
+                reasoning = entry?.reasoningProfile ?: service.resolveReasoning(modelId)
+            )
         }
 
     /** Every catalog row — for the management page and future cost-aware model selection. */
@@ -228,7 +234,9 @@ class ModelConfigController(
 /** Lookup envelope so a miss is a present-200 `{}` rather than an empty body the client must special-case. */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class ModelCatalogLookupDto(
-    val entry: ModelCatalogEntry?
+    val entry: ModelCatalogEntry?,
+    /** Resolved reasoning matrix; always present, `UNKNOWN` when nothing declares the model. */
+    val reasoning: ReasoningProfile = ReasoningProfile.UNKNOWN
 )
 
 /** Refresh outcome; failures ride a 200 with the upstream message so the hint can show the cause. */

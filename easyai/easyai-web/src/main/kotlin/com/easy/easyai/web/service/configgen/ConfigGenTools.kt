@@ -130,7 +130,7 @@ class ListResourcesTool(
     private val skillAccessResolver: SkillAccessResolver?,
     private val mcpClientManager: McpClientManager?,
     private val modelConfigStore: ModelProviderConfigStore,
-    private val userId: String,
+    private val owners: Collection<String>,
     private val configType: String,
     private val toolFactory: ToolFactory,
     private val swarmContext: Boolean = false
@@ -253,7 +253,7 @@ class ListResourcesTool(
     }
 
     private suspend fun listModels(): String {
-        val models = modelConfigStore.getAllConfigs(userId)
+        val models = modelConfigStore.getAllConfigs(owners)
         if (models.isEmpty()) return "No model configurations available."
         return buildString {
             appendLine("Available Models:")

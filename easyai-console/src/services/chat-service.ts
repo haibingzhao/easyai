@@ -155,6 +155,8 @@ export interface SendMessageParams {
   modelId: string;
   projectId?: string | null;
   attachments?: ChatAttachment[];
+  /** Composer overrides saved in the model picker; always sent so clearing one reaches the server. */
+  modelOverrides?: ChatRequest['modelOverrides'];
   onEvent: (event: ChatStreamEvent) => void;
   onDone: (event: DoneEvent) => void;
   onError: (event: ErrorEvent) => void;
@@ -168,7 +170,7 @@ export interface SendMessageParams {
  * routed to onError by ChatService.sendMessage; the send itself never rejects.
  */
 export function sendMessageToBackend(params: SendMessageParams): ChatService {
-  const { message, sessionId, agentId, modelId, projectId, attachments, onEvent, onDone, onError } = params;
+  const { message, sessionId, agentId, modelId, projectId, attachments, modelOverrides, onEvent, onDone, onError } = params;
 
   const chatService = new ChatService({
     onEvent,
@@ -184,6 +186,7 @@ export function sendMessageToBackend(params: SendMessageParams): ChatService {
     agentId: agentId ?? 'default',
     modelProviderConfigId: modelId,
     attachments: attachments && attachments.length > 0 ? attachments : undefined,
+    modelOverrides,
   });
 
   return chatService;

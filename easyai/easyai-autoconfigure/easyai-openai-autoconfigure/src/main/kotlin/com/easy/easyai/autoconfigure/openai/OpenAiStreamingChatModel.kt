@@ -216,7 +216,15 @@ internal class OpenAiStreamingChatModel(
         options.model?.let { builder.model(it) }
         options.temperature?.let { builder.temperature(it) }
         applyMaxTokens(builder, options)
-        options.reasoningEffort?.let { builder.reasoningEffort(ReasoningEffort.of(it.lowercase())) }
+        // Raw body properties, not the typed fields: gateways accept effort names the SDK enum does
+        // not (xhigh/max), and enable_thinking has no typed field at all. The SDK still merges these
+        // into the serialized body.
+        options.reasoningEffort?.let {
+            builder.putAdditionalBodyProperty("reasoning_effort", JsonValue.from(it.lowercase()))
+        }
+        options.enableThinking?.let {
+            builder.putAdditionalBodyProperty("enable_thinking", JsonValue.from(it))
+        }
         if (options.parallelToolCalls != null) builder.parallelToolCalls(options.parallelToolCalls)
         if (options.stop.isNotEmpty()) {
             builder.stop(

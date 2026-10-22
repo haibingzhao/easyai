@@ -225,6 +225,25 @@ class OpenAiStreamingChatModelTest {
     }
 
     @Nested
+    inner class `reasoning controls on the wire` {
+
+        @Test
+        fun `effort and thinking switch reach the request body`() {
+            val opts = OpenAiChatOptions(
+                model = "gpt-test",
+                reasoningEffort = "xhigh",
+                enableThinking = false
+            )
+
+            val params = model.createRequest(Prompt(listOf(UserMessage("think"))), opts)
+            val body = jsonMapper().writeValueAsString(params._body())
+
+            assertTrue(body.contains("\"reasoning_effort\":\"xhigh\""), body)
+            assertTrue(body.contains("\"enable_thinking\":false"), body)
+        }
+    }
+
+    @Nested
     inner class `usage accounting` {
 
         @Test

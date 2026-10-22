@@ -9,6 +9,7 @@ import com.easy.easyai.api.llm.ToolCallback
 import com.easy.easyai.api.llm.observation.ObservationChatModel
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.api.model.ReasoningMode
 import com.easy.easyai.api.model.SamplingPolicy
 import com.easy.easyai.api.model.StructuredOutputPolicy
 import com.easy.easyai.api.model.StructuredOutputSupport
@@ -76,27 +77,65 @@ class AnthropicChatModelFactory : ChatModelFactory {
             timeoutSeconds = config.timeoutSeconds
         )
 
-        config.options?.let {
-            if (it.thinking) {
-                // Thinking: pass thinking.budget_tokens when enabled. The mapper floors
-                // max_tokens to budget + reserve, so no explicit bump is needed here.
-                options = options.copy(
-                    thinkingBudget = DEFAULT_THINKING_BUDGET_TOKENS,
-                    maxTokens = maxOf(it.maxTokens, DEFAULT_THINKING_BUDGET_TOKENS.toInt() + 1)
-                )
-            } else {
-                // Effort maps to reasoning_effort. Some Anthropic-compatible gateways (e.g.
-                // Bailian token-plan) reject reasoning_effort alongside thinking.budget_tokens, so
-                // it is only emitted when thinking is off; the mapper sends an explicit
-                // {type: disabled} thinking config whenever thinkingBudget is null (some models
-                // reason by DEFAULT, e.g. qwen3.x-max, so merely omitting the field leaves it on).
-                options = options.copy(
-                    effort = it.effort,
-                    // Gated, not read straight off the row: a model that declares sampling
-                    // NOT_SETTABLE must never see the row number.
-                    temperature = SamplingPolicy.rowTemperature(config),
-                    maxTokens = it.maxTokens
-                )
+        config.options?.let { opts ->
+            when (config.capabilities?.reasoning?.mode) {
+                ReasoningMode.NONE -> {
+                    options = options.copy(
+                        temperature = SamplingPolicy.rowTemperature(config),
+                        maxTokens = opts.maxTokens
+                    )
+                }
+
+                ReasoningMode.TOGGLEABLE -> {
+                    options = if (opts.thinking) {
+                        // Thinking: pass thinking.budget_tokens when enabled. The mapper floors
+                        // max_tokens to budget + reserve, so no explicit bump is needed here.
+                        options.copy(
+                            thinkingBudget = DEFAULT_THINKING_BUDGET_TOKENS,
+                            maxTokens = maxOf(opts.maxTokens, DEFAULT_THINKING_BUDGET_TOKENS.toInt() + 1)
+                        )
+                    } else {
+                        // Effort maps to output_config.effort. This gateway rejects reasoning_effort
+                        // alongside thinking.budget_tokens, so it is only emitted when thinking is
+                        // off; the mapper sends an explicit {type: disabled} thinking config whenever
+                        // thinkingBudget is null (some models reason by DEFAULT, e.g. qwen3.x-max,
+                        // so merely omitting the field leaves it on).
+                        options.copy(
+                            effort = opts.effort,
+                            temperature = SamplingPolicy.rowTemperature(config),
+                            maxTokens = opts.maxTokens
+                        )
+                    }
+                }
+
+                // Thinking is fixed on. Effort replaces the fixed budget instead of riding with it —
+                // the gateway rejects the pair, but accepts either one on its own.
+                ReasoningMode.ALWAYS_ON -> {
+                    options = if (opts.effort != null) {
+                        options.copy(effort = opts.effort, maxTokens = opts.maxTokens)
+                    } else {
+                        options.copy(
+                            thinkingBudget = DEFAULT_THINKING_BUDGET_TOKENS,
+                            maxTokens = maxOf(opts.maxTokens, DEFAULT_THINKING_BUDGET_TOKENS.toInt() + 1)
+                        )
+                    }
+                }
+
+                // Undeclared rows keep the pre-profile mapping.
+                ReasoningMode.UNKNOWN, null -> {
+                    options = if (opts.thinking) {
+                        options.copy(
+                            thinkingBudget = DEFAULT_THINKING_BUDGET_TOKENS,
+                            maxTokens = maxOf(opts.maxTokens, DEFAULT_THINKING_BUDGET_TOKENS.toInt() + 1)
+                        )
+                    } else {
+                        options.copy(
+                            effort = opts.effort,
+                            temperature = SamplingPolicy.rowTemperature(config),
+                            maxTokens = opts.maxTokens
+                        )
+                    }
+                }
             }
         }
 

@@ -5,8 +5,11 @@ import { useAgentStore } from '@/services/stores/agent-store';
 import { useSideAskStore } from '@/services/stores/side-ask-store';
 import { useProjectStore, adoptHandshakeWorkspace } from '@/services/stores/project-store';
 import { useNavStore } from '@/services/stores/nav-store';
+import { useSettingsStore } from '@/services/stores/settings-store';
+import { sanitizeOverrides } from '@/components/models/model-overrides';
 import { pathToFile, IMAGE_EXTS } from '@/services/file-browser-service';
 import { sendMessageToBackend, abortAllActiveStreams, cancelChat, requireStreamingStatus, getCurrentSendService, type ChatService } from '../../services/chat-service';
+import { storageService } from '@/services/storage-service';
 import { SessionService, sessionService } from '../../services/session-service';
 import { isImageAttachment, isTextAttachment, toChatAttachment, buildMessageWithTextAttachments, buildFileRef, buildFolderRef, resolveEmptyFileRefs } from '../../utils/attachment-utils';
 import { useMention } from '@/hooks/useMention';
@@ -98,6 +101,7 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
   const editorRef = useRef<HTMLDivElement>(null);
   const [currentModelId, setCurrentModelId] = useState('');
   const [currentCapabilities, setCurrentCapabilities] = useState<ModelCapabilities | undefined>();
+  const modelConfigs = useSettingsStore((state) => state.modelConfigs);
   const [isModelLoading, setIsModelLoading] = useState(true);
   const [showAutoApprove, setShowAutoApprove] = useState(false);
   const [showPlusMenu, setShowPlusMenu] = useState(false);
@@ -589,6 +593,17 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
         // The first message pins this conversation to its agent; a later default change only affects new chats.
         useAgentStore.getState().markAgentSelectionTouched();
 
+        // The picker's stored preference can outlive a model-config change. Sanitize against the
+        // current config so a stale effort/window cannot fail the whole turn; refresh the stored
+        // copy when it was dropped.
+        const storedOverrides = storageService.getModelOverrides(currentModelId);
+        const selectedConfig = modelConfigs.find(c => c.id === currentModelId);
+        const sanitized = selectedConfig ? sanitizeOverrides(selectedConfig, storedOverrides) : storedOverrides;
+        if (selectedConfig && JSON.stringify(storedOverrides ?? null) !== JSON.stringify(sanitized)) {
+          storageService.saveModelOverrides(currentModelId, sanitized);
+        }
+        const modelOverrides = sanitized ?? {};
+
         ownService = sendMessageToBackend({
           message: finalMessage,
           sessionId: sid,
@@ -596,6 +611,8 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
           modelId: currentModelId,
           projectId: currentProjectId,
           attachments: chatAttachments.length > 0 ? chatAttachments : undefined,
+          // Always an object: an empty one clears overrides recorded on the session.
+          modelOverrides,
           onEvent: (event) => {
             if (isStaleStream()) return;
             if (event.type === 'session_context') adoptHandshakeWorkspace(event);
@@ -641,7 +658,7 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
         setIsSubmitting(false);
       }
     }
-  }, [editorValue, isStreaming, sessionId, attachments, addMessage, setStreaming, handleEvent, setSessionId, currentModelId, selectedAgentId, currentProjectId, isModelLoading, isAwaitingAskQuestion, isAwaitingPermission, selectedCommand, isProcessingFiles, uploadPendingAttachments, setAttachments, visionSupported, commitStreamingMessage, validateCommand, isCurrentContext]);
+  }, [editorValue, isStreaming, sessionId, attachments, addMessage, setStreaming, handleEvent, setSessionId, currentModelId, selectedAgentId, currentProjectId, isModelLoading, isAwaitingAskQuestion, isAwaitingPermission, selectedCommand, isProcessingFiles, uploadPendingAttachments, setAttachments, visionSupported, commitStreamingMessage, validateCommand, isCurrentContext, modelConfigs]);
 
   /** Extract text content, excluding command chip text and replacing mention chips with encoded refs */
   const getEditorText = useCallback((): string => {
@@ -1460,7 +1477,7 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
             </div>
           )}
           <AgentSelector onSelect={handleAgentSelect} />
-          <ModelSelector onModelChange={handleModelChange} />
+          <ModelSelector onModelChange={handleModelChange} enableParamOverrides />
         </div>
         <div className="flex items-center gap-0.5">
           {isMobile

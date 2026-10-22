@@ -4,10 +4,15 @@ import com.easy.easyai.api.model.ModelCapabilities
 import com.easy.easyai.api.model.ModelOptions
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
+import com.easy.easyai.api.model.ReasoningMode
+import com.easy.easyai.api.model.ReasoningProfile
 import com.easy.easyai.api.model.SamplingSupport
 import com.easy.easyai.api.model.StructuredOutputSupport
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.Arguments
+import org.junit.jupiter.params.provider.MethodSource
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -106,6 +111,89 @@ class AnthropicChatModelFactoryTest {
     }
 
     @Nested
+    inner class `reasoning profile` {
+
+        private fun row(mode: ReasoningMode, thinking: Boolean, effort: String? = null) =
+            ModelCapabilities(
+                reasoning = ReasoningProfile(
+                    mode = mode,
+                    effortLevels = listOf("low", "high", "max"),
+                    defaultThinking = mode == ReasoningMode.ALWAYS_ON,
+                    defaultEffort = "max"
+                )
+            ) to ModelOptions(thinking = thinking, effort = effort, maxTokens = 1000)
+
+        @Test
+        fun `always on with effort sends only the effort`() {
+            val (caps, options) = row(ReasoningMode.ALWAYS_ON, thinking = true, effort = "max")
+            val b = built(caps, options = options)
+
+            assertEquals("max", b.effort)
+            assertNull(b.thinkingBudget, "an explicitly chosen effort replaces the fixed budget")
+        }
+
+        @Test
+        fun `always on without effort keeps the fixed budget`() {
+            val (caps, options) = row(ReasoningMode.ALWAYS_ON, thinking = true)
+            val b = built(caps, options = options)
+
+            assertNotNull(b.thinkingBudget)
+            assertNull(b.effort)
+        }
+
+        @Test
+        fun `toggleable thinking off sends effort without a budget`() {
+            val (caps, options) = row(ReasoningMode.TOGGLEABLE, thinking = false, effort = "high")
+            val b = built(caps, options = options)
+
+            assertEquals("high", b.effort)
+            assertNull(b.thinkingBudget)
+        }
+
+        @Test
+        fun `toggleable thinking on keeps the mutual exclusion`() {
+            val (caps, options) = row(ReasoningMode.TOGGLEABLE, thinking = true, effort = "high")
+            val b = built(caps, options = options)
+
+            assertNotNull(b.thinkingBudget)
+            assertNull(b.effort)
+        }
+
+        @Test
+        fun `none sends neither`() {
+            val (caps, options) = row(ReasoningMode.NONE, thinking = true, effort = "max")
+            val b = built(caps, options = options)
+
+            assertNull(b.thinkingBudget)
+            assertNull(b.effort)
+        }
+    }
+
+    @Nested
+    inner class `protocol matrix` {
+
+        @ParameterizedTest(name = "{0} thinking={1} effort={2}")
+        @MethodSource("com.easy.easyai.autoconfigure.anthropic.AnthropicChatModelFactoryTest#reasoningMatrix")
+        fun `budget and effort follow the mode and switch`(
+            mode: ReasoningMode?,
+            thinking: Boolean,
+            effort: String?,
+            expectedEffort: String?,
+            expectedBudget: Boolean
+        ) {
+            val caps = mode?.let {
+                ModelCapabilities(
+                    reasoning = ReasoningProfile(it, listOf("low", "high", "max"), defaultThinking = true)
+                )
+            }
+            val built = built(caps, ModelOptions(thinking = thinking, effort = effort, maxTokens = 1000))
+
+            assertEquals(expectedEffort, built.effort)
+            assertEquals(expectedBudget, built.thinkingBudget != null)
+        }
+    }
+
+    @Nested
     inner class `sampling capability gate` {
 
         private val row = ModelOptions(temperature = 0.7, maxTokens = 1000, thinking = false)
@@ -123,5 +211,23 @@ class AnthropicChatModelFactoryTest {
             assertNull(b.temperature)
             assertEquals(1000, b.maxTokens)
         }
+    }
+
+    companion object {
+        /** protocol × mode × thinking × effort matrix: the budget and effort must never ride together. */
+        @JvmStatic
+        fun reasoningMatrix(): List<Arguments> = listOf(
+            Arguments.of(ReasoningMode.TOGGLEABLE, true, "high", null, true),
+            Arguments.of(ReasoningMode.TOGGLEABLE, false, "high", "high", false),
+            Arguments.of(ReasoningMode.TOGGLEABLE, true, null, null, true),
+            Arguments.of(ReasoningMode.ALWAYS_ON, true, "high", "high", false),
+            Arguments.of(ReasoningMode.ALWAYS_ON, false, "high", "high", false),
+            Arguments.of(ReasoningMode.ALWAYS_ON, true, null, null, true),
+            Arguments.of(ReasoningMode.NONE, true, "high", null, false),
+            Arguments.of(ReasoningMode.UNKNOWN, true, "high", null, true),
+            Arguments.of(ReasoningMode.UNKNOWN, false, "high", "high", false),
+            Arguments.of(null, true, "high", null, true),
+            Arguments.of(null, false, "high", "high", false),
+        )
     }
 }

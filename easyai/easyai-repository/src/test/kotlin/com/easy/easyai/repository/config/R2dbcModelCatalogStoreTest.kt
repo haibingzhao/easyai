@@ -4,6 +4,8 @@ import com.easy.easyai.api.model.CatalogCapabilities
 import com.easy.easyai.api.model.CatalogOptions
 import com.easy.easyai.api.model.ModelCatalogEntry
 import com.easy.easyai.api.model.ModelPricing
+import com.easy.easyai.api.model.ReasoningMode
+import com.easy.easyai.api.model.ReasoningProfile
 import com.easy.easyai.api.model.StructuredOutputSupport
 import com.easy.easyai.repository.database.DatabaseMigration
 import kotlinx.coroutines.test.runTest
@@ -52,7 +54,8 @@ class R2dbcModelCatalogStoreTest {
         maxContextTokens: Int? = 1_000_000,
         pricing: ModelPricing? = ModelPricing("CNY", 12.0, 36.0, 1.5),
         description: String? = "desc of $modelId",
-        rawPayload: String? = """{"model":"$modelId"}"""
+        rawPayload: String? = """{"model":"$modelId"}""",
+        reasoningProfile: ReasoningProfile? = null
     ) = ModelCatalogEntry(
         modelId = modelId,
         vendor = "bailian",
@@ -60,6 +63,7 @@ class R2dbcModelCatalogStoreTest {
         description = description,
         capabilities = CatalogCapabilities(vision, structuredOutput, toolCalling, thinking),
         defaultOptions = CatalogOptions(maxTokens, maxContextTokens),
+        reasoningProfile = reasoningProfile,
         pricing = pricing,
         source = "bailian-refresh",
         rawPayload = rawPayload
@@ -136,6 +140,60 @@ class R2dbcModelCatalogStoreTest {
             assertNull(loaded.pricing, "null pricing on the new entry clears the stored one")
             assertEquals(created.createdAt, loaded.createdAt)
             assertTrue(loaded.updatedAt >= created.updatedAt)
+        }
+    }
+
+    @Nested
+    inner class `reasoning profile` {
+
+        private val vendorProfile = ReasoningProfile(
+            mode = ReasoningMode.TOGGLEABLE,
+            effortLevels = listOf("low", "medium", "xhigh"),
+            defaultThinking = true,
+            defaultEffort = "xhigh",
+            source = ReasoningProfile.SOURCE_VENDOR_DOC
+        )
+
+        @Test
+        fun `profile round-trips through the json column`() = runTest {
+            val store = createStore()
+            val modelId = "profile-${UUID.randomUUID()}"
+            store.upsert(entry(modelId, reasoningProfile = vendorProfile))
+
+            val loaded = assertNotNull(store.getByModelId(modelId))
+            assertEquals(vendorProfile, loaded.reasoningProfile)
+        }
+
+        @Test
+        fun `a manual profile survives a catalog refresh`() = runTest {
+            val store = createStore()
+            val modelId = "manual-${UUID.randomUUID()}"
+            val manual = ReasoningProfile(
+                mode = ReasoningMode.ALWAYS_ON,
+                effortLevels = listOf("high", "max"),
+                defaultThinking = true,
+                defaultEffort = "max",
+                source = ReasoningProfile.SOURCE_MANUAL
+            )
+            store.upsert(entry(modelId, reasoningProfile = manual))
+
+            store.upsert(entry(modelId, reasoningProfile = vendorProfile))
+
+            val loaded = assertNotNull(store.getByModelId(modelId))
+            assertEquals(manual, loaded.reasoningProfile, "refresh must not overwrite a hand-declared profile")
+        }
+
+        @Test
+        fun `a resolver profile is replaced by the next refresh`() = runTest {
+            val store = createStore()
+            val modelId = "refresh-${UUID.randomUUID()}"
+            store.upsert(entry(modelId, reasoningProfile = vendorProfile))
+            val revised = vendorProfile.copy(effortLevels = listOf("high", "max"), defaultEffort = "high")
+
+            store.upsert(entry(modelId, reasoningProfile = revised))
+
+            val loaded = assertNotNull(store.getByModelId(modelId))
+            assertEquals(revised, loaded.reasoningProfile)
         }
     }
 }

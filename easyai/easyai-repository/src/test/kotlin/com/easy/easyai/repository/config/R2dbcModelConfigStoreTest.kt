@@ -1,8 +1,11 @@
 package com.easy.easyai.repository.config
 
+import com.easy.easyai.api.model.ModelCapabilities
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
 import com.easy.easyai.api.model.ModelType
+import com.easy.easyai.api.model.ReasoningMode
+import com.easy.easyai.api.model.ReasoningProfile
 import com.easy.easyai.repository.database.DatabaseMigration
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
@@ -46,7 +49,8 @@ class R2dbcModelConfigStoreTest {
         apiKey: String? = "sk-$name",
         mediaOptions: String? = null,
         isDefault: Boolean = false,
-        modelId: String = "$name-model"
+        modelId: String = "$name-model",
+        capabilities: ModelCapabilities? = null
     ) = ModelProviderConfig(
         id = UUID.randomUUID().toString(),
         name = name,
@@ -59,7 +63,8 @@ class R2dbcModelConfigStoreTest {
         timeoutSeconds = 120L,
         modelType = modelType,
         mediaOptions = mediaOptions,
-        isDefault = isDefault
+        isDefault = isDefault,
+        capabilities = capabilities
     )
 
     @Nested
@@ -110,6 +115,96 @@ class R2dbcModelConfigStoreTest {
             val other = "user-${UUID.randomUUID()}"
 
             assertEquals(setOf("sys-image"), store.getModelConfigs(ModelType.IMAGE, other).map { it.name }.toSet())
+        }
+    }
+
+    @Nested
+    inner class `reasoning profile enrichment` {
+
+        @Test
+        fun `a known family without a stored profile resolves on read`() = runTest {
+            val store = createStore()
+            val user = "user-${UUID.randomUUID()}"
+            val saved = config("glm", ModelType.CHAT, modelId = "glm-5.3")
+            store.saveConfig(saved, user)
+
+            val loaded = store.getConfig(saved.id, user)!!
+            assertEquals(ReasoningMode.ALWAYS_ON, loaded.capabilities?.reasoning?.mode)
+            assertEquals(listOf("low", "high", "max"), loaded.capabilities?.reasoning?.effortLevels)
+        }
+
+        @Test
+        fun `a stored declaration wins over the family rule`() = runTest {
+            val store = createStore()
+            val user = "user-${UUID.randomUUID()}"
+            val stored = ReasoningProfile(
+                mode = ReasoningMode.TOGGLEABLE,
+                effortLevels = listOf("low"),
+                defaultThinking = false,
+                source = ReasoningProfile.SOURCE_MANUAL
+            )
+            val saved = config(
+                "glm-custom",
+                ModelType.CHAT,
+                modelId = "glm-5.3",
+                capabilities = ModelCapabilities(reasoning = stored)
+            )
+            store.saveConfig(saved, user)
+
+            assertEquals(stored, store.getConfig(saved.id, user)!!.capabilities?.reasoning)
+        }
+
+        @Test
+        fun `an unknown model stays undeclared`() = runTest {
+            val store = createStore()
+            val user = "user-${UUID.randomUUID()}"
+            val saved = config("custom", ModelType.CHAT, modelId = "custom-llm-v2")
+            store.saveConfig(saved, user)
+
+            assertEquals(null, store.getConfig(saved.id, user)!!.capabilities)
+        }
+
+        @Test
+        fun `a stored derived profile is refreshed from the current family rule`() = runTest {
+            val store = createStore()
+            val user = "user-${UUID.randomUUID()}"
+            val stale = ReasoningProfile(
+                mode = ReasoningMode.TOGGLEABLE,
+                effortLevels = listOf("low"),
+                defaultThinking = false,
+                source = ReasoningProfile.SOURCE_VENDOR_DOC
+            )
+            val saved = config(
+                "glm-stale",
+                ModelType.CHAT,
+                modelId = "glm-5.3",
+                capabilities = ModelCapabilities(reasoning = stale)
+            )
+            store.saveConfig(saved, user)
+
+            val loaded = store.getConfig(saved.id, user)!!.capabilities?.reasoning!!
+            assertEquals(ReasoningMode.ALWAYS_ON, loaded.mode)
+            assertEquals(listOf("low", "high", "max"), loaded.effortLevels)
+            assertEquals(ReasoningProfile.SOURCE_VENDOR_DOC, loaded.source)
+        }
+
+        @Test
+        fun `a catalog NONE on an unknown id survives the read overlay`() = runTest {
+            val store = createStore()
+            val user = "user-${UUID.randomUUID()}"
+            val catalogNone = ReasoningProfile(
+                mode = ReasoningMode.NONE,
+                source = ReasoningProfile.SOURCE_CATALOG
+            )
+            val saved = config(
+                "custom-none",
+                ModelType.CHAT,
+                modelId = "custom-no-reasoning-v1",
+                capabilities = ModelCapabilities(reasoning = catalogNone)
+            )
+            store.saveConfig(saved, user)
+
+            assertEquals(catalogNone, store.getConfig(saved.id, user)!!.capabilities?.reasoning)
         }
     }
 
