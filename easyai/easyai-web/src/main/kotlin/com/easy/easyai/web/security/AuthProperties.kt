@@ -1,5 +1,6 @@
 package com.easy.easyai.web.security
 
+import com.easy.easyai.auth.AuthConstants
 import org.springframework.boot.context.properties.ConfigurationProperties
 
 /**
@@ -20,6 +21,9 @@ data class AuthProperties(
     val accessTokenExpirationSeconds: Long = 7200,
     // Refresh token TTL in seconds (default: 180 days).
     val refreshTokenExpirationSeconds: Long = 15552000,
+    // Name of the httpOnly refresh-token cookie. Cookies are scoped by host, not port, so several
+    // consoles served from one host must use distinct names or they overwrite each other's session.
+    val refreshCookieName: String = AuthConstants.REFRESH_TOKEN_COOKIE,
     // CORS allowed origins for frontend.
     val corsAllowedOrigins: List<String> = listOf("http://localhost:5173"),
     // PEM file path for RSA private key (production). If empty, dev key pair is generated.
