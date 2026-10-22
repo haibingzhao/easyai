@@ -131,7 +131,11 @@ export function resolveWriteScope(scope?: AssetScope): AssetScope | undefined {
   return scope ?? defaultWriteScope;
 }
 
-/** Build the `?scope=` suffix for a write endpoint; empty when the effective scope is personal. */
+/**
+ * Build the `?scope=` suffix for a write endpoint; empty when the effective scope is personal.
+ * A read whose absent scope means *effective* (e.g. `chatPreferenceService.get()`) must name the
+ * bucket itself instead: the host write default would silently narrow it to one bucket's own row.
+ */
 export function scopeQuery(scope?: AssetScope): string {
   const s = resolveWriteScope(scope);
   return s ? `?scope=${s}` : '';

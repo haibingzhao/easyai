@@ -6,6 +6,7 @@ import { uploadAvatar } from '@/services/user-service';
 import { useProjectStore } from './project-store';
 import { useChatStore } from './chat-store';
 import { useCapabilityStore } from './capability-store';
+import { useAgentStore } from './agent-store';
 
 interface AuthState {
   user: UserProfile | null;
@@ -123,9 +124,10 @@ export const useAuthStore = create<AuthState>((set) => ({
   applyProfile: (user) => set({ user }),
 }));
 
-/** Reset user-scoped stores (project selection, chat) to prevent cross-user state leakage */
+/** Reset user-scoped stores (project selection, chat, agent preference) to prevent cross-user state leakage */
 function resetUserScopedState() {
   useProjectStore.getState().resetForUserSwitch();
   useChatStore.getState().clearChat();
   useCapabilityStore.getState().clear();
+  useAgentStore.getState().resetForUserSwitch();
 }

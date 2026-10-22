@@ -27,6 +27,7 @@ import com.easy.easyai.core.team.TeamMemberHistoryLoader
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolFactory
 import com.easy.easyai.repository.agent.R2dbcAgentStore
+import com.easy.easyai.repository.agent.R2dbcChatPreferenceStore
 import com.easy.easyai.repository.auth.R2dbcRefreshTokenStore
 import com.easy.easyai.repository.command.R2dbcAsyncUserCommandStore
 import com.easy.easyai.repository.config.R2dbcModelCatalogStore
@@ -500,6 +501,17 @@ class R2dbcRepositoryAutoConfiguration(
     @ConditionalOnMissingBean(StorageSettingsStore::class)
     fun storageSettingsStore(initializer: R2dbcDatabaseInitializer): StorageSettingsStore {
         return R2dbcStorageSettingsStore(initializer.getDatabase())
+    }
+
+    /**
+     * Per-owner Chat surface preferences (default agent + agents hidden from the chat picker).
+     * Group sharing follows the auxiliary-model precedent: a group row applies to members with no
+     * personal row. Absent when `easyai.r2dbc.enabled=false`, which is how the endpoint reports 503.
+     */
+    @Bean
+    @ConditionalOnMissingBean(ChatPreferenceStore::class)
+    fun chatPreferenceStore(initializer: R2dbcDatabaseInitializer): ChatPreferenceStore {
+        return R2dbcChatPreferenceStore(initializer.getDatabase())
     }
 
     /**

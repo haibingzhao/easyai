@@ -8,6 +8,7 @@ import { IntegrationsTab } from '@/components/settings/IntegrationsTab';
 import { RagTab } from '@/components/settings/RagTab';
 import { StorageTab } from '@/components/settings/StorageTab';
 import { AuxModelsTab } from '@/components/settings/AuxModelsTab';
+import { ChatAgentsTab } from '@/components/settings/ChatAgentsTab';
 import { ReadOnlyBanner } from '@/components/ui/ReadOnlyBanner';
 import { UserAvatar } from '@/components/user/UserAvatar';
 import { ProfileEditDialog } from '@/components/user/ProfileEditDialog';
@@ -27,7 +28,8 @@ import {
   Sparkles,
   Globe,
   Layers,
-  Cpu
+  Cpu,
+  Bot
 } from 'lucide-react';
 
 export interface SettingsMenuItem {
@@ -51,6 +53,7 @@ export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
   { id: 'database', label: 'Database', icon: <Database className="w-4 h-4" /> },
   { id: 'storage', label: 'Storage', icon: <HardDrive className="w-4 h-4" /> },
   { id: 'aux-models', label: 'Task Models', icon: <Cpu className="w-4 h-4" /> },
+  { id: 'chat-agents', label: 'Chat Agents', icon: <Bot className="w-4 h-4" /> },
   { id: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
 ];
 
@@ -104,6 +107,7 @@ export const SettingsPage: React.FC = () => {
         {activeTab === 'database' && <DatabaseTab />}
         {activeTab === 'storage' && <StorageTab />}
         {activeTab === 'aux-models' && <AuxModelsTab />}
+        {activeTab === 'chat-agents' && <ChatAgentsTab />}
         {activeTab === 'about' && <AboutTab />}
       </main>
     </div>

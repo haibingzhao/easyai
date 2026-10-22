@@ -40,6 +40,17 @@ internal fun resolveWriteOwner(userId: String, claims: GroupClaims, scope: Asset
     return groupUserId
 }
 
+/**
+ * Resolve the `owner_id` a scope-addressed **read** must target. The bucket selection mirrors
+ * [resolveWriteOwner], but membership is enough: a group member may read the group bucket they
+ * belong to. Naming `group` without an active group is a 400, same as the write path.
+ */
+suspend fun resolveReadOwner(scope: AssetScope?): String {
+    if (scope != AssetScope.GROUP) return getCurrentUserId()
+    return currentGroupUserId()
+        ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "No active group for a group-scoped read")
+}
+
 /** Parse the `scope` request parameter, tolerating case/whitespace; absent or unknown → PERSONAL. */
 fun parseAssetScope(raw: String?): AssetScope =
     if (raw?.trim().equals("group", ignoreCase = true)) AssetScope.GROUP else AssetScope.PERSONAL

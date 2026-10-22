@@ -448,6 +448,7 @@ class AgentController(
      */
     private fun AgentDefinition.toLightDto(): AgentDto = AgentDto(
         id = this.id,
+        ownerId = this.userId,
         name = this.name,
         agentType = this.agentType,
         agentContext = this.agentContext,
@@ -479,6 +480,7 @@ class AgentController(
         customMembers: List<InlineAgentSpec>? = null
     ): AgentDto = AgentDto(
         id = this.id,
+        ownerId = this.userId,
         name = this.name,
         agentType = this.agentType,
         agentContext = this.agentContext,

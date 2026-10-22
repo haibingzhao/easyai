@@ -61,6 +61,8 @@ export interface InlineAgentSpec {
  */
 export interface AgentDto {
   id: string;
+  /** Bucket that owns this row: the caller's user id, the group bucket id, or `system`. */
+  ownerId: string;
   name: string;
   agentType: AgentType;
   agentContext: AgentEnv;
@@ -198,4 +200,26 @@ export interface ResourceItem {
   name: string;
   available: boolean;
   checked: boolean;
+}
+
+/** Where the effective chat preference came from: the user's own row, the shared group row, or defaults. */
+export type ChatPreferenceSource = 'user' | 'group' | 'default';
+
+/**
+ * Per-user (or group-shared) chat defaults: which agent a fresh conversation starts with and which
+ * agents are hidden from the Chat agent dropdown.
+ */
+export interface ChatPreference {
+  defaultAgentId: string | null;
+  hiddenAgentIds: string[];
+  /** Which layer wins for the caller right now (personal → group → built-in). */
+  effectiveSource: ChatPreferenceSource;
+  /** Which layer supplied these values; differs from effectiveSource for a scoped read. */
+  source: ChatPreferenceSource;
+}
+
+/** Request body for saving chat preferences. A blank agent id plus no hidden ids clears the row. */
+export interface SaveChatPreferenceRequest {
+  defaultAgentId: string | null;
+  hiddenAgentIds: string[];
 }

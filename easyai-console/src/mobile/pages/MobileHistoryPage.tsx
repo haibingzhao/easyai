@@ -6,6 +6,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { MobileHeader } from '../components/MobileHeader';
 import { MobileSwipeRow } from '../components/MobileSwipeRow';
 import { useChatStore } from '@/services/stores/chat-store';
+import { useAgentStore } from '@/services/stores/agent-store';
 import { useSessionStore } from '@/services/stores/session-store';
 import { useProjectStore } from '@/services/stores/project-store';
 import { useNavStore } from '@/services/stores/nav-store';
@@ -94,6 +95,7 @@ export const MobileHistoryPage: React.FC = () => {
     if (isCurrentSession) {
       clearChat();
       resetTeam();
+      useAgentStore.getState().resetAgentSelection();
       useNavStore.getState().setSelectedFile(null);
       setCurrentSessionId(null);
     }
@@ -113,6 +115,7 @@ export const MobileHistoryPage: React.FC = () => {
             onClick={() => {
               clearChat();
               resetTeam();
+              useAgentStore.getState().resetAgentSelection();
               navigate('/chat');
             }}
             aria-label={i18n('New Session')}

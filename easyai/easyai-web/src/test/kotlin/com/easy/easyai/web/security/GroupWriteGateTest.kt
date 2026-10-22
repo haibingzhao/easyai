@@ -1,9 +1,16 @@
 package com.easy.easyai.web.security
 
 import com.easy.easyai.auth.group.GroupClaims
+import kotlinx.coroutines.reactor.ReactorContext
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.jupiter.api.Test
 import org.springframework.http.HttpStatus
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
+import org.springframework.security.core.GrantedAuthority
+import org.springframework.security.core.context.ReactiveSecurityContextHolder
 import org.springframework.web.server.ResponseStatusException
+import reactor.util.context.Context
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
@@ -50,4 +57,39 @@ class GroupWriteGateTest {
         assertEquals(AssetScope.PERSONAL, parseAssetScope(null))
         assertEquals(AssetScope.PERSONAL, parseAssetScope("nonsense"))
     }
+
+    @Test
+    fun `a personal read resolves to the caller`() = runTest {
+        withContext(ReactorContext(asAlice())) {
+            assertEquals("alice", resolveReadOwner(AssetScope.PERSONAL))
+        }
+    }
+
+    @Test
+    fun `a member may read the group bucket`() = runTest {
+        val memberAlice = GroupClaims(
+            owners = listOf("alice", "grp_1"),
+            groupId = "fam-1",
+            groupUserId = "grp_1",
+            isGroupOwner = false
+        )
+        withContext(ReactorContext(asAlice(memberAlice))) {
+            assertEquals("grp_1", resolveReadOwner(AssetScope.GROUP))
+        }
+    }
+
+    @Test
+    fun `a group-less login cannot make a group read`() = runTest {
+        withContext(ReactorContext(asAlice(groupLess))) {
+            val e = assertFailsWith<ResponseStatusException> { resolveReadOwner(AssetScope.GROUP) }
+            assertEquals(HttpStatus.BAD_REQUEST, e.statusCode)
+        }
+    }
+
+    private fun asAlice(claims: GroupClaims? = null): Context =
+        ReactiveSecurityContextHolder.withAuthentication(
+            UsernamePasswordAuthenticationToken("alice", "", emptyList<GrantedAuthority>()).apply {
+                details = claims
+            }
+        )
 }

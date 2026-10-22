@@ -166,7 +166,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ onModelChange, sel
         onClick={toggleDropdown}
         className="flex items-center gap-1 px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-muted transition-colors"
       >
-        {selectedConfig ? (selectedConfig.modelName || selectedConfig.modelId) : i18n('Select Model')}
+        {selectedConfig ? (selectedConfig.name || selectedConfig.modelName || selectedConfig.modelId) : i18n('Select Model')}
         <ChevronDown className={`w-3 h-3 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
       </button>
 

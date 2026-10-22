@@ -586,6 +586,9 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
         // optimistic user message — drop them once a newer send owns the channel.
         const isStaleStream = () => ownService !== null && getCurrentSendService() !== ownService;
 
+        // The first message pins this conversation to its agent; a later default change only affects new chats.
+        useAgentStore.getState().markAgentSelectionTouched();
+
         ownService = sendMessageToBackend({
           message: finalMessage,
           sessionId: sid,

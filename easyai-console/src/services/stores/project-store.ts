@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { useChatStore } from './chat-store';
+import { useAgentStore } from './agent-store';
 import { useNavStore } from './nav-store';
 import type { Project } from '@/services/project-service';
 import type { UpdateProjectRequest, SessionWorkspaceInfo } from '@/services/project-service';
@@ -112,6 +113,7 @@ export const useProjectStore = create<ProjectState>()(
 
         useChatStore.getState().setSessionId(null);
         useChatStore.getState().clearChat();
+        useAgentStore.getState().resetAgentSelection();
         set({ currentProject: project, userSelected: true, workspaceOnly: false });
         const nav = useNavStore.getState();
         nav.setRightPanelOpen(true);
@@ -126,6 +128,7 @@ export const useProjectStore = create<ProjectState>()(
         }
         useChatStore.getState().setSessionId(null);
         useChatStore.getState().clearChat();
+        useAgentStore.getState().resetAgentSelection();
         set({ currentProject: null, userSelected: false, workspaceOnly: true });
       },
 

@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { ChevronDown, ChevronRight, Server, Loader2, Wrench, MessageSquare, Search, X } from 'lucide-react';
 import type { McpBindingDto } from '@/types/agent';
 import type { McpServerDto, McpToolInfo, McpPromptInfo } from '@/types/mcp';
-import { mcpService } from '@/services/mcp-service';
+import { mcpService, mcpServerKey, mcpServerScope, dedupeMcpServers } from '@/services/mcp-service';
+import { useAuthStore } from '@/services/stores/auth-store';
 import { i18n } from '@/utils/i18n';
 import { ToolTooltip } from './ToolItem';
 
@@ -21,6 +22,7 @@ export const McpSelector: React.FC<McpSelectorProps> = ({ selectedConfigs, onCha
   const [loadingTools, setLoadingTools] = useState<string | null>(null);
   const [serverSearch, setServerSearch] = useState('');
   const [toolSearch, setToolSearch] = useState('');
+  const currentUserId = useAuthStore(state => state.user?.id);
 
   const loadServers = useCallback(async () => {
     try {
@@ -38,19 +40,23 @@ export const McpSelector: React.FC<McpSelectorProps> = ({ selectedConfigs, onCha
     loadServers();
   }, [loadServers]);
 
-  const loadServerTools = async (serverName: string) => {
-    if (toolsByServer[serverName]) return;
-    setLoadingTools(serverName);
+  const loadServerTools = async (server: McpServerDto) => {
+    // Names repeat across the personal and group buckets; cache and fetch under (owner, name) so a
+    // same-named row cannot show the other bucket's tools.
+    const key = mcpServerKey(server);
+    if (toolsByServer[key]) return;
+    setLoadingTools(key);
     try {
+      const scope = mcpServerScope(server, currentUserId);
       const [tools, prompts] = await Promise.all([
-        mcpService.getServerTools(serverName),
-        mcpService.getServerPrompts(serverName).catch(() => [] as McpPromptInfo[]),
+        mcpService.getServerTools(server.name, scope),
+        mcpService.getServerPrompts(server.name, scope).catch(() => [] as McpPromptInfo[]),
       ]);
-      setToolsByServer(prev => ({ ...prev, [serverName]: tools }));
-      setPromptsByServer(prev => ({ ...prev, [serverName]: prompts }));
+      setToolsByServer(prev => ({ ...prev, [key]: tools }));
+      setPromptsByServer(prev => ({ ...prev, [key]: prompts }));
     } catch {
-      setToolsByServer(prev => ({ ...prev, [serverName]: [] }));
-      setPromptsByServer(prev => ({ ...prev, [serverName]: [] }));
+      setToolsByServer(prev => ({ ...prev, [key]: [] }));
+      setPromptsByServer(prev => ({ ...prev, [key]: [] }));
     } finally {
       setLoadingTools(null);
     }
@@ -70,7 +76,7 @@ export const McpSelector: React.FC<McpSelectorProps> = ({ selectedConfigs, onCha
     }
   };
 
-  const toggleTool = (serverName: string, toolName: string) => {
+  const toggleTool = (serverKey: string, serverName: string, toolName: string) => {
     const config = getServerConfig(serverName);
 
     // Server not yet selected: auto-select it with just this tool
@@ -79,7 +85,7 @@ export const McpSelector: React.FC<McpSelectorProps> = ({ selectedConfigs, onCha
       return;
     }
 
-    const allToolNames = (toolsByServer[serverName] ?? []).map(t => t.name);
+    const allToolNames = (toolsByServer[serverKey] ?? []).map(t => t.name);
     const isAllMode = config.toolNames.length === 0;
     const currentTools = isAllMode ? [...allToolNames] : config.toolNames;
 
@@ -98,13 +104,20 @@ export const McpSelector: React.FC<McpSelectorProps> = ({ selectedConfigs, onCha
     ));
   };
 
-  const filteredServers = useMemo(() => {
-    if (!serverSearch.trim()) return servers;
-    const q = serverSearch.toLowerCase();
-    return servers.filter(s => s.name.toLowerCase().includes(q));
-  }, [servers, serverSearch]);
+  const dedupedServers = useMemo(
+    () => dedupeMcpServers(servers, currentUserId),
+    [servers, currentUserId],
+  );
 
-  const togglePrompt = (serverName: string, promptName: string) => {
+  const shadowedCount = servers.length - dedupedServers.length;
+
+  const filteredServers = useMemo(() => {
+    if (!serverSearch.trim()) return dedupedServers;
+    const q = serverSearch.toLowerCase();
+    return dedupedServers.filter(s => s.name.toLowerCase().includes(q));
+  }, [dedupedServers, serverSearch]);
+
+  const togglePrompt = (serverKey: string, serverName: string, promptName: string) => {
     const config = getServerConfig(serverName);
 
     // Server not yet selected: auto-select it with just this prompt
@@ -113,7 +126,7 @@ export const McpSelector: React.FC<McpSelectorProps> = ({ selectedConfigs, onCha
       return;
     }
 
-    const allPromptNames = (promptsByServer[serverName] ?? []).map(p => p.name);
+    const allPromptNames = (promptsByServer[serverKey] ?? []).map(p => p.name);
     const currentPrompts = (config.promptNames ?? []).length === 0 ? [...allPromptNames] : config.promptNames;
 
     const newPromptNames = currentPrompts.includes(promptName)
@@ -125,13 +138,14 @@ export const McpSelector: React.FC<McpSelectorProps> = ({ selectedConfigs, onCha
     ));
   };
 
-  const handleExpand = (serverName: string) => {
-    if (expandedServer === serverName) {
+  const handleExpand = (server: McpServerDto) => {
+    const key = mcpServerKey(server);
+    if (expandedServer === key) {
       setExpandedServer(null);
     } else {
-      setExpandedServer(serverName);
+      setExpandedServer(key);
       setToolSearch('');
-      loadServerTools(serverName);
+      loadServerTools(server);
     }
   };
 
@@ -188,16 +202,17 @@ export const McpSelector: React.FC<McpSelectorProps> = ({ selectedConfigs, onCha
           )}
           <div className="divide-y divide-border">
           {filteredServers.map(server => {
+            const serverKey = mcpServerKey(server);
             const selected = isServerSelected(server.name);
             const config = getServerConfig(server.name);
-            const isExpanded = expandedServer === server.name;
-            const tools = toolsByServer[server.name];
-            const prompts = promptsByServer[server.name];
+            const isExpanded = expandedServer === serverKey;
+            const tools = toolsByServer[serverKey];
+            const prompts = promptsByServer[serverKey];
             const toolCount = tools?.length ?? 0;
             const selectedToolCount = config?.toolNames.length ?? 0;
 
             return (
-              <div key={server.name}>
+              <div key={serverKey}>
                 {/* Server row */}
                 <div className="flex items-center gap-2 px-3 py-2">
                   {/* Status dot */}
@@ -216,7 +231,7 @@ export const McpSelector: React.FC<McpSelectorProps> = ({ selectedConfigs, onCha
                   {/* Server name - click to expand/collapse */}
                   <button
                     type="button"
-                    onClick={() => handleExpand(server.name)}
+                    onClick={() => handleExpand(server)}
                     className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
                   >
                     {isExpanded
@@ -238,7 +253,7 @@ export const McpSelector: React.FC<McpSelectorProps> = ({ selectedConfigs, onCha
                 {/* Expanded tools list */}
                 {isExpanded && (
                   <div className="px-8 pb-2">
-                    {loadingTools === server.name ? (
+                    {loadingTools === serverKey ? (
                       <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
                         <Loader2 className="w-3 h-3 animate-spin" />
                         {i18n('Loading tools...')}
@@ -280,7 +295,7 @@ export const McpSelector: React.FC<McpSelectorProps> = ({ selectedConfigs, onCha
                               <input
                                 type="checkbox"
                                 checked={config?.toolNames.length === 0 || (config?.toolNames.includes(tool.name) ?? false)}
-                                onChange={() => !disabled && toggleTool(server.name, tool.name)}
+                                onChange={() => !disabled && toggleTool(serverKey, server.name, tool.name)}
                                 disabled={disabled}
                                 className="w-3 h-3 rounded border-border accent-primary shrink-0"
                               />
@@ -314,7 +329,7 @@ export const McpSelector: React.FC<McpSelectorProps> = ({ selectedConfigs, onCha
                             <input
                               type="checkbox"
                               checked={(config?.promptNames ?? []).length === 0 || ((config?.promptNames ?? []).includes(prompt.name))}
-                              onChange={() => !disabled && togglePrompt(server.name, prompt.name)}
+                              onChange={() => !disabled && togglePrompt(serverKey, server.name, prompt.name)}
                               disabled={disabled}
                               className="w-3 h-3 rounded border-border accent-primary shrink-0"
                             />
@@ -336,6 +351,11 @@ export const McpSelector: React.FC<McpSelectorProps> = ({ selectedConfigs, onCha
           })}
           </div>
         </div>
+      )}
+      {!loading && shadowedCount > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {i18n('Same-named servers in other scopes are hidden; connected servers take precedence, then your own.')}
+        </p>
       )}
     </div>
   );

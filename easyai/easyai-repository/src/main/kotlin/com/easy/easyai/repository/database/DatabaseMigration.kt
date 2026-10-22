@@ -53,6 +53,7 @@ class DatabaseMigration(
                 Tables.SkillTable,
                 Tables.StorageSettingsTable,
                 Tables.AuxModelSettingsTable,
+                Tables.ChatPreferenceTable,
                 Tables.ScheduledTaskSettingTable,
                 Tables.UserCommandTable,
                 Tables.AsyncTaskTable,
