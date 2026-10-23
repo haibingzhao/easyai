@@ -89,6 +89,23 @@ interface AsyncSessionStore {
      */
     suspend fun ensureSessionExists(sessionId: String, context: AgentContext) {}
     suspend fun findById(id: String, userId: String = "system"): PersistedSession?
+
+    /**
+     * Marker metadata of a session row. [systemKind] is null for ordinary chat rows and carries
+     * the hidden-session kind (e.g. [AgentContext.SYSTEM_KIND_ASYNC_TASK]) otherwise.
+     */
+    data class SessionMarker(val systemKind: String?)
+
+    /**
+     * Lightweight lookup of a session's hidden-session marker without loading its messages.
+     * Returns null when the row does not exist.
+     *
+     * Ownership is not filtered here; callers that reuse an existing session must verify it
+     * first (see [isSessionOwnedByUser]). Stores without a hidden-session concept keep this
+     * no-op and report every row as unmarked.
+     */
+    suspend fun findSessionMarker(id: String): SessionMarker? = null
+
     suspend fun findIdsByLimit(limit: Int, offset: Int = 0, projectId: String? = null, userId: String = "system", excludeSwarm: Boolean = true): SessionPageResult
 
     /**
