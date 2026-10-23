@@ -40,7 +40,7 @@ class R2dbcDatabaseInitializer(
 
         logger.info("Initializing R2DBC database at URL: {}", properties.url)
         database = R2dbcDatabase.connect(
-            url = properties.url,
+            url = R2dbcUrls.withConnectTimeout(properties.url, properties.connectTimeoutSeconds),
             user = properties.username,
             password = properties.password,
             manager = { TransactionManager(it) }

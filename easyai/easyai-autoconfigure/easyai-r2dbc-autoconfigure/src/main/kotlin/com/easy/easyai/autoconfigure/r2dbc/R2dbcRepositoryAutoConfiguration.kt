@@ -72,6 +72,7 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Lazy
 import org.springframework.core.annotation.Order
 import java.nio.file.Path
+import java.time.Duration
 
 /**
  * Auto-Configuration for async R2DBC-based repository layer.
@@ -122,6 +123,21 @@ class R2dbcRepositoryAutoConfiguration(
         flywayRunner: FlywayMigrationRunner?
     ): R2dbcDatabaseInitializer {
         return R2dbcDatabaseInitializer(r2dbcProperties, migration, flywayRunner)
+    }
+
+    @Bean
+    @ConditionalOnProperty(
+        prefix = "easyai.r2dbc",
+        name = ["health-check-enabled"],
+        havingValue = "true",
+        matchIfMissing = true
+    )
+    fun databaseHealthMonitor(initializer: R2dbcDatabaseInitializer): DatabaseHealthMonitor {
+        return DatabaseHealthMonitor(
+            databaseProvider = { initializer.getDatabase() },
+            interval = Duration.ofMillis(r2dbcProperties.healthCheckIntervalMs),
+            timeout = Duration.ofMillis(r2dbcProperties.healthCheckTimeoutMs)
+        )
     }
 
     @Bean

@@ -40,7 +40,7 @@ class FlywayMigrationRunner(private val properties: R2dbcProperties) {
      * versioned script (see V17, which drops the columns the retired V6/V7 left behind).
      */
     fun migrate() {
-        val jdbcUrl = toJdbcUrl(properties.url)
+        val jdbcUrl = toJdbcUrl(R2dbcUrls.withConnectTimeout(properties.url, properties.connectTimeoutSeconds))
         logger.info("Running Flyway migration with JDBC URL: {}", jdbcUrl)
 
         val flyway = Flyway.configure()
