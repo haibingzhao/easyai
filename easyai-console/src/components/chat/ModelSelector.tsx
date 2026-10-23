@@ -8,9 +8,10 @@ import { sanitizeOverrides } from '@/components/models/model-overrides';
 import { ModelParamPanel } from './ModelParamPanel';
 import type { ModelProviderConfig, ModelCapabilities, ModelOverrides } from '@/types/settings';
 import { i18n } from '@/utils/i18n';
+import { resolveInitialSelection } from '@/utils/model-selection';
 import { ChevronDown } from 'lucide-react';
 
-interface ModelSelectorProps {
+export interface ModelSelectorProps {
   onModelChange: (configId: string, capabilities?: ModelCapabilities) => void;
   /** Controlled mode: display this config id instead of the global selection. */
   selectedId?: string | null;
@@ -21,6 +22,20 @@ interface ModelSelectorProps {
    * window. Off by default: consumers whose request has no override channel must not show it.
    */
   enableParamOverrides?: boolean;
+  /**
+   * Offer "no selection" as a real choice (e.g. a host whose request leaves the model to the
+   * server). Only honoured in controlled mode: `selectedId` must be supplied (null included) from
+   * the first render. In uncontrolled mode the global selection always resolves a model, so the
+   * entry is not rendered and `onSelectionCleared` never fires.
+   *
+   * Never respond to `onSelectionCleared` by setting `selectedId` to `undefined`: that reads as
+   * "uncontrolled", so the entry disappears and the next mount picks the first model. Pass `null`.
+   */
+  allowEmptySelection?: boolean;
+  /** Label for the empty entry; defaults to "Default model". */
+  emptySelectionLabel?: string;
+  /** Fired when the user picks the empty entry, or a selected id no longer exists (empty mode). */
+  onSelectionCleared?: () => void;
 }
 
 const PANEL_GAP = 8;
@@ -34,6 +49,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   selectedId,
   persistSelection = true,
   enableParamOverrides = false,
+  allowEmptySelection = false,
+  emptySelectionLabel,
+  onSelectionCleared,
 }) => {
   const [enabledConfigs, setEnabledConfigs] = useState<ModelProviderConfig[]>([]);
   const [groupNames, setGroupNames] = useState<Record<string, string>>({});
@@ -58,6 +76,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const selectedModelConfigId = useSettingsStore((state) => state.selectedModelConfigId);
   const setSelectedModelConfig = useSettingsStore((state) => state.setSelectedModelConfig);
   const setModelConfigs = useSettingsStore((state) => state.setModelConfigs);
+
+  // Empty mode only makes sense when the host owns the selection; in uncontrolled mode the
+  // global store always resolves a model, so offering "server default" would be a dead choice.
+  const supportsEmptySelection = allowEmptySelection && selectedId !== undefined;
 
   useEffect(() => {
     const loadConfigs = async () => {
@@ -89,19 +111,29 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           setOverrides(loaded);
         }
 
-        if (enabled.length > 0) {
-          // Read directly from localStorage to avoid race condition:
-          // React child effects run before parent effects, so loadSettings()
-          // in App.tsx may not have populated the store yet.
-          const storedId = persistSelection ? storageService.getSelectedModelConfigId() : null;
-          const currentId = selectedId ?? storedId ?? enabled[0].id;
-          const currentConfig = enabled.find(c => c.id === currentId) || enabled[0];
-          if (currentConfig?.id) {
-            // Sync store & localStorage so the UI reflects the resolved model
-            // (handles stale IDs left over from a different user's session).
-            if (persistSelection) setSelectedModelConfig(currentConfig.id);
-            onModelChange(currentConfig.id, currentConfig.capabilities);
-          }
+        // Read directly from localStorage to avoid race condition:
+        // React child effects run before parent effects, so loadSettings()
+        // in App.tsx may not have populated the store yet.
+        const storedId = persistSelection ? storageService.getSelectedModelConfigId() : null;
+        const initial = resolveInitialSelection({
+          enabledIds: enabled.map((c) => c.id),
+          selectedId,
+          storedId,
+          supportsEmptySelection,
+        });
+        if (initial.kind === 'cleared') {
+          onSelectionCleared?.();
+          return;
+        }
+        if (initial.kind === 'unselected') {
+          return;
+        }
+        const currentConfig = enabled.find((c) => c.id === initial.configId);
+        if (currentConfig?.id) {
+          // Sync store & localStorage so the UI reflects the resolved model
+          // (handles stale IDs left over from a different user's session).
+          if (persistSelection) setSelectedModelConfig(currentConfig.id);
+          onModelChange(currentConfig.id, currentConfig.capabilities);
         }
       } catch (e) {
         console.error('Failed to load model configs:', e);
@@ -366,7 +398,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         onClick={toggleDropdown}
         className="flex items-center gap-1 px-2 py-1 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-muted transition-colors"
       >
-        {selectedConfig ? (selectedConfig.name || selectedConfig.modelName || selectedConfig.modelId) : i18n('Select Model')}
+        {selectedConfig
+          ? (selectedConfig.name || selectedConfig.modelName || selectedConfig.modelId)
+          : supportsEmptySelection
+            ? (emptySelectionLabel ?? i18n('Default model'))
+            : i18n('Select Model')}
         {selectedEffort && <span className="text-[10px] opacity-80">· {effortLabel(selectedEffort)}</span>}
         <ChevronDown className={`w-3 h-3 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
       </button>
@@ -381,6 +417,19 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               : { bottom: `${window.innerHeight - pendingAnchor.top}px`, left: 0, visibility: 'hidden' }
             }
           >
+            {supportsEmptySelection && (
+              <button
+                onClick={() => {
+                  onSelectionCleared?.();
+                  setDropdownOpen(false);
+                }}
+                className={`w-full text-left px-3 py-2 hover:bg-muted transition-colors select-none border-b border-border ${
+                  effectiveSelectedId === null ? 'bg-muted' : ''
+                }`}
+              >
+                <div className="text-sm font-medium truncate">{emptySelectionLabel ?? i18n('Default model')}</div>
+              </button>
+            )}
             {[...grouped.byGroup.entries()].map(([groupId, configs]) => (
               <div key={groupId}>
                 <div className="px-3 pt-2 pb-1 text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wide truncate">

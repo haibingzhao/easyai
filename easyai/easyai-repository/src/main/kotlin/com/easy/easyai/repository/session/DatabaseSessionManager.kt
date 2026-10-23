@@ -16,6 +16,7 @@ import com.easy.easyai.core.team.TeamMemberStatus
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.repository.database.UserScope
 import com.easy.easyai.repository.todo.AsyncTodoStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
@@ -327,7 +328,12 @@ class DatabaseSessionManager(
                 restoreEndReason(chatSession, id, callerId)
             } else {
                 logger.info("Creating new session with agent {}: {}", agentDef.id, id)
-                persistNewSession(id, callerId, projectId)
+                persistNewSession(id, callerId, projectId, resolvedContext.systemKind)
+            }
+            // Only an existing row can lack the marker: a fresh insert carried it. Repeating the
+            // write on every request would cost two statements per turn for a hidden session.
+            if (persistedSession != null && persistedSession.systemKind == null) {
+                markSystemKind(id, resolvedContext)
             }
             return chatSession
         }
@@ -349,7 +355,10 @@ class DatabaseSessionManager(
             restoreEndReason(chatSession, id, agentContext.userId ?: "system")
         } else {
             logger.info("Creating new session with config {}: {}", config.id, id)
-            persistNewSession(id, agentContext.userId ?: "system", projectId)
+            persistNewSession(id, agentContext.userId ?: "system", projectId, resolvedContext.systemKind)
+        }
+        if (persistedSession != null && persistedSession.systemKind == null) {
+            markSystemKind(id, resolvedContext)
         }
         return chatSession
     }
@@ -696,12 +705,30 @@ class DatabaseSessionManager(
     }
 
     /**
+     * Apply [AgentContext.systemKind] to a row that already exists without it.
+     *
+     * New rows carry the marker in [persistNewSession]'s insert, and ordinary (unmarked) sessions
+     * skip the write entirely — this only covers rows created before the marker existed.
+     */
+    private suspend fun markSystemKind(id: String, context: AgentContext) {
+        if (context.systemKind == null) return
+        try {
+            sessionStore.ensureSessionExists(id, context)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("Failed to mark session {} as {}", id, context.systemKind, e)
+        }
+    }
+
+    /**
      * Persist a new session record to the database.
      */
     private suspend fun persistNewSession(
         id: String,
         userId: String,
-        projectId: String?
+        projectId: String?,
+        systemKind: String? = null
     ) {
         saveMutex.withLock {
             try {
@@ -710,7 +737,8 @@ class DatabaseSessionManager(
                     messages = emptyList(),
                     projectId = projectId,
                     createdAt = Instant.now(),
-                    updatedAt = Instant.now()
+                    updatedAt = Instant.now(),
+                    systemKind = systemKind
                 )
                 sessionStore.save(persistedSession, userId)
                 logger.debug("Persisted new session to database: {} with projectId: {}", id, projectId)

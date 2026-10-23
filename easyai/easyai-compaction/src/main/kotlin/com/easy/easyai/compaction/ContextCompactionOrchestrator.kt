@@ -214,8 +214,10 @@ class ContextCompactionOrchestrator(
         }
         // Full accumulated variables (all rounds merged) for DB persistence.
         // Session restore only reads the LATEST summary message, so it must contain
-        // the complete variable set, not just this round's delta.
-        val allVariables = agentContext.sessionVariables.getAll()
+        // the complete variable set, not just this round's delta. Trusted values stay in
+        // memory: they are re-contributed on every run entry, and persisting one would let a
+        // later run restore it as an ordinary value when its contributor no longer supplies it.
+        val allVariables = agentContext.sessionVariables.getConversationOwned()
 
         val strategyName = "agent"
 

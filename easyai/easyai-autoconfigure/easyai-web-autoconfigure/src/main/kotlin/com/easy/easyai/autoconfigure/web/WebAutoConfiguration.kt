@@ -35,6 +35,7 @@ import com.easy.easyai.snapshot.SnapshotService
 import com.easy.easyai.tools.background.BackgroundTaskManagerRegistry
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.web.connection.ConnectionProperties
+import com.easy.easyai.web.context.ChatContextContributor
 import com.easy.easyai.web.controller.ChatController
 import com.easy.easyai.web.handler.BackgroundTaskCustomEventConverter
 import com.easy.easyai.web.handler.CheckpointCustomEventConverter
@@ -150,13 +151,15 @@ open class WebAutoConfiguration {
         @Autowired(required = false)
         defaultWorkspaceService: DefaultWorkspaceService? = null,
         @Autowired(required = false)
-        agentStore: AsyncAgentStore? = null
+        agentStore: AsyncAgentStore? = null,
+        @Autowired(required = false)
+        contextContributors: List<ChatContextContributor>? = emptyList()
     ): ChatStreamService {
         return ChatStreamService(sessionManager, configStore, modelFactories,
             transformContextService, permissionService, sessionStore, projectStore, snapshotService,
             customEventConverters ?: emptyList(), commandService, goalStatusNotifier, goalStore, fileStorageService,
             scriptEnvProvider, executionService, skillTurnRouter, backgroundTaskManagerRegistry, defaultWorkspaceService,
-            agentStore)
+            agentStore, contextContributors ?: emptyList())
     }
 
     @Bean

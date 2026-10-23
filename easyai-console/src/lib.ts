@@ -30,6 +30,8 @@ export {
   resolveWriteScope,
   scopeQuery,
   withScope,
+  // Host-scoped headers (e.g. an active-family routing header) for every non-FormData request.
+  setDefaultRequestHeaders,
 } from './services/api-client';
 export type { AssetScope } from './services/api-client';
 
@@ -113,6 +115,10 @@ export { mergeToolResults } from './services/stores/chat/session-loader';
 // === Components ===
 export { ChatPanel } from './components/chat/ChatPanel';
 export { MessageList } from './components/chat/MessageList';
+// Model dropdown reused by host-built composers; `allowEmptySelection` lets a host keep
+// "server default" as a real choice instead of pinning the first enabled model.
+export { ModelSelector } from './components/chat/ModelSelector';
+export type { ModelSelectorProps } from './components/chat/ModelSelector';
 export { RenderVisualToolMessage } from './components/chat/tools/RenderVisualToolMessage';
 // Streaming-safe markdown renderer used by chat text segments; hosts reuse it for
 // any LLM-authored text so rendering stays identical to the chat bubbles.
@@ -147,6 +153,7 @@ export type {
   StorageBackendType,
   StorageEffectiveSource,
   StorageTestResult,
+  ModelCapabilities,
 } from './types/settings';
 
 export type { NavItem } from './types/layout';
@@ -211,6 +218,9 @@ export { DatabaseSetupPage } from './pages/DatabaseSetupPage';
 
 // === Utility ===
 export { setTheme } from './utils/theme';
+// Canonical reader for a contenteditable composer (chip-aware); hosts that mirror dictation slots
+// into their own draft state must read the editor through this, not innerText.
+export { readMessageEditorText } from './utils/attachment-utils';
 export { setupService } from './services/setup-service';
 export { useProjectStore } from './services/stores/project-store';
 export { useFeatureStore } from './services/stores/feature-store';
@@ -293,6 +303,9 @@ export { useDisplaySessions } from './hooks/useDisplaySessions';
 export { useAggregatedReferences } from './hooks/useAggregatedReferences';
 export { useChatBootstrap } from './hooks/useChatBootstrap';
 export { useVisibilityReconnect } from './hooks/useVisibilityReconnect';
+// Dictation for a contenteditable composer: live draft slots + sentence correction + polish.
+export { useVoiceInput } from './hooks/useVoiceInput';
+export type { VoicePhase, UseVoiceInputOptions } from './hooks/useVoiceInput';
 
 // Deploy freshness. `AppLayout` and `MobileAppLayout` mount the prompt themselves, so a host only
 // reaches for these when it builds its own root instead of using either layout.

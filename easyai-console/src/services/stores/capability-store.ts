@@ -20,23 +20,38 @@ interface CapabilityState {
   clear: () => void;
 }
 
-export const useCapabilityStore = create<CapabilityState>((set) => ({
-  capabilities: null,
-  loaded: false,
+export const useCapabilityStore = create<CapabilityState>((set) => {
+  /**
+   * Monotonic request id. A load that started before a family switch must not overwrite the
+   * snapshot the newer load writes when it resolves late; only the latest request may publish.
+   */
+  let loadSeq = 0;
 
-  load: async () => {
-    try {
-      const capabilities = await capabilityService.get();
-      set({ capabilities, loaded: true });
-    } catch {
-      // A failed probe must not block the session; selectors fall back to "manageable"
-      // and the backend write gate still enforces the real permission.
-      set({ capabilities: null, loaded: true });
-    }
-  },
+  return {
+    capabilities: null,
+    loaded: false,
 
-  clear: () => set({ capabilities: null, loaded: false }),
-}));
+    load: async () => {
+      const seq = ++loadSeq;
+      try {
+        const capabilities = await capabilityService.get();
+        if (seq !== loadSeq) return;
+        set({ capabilities, loaded: true });
+      } catch {
+        if (seq !== loadSeq) return;
+        // A failed probe must not block the session; selectors fall back to "manageable"
+        // and the backend write gate still enforces the real permission.
+        set({ capabilities: null, loaded: true });
+      }
+    },
+
+    clear: () => {
+      // Invalidate any in-flight probe so it cannot restore the previous user's snapshot.
+      loadSeq += 1;
+      set({ capabilities: null, loaded: false });
+    },
+  };
+});
 
 /**
  * Reactive selector: may the current login manage this asset kind's group bucket? Defaults to true

@@ -55,7 +55,7 @@ interface Session {
   draftFailureReported: boolean;
 }
 
-interface UseVoiceInputOptions {
+export interface UseVoiceInputOptions {
   editorRef: React.RefObject<HTMLDivElement>;
   /** Whether the dictation-refine task model is configured; read live at stop time to decide whether to offer polish. */
   isRefineEnabled: () => boolean;
