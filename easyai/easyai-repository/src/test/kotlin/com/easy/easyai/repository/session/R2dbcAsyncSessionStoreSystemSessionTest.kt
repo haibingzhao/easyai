@@ -9,7 +9,9 @@ import org.jetbrains.exposed.v1.r2dbc.transactions.TransactionManager
 import org.junit.jupiter.api.*
 import java.time.Instant
 import java.util.UUID
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -85,6 +87,34 @@ class R2dbcAsyncSessionStoreSystemSessionTest {
             sessionStore.ensureSessionExists(sessionId, context(sessionId, AgentContext.SYSTEM_KIND_ASYNC_TASK))
 
             assertFalse(sessionId in listedIds(), "the run's marker must survive a pre-existing row")
+        }
+    }
+
+    @Nested
+    inner class `session marker lookup` {
+
+        @Test
+        fun `returns the kind of a marked row`() = runTest {
+            val sessionId = "task-${UUID.randomUUID()}"
+            sessionStore.ensureSessionExists(sessionId, context(sessionId, AgentContext.SYSTEM_KIND_ASYNC_TASK))
+
+            assertEquals(
+                AsyncSessionStore.SessionMarker(AgentContext.SYSTEM_KIND_ASYNC_TASK),
+                sessionStore.findSessionMarker(sessionId)
+            )
+        }
+
+        @Test
+        fun `an ordinary chat row has no kind`() = runTest {
+            val sessionId = "chat-${UUID.randomUUID()}"
+            sessionStore.ensureSessionExists(sessionId, context(sessionId, systemKind = null))
+
+            assertEquals(AsyncSessionStore.SessionMarker(systemKind = null), sessionStore.findSessionMarker(sessionId))
+        }
+
+        @Test
+        fun `a missing row yields null`() = runTest {
+            assertNull(sessionStore.findSessionMarker("missing-${UUID.randomUUID()}"))
         }
     }
 }

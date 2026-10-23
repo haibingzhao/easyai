@@ -87,6 +87,17 @@ class R2dbcAsyncSessionStore(
         }
     }
 
+    override suspend fun findSessionMarker(id: String): AsyncSessionStore.SessionMarker? {
+        return suspendTransaction(db) {
+            Tables.Session
+                .select(Tables.Session.systemKind)
+                .where { Tables.Session.id eq id }
+                .limit(1)
+                .firstOrNull()
+                ?.let { AsyncSessionStore.SessionMarker(it[Tables.Session.systemKind]) }
+        }
+    }
+
     /**
      * Condition excluding Team Agent member sub-sessions from session listings.
      * A session is a member sub-session when its ID is referenced as
