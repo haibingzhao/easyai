@@ -80,6 +80,14 @@ data class MessageWithTimestamp(
  */
 interface AsyncSessionStore {
     suspend fun save(session: PersistedSession, userId: String = "system")
+
+    /**
+     * Ensure the session row exists and carry [AgentContext.systemKind] onto it.
+     *
+     * Stores without a hidden-session concept may keep the default no-op; the R2DBC store
+     * uses it so a session created through the ordinary save path still gets its marker.
+     */
+    suspend fun ensureSessionExists(sessionId: String, context: AgentContext) {}
     suspend fun findById(id: String, userId: String = "system"): PersistedSession?
     suspend fun findIdsByLimit(limit: Int, offset: Int = 0, projectId: String? = null, userId: String = "system", excludeSwarm: Boolean = true): SessionPageResult
 

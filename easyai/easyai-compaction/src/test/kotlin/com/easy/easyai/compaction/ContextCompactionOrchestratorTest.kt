@@ -18,6 +18,7 @@ import com.easy.easyai.core.model.Usage
 import com.easy.easyai.core.model.UserMessage
 import io.mockk.coEvery
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -50,6 +51,39 @@ class ContextCompactionOrchestratorTest {
 
     private fun collectingPusher(events: MutableList<AgentEvent>) =
         ContextCompactionOrchestrator.EventPusher { events.add(it) }
+
+    @Nested
+    inner class `persisted variables` {
+
+        @Test
+        fun `trusted values are not persisted with the summary`() = runTest {
+            val listener = mockk<CompactionListener>(relaxed = true)
+            val persisted = slot<Map<String, String>>()
+            coEvery {
+                listener.onMessagesCompacted(
+                    any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), capture(persisted)
+                )
+            } returns Unit
+
+            agentContext.sessionVariables.put("draft", "value")
+            agentContext.sessionVariables.putTrusted("home.familyId", "family-1")
+
+            val messages = listOf(
+                UserMessage("first question"),
+                AssistantMessage(content = listOf(TextContent("first answer"))),
+                UserMessage("second question"),
+                AssistantMessage(content = listOf(TextContent("second answer")))
+            )
+            ContextCompactionOrchestrator(
+                config = CompactionConfig(tailTurns = 1),
+                strategy = summaryStrategy(),
+                tokenEstimator = estimator,
+                compactionListener = listener
+            ).compact(agentContext, messages, turnId = 1, modelContextLength = 100_000)
+
+            assertEquals(mapOf("draft" to "value"), persisted.captured)
+        }
+    }
 
     @Nested
     inner class `tail structure protection` {

@@ -66,6 +66,7 @@ class R2dbcAsyncSessionStore(
                     it[Tables.Session.updatedAt] = updatedAt
                     it[Tables.Session.swarmRunId] = session.swarmRunId
                     it[Tables.Session.swarmTaskId] = session.swarmTaskId
+                    it[Tables.Session.systemKind] = session.systemKind
                 }
                 logger.info("Inserted session: {} with {} messages", session.id, session.messages.size)
             }
@@ -517,7 +518,7 @@ class R2dbcAsyncSessionStore(
      * write path creates the row first (this, or [save]) decides whether the marker lands
      * with the insert, and a background run must be hidden either way.
      */
-    suspend fun ensureSessionExists(sessionId: String, context: AgentContext) {
+    override suspend fun ensureSessionExists(sessionId: String, context: AgentContext) {
         suspendTransaction(db) {
             val userId = context.userId ?: UserScope.SYSTEM_USER_ID
             val now = System.currentTimeMillis()
@@ -780,7 +781,8 @@ class R2dbcAsyncSessionStore(
             createdAt = Instant.ofEpochMilli(row[Tables.Session.createdAt]),
             updatedAt = Instant.ofEpochMilli(row[Tables.Session.updatedAt]),
             swarmRunId = row[Tables.Session.swarmRunId],
-            swarmTaskId = row[Tables.Session.swarmTaskId]
+            swarmTaskId = row[Tables.Session.swarmTaskId],
+            systemKind = row[Tables.Session.systemKind]
         )
     }
 

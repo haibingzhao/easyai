@@ -6,6 +6,10 @@ import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.verify
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.runTest
@@ -13,8 +17,11 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.springframework.context.ApplicationEventPublisher
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -82,6 +89,25 @@ class SessionExecutionServiceTest {
             assertEquals(1, service.getActiveSessionCount())
             // handle1 is no longer registered
             assertFalse(handle1 === handle2)
+        }
+
+        @Test
+        fun `beginExecutionIfIdle refuses a second registration without touching the first`() = runTest {
+            service = createService(testScheduler)
+            val first = service.beginExecutionIfIdle("s1", "user1")
+            val second = service.beginExecutionIfIdle("s1", "user1")
+
+            assertTrue(first != null)
+            assertNull(second)
+            assertTrue(service.isLocallyExecuting("s1"))
+            testScheduler.advanceUntilIdle()
+            coVerify(exactly = 1) { sessionStore.updateStatus("s1", "streaming", "user1") }
+
+            // The original handle still owns the session and can end it.
+            service.endExecution(first!!)
+            testScheduler.advanceUntilIdle()
+            assertFalse(service.isLocallyExecuting("s1"))
+            coVerify(exactly = 1) { sessionStore.updateStatus("s1", "active", "user1", expectedStatus = "streaming") }
         }
     }
 
@@ -230,6 +256,35 @@ class SessionExecutionServiceTest {
 
             coVerify { sessionStore.updateStatus("unknown", "active", "user1", expectedStatus = "streaming") }
             coVerify { sessionStore.saveEndReason("unknown", "cancelled", "user1") }
+        }
+
+        @Test
+        fun `cancel waits for the admission's streaming write before downgrading`() = runBlocking {
+            val streamingStarted = CountDownLatch(1)
+            val releaseStreaming = CountDownLatch(1)
+            coEvery { sessionStore.updateStatus("s1", "streaming", "user1") } coAnswers {
+                streamingStarted.countDown()
+                releaseStreaming.await()
+                Unit
+            }
+            val threaded = SessionExecutionService(sessionStore, Dispatchers.IO)
+
+            val handle = threaded.beginExecutionIfIdle("s1", "user1", session = null, onCancel = {})
+            assertNotNull(handle)
+            assertTrue(streamingStarted.await(5, TimeUnit.SECONDS))
+
+            val cancel = async(Dispatchers.IO) { threaded.cancelExecution("s1", "user1") }
+            // Let cancel reach the join while the streaming write is still blocked. It must not
+            // downgrade the row yet; otherwise the late streaming write would leave it stuck.
+            delay(100)
+            releaseStreaming.countDown()
+            assertTrue(cancel.await().aborted)
+            threaded.destroy()
+
+            coVerify(ordering = io.mockk.Ordering.ORDERED) {
+                sessionStore.updateStatus("s1", "streaming", "user1")
+                sessionStore.updateStatus("s1", "active", "user1", expectedStatus = "streaming")
+            }
         }
 
         @Test

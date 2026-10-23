@@ -9,7 +9,9 @@ import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.skills.command.CommandReferenceException
 import com.easy.easyai.snapshot.RevertService
 import com.easy.easyai.snapshot.SnapshotService
+import com.easy.easyai.web.context.ChatTurnContext
 import com.easy.easyai.web.model.*
+import com.easy.easyai.web.security.currentGroupId
 import com.easy.easyai.web.security.currentOwners
 import com.easy.easyai.web.security.getCurrentUserId
 import com.easy.easyai.web.service.ChatStreamService
@@ -19,6 +21,7 @@ import com.easy.easyai.web.util.AttachmentValidationException
 import kotlinx.coroutines.reactor.asFlux
 import kotlinx.coroutines.reactor.mono
 import org.slf4j.LoggerFactory
+import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.codec.ServerSentEvent
@@ -69,6 +72,16 @@ class ChatController(
         return userId
     }
 
+    /** The server-resolved request identity handed to the session-variable contributors. */
+    private suspend fun chatTurn(userId: String, sessionId: String?, headers: HttpHeaders): ChatTurnContext =
+        ChatTurnContext.from(
+            userId = userId,
+            owners = currentOwners(),
+            sessionId = sessionId,
+            groupId = currentGroupId(),
+            headers = headers,
+        )
+
     /**
      * SSE streaming chat endpoint.
      * Returns a Flux<ServerSentEvent> which Spring WebFlux automatically
@@ -79,14 +92,16 @@ class ChatController(
         produces = [MediaType.TEXT_EVENT_STREAM_VALUE]
     )
     fun chat(
-        @RequestBody request: ChatRequest
+        @RequestBody request: ChatRequest,
+        @RequestHeader headers: HttpHeaders
     ): Flux<ServerSentEvent<ChatStreamEvent>> {
         logger.debug("Received chat request: {}", request)
         return mono {
             val userId = getCurrentUserId()
             // Verify ownership when targeting an existing session
             request.sessionId?.let { verifyOwnership(it) }
-            chatStreamService.streamChat(request, userId, currentOwners())
+            val turn = chatTurn(userId, request.sessionId, headers)
+            chatStreamService.streamChat(request, userId, turn.owners, turn)
         }.flatMapMany { it.asFlux() }
     }
 
@@ -355,11 +370,13 @@ class ChatController(
         produces = [MediaType.TEXT_EVENT_STREAM_VALUE]
     )
     fun resumeChat(
-        @RequestBody request: ResumeRequest
+        @RequestBody request: ResumeRequest,
+        @RequestHeader headers: HttpHeaders
     ): Flux<ServerSentEvent<ChatStreamEvent>> {
         return mono {
             val userId = verifyOwnership(request.sessionId)
-            chatStreamService.resumeChat(request.sessionId, userId, request.message, currentOwners())
+            val turn = chatTurn(userId, request.sessionId, headers)
+            chatStreamService.resumeChat(request.sessionId, userId, request.message, turn.owners, turn)
         }.flatMapMany { it.asFlux() }
     }
 
@@ -504,11 +521,13 @@ class ChatController(
     fun answerQuestion(
         @PathVariable sessionId: String,
         @PathVariable toolCallId: String,
-        @RequestBody request: QuestionAnswerRequest
+        @RequestBody request: QuestionAnswerRequest,
+        @RequestHeader headers: HttpHeaders
     ): Flux<ServerSentEvent<ChatStreamEvent>> {
         return mono {
             val userId = verifyOwnership(sessionId)
-            chatStreamService.resumeAfterAnswer(sessionId, userId, toolCallId, request.answers, currentOwners())
+            val turn = chatTurn(userId, sessionId, headers)
+            chatStreamService.resumeAfterAnswer(sessionId, userId, toolCallId, request.answers, turn.owners, turn)
         }.flatMapMany { it.asFlux() }
     }
 
@@ -522,11 +541,13 @@ class ChatController(
     )
     fun rejectQuestion(
         @PathVariable sessionId: String,
-        @PathVariable toolCallId: String
+        @PathVariable toolCallId: String,
+        @RequestHeader headers: HttpHeaders
     ): Flux<ServerSentEvent<ChatStreamEvent>> {
         return mono {
             val userId = verifyOwnership(sessionId)
-            chatStreamService.rejectAndResume(sessionId, userId, toolCallId, currentOwners())
+            val turn = chatTurn(userId, sessionId, headers)
+            chatStreamService.rejectAndResume(sessionId, userId, toolCallId, turn.owners, turn)
         }.flatMapMany { it.asFlux() }
     }
 
@@ -539,11 +560,13 @@ class ChatController(
         produces = [MediaType.TEXT_EVENT_STREAM_VALUE]
     )
     fun compactSession(
-        @PathVariable sessionId: String
+        @PathVariable sessionId: String,
+        @RequestHeader headers: HttpHeaders
     ): Flux<ServerSentEvent<ChatStreamEvent>> {
         return mono {
             val userId = verifyOwnership(sessionId)
-            chatStreamService.compactChat(sessionId, userId, currentOwners())
+            val turn = chatTurn(userId, sessionId, headers)
+            chatStreamService.compactChat(sessionId, userId, turn.owners, turn)
         }.flatMapMany { it.asFlux() }
     }
 
@@ -560,12 +583,14 @@ class ChatController(
     fun allowPermission(
         @PathVariable sessionId: String,
         @PathVariable toolCallId: String,
-        @RequestBody request: PermissionReplyRequest
+        @RequestBody request: PermissionReplyRequest,
+        @RequestHeader headers: HttpHeaders
     ): Flux<ServerSentEvent<ChatStreamEvent>> {
         return mono {
             val userId = verifyOwnership(sessionId)
+            val turn = chatTurn(userId, sessionId, headers)
             chatStreamService.allowPermissionAndResume(sessionId, userId, toolCallId, request.remember,
-                request.permission, request.pattern, currentOwners())
+                request.permission, request.pattern, turn.owners, turn)
         }.flatMapMany { it.asFlux() }
     }
 
@@ -580,12 +605,14 @@ class ChatController(
     fun denyPermission(
         @PathVariable sessionId: String,
         @PathVariable toolCallId: String,
-        @RequestBody request: PermissionReplyRequest
+        @RequestBody request: PermissionReplyRequest,
+        @RequestHeader headers: HttpHeaders
     ): Flux<ServerSentEvent<ChatStreamEvent>> {
         return mono {
             val userId = verifyOwnership(sessionId)
+            val turn = chatTurn(userId, sessionId, headers)
             chatStreamService.denyPermissionAndResume(sessionId, userId, toolCallId, request.remember,
-                request.reason, request.permission, request.pattern, currentOwners())
+                request.reason, request.permission, request.pattern, turn.owners, turn)
         }.flatMapMany { it.asFlux() }
     }
     // ==================== Snapshot / Revert endpoints ====================

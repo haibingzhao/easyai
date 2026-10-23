@@ -48,7 +48,8 @@ class ExecutionHandle internal constructor(
     val userId: String,
     /** The running [ChatSession], or null when the execution has no agent (compaction). */
     val session: ChatSession?,
-    internal val beginJob: Job?,
+    /** Assigned right after the atomic registration in [SessionExecutionService.beginExecutionIfIdle]. */
+    @Volatile internal var beginJob: Job?,
     /** Abort hook for executions with no [session] to abort, e.g. cancelling the compaction job. */
     internal val onCancel: (() -> Unit)?
 )
@@ -86,6 +87,17 @@ class SessionExecutionService(
 
     private val logger = LoggerFactory.getLogger(javaClass)
     private val executions = ConcurrentHashMap<String, ExecutionHandle>()
+    /**
+     * Serialises registration publication, idle admission and cancel-side removal.
+     *
+     * The handle's [ExecutionHandle.beginJob] must be visible before the handle is visible to a
+     * concurrent cancel: otherwise cancel can remove the handle, read `beginJob == null`, skip the
+     * join and leave the row at `streaming`. `beginExecution` takes the same lock so an idle
+     * admission's check-and-set cannot interleave with an overwrite-by-design registration.
+     * [endExecution]'s conditional remove stays outside the lock: identity comparison already makes
+     * it a single-writer guard, and it never publishes a handle.
+     */
+    private val admissionLock = Any()
     private val statusScope = CoroutineScope(SupervisorJob() + dispatcher)
     private var eventPublisher: ApplicationEventPublisher? = null
 
@@ -115,7 +127,45 @@ class SessionExecutionService(
         resetEndReason: Boolean = true,
         onCancel: (() -> Unit)? = null
     ): ExecutionHandle {
-        val beginJob = sessionStore?.let { store ->
+        val handle = ExecutionHandle(
+            sessionId, userId, session, markStreaming(sessionId, userId, resetEndReason), onCancel,
+        )
+        val previous = synchronized(admissionLock) { executions.put(sessionId, handle) }
+        if (previous != null) {
+            logger.warn("Overwriting execution handle for session {} (SSE reconnect or concurrent invocation)", sessionId)
+        }
+        return handle
+    }
+
+    /**
+     * Register an execution only when this instance is idle for [sessionId].
+     *
+     * [beginExecution] overwrites by design (an SSE reconnect), but a caller that must not disturb
+     * an already-running chat or compaction cannot get that from a separate
+     * [isLocallyExecuting] pre-check followed by [beginExecution]: another run can register in
+     * between. The check-and-register below runs under [admissionLock], which [beginExecution] and
+     * [cancelExecution] also take, so at most one caller wins; `null` means "busy".
+     */
+    fun beginExecutionIfIdle(
+        sessionId: String,
+        userId: String,
+        session: ChatSession? = null,
+        resetEndReason: Boolean = true,
+        onCancel: (() -> Unit)? = null
+    ): ExecutionHandle? {
+        val handle = ExecutionHandle(sessionId, userId, session, null, onCancel)
+        synchronized(admissionLock) {
+            if (executions.containsKey(sessionId)) return null
+            // Assign before publishing: a cancel that removes the handle must see the job it has
+            // to join, otherwise it can downgrade the row before markStreaming writes `streaming`.
+            handle.beginJob = markStreaming(sessionId, userId, resetEndReason)
+            executions[sessionId] = handle
+        }
+        return handle
+    }
+
+    private fun markStreaming(sessionId: String, userId: String, resetEndReason: Boolean): Job? =
+        sessionStore?.let { store ->
             statusScope.launch {
                 try {
                     store.updateStatus(sessionId, "streaming", userId)
@@ -127,14 +177,6 @@ class SessionExecutionService(
                 }
             }
         }
-
-        val handle = ExecutionHandle(sessionId, userId, session, beginJob, onCancel)
-        val previous = executions.put(sessionId, handle)
-        if (previous != null) {
-            logger.warn("Overwriting execution handle for session {} (SSE reconnect or concurrent invocation)", sessionId)
-        }
-        return handle
-    }
 
     /**
      * End an execution and transition DB state back to active.
@@ -214,7 +256,9 @@ class SessionExecutionService(
      *   mean the cancel was ignored.
      */
     suspend fun cancelExecution(sessionId: String, userId: String): CancelVerdict {
-        val handle = executions.remove(sessionId)
+        // Same critical section as admission: either this removes a fully-published handle (with
+        // beginJob assigned) or the admission has not published one yet and will see this removal.
+        val handle = synchronized(admissionLock) { executions.remove(sessionId) }
         val abortable = handle != null && (handle.session != null || handle.onCancel != null)
         when {
             handle == null ->

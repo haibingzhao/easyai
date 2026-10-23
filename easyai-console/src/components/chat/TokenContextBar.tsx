@@ -67,7 +67,9 @@ export const TokenContextBar: React.FC = () => {
     compactSession(sessionId, {
       onEvent: (event) => handleEvent(event),
       onDone: () => {
-        // Compaction complete — cumulativeUsage already updated via compaction_end event
+        // Compaction complete — cumulativeUsage already updated via compaction_end event.
+        // A cancelled compaction ends with `done` and no compaction_end, so stop the spinner here.
+        setCompacting(false);
       },
       onError: (event) => {
         // Reset the loading state so the spinner does not get stuck if compaction fails.

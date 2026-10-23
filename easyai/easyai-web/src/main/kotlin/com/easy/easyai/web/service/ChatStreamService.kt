@@ -33,8 +33,9 @@ import com.easy.easyai.skills.selection.SkillTurnRouter
 import com.easy.easyai.snapshot.SnapshotService
 import com.easy.easyai.tools.background.BackgroundTaskManagerRegistry
 import com.easy.easyai.tools.background.BackgroundTaskStatus
-import java.nio.file.Files
-import java.nio.file.Path
+import com.easy.easyai.web.context.ChatContextContributor
+import com.easy.easyai.web.context.ChatContextRejectedException
+import com.easy.easyai.web.context.ChatTurnContext
 import com.easy.easyai.web.handler.ChatEventConverter
 import com.easy.easyai.web.handler.CustomEventConverter
 import com.easy.easyai.web.model.*
@@ -46,11 +47,17 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.DisposableBean
+import org.springframework.http.HttpStatus
 import org.springframework.http.codec.ServerSentEvent
 import org.springframework.stereotype.Service
+import org.springframework.web.server.ResponseStatusException
 import tools.jackson.databind.ObjectMapper
+import java.nio.file.Files
+import java.nio.file.Path
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Coroutine-based service that bridges EasyAI Agent with SSE streaming.
@@ -84,7 +91,13 @@ class ChatStreamService(
     /** Allocates the per-session scratch workspace for chats that come in without a project. */
     private val workspaceService: DefaultWorkspaceService? = null,
     /** Guards the fresh-chat entry against an agentId with no row; see [streamChat]. */
-    private val agentStore: AsyncAgentStore? = null
+    private val agentStore: AsyncAgentStore? = null,
+    /**
+     * Server-trusted session-variable contributors, invoked on every run entry (fresh chat,
+     * resume, question/permission answer, manual compaction). Empty keeps the pre-existing
+     * behaviour: no variables are injected and no host identity is resolved.
+     */
+    private val contextContributors: List<ChatContextContributor> = emptyList()
 ) : DisposableBean {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper: ObjectMapper = SharedObjectMapper.instance
@@ -304,7 +317,8 @@ class ChatStreamService(
     suspend fun streamChat(
         request: ChatRequest,
         userId: String = "system",
-        owners: Set<String> = emptySet()
+        owners: Set<String> = emptySet(),
+        turn: ChatTurnContext? = null
     ): Flow<ServerSentEvent<ChatStreamEvent>> {
         val configId = request.modelProviderConfigId
             ?: return flowOf(errorSse("modelProviderConfigId is required"))
@@ -350,9 +364,14 @@ class ChatStreamService(
             // Mint the session id up front: a project-less chat resolves its temporary workspace
             // by session, so the very first turn must already run inside that directory.
             val sessionId = request.sessionId ?: UUID.randomUUID().toString()
+            // Resolve the request identity before anything per-session exists: a rejected
+            // contributor must not leave a workspace directory and temp project row behind.
+            val contributed = resolveContributions(turn?.copy(sessionId = sessionId))
             val agentContext = createAgentContext(agentId, config, sessionId, request.projectId, userId, readOwners).let { ctx ->
                 if (request.inputData != null) ctx.copy(inputVariables = request.inputData) else ctx
             }
+            // Trusted values survive the manager's restoreSessionVariables() later in this call.
+            applyContributions(agentContext, contributed)
 
             val session = sessionManager.getOrCreateSession(
                 agentContext = agentContext,
@@ -364,6 +383,8 @@ class ChatStreamService(
             if (overrides != null) persistModelOverrides(sessionId, overrides)
             chatFlow(agentContext, session, request.message, request.attachments)
         } catch (e: CancellationException) {
+            throw e
+        } catch (e: ChatContextRejectedException) {
             throw e
         } catch (e: Exception) {
             flowOf(errorSse(e.message))
@@ -572,10 +593,13 @@ class ChatStreamService(
      * Optionally accepts a user message to add before resuming.
      * Injects resumption context and streams the continuation as SSE.
      */
-    suspend fun resumeChat(sessionId: String, userId: String = "system", message: String? = null, owners: Collection<String> = emptyList()): Flow<ServerSentEvent<ChatStreamEvent>> {
+    suspend fun resumeChat(sessionId: String, userId: String = "system", message: String? = null, owners: Collection<String> = emptyList(), turn: ChatTurnContext? = null): Flow<ServerSentEvent<ChatStreamEvent>> {
         return try {
             val session = sessionManager.getSession(sessionId, userId, owners)
                 ?: throw IllegalStateException("Session not found: $sessionId")
+            // A resumed session restores only compaction-persisted variables; re-resolve the
+            // request's current identity instead of trusting a possibly stale snapshot.
+            applyContextContributors(session.agentContext, turn?.copy(sessionId = sessionId))
 
             // Resume goal timer if it was paused waiting for user input
             resumeGoalTimer(sessionId, userId)
@@ -599,6 +623,8 @@ class ChatStreamService(
 
             buildSseFlow(session, stream, context = "resume", isRetryable = true)
         } catch (e: CancellationException) {
+            throw e
+        } catch (e: ChatContextRejectedException) {
             throw e
         } catch (e: Exception) {
             flowOf(errorSse(e.message?.removePrefix("Session not found: ") ?: e.message))
@@ -842,10 +868,54 @@ class ChatStreamService(
     }
 
     /**
+     * Merge every contributor's values into [context] as trusted session variables.
+     *
+     * Run entry points whose session-row validation already happened call this; [streamChat]
+     * resolves the contributions first so a rejection cannot leave per-session state behind.
+     */
+    private suspend fun applyContextContributors(context: AgentContext, turn: ChatTurnContext?) {
+        applyContributions(context, resolveContributions(turn))
+    }
+
+    /** Run every contributor for this request; throws when a host refuses the run. */
+    private suspend fun resolveContributions(turn: ChatTurnContext?): Map<String, String> {
+        if (turn == null || contextContributors.isEmpty()) return emptyMap()
+        val contributed = LinkedHashMap<String, String>()
+        for (contributor in contextContributors) {
+            contributed.putAll(contributor.contribute(turn))
+        }
+        return contributed
+    }
+
+    private fun applyContributions(context: AgentContext, contributed: Map<String, String>) {
+        contributed.forEach { (key, value) -> context.sessionVariables.putTrusted(key, value) }
+    }
+
+    /**
+     * Validate a permission/compaction continuation before it produces side effects, and return
+     * the restored session so the caller does not have to restore it a second time.
+     * The resumed flow validates again only when no session is handed over.
+     */
+    private suspend fun validateTurnIdentity(
+        sessionId: String,
+        userId: String,
+        owners: Collection<String>,
+        turn: ChatTurnContext?,
+    ): ChatSession? {
+        if (turn == null || contextContributors.isEmpty()) return null
+        val session = sessionManager.getSession(sessionId, userId, owners)
+            // This runs outside the SSE flow, so it must use the same HTTP mapping as compact:
+            // an IllegalStateException here would surface as an opaque 500.
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found: $sessionId")
+        applyContextContributors(session.agentContext, turn.copy(sessionId = sessionId))
+        return session
+    }
+
+    /**
      * Resume after answering a question.
      * Constructs a ToolResultMessage (role=TOOL) and resumes the session.
      */
-    suspend fun resumeAfterAnswer(sessionId: String, userId: String = "system", toolCallId: String, answers: List<List<String>>, owners: Collection<String> = emptyList()): Flow<ServerSentEvent<ChatStreamEvent>> {
+    suspend fun resumeAfterAnswer(sessionId: String, userId: String = "system", toolCallId: String, answers: List<List<String>>, owners: Collection<String> = emptyList(), turn: ChatTurnContext? = null): Flow<ServerSentEvent<ChatStreamEvent>> {
         val answerText = buildAnswerText(answers)
         val toolResultEntry = ToolResultEntry(
             toolCallId = toolCallId,
@@ -858,7 +928,8 @@ class ChatStreamService(
             userId = userId,
             toolCallId = toolCallId,
             context = "answer",
-            owners = owners
+            owners = owners,
+            turn = turn
         ) { messages, resolvedToolCallId ->
             // toolName will be resolved from messages
             val toolName = findToolNameById(messages, resolvedToolCallId)
@@ -870,7 +941,7 @@ class ChatStreamService(
      * Reject a pending question and resume the session.
      * Constructs a ToolResultMessage (role=TOOL) with rejection info and resumes the session.
      */
-    suspend fun rejectAndResume(sessionId: String, userId: String = "system", toolCallId: String, owners: Collection<String> = emptyList()): Flow<ServerSentEvent<ChatStreamEvent>> {
+    suspend fun rejectAndResume(sessionId: String, userId: String = "system", toolCallId: String, owners: Collection<String> = emptyList(), turn: ChatTurnContext? = null): Flow<ServerSentEvent<ChatStreamEvent>> {
         val toolResultEntry = ToolResultEntry(
             toolCallId = toolCallId,
             toolName = "", // will be resolved in resumeWithToolResult
@@ -882,7 +953,8 @@ class ChatStreamService(
             userId = userId,
             toolCallId = toolCallId,
             context = "resume",
-            owners = owners
+            owners = owners,
+            turn = turn
         ) { messages, resolvedToolCallId ->
             val toolName = findToolNameById(messages, resolvedToolCallId)
             toolResultEntry.copy(toolName = toolName)
@@ -896,15 +968,20 @@ class ChatStreamService(
      * @param permission Permission type echoed back from the frontend (originally sent in PermissionRequestEvent)
      * @param pattern Pattern echoed back from the frontend
      */
-    suspend fun allowPermissionAndResume(sessionId: String, userId: String = "system", toolCallId: String, remember: Boolean, permission: String?, pattern: String?, owners: Collection<String> = emptyList()): Flow<ServerSentEvent<ChatStreamEvent>> {
+    suspend fun allowPermissionAndResume(sessionId: String, userId: String = "system", toolCallId: String, remember: Boolean, permission: String?, pattern: String?, owners: Collection<String> = emptyList(), turn: ChatTurnContext? = null): Flow<ServerSentEvent<ChatStreamEvent>> {
         // If remember=true, save the allow rule before resuming
+        var validated: ChatSession? = null
         if (remember && permissionService != null && permission != null) {
-            val context = sessionManager.getSessionContext(sessionId, userId, owners)
-            context?.projectId?.let { projectId ->
+            // Validate the request identity before persisting anything: a rejected turn must not
+            // leave a durable rule behind.
+            validated = validateTurnIdentity(sessionId, userId, owners, turn)
+            val scopeContext = validated?.agentContext
+                ?: sessionManager.getSessionContext(sessionId, userId, owners)
+            scopeContext?.projectId?.let { projectId ->
                 // Temporary workspaces keep no durable rules; their "always allow" lands in the
                 // default bucket (the family's shared one when the login is group-backed), which
                 // every project-less session of that scope reads.
-                val ruleScope = PermissionScope.forProject(projectId, context.projectKind, userId, owners)
+                val ruleScope = PermissionScope.forProject(projectId, scopeContext.projectKind, userId, owners)
                 permissionService.addAllowRule(ruleScope, permission, pattern ?: "*")
                 logger.info("Saved allow rule for {} {} in scope {}", permission, pattern, ruleScope)
             }
@@ -919,7 +996,9 @@ class ChatStreamService(
             toolCallId = toolCallId,
             context = "permission_allow",
             saveToolResult = false,
-            owners = owners
+            owners = owners,
+            turn = turn,
+            preloadedSession = validated
         ) { messages, resolvedToolCallId ->
             val toolName = findToolNameById(messages, resolvedToolCallId)
             ToolResultEntry(toolCallId = resolvedToolCallId, toolName = toolName, result = "", isError = false)
@@ -933,12 +1012,17 @@ class ChatStreamService(
      * @param permission Permission type echoed back from the frontend (originally sent in PermissionRequestEvent)
      * @param pattern Pattern echoed back from the frontend
      */
-    suspend fun denyPermissionAndResume(sessionId: String, userId: String = "system", toolCallId: String, remember: Boolean, reason: String?, permission: String?, pattern: String?, owners: Collection<String> = emptyList()): Flow<ServerSentEvent<ChatStreamEvent>> {
+    suspend fun denyPermissionAndResume(sessionId: String, userId: String = "system", toolCallId: String, remember: Boolean, reason: String?, permission: String?, pattern: String?, owners: Collection<String> = emptyList(), turn: ChatTurnContext? = null): Flow<ServerSentEvent<ChatStreamEvent>> {
         // If remember=true, save the deny rule before resuming
+        var validated: ChatSession? = null
         if (remember && permissionService != null && permission != null) {
-            val context = sessionManager.getSessionContext(sessionId, userId, owners)
-            context?.projectId?.let { projectId ->
-                val ruleScope = PermissionScope.forProject(projectId, context.projectKind, userId, owners)
+            // Validate the request identity before persisting anything: a rejected turn must not
+            // leave a durable rule behind.
+            validated = validateTurnIdentity(sessionId, userId, owners, turn)
+            val scopeContext = validated?.agentContext
+                ?: sessionManager.getSessionContext(sessionId, userId, owners)
+            scopeContext?.projectId?.let { projectId ->
+                val ruleScope = PermissionScope.forProject(projectId, scopeContext.projectKind, userId, owners)
                 permissionService.addDenyRule(ruleScope, permission, pattern ?: "*")
                 logger.info("Saved deny rule for {} {} in scope {}", permission, pattern, ruleScope)
             }
@@ -957,7 +1041,9 @@ class ChatStreamService(
             userId = userId,
             toolCallId = toolCallId,
             context = "permission_deny",
-            owners = owners
+            owners = owners,
+            turn = turn,
+            preloadedSession = validated
         ) { messages, resolvedToolCallId ->
             val toolName = findToolNameById(messages, resolvedToolCallId)
             entry.copy(toolName = toolName)
@@ -983,11 +1069,20 @@ class ChatStreamService(
         context: String,
         saveToolResult: Boolean = true,
         owners: Collection<String> = emptyList(),
+        turn: ChatTurnContext? = null,
+        /** Already restored and contributor-validated by the caller; skips both steps here. */
+        preloadedSession: ChatSession? = null,
         resolveToolName: (messages: List<EasyAiMessage>, toolCallId: String) -> ToolResultEntry
     ): Flow<ServerSentEvent<ChatStreamEvent>> {
         return try {
-            val session = sessionManager.getSession(sessionId, userId, owners)
+            val session = preloadedSession ?: sessionManager.getSession(sessionId, userId, owners)
                 ?: throw IllegalStateException("Session not found: $sessionId")
+            // Continuations re-resolve the request identity; the restored context only carries
+            // whatever a previous compaction happened to persist. A preloaded session already has
+            // this request's contributions applied to the same AgentContext instance.
+            if (preloadedSession == null) {
+                applyContextContributors(session.agentContext, turn?.copy(sessionId = sessionId))
+            }
 
             // Clear pending permission from DB (permission has been answered)
             if (context.startsWith("permission_") && sessionStore != null) {
@@ -1063,6 +1158,8 @@ class ChatStreamService(
                 }
             }
         } catch (e: CancellationException) {
+            throw e
+        } catch (e: ChatContextRejectedException) {
             throw e
         } catch (e: Exception) {
             flowOf(errorSse(e.message))
@@ -1335,70 +1432,101 @@ class ChatStreamService(
      * Manually trigger context compaction for a session.
      * Streams compaction events as SSE in real-time via a Channel bridge.
      */
-    fun compactChat(sessionId: String, userId: String = "system", owners: Collection<String> = emptyList()): Flow<ServerSentEvent<ChatStreamEvent>> = flow {
-        val channel = Channel<AgentEvent>(Channel.UNLIMITED)
+    suspend fun compactChat(sessionId: String, userId: String = "system", owners: Collection<String> = emptyList(), turn: ChatTurnContext? = null): Flow<ServerSentEvent<ChatStreamEvent>> {
+        // Validate before registering anything: a rejected identity must not overwrite the
+        // handle of a running chat or turn the 403 into an SSE error.
+        val session = sessionManager.getSession(sessionId, userId, owners)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found: $sessionId")
+        // Keep the request identity in the set compaction persists; trusted values also
+        // survive the strategy's replaceAll for the rest of this run.
+        applyContextContributors(session.agentContext, turn?.copy(sessionId = sessionId))
+        val cancelled = AtomicBoolean(false)
+        // Published to the cancel thread: a plain var has no happens-before, and a stale null
+        // read there would leave the compaction running unowned.
+        val compactionJob = AtomicReference<Job?>(null)
 
-        // Launch compaction in a background coroutine that pushes events to the channel.
-        // Job is held so cancellation can abort it when the SSE connection drops.
-        val compactionJob = CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
-            try {
-                val session = sessionManager.getSession(sessionId, userId, owners)
-                    ?: throw IllegalStateException("Session not found: $sessionId")
+        return flow {
+            // Admission happens at collection time: a response that is never subscribed (the
+            // client disconnected before flatMapMany subscribed) must not leave a registered
+            // handle and a `streaming` row behind, since nothing would ever call endExecution.
+            // Atomic: a separate isLocallyExecuting check can lose a race with a chat that
+            // registers between the check and this line.
+            val handle = executionService?.let { service ->
+                service.beginExecutionIfIdle(
+                    sessionId, userId, session = null, resetEndReason = false,
+                    onCancel = {
+                        cancelled.set(true)
+                        compactionJob.get()?.cancel()
+                    },
+                ) ?: throw ResponseStatusException(HttpStatus.CONFLICT, "Session is running; cannot compact")
+            }
+            val channel = Channel<AgentEvent>(Channel.UNLIMITED)
 
-                val context = session.agentContext
-                val messages = sessionManager.loadMessages(sessionId)
-                val messageTimestamps = sessionManager.getMessageTimestamps(sessionId)
+            // Launch compaction in a background coroutine that pushes events to the channel.
+            // Job is held so cancellation can abort it when the SSE connection drops.
+            compactionJob.set(CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
+                try {
+                    val context = session.agentContext
+                    val messages = sessionManager.loadMessages(sessionId)
+                    val messageTimestamps = sessionManager.getMessageTimestamps(sessionId)
 
-                val compactionService = transformContextService as? CompactionTransformContextService
-                    ?: throw IllegalStateException("Compaction service not available")
+                    val compactionService = transformContextService as? CompactionTransformContextService
+                        ?: throw IllegalStateException("Compaction service not available")
 
-                val eventPusher = ContextCompactionOrchestrator.EventPusher { event ->
-                    channel.send(event)
+                    val eventPusher = ContextCompactionOrchestrator.EventPusher { event ->
+                        channel.send(event)
+                    }
+
+                    compactionService.manualCompactWithPusher(
+                        agentContext = context,
+                        messages = messages,
+                        turnId = 0,
+                        modelContextLength = context.modelContextLength,
+                        eventPusher = eventPusher,
+                        messageTimestamps = messageTimestamps,
+                        chatModel = session.getChatModel()
+                    )
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logger.error("Error during compaction for session {}", sessionId, e)
+                    channel.close(e)
+                    return@launch
+                } finally {
+                    channel.close()
                 }
+            })
 
-                compactionService.manualCompactWithPusher(
-                    agentContext = context,
-                    messages = messages,
-                    turnId = 0,
-                    modelContextLength = context.modelContextLength,
-                    eventPusher = eventPusher,
-                    messageTimestamps = messageTimestamps,
-                    chatModel = session.getChatModel()
+            // A cancel that landed between admission and this subscription already removed the
+            // handle; abort the job it could not see yet instead of running compaction unowned.
+            // The stop is still reported: a silent close reaches the client as connection_lost.
+            if (cancelled.get()) {
+                compactionJob.get()?.cancel()
+                emit(ChatStreamEvent.Done(reason = "cancelled").toSse("done"))
+                return@flow
+            }
+
+            try {
+                channel.consumeAsFlow().collect { event ->
+                    val chatEvents = ChatEventConverter.convert(event, customEventConverters)
+                    chatEvents.forEach { chatEvent -> emit(chatEvent.toSse()) }
+                }
+                // A cancel closes the producer without an error, so a normal completion here also
+                // covers "a cancel stopped it" — reporting completion then would be a lie.
+                emit(
+                    ChatStreamEvent.Done(
+                        reason = if (cancelled.get()) "cancelled" else "compaction_complete"
+                    ).toSse("done")
                 )
             } catch (e: CancellationException) {
+                logger.info("Compaction SSE cancelled for session {}, aborting background compaction", sessionId)
+                compactionJob.get()?.cancel()
                 throw e
             } catch (e: Exception) {
-                logger.error("Error during compaction for session {}", sessionId, e)
-                channel.close(e)
-                return@launch
+                emit(errorSse(e.message?.removePrefix("Session not found: ") ?: e.message))
             } finally {
-                channel.close()
+                handle?.let { executionService.endExecution(it, endReason = null) }
             }
-        }
-
-        // Register execution + persist streaming status
-        // NOTE: Do NOT reset endReason for compaction — it's not a new Agent execution.
-        // onCancel keeps the cancel verdict honest: there is no ChatSession to abort here, so
-        // without the hook a Stop during compaction would report "cancelled" while the job ran on.
-        val handle = executionService?.beginExecution(
-            sessionId, userId, session = null, resetEndReason = false,
-            onCancel = { compactionJob.cancel() }
-        )
-
-        try {
-            channel.consumeAsFlow().collect { event ->
-                val chatEvents = ChatEventConverter.convert(event, customEventConverters)
-                chatEvents.forEach { chatEvent -> emit(chatEvent.toSse()) }
-            }
-            emit(ChatStreamEvent.Done(reason = "compaction_complete").toSse("done"))
-        } catch (e: CancellationException) {
-            logger.info("Compaction SSE cancelled for session {}, aborting background compaction", sessionId)
-            compactionJob.cancel()
-            throw e
-        } catch (e: Exception) {
-            emit(errorSse(e.message?.removePrefix("Session not found: ") ?: e.message))
-        } finally {
-            handle?.let { executionService.endExecution(it, endReason = null) }
         }
     }
 }

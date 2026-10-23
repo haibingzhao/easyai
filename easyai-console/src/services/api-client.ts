@@ -58,18 +58,25 @@ export async function authFetch(
   options?: AuthFetchOptions,
 ): Promise<Response> {
   // Detect FormData body — the browser must auto-set Content-Type with the
-  // multipart boundary.  Passing an explicit `headers` object prevents that
-  // in some environments, so for FormData we authenticate via the `token`
-  // query parameter (already supported by JwtAuthenticationFilter) and
-  // omit `headers` from the fetch init entirely.
+  // multipart boundary.  An explicit Content-Type prevents that in some
+  // environments, so for FormData we authenticate via the `token` query
+  // parameter (already supported by JwtAuthenticationFilter) and only keep the
+  // host's default headers, never caller-supplied ones.
   const isFormData = typeof FormData !== 'undefined' && options?.body instanceof FormData;
 
   let effectiveUrl = url;
   const fetchOptions: RequestInit = { ...options };
 
   if (isFormData) {
-    // Remove headers so the browser auto-sets Content-Type: multipart/form-data
-    delete fetchOptions.headers;
+    // Call-specific headers (including any Content-Type) are dropped: they would break the
+    // multipart boundary. Default headers carry the host's request scope and must still apply.
+    const defaults = Object.entries(defaultRequestHeadersProvider?.() ?? {})
+      .filter(([key]) => key.toLowerCase() !== 'content-type');
+    if (defaults.length > 0) {
+      fetchOptions.headers = new Headers(defaults);
+    } else {
+      delete fetchOptions.headers;
+    }
 
     // Append auth token as query parameter
     if (accessToken) {
@@ -77,15 +84,16 @@ export async function authFetch(
       effectiveUrl = `${effectiveUrl}${separator}token=${encodeURIComponent(accessToken)}`;
     }
   } else {
-    // Non-FormData: build headers normally
-    const hasOwnHeaders = options?.headers != null;
-    const headers = hasOwnHeaders ? new Headers(options.headers) : new Headers();
+    // Non-FormData: build headers normally. Default (host) headers go first so a call's own
+    // headers and the bearer token always win over them.
+    const headers = new Headers(defaultRequestHeadersProvider?.() ?? {});
+    if (options?.headers) {
+      new Headers(options.headers).forEach((value, key) => headers.set(key, value));
+    }
     if (accessToken) {
       headers.set('Authorization', `Bearer ${accessToken}`);
     }
-    if (hasOwnHeaders || accessToken) {
-      fetchOptions.headers = headers;
-    }
+    fetchOptions.headers = headers;
   }
 
   const res = await fetch(effectiveUrl, fetchOptions);
@@ -105,6 +113,25 @@ export async function authFetch(
 }
 
 export const JSON_HEADERS = { 'Content-Type': 'application/json' } as const;
+
+/**
+ * Headers every non-FormData request should carry, decided by the host at request time.
+ *
+ * Hosts that scope requests by a mutable selection (e.g. home-console's active family) register
+ * a provider once; returning a fresh object per call keeps the value live without re-registering.
+ * Call-specific headers win over these. FormData requests carry these headers too, minus any
+ * `Content-Type` (the browser must set the multipart boundary) and minus caller-supplied headers.
+ *
+ * A provider that throws fails the request: `authFetch` never swallows the error, because an
+ * unscoped request could act in the wrong scope. Keep the provider total.
+ */
+type DefaultRequestHeadersProvider = () => Record<string, string>;
+let defaultRequestHeadersProvider: DefaultRequestHeadersProvider | null = null;
+
+/** Register (or clear, with null) the host-provided default request headers. */
+export function setDefaultRequestHeaders(provider: DefaultRequestHeadersProvider | null): void {
+  defaultRequestHeadersProvider = provider;
+}
 
 /**
  * Which ownership bucket a write targets. `group` writes the shared bucket and is refused (403) for
@@ -174,20 +201,29 @@ export async function fetchVoid(url: string, options?: AuthFetchOptions): Promis
 }
 
 /**
- * Human-readable text from an Error thrown by fetchJson/fetchVoid: validation
- * failures arrive as a `{"error": "..."}` body rather than plain text.
+ * The readable text of an HTTP error body: validation failures arrive as a `{"error": "..."}`
+ * body (WebFlux renders `ResponseStatusException` as RFC 7807 problem details, hence `detail`)
+ * rather than plain text. Callers that cap length must run this first, or the slice turns the
+ * JSON into an unparseable prefix.
+ */
+export function readErrorBody(body: string): string {
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown; detail?: unknown } | null;
+    if (parsed && typeof parsed.error === 'string' && parsed.error) return parsed.error;
+    if (parsed && typeof parsed.detail === 'string' && parsed.detail) return parsed.detail;
+  } catch {
+    // Body wasn't a JSON error object — it is already readable.
+  }
+  return body;
+}
+
+/**
+ * Human-readable text from an Error thrown by fetchJson/fetchVoid, whose message carries the
+ * raw error body.
  */
 export function readErrorMessage(e: unknown, fallback = 'Request failed'): string {
   if (!(e instanceof Error)) return fallback;
-  try {
-    const body = JSON.parse(e.message) as { error?: unknown; detail?: unknown };
-    if (typeof body.error === 'string' && body.error) return body.error;
-    // WebFlux renders ResponseStatusException as RFC 7807 problem details.
-    if (typeof body.detail === 'string' && body.detail) return body.detail;
-  } catch {
-    // Body wasn't a JSON error object — the message is already readable.
-  }
-  return e.message || fallback;
+  return readErrorBody(e.message) || fallback;
 }
 
 /**

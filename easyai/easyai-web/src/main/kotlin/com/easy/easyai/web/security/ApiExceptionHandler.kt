@@ -1,5 +1,7 @@
 package com.easy.easyai.web.security
 
+import com.easy.easyai.web.context.ChatContextRejectedException
+import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
@@ -18,4 +20,10 @@ class ApiExceptionHandler {
         ResponseEntity
             .status(ex.statusCode)
             .body(mapOf("error" to (ex.reason ?: "Request failed")))
+
+    @ExceptionHandler(ChatContextRejectedException::class)
+    fun handleChatContextRejected(ex: ChatContextRejectedException): ResponseEntity<Map<String, String>> =
+        ResponseEntity
+            .status(HttpStatus.FORBIDDEN)
+            .body(mapOf("error" to (ex.message ?: "Request failed")))
 }

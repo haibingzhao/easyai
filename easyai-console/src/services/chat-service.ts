@@ -1,6 +1,6 @@
 import type { DoneEvent, ErrorEvent, ChatStreamEvent } from '../types/socket-event';
 import type { ChatRequest, ChatAttachment } from '../types/socket-request';
-import { authFetch, JSON_HEADERS } from '@/services/api-client';
+import { authFetch, JSON_HEADERS, readErrorBody, readErrorMessage } from '@/services/api-client';
 import { parseSSEStream, SSEConnectionError } from '@/services/sse-parser';
 import type { RawSSEEvent } from '@/services/sse-parser';
 
@@ -46,6 +46,19 @@ interface SSEStreamOutcome {
  */
 function connectionLost(cause: string): ErrorEvent {
   return { type: 'error', reason: 'connection_lost', cause };
+}
+
+/** Cap on a non-OK response message echoed to the user; a proxy's HTML error page must not flood the UI. */
+const MAX_ERROR_BODY_CHARS = 300;
+
+/** Build the error for a non-OK response, preferring the server's readable body over the status. */
+async function httpError(response: Response): Promise<Error> {
+  const body = (await response.text().catch(() => '')).trim();
+  if (!body) return new Error(`HTTP error! status: ${response.status}`);
+  // Extract `error`/`detail` before capping the length: slicing a long problem-details body
+  // first would leave invalid JSON that every reader then shows as a raw truncated prefix.
+  const readable = readErrorBody(body);
+  return new Error(readable.length > MAX_ERROR_BODY_CHARS ? `${readable.slice(0, MAX_ERROR_BODY_CHARS)}…` : readable);
 }
 
 /**
@@ -108,7 +121,7 @@ export class ChatService {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        throw await httpError(response);
       }
 
       const reader = response.body?.getReader();
@@ -133,7 +146,7 @@ export class ChatService {
         this.onError({
           type: 'error',
           reason: 'send_failed',
-          errorMessage: (error as Error).message,
+          errorMessage: readErrorMessage(error),
         });
       }
     }
@@ -216,7 +229,7 @@ function createSseStream(config: {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        throw await httpError(response);
       }
 
       const reader = response.body?.getReader();
@@ -234,7 +247,7 @@ function createSseStream(config: {
         config.callbacks.onError({
           type: 'error',
           reason: config.errorReason,
-          errorMessage: (error as Error).message,
+          errorMessage: readErrorMessage(error),
         });
       }
     } finally {
