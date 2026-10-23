@@ -22,5 +22,16 @@ data class R2dbcProperties(
     var username: String = "sa",
     var password: String = "",
     /** Enable Flyway versioned migration for persistent DBs. Set false to fall back to SchemaUtils. */
-    var flywayEnabled: Boolean = true
+    var flywayEnabled: Boolean = true,
+    /**
+     * TCP connect timeout appended to PostgreSQL URLs, in seconds (0 disables the rewrite).
+     * Without it an unreachable host can hold a request for the driver's own default.
+     */
+    var connectTimeoutSeconds: Int = 5,
+    /** Probe the database periodically and log connectivity changes. */
+    var healthCheckEnabled: Boolean = true,
+    /** Interval between health probes, in milliseconds. */
+    var healthCheckIntervalMs: Long = 30_000,
+    /** Upper bound for a single health probe, in milliseconds. */
+    var healthCheckTimeoutMs: Long = 5_000
 )
