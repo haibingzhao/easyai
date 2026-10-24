@@ -1,6 +1,8 @@
 package com.easy.easyai.tools
 
 import com.easy.easyai.common.util.isSafePathSegment
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.nio.file.Files
@@ -17,11 +19,11 @@ private val logger = LoggerFactory.getLogger("com.easy.easyai.tools.PathUtils")
  * the client, so only a whitelisted id becomes a path segment; anything else falls back to the
  * shared root.
  */
-internal fun fallbackWorkDir(sessionId: String? = null): Path {
+internal suspend fun fallbackWorkDir(sessionId: String? = null): Path {
     val root = Path.of(System.getProperty("java.io.tmpdir") ?: "/tmp", "easyai-workspace")
     val workDir = sessionId?.takeIf { isSafePathSegment(it) }?.let { root.resolve(it) } ?: root
     try {
-        Files.createDirectories(workDir)
+        withContext(Dispatchers.IO) { Files.createDirectories(workDir) }
     } catch (e: IOException) {
         // Return the path anyway: the tool reports the missing directory instead of silently
         // writing somewhere else.

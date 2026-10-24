@@ -81,7 +81,7 @@ class DelegateToMemberToolBuilder(
         capabilities = setOf(ToolCapability.TEAM_COORDINATION),
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         val state = resolveState(context) ?: return null
         // Inject concrete member IDs into the tool description so the LLM sees
         // exact valid values in the tool schema (reduces "Researcher" vs "inline:Researcher" errors)
@@ -125,7 +125,7 @@ class WaitForMemberEventsToolBuilder(
         capabilities = setOf(ToolCapability.TEAM_COORDINATION),
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         val state = resolveState(context) ?: return null
         return WaitForMemberEventsTool(
             metadata = metadata,
@@ -159,7 +159,7 @@ class ResumeMemberToolBuilder(
         capabilities = setOf(ToolCapability.TEAM_COORDINATION),
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         val state = resolveState(context) ?: return null
         return ResumeMemberTool(
             metadata = metadata,

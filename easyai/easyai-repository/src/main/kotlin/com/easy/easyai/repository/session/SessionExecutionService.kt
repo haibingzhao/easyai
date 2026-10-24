@@ -1,21 +1,14 @@
 package com.easy.easyai.repository.session
 
 import com.easy.easyai.core.agent.ChatSession
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.DisposableBean
 import org.springframework.context.ApplicationEvent
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.context.ApplicationEventPublisherAware
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Published when a session execution completes (Agent Loop finishes).
@@ -336,7 +329,7 @@ class SessionExecutionService(
         if (sessionStore == null || localSessions.isEmpty()) return
 
         runBlocking {
-            withTimeoutOrNull(10_000) {
+            withTimeoutOrNull(10_000.milliseconds) {
                 localSessions.forEach { handle ->
                     try {
                         sessionStore.updateStatus(handle.sessionId, "active", handle.userId, expectedStatus = "streaming")

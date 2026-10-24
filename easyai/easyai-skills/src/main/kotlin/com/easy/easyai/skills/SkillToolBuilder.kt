@@ -35,7 +35,7 @@ class SkillToolBuilder(
         PermissionRule("tool.execute.skill", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         val reg = registry ?: return null
         val effectiveMetadata = if (ragEnabled && context.allowedSkillNames.isNotEmpty()) {
             metadata.copy(description = "$baseDescription Discover suitable skills with `skill_search` first.")

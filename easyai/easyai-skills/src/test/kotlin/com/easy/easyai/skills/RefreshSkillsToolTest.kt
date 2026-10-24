@@ -318,14 +318,14 @@ class RefreshSkillsToolTest {
         }
 
         @Test
-        fun `with no skill registry there is nothing to re-read, so no tool is offered`() {
+        fun `with no skill registry there is nothing to re-read, so no tool is offered`(): Unit = runTest {
             every { registryProvider.getIfAvailable() } returns null
 
             assertNull(builder().build(AgentContext(agentId = "a"), mockk<AgentService>()))
         }
 
         @Test
-        fun `the tool is handed the registry, the refresher and this agent's skill whitelist`() {
+        fun `the tool is handed the registry, the refresher and this agent's skill whitelist`(): Unit = runTest {
             every { registryProvider.getIfAvailable() } returns registry
             every { refresherProvider.getIfAvailable() } returns refresher
             every { configProvider.getIfAvailable() } returns config
@@ -340,7 +340,7 @@ class RefreshSkillsToolTest {
         }
 
         @Test
-        fun `the tool stays offered when the catalog layer is off`() {
+        fun `the tool stays offered when the catalog layer is off`(): Unit = runTest {
             every { registryProvider.getIfAvailable() } returns registry
             every { refresherProvider.getIfAvailable() } returns null
             every { configProvider.getIfAvailable() } returns null

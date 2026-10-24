@@ -37,7 +37,7 @@ internal class SkillSearchToolBuilder(
         PermissionRule("tool.execute.skill", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         val reg = registry ?: return null
         if (!ragEnabled || context.allowedSkillNames.isEmpty()) return null
         return SkillSearchTool(

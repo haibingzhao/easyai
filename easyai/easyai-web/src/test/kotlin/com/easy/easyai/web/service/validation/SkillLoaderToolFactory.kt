@@ -20,12 +20,12 @@ internal object SkillLoaderToolFactory : ToolFactory {
             capabilities = setOf(ToolCapability.SKILL_LOADING)
         )
 
-        override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? = null
+        override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? = null
     }
 
     override fun getBuilders(): List<ToolBuilder> = listOf(skillLoaderBuilder)
 
-    override fun createTools(
+    override suspend fun createTools(
         context: AgentContext,
         agentService: AgentService,
         allowedToolNames: List<String>

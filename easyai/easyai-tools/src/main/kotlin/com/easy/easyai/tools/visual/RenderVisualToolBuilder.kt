@@ -156,7 +156,7 @@ class RenderVisualToolBuilder : ToolBuilder {
         PermissionRule("tool.execute.render_visual", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
         return RenderVisualTool(metadata)
     }
 }

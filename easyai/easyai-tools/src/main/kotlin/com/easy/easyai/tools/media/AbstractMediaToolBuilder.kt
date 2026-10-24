@@ -8,7 +8,6 @@ import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.storage.ObjectStorage
 import com.easy.easyai.core.tool.ToolBuilder
 import com.easy.easyai.core.tool.ToolDefinition
-import kotlinx.coroutines.runBlocking
 
 /**
  * Base builder for the media-generation tools (image / speech / video / music / asr).
@@ -22,10 +21,6 @@ import kotlinx.coroutines.runBlocking
  * The tool itself receives only the [MediaProviderResolver], not a single settings row: each call
  * re-resolves the concrete entry via its optional `model` argument, so adding/removing generation
  * models needs no agent re-assembly beyond the presence gate done here.
- *
- * The two resolvers are reached through [AgentService] (not constructor injection) to mirror
- * [com.easy.easyai.tools.memory.AbstractMemoryToolBuilder]; bridging their `suspend` resolve with a
- * one-shot [runBlocking] is acceptable here because [build] runs once per agent assembly, not per call.
  */
 abstract class AbstractMediaToolBuilder(
     protected val serviceKind: String
@@ -39,12 +34,12 @@ abstract class AbstractMediaToolBuilder(
         PermissionRule("tool.execute.media", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         val resolver = agentService.mediaProviderResolver ?: return null
         val storageResolver = agentService.objectStorageResolver ?: return null
         val userId = context.userId ?: SYSTEM_USER_ID
-        val storage = runBlocking { storageResolver.resolve(context.effectiveOwners) } ?: return null
-        val entries = runBlocking { resolver.resolveEntries(context.effectiveOwners, serviceKind) }
+        val storage = storageResolver.resolve(context.effectiveOwners) ?: return null
+        val entries = resolver.resolveEntries(context.effectiveOwners, serviceKind)
         if (entries.isEmpty()) return null
         return createTool(resolver, storage, userId)
     }

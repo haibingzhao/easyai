@@ -39,7 +39,7 @@ class TaskStatusToolBuilder(
         PermissionRule("tool.execute.background_task", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
         return TaskStatusTool(
             metadata = metadata,
             taskManagerRegistry = taskManagerRegistry

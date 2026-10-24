@@ -72,7 +72,7 @@ class RunBackgroundToolBuilder(
         PermissionRule("tool.execute.background_task", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         val permissions = permissionService ?: return null
         return RunBackgroundTool(
             metadata = metadata,

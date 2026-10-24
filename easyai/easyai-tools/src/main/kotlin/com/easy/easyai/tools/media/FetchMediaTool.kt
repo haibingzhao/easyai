@@ -16,7 +16,6 @@ import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.tool.ToolUpdate
 import com.easy.easyai.tools.resolveSafe
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Qualifier
@@ -226,10 +225,9 @@ class FetchMediaToolBuilder(
         PermissionRule("file.write.project", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         val userId = context.userId ?: AbstractMediaToolBuilder.SYSTEM_USER_ID
-        val storage = agentService.objectStorageResolver
-            ?.let { runBlocking { it.resolve(context.effectiveOwners) } }
+        val storage = agentService.objectStorageResolver?.resolve(context.effectiveOwners)
             ?: localStorage
             ?: return null
         return FetchMediaTool(metadata, storage, userId, context.projectPath)

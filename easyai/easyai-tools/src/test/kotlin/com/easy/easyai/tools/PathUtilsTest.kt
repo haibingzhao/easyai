@@ -1,5 +1,6 @@
 package com.easy.easyai.tools
 
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -16,7 +17,7 @@ class PathUtilsTest {
     private val root: Path = Path.of(System.getProperty("java.io.tmpdir") ?: "/tmp", "easyai-workspace")
 
     @Test
-    fun `a safe session id gets its own scratch directory`() {
+    fun `a safe session id gets its own scratch directory`() = runTest {
         val sessionId = "s-${UUID.randomUUID()}"
         val workDir = fallbackWorkDir(sessionId)
 
@@ -27,7 +28,7 @@ class PathUtilsTest {
     }
 
     @Test
-    fun `an unusable session id falls back to the shared root`() {
+    fun `an unusable session id falls back to the shared root`() = runTest {
         assertEquals(root, fallbackWorkDir("../../etc"))
         assertEquals(root, fallbackWorkDir("a/b"))
         assertEquals(root, fallbackWorkDir("x".repeat(65)))

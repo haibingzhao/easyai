@@ -5,6 +5,7 @@ import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.tool.ToolBuilder
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolFactory
+import kotlinx.coroutines.CancellationException
 import org.slf4j.LoggerFactory
 
 /**
@@ -28,7 +29,7 @@ class SpringToolFactory(
 
     override fun getBuilders(): List<ToolBuilder> = builders
 
-    override fun createTools(
+    override suspend fun createTools(
         context: AgentContext,
         agentService: AgentService,
         allowedToolNames: List<String>
@@ -42,6 +43,8 @@ class SpringToolFactory(
         return filteredBuilders.mapNotNull { builder ->
             try {
                 builder.build(context, agentService)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 logger.error(
                     "Failed to build tool '{}' from builder {}: {}",

@@ -17,6 +17,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import java.nio.file.Path
@@ -311,7 +312,7 @@ class FetchMediaToolTest {
             mockk<AgentService> { every { objectStorageResolver } returns resolver }
 
         @Test
-        fun `per-user object storage keeps the tool available`() {
+        fun `per-user object storage keeps the tool available`() = runTest {
             val resolver = mockk<ObjectStorageResolver> {
                 coEvery { resolve(any<Collection<String>>()) } returns InMemoryStorage()
             }
@@ -320,7 +321,7 @@ class FetchMediaToolTest {
         }
 
         @Test
-        fun `local fallback keeps the tool alive without user storage`() {
+        fun `local fallback keeps the tool alive without user storage`() = runTest {
             val resolver = mockk<ObjectStorageResolver> {
                 coEvery { resolve(any<Collection<String>>()) } returns null
             }
@@ -329,7 +330,7 @@ class FetchMediaToolTest {
         }
 
         @Test
-        fun `no storage layer at all hides the tool`() {
+        fun `no storage layer at all hides the tool`() = runTest {
             val tool = FetchMediaToolBuilder(localStorage = null).build(context, agentServiceWith(null))
             assertNull(tool)
         }
