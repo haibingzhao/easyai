@@ -3,7 +3,7 @@
 This file provides guidance to Qoder (qoder.com) when working with code in this repository.
 
 ## OVERVIEW
-REST API layer: 14 controllers, SSE streaming, JWT security, config generation, session management.
+REST API layer: 15 controllers, SSE streaming, JWT security, config generation, session management.
 
 ## STRUCTURE
 
@@ -22,6 +22,7 @@ easyai-web/src/main/kotlin/com/easy/easyai/web/
 │   ├── UserCommandController.kt   # User custom command CRUD
 │   ├── ModelConfigController.kt   # Model provider config
 │   ├── SkillController.kt         # Skill list / add from directory / upload / enable / delete (owner-granular)
+│   ├── SkillAgentController.kt    # POST /api/skills/agent/stream: ephemeral installer agent SSE (no session)
 │   ├── FileController.kt          # File upload/storage
 │   └── AiConfigController.kt      # AI config generation, template validation
 ├── handler/
@@ -41,7 +42,8 @@ easyai-web/src/main/kotlin/com/easy/easyai/web/
     ├── ConfigValidator.kt         # Prompt template + config validation
     ├── FileStorageService.kt      # File upload handling
     ├── GoalCommandHandler.kt      # /goal slash command
-    └── configgen/                 # Agent-based config generation (DryRunAgentService)
+    ├── configgen/                 # Agent-based config generation (DryRunAgentService)
+    └── skillgen/                  # "Install with Agent": dry-run installer, bounded webfetch, scan-gated submit_skill
 ```
 
 ## WHERE TO LOOK
@@ -53,6 +55,7 @@ easyai-web/src/main/kotlin/com/easy/easyai/web/
 | Security | `security/` | JWT filter, auth endpoints, SecurityConfig |
 | Swarm API | `controller/SwarmController` | Preset CRUD, run start/cancel, SSE events |
 | Config generation | `service/configgen/` | LLM-powered agent config creation |
+| Agent skill install | `controller/SkillAgentController` + `service/skillgen/` | POST /api/skills/agent/stream → SSE preview; no session, scan-gated |
 
 ## CONVENTIONS
 - WebFlux reactive: `Flux<T>`, `Mono<T>` return types

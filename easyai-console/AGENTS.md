@@ -18,6 +18,7 @@ easyai-console/src/
 │   ├── McpPage.tsx              # MCP server management
 │   ├── MemoriesPage.tsx         # Memory CRUD + search
 │   ├── SkillsPage.tsx           # Skill management (my skills + shared read-only layer) + AddSkillDialog
+│   ├── SkillAgentPage.tsx       # "Install with Agent" chat panel: scan report, high-risk confirm, install via upload
 │   ├── CommandsPage.tsx         # User command management
 │   ├── ModelsPage.tsx           # Model provider config
 │   ├── SettingsPage.tsx         # App settings (project, permissions, auth)
@@ -41,6 +42,8 @@ easyai-console/src/
 ```
 
 ## CONVENTIONS
+- `/skills/agent` is entered from a button inside the Skills page, not the sidebar; hosts pass `showAgentInstaller` to `<SkillsPage />` only after mounting the route (hosts without the route must not show a dead entry)
+- The Agent panel pins the write bucket onto each assistant turn (`installScope`) and passes it to `installFromUpload(request, scope?)`, so a host write-default change between preview and install cannot land the package in a bucket other than the card shows
 - TypeScript strict: noUnusedLocals, noUnusedParameters; no `any` types
 - Path alias: `@/*` → `src/*` (tsconfig + vite)
 - No inline/dynamic imports for types — standard top-level imports only
@@ -82,4 +85,5 @@ tsc -b          # Type check
 | PermissionService | `/api/permission` | GET/POST/PUT/DELETE |
 | MemoryService | `/api/memory` | GET/POST/PUT/DELETE |
 | SkillService | `/api/skills` | GET/POST/PATCH/DELETE (`POST /api/skills/upload` multipart) |
+| skill-agent-service | `/api/skills/agent/stream` | POST (SSE, no session; preview + scan) |
 | AuthService | `/api/auth` | POST (login/register/refresh) |

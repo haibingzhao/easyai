@@ -178,7 +178,7 @@ export const MobileHistoryPage: React.FC = () => {
           const el = e.currentTarget;
           if (!remoteSessionHasMore || remoteSessionLoading) return;
           if (el.scrollHeight - el.scrollTop - el.clientHeight < 120) {
-            void loadMoreRemoteSessions(20, listProjectId);
+            void loadMoreRemoteSessions(20, listProjectId, tempWorkspaceOnly);
           }
         }}
       >

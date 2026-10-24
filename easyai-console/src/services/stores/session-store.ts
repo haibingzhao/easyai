@@ -35,8 +35,8 @@ interface SessionState {
   saveSessions: () => void;
 
   setRemoteSessions: (sessions: SessionListItem[]) => void;
-  loadRemoteSessions: (limit?: number, append?: boolean, projectId?: string, tempWorkspace?: boolean) => Promise<void>;
-  loadMoreRemoteSessions: (limit?: number, projectId?: string, tempWorkspace?: boolean) => Promise<void>;
+  loadRemoteSessions: (limit?: number, append?: boolean, projectId?: string, tempWorkspace?: boolean, tags?: string[]) => Promise<void>;
+  loadMoreRemoteSessions: (limit?: number, projectId?: string, tempWorkspace?: boolean, tags?: string[]) => Promise<void>;
   deleteRemoteSession: (id: string) => Promise<void>;
   loadSessionTags: (projectId?: string, tempWorkspace?: boolean) => Promise<void>;
   setTagFilter: (tags: string[]) => void;
@@ -77,7 +77,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setRemoteSessions: (sessions) => set({ remoteSessions: sessions }),
 
-  loadRemoteSessions: async (limit = 10, append = false, projectId?: string, tempWorkspace?: boolean) => {
+  loadRemoteSessions: async (limit = 10, append = false, projectId?: string, tempWorkspace?: boolean, tags?: string[]) => {
     const state = get();
     // Pagination guard: never start a second "load more" while one is in flight
     // (it would fetch the same offset twice). Replace-loads are allowed to overlap
@@ -85,12 +85,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (append && state.remoteSessionLoading) return;
 
     const offset = append ? state.remoteSessionOffset : 0;
-    const tags = state.activeTagFilter.length > 0 ? state.activeTagFilter : undefined;
+    // An explicit `[]` means "no tag filter"; undefined inherits the History chip row.
+    const effectiveTags = tags ?? (state.activeTagFilter.length > 0 ? state.activeTagFilter : undefined);
     const seq = ++loadSeq;
     set({ remoteSessionLoading: true, remoteSessionProjectId: projectId, remoteSessionTempWorkspace: tempWorkspace });
 
     try {
-      const result = await sessionService.listSessions(limit, offset, projectId, tags, tempWorkspace);
+      const result = await sessionService.listSessions(limit, offset, projectId, effectiveTags, tempWorkspace);
       if (seq !== loadSeq) return; // superseded by a newer request
       set({
         remoteSessions: append ? [...get().remoteSessions, ...result.sessions] : result.sessions,
@@ -107,8 +108,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  loadMoreRemoteSessions: async (limit = 10, projectId?: string, tempWorkspace?: boolean) => {
-    return get().loadRemoteSessions(limit, true, projectId, tempWorkspace);
+  loadMoreRemoteSessions: async (limit = 10, projectId?: string, tempWorkspace?: boolean, tags?: string[]) => {
+    return get().loadRemoteSessions(limit, true, projectId, tempWorkspace, tags);
   },
 
   deleteRemoteSession: async (id: string) => {

@@ -76,12 +76,18 @@ internal object SkillPackages {
 
     /**
      * Unpack [bytes] into [targetDir], replacing its previous content atomically per file.
-     * Rejects hostile entry names and an oversized expansion.
+     * Rejects hostile entry names, duplicate entries and an oversized expansion.
+     *
+     * Duplicate rejection matters after normalisation (`a//b` and `./a/b` name the same file):
+     * silently letting the latter overwrite the former would make the installed bytes depend on
+     * zip ordering, so a verifier reading one entry and an installer writing both could disagree.
      */
     suspend fun unpack(bytes: ByteArray, targetDir: Path, maxBytes: Long): Unit = withContext(Dispatchers.IO) {
         val canonicalTarget = targetDir.toAbsolutePath().normalize()
         Files.createDirectories(canonicalTarget)
         var written = 0L
+        var entries = 0
+        val seen = HashSet<String>()
         ZipInputStream(bytes.inputStream()).use { zip ->
             while (true) {
                 val entry = zip.nextEntry ?: break
@@ -91,7 +97,18 @@ internal object SkillPackages {
                     if (name.contains('\\') || name.startsWith("/") || name.split('/').contains("..")) {
                         throw ObjectStorageException("Unsafe skill package entry: $name")
                     }
-                    val out = canonicalTarget.resolve(name)
+                    val normalized = name.split('/').filter { it.isNotEmpty() && it != "." }.joinToString("/")
+                    if (normalized.isBlank()) {
+                        throw ObjectStorageException("Unsafe skill package entry: $name")
+                    }
+                    if (!seen.add(normalized)) {
+                        throw ObjectStorageException("Duplicate skill package entry: $name")
+                    }
+                    entries++
+                    if (entries > MAX_ENTRIES) {
+                        throw ObjectStorageException("Skill package carries more than $MAX_ENTRIES files — refused")
+                    }
+                    val out = canonicalTarget.resolve(normalized)
                     if (!out.startsWith(canonicalTarget) || out == canonicalTarget) {
                         throw ObjectStorageException("Unsafe skill package entry: $name")
                     }
@@ -189,4 +206,7 @@ internal object SkillPackages {
     }
 
     private const val COPY_BUFFER_SIZE = 8 * 1024
+
+    /** A skill package is a working directory, not a data dump; this bounds a hostile archive. */
+    private const val MAX_ENTRIES = 2000
 }

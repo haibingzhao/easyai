@@ -205,6 +205,7 @@ export { KnowledgePage } from './pages/KnowledgePage';
 export { ArticleEditorPage } from './pages/ArticleEditorPageLazy';
 export { CommandsPage } from './pages/CommandsPage';
 export { SkillsPage } from './pages/SkillsPage';
+export { SkillAgentPage } from './pages/SkillAgentPage';
 export { SettingsPage } from './pages/SettingsPage';
 // Mutable Settings tab list — hosts trim tabs they don't surface (e.g. home-console drops
 // database / rag / integrations) by splicing this array before render.

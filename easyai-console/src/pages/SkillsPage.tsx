@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { SkillInfo } from '@/types/agent';
 import { useSkillStore } from '@/services/stores/skill-store';
 import { SHARED_OWNER_ID } from '@/services/skill-service';
@@ -8,7 +9,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { FilesSplitView } from '@/components/files/FilesSplitView';
 import { useResizable } from '@/hooks/useResizable';
 import { i18n } from '@/utils/i18n';
-import { BookOpen, Loader2, Plus, Trash2, X } from 'lucide-react';
+import { BookOpen, Loader2, Plus, Trash2, Wand2, X } from 'lucide-react';
 
 /** Stable identity for a catalog row: the same name can exist in both the own and shared layers. */
 function skillKey(skill: SkillInfo): string {
@@ -38,7 +39,8 @@ const LIST_MIN = 280;
 const LIST_MAX = 560;
 const LIST_DEFAULT = 380;
 
-export const SkillsPage: React.FC = () => {
+export const SkillsPage: React.FC<{ showAgentInstaller?: boolean }> = ({ showAgentInstaller = false }) => {
+  const navigate = useNavigate();
   const userId = useAuthStore((state) => state.user?.id);
   const {
     skills,
@@ -184,13 +186,24 @@ export const SkillsPage: React.FC = () => {
             {i18n('Install a skill from a server directory or an upload, and keep it in sync across devices.')}
           </p>
         </div>
-        <button
-          onClick={() => setDialogOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors text-sm shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          {i18n('Add Skill')}
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {showAgentInstaller && (
+            <button
+              onClick={() => navigate('/skills/agent')}
+              className="flex items-center gap-2 px-4 py-2 rounded-md border border-border text-foreground text-sm font-medium hover:bg-muted transition-colors"
+            >
+              <Wand2 className="w-4 h-4" />
+              {i18n('Install with Agent')}
+            </button>
+          )}
+          <button
+            onClick={() => setDialogOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors text-sm shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            {i18n('Add Skill')}
+          </button>
+        </div>
       </div>
 
       {/* Master-detail split: skill list (left) + file browser (right) */}

@@ -23,7 +23,7 @@ easyai/
 ├── easyai-repository/     # Exposed R2DBC: 18 tables, async suspend/Flow, DB migration
 ├── easyai-api/            # Model config service, ChatModelFactory, provider config
 ├── easyai-observability/  # @Tracked AOP, MDC propagation, OTel+Micrometer handlers
-├── easyai-web/            # REST controllers (14), SSE streaming, security (JWT filter), services
+├── easyai-web/            # REST controllers (15), SSE streaming, security (JWT filter), services
 ├── easyai-common/         # 4 sub-modules: bom, core (marker interfaces, thinking), textio (Jinja), util
 ├── easyai-autoconfigure/  # 11 auto-config sub-modules (core, web, observability, openai, anthropic, dashscope, r2dbc, compaction, rag, storage, swarm)
 └── easyai-starters/       # Starter POM aggregation
@@ -68,10 +68,11 @@ class MyTool : ToolDefinition {
 AgentLoop → AgentEvent → ChatStreamService → ChatEventConverter → Flux<ServerSentEvent>
 ```
 
-### Web Controllers (14)
+### Web Controllers (15)
 ChatController, AgentController, SwarmController, SessionController, ProjectController,
 ModelConfigController, McpServerController, PermissionController, MemoryController,
-CommandController, UserCommandController, SkillController, FileController, AiConfigController
+CommandController, UserCommandController, SkillController, SkillAgentController, FileController,
+AiConfigController
 
 ## TESTING
 

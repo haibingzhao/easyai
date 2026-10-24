@@ -228,10 +228,53 @@ class SkillSyncService(
                 ?: return SkillAddResult.Invalid(
                     "The upload has no SKILL.md, neither at its root nor in exactly one top-level folder"
                 )
+            // Browser uploads are the one path carrying third-party bytes from an agent flow; the
+            // panel's preview scan is not a server boundary. Only security criticals are refused
+            // here so packages with assets or scripts still go through the normal dialog.
+            securityRefusal(owner, name, sourceDir)?.let { return SkillAddResult.Invalid(it) }
             return addSkill(owner, name, sourceDir)
         } finally {
             SkillPackages.deleteTree(stage)
         }
+    }
+
+    /** Refusal reason when the staged tree carries a blocking security finding; null when it does not. */
+    private suspend fun securityRefusal(owner: String, name: String, dir: Path): String? = try {
+        val files = withContext(Dispatchers.IO) {
+            Files.walk(dir).use { stream ->
+                stream.filter { Files.isRegularFile(it) }
+                    .sorted()
+                    .map { path ->
+                        SkillUploadFile(
+                            dir.relativize(path).toString().replace('\\', '/'),
+                            Files.readAllBytes(path)
+                        )
+                    }
+                    .toList()
+            }
+        }
+        // Reading is IO-bound; the regex scan is CPU-bound and must not starve the IO pool.
+        val blocked = withContext(Dispatchers.Default) {
+            SkillPackageScanner.scan(name, files, config.packageMaxBytes)
+                .findings
+                .filter { finding -> finding.category == SkillScanCategory.SECURITY && finding.blocking }
+                .map { finding -> finding.id + (finding.file?.let { file -> " ($file)" } ?: "") }
+        }
+        if (blocked.isEmpty()) {
+            null
+        } else {
+            // Refusing silently is indistinguishable from a client bug for whoever operates this
+            // instance: the verdict belongs in the log, not only in the 400 body.
+            val summary = blocked.joinToString("; ")
+            logger.warn("Upload '{}' for owner '{}' blocked by the security scan: {}", name, owner, summary)
+            "The package was blocked by the security scan: $summary"
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        // A package nobody could read is not a package that was cleared.
+        logger.warn("Upload '{}' for owner '{}' could not be scanned: {}", name, owner, e.message)
+        "The uploaded package could not be scanned: ${e.message}"
     }
 
     private suspend fun stageUpload(upload: SkillUpload): Path {
