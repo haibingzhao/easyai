@@ -26,13 +26,12 @@ const MAX_INSTRUCTIONS_LENGTH = 10000;
 
 /** PromptContext variables available for Jinja2 agent prompt templates. */
 const PROMPT_CONTEXT_VARIABLES: { name: string; description: string }[] = [
-  { name: 'tools', description: 'Available tools (list of {name, description}).' },
-  { name: 'skills', description: 'Available skills (list of {name, description}).' },
-  { name: 'sub_agents', description: 'Delegatable sub-agents (list of {name, description, inputSchema}).' },
-  { name: 'team_members', description: 'Team member agents for TEAM type (list of {name, description}).' },
-  { name: 'instructions', description: 'Project instructions from AGENTS.md (list of {name, content, source}).' },
-  { name: 'custom_instructions', description: 'Free-text instructions from the Custom Instructions field.' },
-  { name: 'memory', description: 'Persistent cross-session memory content.' },
+  { name: 'tools', description: 'Available tools — sent as native tool definitions; reference only to position the list.' },
+  { name: 'skills', description: 'Available skills — injected automatically when not referenced.' },
+  { name: 'sub_agents', description: 'Delegatable sub-agents — injected automatically when not referenced.' },
+  { name: 'team_members', description: 'Team member agents (TEAM type) — injected automatically when not referenced.' },
+  { name: 'instructions', description: 'Project AGENTS.md — injected automatically when Project Instructions is on.' },
+  { name: 'custom_instructions', description: 'Custom instructions text — injected automatically when present.' },
   { name: 'model_id', description: 'Active model identifier (e.g. gpt-4o, claude-sonnet-4).' },
   { name: 'protocol', description: 'Model protocol (e.g. openai, anthropic).' },
   { name: 'os', description: 'Operating system name (e.g. Mac OS X, Linux).' },
@@ -659,7 +658,7 @@ export const AgentCreatePage: React.FC = () => {
                       setTemplateValidationErrors(undefined);
                       setTemplateValidationPassed(false);
                     }}
-                    placeholder="Define the agent's role, tone, workflow, tool preferences, and rules. Supports Jinja2 syntax: {{ tools }}, {{ skills }}, {{ memory }}, etc."
+                    placeholder="Define the agent's role, tone, workflow and rules. Tools are sent as native tool definitions; skills, sub-agents, team members and project instructions are injected automatically. Use {{ input.xxx }} for structured input."
                     maxLength={MAX_INSTRUCTIONS_LENGTH}
                     rows={8}
                     disabled={readOnly}

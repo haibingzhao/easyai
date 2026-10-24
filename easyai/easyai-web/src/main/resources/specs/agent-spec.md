@@ -12,8 +12,8 @@ Use this as the authoritative reference when generating agent JSON configuration
 | `agentType` | string | no | `PRIMARY` | enum: `PRIMARY`, `SUBAGENT`, `TEAM`, `ALL` | Controls visibility. See **Agent Type Semantics** below. |
 | `agentContext` | string | no | `CHAT` | enum: `CHAT`, `SWARM`, `BOTH` | Controls execution environment compatibility. See **Agent Context Semantics** below. |
 | `description` | string | no | null | ≤ 200 chars | Short description of the agent's purpose. |
-| `promptTemplate` | string | **yes** | — | Valid Jinja2 | System prompt template. When provided, it **fully replaces** the built-in system prompt. See **Prompt Template** below. |
-| `customInstructions` | string | no | null | — | Free-text instructions injected into the template variable `custom_instructions`. |
+| `promptTemplate` | string | **yes** | — | Valid Jinja2 | System prompt template — define the agent's role, workflow, and output rules. Runtime sections (skills, sub-agents, team members, project instructions, custom instructions) are appended automatically. See **Prompt Template** below. |
+| `customInstructions` | string | no | null | — | Free-text instructions appended to the system prompt automatically; also carries the delegated task for sub-agents and team members. |
 | `toolNames` | string[] | no | `[]` | Each name must exist in the available tools list | Tool whitelist. **Empty array = ALL tools available.** Non-empty = only listed tools. |
 | `subAgentIds` | string[] | no | `[]` | Each ID must reference an existing agent | Sub-agents this agent can delegate tasks to. |
 | `memberIds` | string[] | no | `[]` | Each ID must reference an existing non-TEAM agent | Team members. **Required when `agentType=TEAM`** (≥2 recommended). Members execute the work; the TEAM leader only coordinates. |
@@ -43,35 +43,53 @@ Controls where the agent's `promptTemplate` can be correctly rendered. Orthogona
 
 | Value | Behavior |
 |-------|----------|
-| `CHAT` | Prompt uses only PromptContext variables (`tools`, `skills`, `memory`, `os`, `cwd`, `model_id`, etc.). Usable in Chat sessions. In Swarm workflows, the task promptTemplate is skipped and the agent's own system prompt drives behavior. |
+| `CHAT` | Prompt may use PromptContext variables (`tools`, `skills`, `input`, `os`, `cwd`, `model_id`, etc.). Usable in Chat sessions. In Swarm workflows, the task promptTemplate is skipped and the agent's own system prompt drives behavior. |
 | `SWARM` | Prompt may use Swarm-specific variables (`user_input`, `deliberation_history`, `rounds`, upstream task summaries). Designed for Swarm workflow tasks. Not shown in Chat agent selector. **Restrictions**: `load_skill`, `task`, `run_swarm` are unavailable in swarm runtime — never include in `toolNames`; `skillNames` and `subAgentIds` must be empty (Skills and Sub-Agents unsupported). |
 | `BOTH` | Compatible with both Chat and Swarm environments. Shown in Chat selector and supports custom task promptTemplate in Swarm. |
 
 ## Prompt Template
 
 `promptTemplate` is a **Jinja2 template** that generates the agent's system prompt at runtime.
+Write it as the agent's role, goals, workflow, and output rules; runtime-owned content is appended
+automatically (see **Runtime Sections** below).
 
-### Available Template Variables
+### Runtime Sections
 
-When writing a `promptTemplate`, these variables are available via the Jinja2 rendering context:
+These sections are appended after the rendered template whenever the template does **not**
+reference their variable. Referencing a variable keeps control in the template, so existing
+templates that already include the section are not duplicated.
 
 | Variable | Type | Source | Description |
 |----------|------|--------|-------------|
-| `custom_instructions` | string | `customInstructions` field | Free-text instructions set by the user. Always include this in your template. |
+| `custom_instructions` | string | `customInstructions` field | Delegated task / extra instructions. Appended when present. |
+| `skills` | list of objects | Skill registry + whitelist | Available skills (requires a skill-loading tool such as `load_skill`). Each object has `name` (string) and `description` (string). |
+| `sub_agents` | list of objects | Agent store + whitelist | Delegatable sub-agents, plus ad-hoc `task` guidance. Each object has `name`, `description`, and optionally `inputSchema`. |
+| `team_members` | list of objects | Agent store + `memberIds` | Team member agents and the coordination protocol (TEAM agents only). Each object has `name` and `description`. |
+| `instructions` | list of objects | AGENTS.md files (when `instructionsEnabled`) | Project-level instructions. Each object has `name` (string), `content` (string), and `source` (enum: `PROJECT` or `SUBDIR`). |
+
+Tools are **not** injected into the system prompt: the model receives every available tool as a
+native tool definition. The `tools` variable remains available for templates that need to position
+the list manually. There is no `memory` template variable — memory is retrieved on demand through
+the memory tools.
+
+### Available Template Variables
+
+For advanced placement, these variables are available via the Jinja2 rendering context:
+
+| Variable | Type | Source | Description |
+|----------|------|--------|-------------|
+| `tools` | list of objects | Tool registry + whitelist | Available tools. Each object has `name` (string) and `description` (string). |
 | `protocol` | string | Runtime model config | Model protocol identifier, e.g. `openai`, `anthropic`. Useful for protocol-specific instructions. |
 | `model_id` | string | Runtime model config | Active model identifier, e.g. `gpt-4o`, `claude-sonnet-4-20250514`. |
-| `tools` | list of objects | Tool registry + whitelist | Available tools. Each object has `name` (string) and `description` (string). |
-| `skills` | list of objects | Skill registry + whitelist | Available skills. Each object has `name` (string) and `description` (string). |
-| `sub_agents` | list of objects | Agent store + whitelist | Delegatable sub-agents. Each object has `name`, `description`, and optionally `inputSchema`. |
-| `team_members` | list of objects | Agent store + `memberIds` | Team member agents (TEAM agents only). Each object has `name` and `description`. |
-| `instructions` | list of objects | AGENTS.md files (when `instructionsEnabled`) | Project-level instructions. Each object has `name` (string), `content` (string), and `source` (enum: `PROJECT` or `SUBDIR`). |
-| `project` | object | Project configuration | Project metadata map. May contain project-specific context. |
 | `os` | string | `System.getProperty("os.name")` | Operating system name, e.g. `Mac OS X`, `Linux`, `Windows 11`. |
 | `cwd` | string | Session project path | Current working directory absolute path. Empty string when no project is set. |
-| `memory` | string | Memory store (loaded once per session) | Formatted memory content including agent memory index and references. Empty string when no memory. |
+| `team_status_summary` | string | Recovered team execution state | Team status summary when restoring a TEAM session; empty otherwise. |
 | `input` | object | API request `inputData` (validated by `inputSchema`) | Structured input variables. Access fields via `{{ input.field_name }}`. Empty object when no input provided. |
 
 ### Variable Details
+
+Runtime sections are placed automatically; the loops below are only needed when a template wants
+to control their placement itself.
 
 #### `tools` — Tool List
 
@@ -128,66 +146,25 @@ Focus areas: {{ input.focus_areas | join(", ") }}
 
 When `inputSchema` is not set or no `inputData` was provided, `input` is an empty object and `{{ input.anything }}` renders as empty string.
 
-#### `agent` — Agent Metadata
-
-A map containing the agent's own metadata (id, name, etc.):
-```jinja2
-You are {{ agent.name }}, a specialized assistant.
-```
-
 ### Example Templates
 
-**Simple agent with custom instructions:**
+**Role-only agent (recommended):**
 ```jinja2
-You are a helpful assistant. {{ custom_instructions }}
+You are a code review specialist. Review the given code for bugs, style, and performance, and
+report findings grouped by file with concrete line references.
+```
+
+**Agent that needs runtime environment values:**
+```jinja2
+You are a helpful assistant. Answer concisely and cite the files you used.
 
 OS: {{ os }}
 Working directory: {{ cwd }}
 ```
 
-**Full-featured agent with tools, skills, and instructions:**
-```jinja2
-You are {{ custom_instructions }}
-
-{% if tools %}
-## Available Tools
-{% for tool in tools %}
-- **{{ tool.name }}**: {{ tool.description }}
-{% endfor %}
-{% endif %}
-
-{% if skills %}
-## Available Skills
-{% for skill in skills %}
-- **{{ skill.name }}**: {{ skill.description }}
-{% endfor %}
-Use the `load_skill` tool to load a skill when a task matches its description.
-{% endif %}
-
-{% if sub_agents %}
-## Available Sub-Agents
-You can delegate tasks using the `task` tool.
-{% for sa in sub_agents %}
-- `{{ sa.name }}`: {{ sa.description }}
-{% endfor %}
-{% endif %}
-
-{% if instructions %}
-## Project Instructions
-{% for instr in instructions %}
-{{ instr.content }}
-{% endfor %}
-{% endif %}
-
-{% if memory %}
-## Memory
-{{ memory }}
-{% endif %}
-```
-
 **Structured input agent (requires `inputSchema`):**
 ```jinja2
-You are a code review specialist. {{ custom_instructions }}
+You are a code review specialist.
 
 ## Task
 Review the following {{ input.language }} code for bugs, performance issues, and style violations:
@@ -203,10 +180,9 @@ Additional context: {{ input.context }}
 
 ### Important Notes
 
-- When `promptTemplate` is `null`, the built-in `SystemPromptBuilder` generates a comprehensive default prompt with all available sections automatically included.
-- When `promptTemplate` is provided, it **completely replaces** the default prompt — you are responsible for including all necessary sections (tools, skills, sub-agents, instructions, memory, etc.).
-- Always include `{{ custom_instructions }}` somewhere in the template to honor the `customInstructions` field.
-- Use Jinja2 conditionals (`{% if %}`) to handle optional sections gracefully — many variables may be empty depending on the agent configuration.
+- When `promptTemplate` is `null`, the built-in `SystemPromptBuilder` generates the default prompt with all runtime sections included.
+- When `promptTemplate` is provided, it supplies the agent's role/behavior base. The runtime appends skills, sub-agents, team members, project instructions, and custom instructions automatically whenever the template does not reference their variables.
+- Do NOT hand-write runtime sections in a generated template; reference a variable only when the prompt must control its placement.
 - `{{ input.xxx }}` variables are only populated when `inputSchema` is set AND the API request includes matching `inputData`.
 
 ## MCP Configs
@@ -304,16 +280,16 @@ When `outputSchema` is set:
 
 1. **Keep `id` descriptive and short**: Use `kebab-case` like `code-reviewer`, `test-writer`, `research-agent`.
 2. **Minimalism for tools, MCP, and skills — only include what the task requires, not more**:
-   - Every tool, MCP server, and skill listed in the config is injected into the agent's system prompt, consuming context window and adding decision noise.
+   - Every tool, MCP server, and skill listed in the config is injected into the agent's request (tool definitions) or system prompt (skill list), consuming context window and adding decision noise.
    - **`toolNames`**: Only list tools the agent will actually use. A code-review agent that only reads code should have `["file_read", "code_search"]`, not `["file_read", "file_write", "shell_exec", "code_search", "web_fetch"]`. Leaving `toolNames: []` (all tools) is appropriate only for general-purpose agents.
    - **`mcpConfigs`**: Only bind MCP servers whose tools are relevant. If the agent never browses the web, don't add `browser-use`. When binding, whitelist only the needed tools via the nested `toolNames` — don't expose all 20 tools from a server when only 2 are needed.
    - **`skillNames`**: Only list skills that match the agent's domain. A translation agent doesn't need a `code-generation` skill.
    - **Rule of thumb**: If you can't describe a concrete scenario where the agent would use a tool/MCP/skill during its task, remove it. Fewer tools → faster reasoning → fewer wrong tool calls → lower token cost.
 3. **Set appropriate `maxIterations`**: Simple Q&A agents can use 10–20; complex coding agents may need 50–100.
 4. **Use `agentType: SUBAGENT`** for specialized workers (e.g., a linter agent) that should only be invoked via delegation.
-5. **Use `agentType: TEAM`** to coordinate multiple existing agents: set `memberIds` referencing existing non-TEAM agents (discover via `list_resources`). The delegate/wait/resume coordination tools are auto-injected, so `toolNames` only needs the leader's own extra tools (e.g. read/search) if any — leave it empty when the leader purely coordinates. Focus the `promptTemplate` on coordination strategy with `{% if team_members %}` member listing.
-6. **Always include `{{ custom_instructions }}`** in your `promptTemplate` so users can add runtime tweaks.
-7. **Prefer `customInstructions` over hardcoding** behavioral tweaks into the prompt — it's easier to iterate on.
+5. **Use `agentType: TEAM`** to coordinate multiple existing agents: set `memberIds` referencing existing non-TEAM agents (discover via `list_resources`). The delegate/wait/resume coordination tools are auto-injected, so `toolNames` only needs the leader's own extra tools (e.g. read/search) if any — leave it empty when the leader purely coordinates. The member list is injected automatically — focus the `promptTemplate` on coordination strategy.
+6. **Keep `promptTemplate` to role/workflow/output rules** — do not hand-write runtime sections; they are appended automatically.
+7. **Use `customInstructions` for runtime tweaks** — it is appended automatically, so no template placeholder is needed.
 8. **Set `instructionsEnabled: false`** for agents that should ignore project-level AGENTS.md (e.g., generic utility agents).
 9. **Use `outputSchema`** when you need guaranteed JSON structure (e.g., for downstream parsing or UI rendering).
 10. **Use `inputSchema` for structured agents**: When an agent is a delegation target or processes structured data, define `inputSchema` to enforce a clear contract and use `{{ input.field }}` in the template.

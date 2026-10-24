@@ -17,11 +17,10 @@ import { i18n } from '@/utils/i18n';
  * custom_instructions contains the auto-generated role definition + delegated task.
  */
 const INLINE_AGENT_PROMPT_VARIABLES: { name: string; description: string }[] = [
-  { name: 'custom_instructions', description: 'Auto-generated role definition + delegated task + response requirements.' },
-  { name: 'tools', description: 'Available tools (list of {name, description}).' },
-  { name: 'skills', description: 'Available skills (list of {name, description}).' },
-  { name: 'instructions', description: 'Project instructions from AGENTS.md (list of {name, content, source}).' },
-  { name: 'memory', description: 'Persistent cross-session memory content.' },
+  { name: 'custom_instructions', description: 'Auto-generated role definition + delegated task + response requirements (injected automatically).' },
+  { name: 'tools', description: 'Available tools — sent as native tool definitions; reference only to position the list.' },
+  { name: 'skills', description: 'Available skills — injected automatically when not referenced.' },
+  { name: 'instructions', description: 'Project AGENTS.md — injected automatically when Project Instructions is on.' },
   { name: 'model_id', description: 'Active model identifier (e.g. gpt-4o, claude-sonnet-4).' },
   { name: 'protocol', description: 'Model protocol (e.g. openai, anthropic).' },
   { name: 'os', description: 'Operating system name (e.g. Mac OS X, Linux).' },

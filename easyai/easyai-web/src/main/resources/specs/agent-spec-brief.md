@@ -8,11 +8,11 @@
 |-------|------|----------|-------------|
 | `id` | string | **yes** | Unique identifier, `kebab-case` (1–50 chars) |
 | `name` | string | **yes** | Display name (1–20 chars) |
-| `promptTemplate` | string | **yes** | Jinja2 system prompt template (replaces built-in prompt) |
+| `promptTemplate` | string | **yes** | Jinja2 system prompt template — role/workflow only; runtime sections are appended automatically |
 | `agentType` | string | no | `PRIMARY` (default) / `SUBAGENT` / `TEAM` / `ALL` |
 | `agentContext` | string | no | `CHAT` (default) / `SWARM` / `BOTH` |
 | `description` | string | no | Purpose description (≤200 chars) |
-| `customInstructions` | string | no | Injected into `{{ custom_instructions }}` variable |
+| `customInstructions` | string | no | Optional free text, appended to the system prompt automatically |
 | `toolNames` | string[] | no | Built-in tool whitelist. **Empty = ALL tools** |
 | `skillNames` | string[] | no | Skill whitelist (NEVER put in toolNames) |
 | `mcpConfigs` | object[] | no | MCP server bindings (NEVER put MCP tools in toolNames) |
@@ -38,22 +38,28 @@
 
 | agentContext | Behavior |
 |--------------|----------|
-| `CHAT` | Uses Chat variables (tools, skills, memory, os, cwd) |
+| `CHAT` | Uses Chat variables (tools, skills, instructions, os, cwd) |
 | `SWARM` | Uses Swarm variables (user_input, deliberation_history). **Restrictions**: `load_skill`, `task`, `run_swarm` unavailable in toolNames; skillNames and subAgentIds must be empty |
 | `BOTH` | Compatible with both environments |
 
-## Prompt Template Variables
+## Prompt Template
 
-| Variable | Description |
-|----------|-------------|
-| `custom_instructions` | From `customInstructions` field — **always include** |
-| `tools` | List of {name, description} |
-| `skills` | List of {name, description} |
-| `sub_agents` | List of {name, description, inputSchema?} |
+`promptTemplate` defines the agent's role, goals, workflow, and output rules. Write plain text
+(or Jinja2 only when the prompt needs a runtime variable such as `{{ input.xxx }}` or `{{ os }}`);
+the runtime renders it as the base system prompt and appends these sections automatically when the
+template does not reference their variable:
+
+| Auto-appended variable | Description |
+|------------------------|-------------|
+| `skills` | Authorized skills (list of {name, description}) |
+| `sub_agents` | Delegatable sub-agents (list of {name, description, inputSchema?}) |
+| `team_members` | Team member agents (TEAM type) |
 | `instructions` | Project AGENTS.md content |
-| `input` | Structured input (requires `inputSchema`) |
-| `memory` | Agent memory content |
-| `os` / `cwd` | Operating system / working directory |
+| `custom_instructions` | `customInstructions` field |
+
+Tools are provided to the model as native tool definitions — do NOT list them in the template.
+There is no `memory` template variable (memory is retrieved through the memory tools).
+`input` is only available when `inputSchema` is set.
 
 ## InlineAgentSpec Schema
 
@@ -73,17 +79,17 @@ Each entry in `customSubAgents` / `customMembers`:
 1. **toolNames empty = ALL tools**; non-empty = only listed tools
 2. **MCP tools via mcpConfigs** — NEVER in toolNames
 3. **Skills via skillNames** — NEVER in toolNames
-4. **promptTemplate MUST include `{{ custom_instructions }}`**
+4. **promptTemplate is role/workflow only** — NEVER write tool/skill/sub-agent/member/project-instruction/memory sections or `{{ custom_instructions }}`; the runtime injects them
 5. **`{{ input.xxx }}` requires inputSchema** to be set
 6. **SWARM context**: when `agentContext` is `SWARM`, tools `load_skill`, `task`, `run_swarm` are unavailable — never include in toolNames; `skillNames` and `subAgentIds` must be empty
-7. **TEAM agent requires memberIds** (≥2 recommended); members must be existing non-TEAM agents; TEAM agent's promptTemplate should focus on coordination strategy, not task execution
+7. **TEAM agent requires memberIds** (≥2 recommended); members must be existing non-TEAM agents; the member list is injected automatically — focus the promptTemplate on coordination strategy, not task execution
 
 ## Best Practices
 
 - **Tool minimalism**: Only include tools the agent will actually use
 - **maxIterations**: Simple Q&A → 10–20; complex coding → 50–100
-- Use `{% if %}` guards for optional sections (tools, skills, memory)
-- Prefer `customInstructions` over hardcoding behavioral tweaks
+- Keep `promptTemplate` to role, workflow, and output rules — runtime sections are appended automatically
+- Reference a runtime variable only when the prompt must control its placement (advanced use)
 
 ## Example: Code Review Agent
 
@@ -93,7 +99,7 @@ Each entry in `customSubAgents` / `customMembers`:
   "name": "Code Reviewer",
   "agentType": "PRIMARY",
   "description": "Reviews code for bugs and style",
-  "promptTemplate": "You are a code review specialist. {{ custom_instructions }}\n\n{% if tools %}\n## Available Tools\n{% for tool in tools %}\n- {{ tool.name }}: {{ tool.description }}\n{% endfor %}\n{% endif %}",
+  "promptTemplate": "You are a code review specialist. Review the given code for bugs, style, and performance; report findings grouped by file with concrete line references.",
   "toolNames": ["file_read", "code_search"],
   "maxIterations": 30
 }
@@ -106,7 +112,7 @@ Each entry in `customSubAgents` / `customMembers`:
   "id": "translator",
   "name": "Translator",
   "agentType": "SUBAGENT",
-  "promptTemplate": "Translate the following {{ input.source_lang }} text to {{ input.target_lang }}. {{ custom_instructions }}\n\n{{ input.text }}",
+  "promptTemplate": "Translate the following {{ input.source_lang }} text to {{ input.target_lang }}.\n\n{{ input.text }}",
   "toolNames": [],
   "inputSchema": {
     "type": "object",
@@ -128,7 +134,7 @@ Each entry in `customSubAgents` / `customMembers`:
   "name": "Fullstack Team",
   "agentType": "TEAM",
   "description": "Coordinates backend and frontend agents for full-stack tasks",
-  "promptTemplate": "You are a team leader coordinating full-stack development. {{ custom_instructions }}\n\n{% if team_members %}\n## Your Members\n{% for m in team_members %}\n- {{ m.name }}: {{ m.description }}\n{% endfor %}\n{% endif %}",
+  "promptTemplate": "You are a team leader coordinating full-stack development. Plan the work, delegate each part to the right member, and synthesize their results into one answer.",
   "memberIds": ["backend-dev", "frontend-dev"],
   "toolNames": [],
   "maxIterations": 30
@@ -143,7 +149,7 @@ Each entry in `customSubAgents` / `customMembers`:
   "name": "Research Assistant",
   "agentType": "PRIMARY",
   "description": "Delegates research tasks to specialized inline agents",
-  "promptTemplate": "You are a research coordinator. {{ custom_instructions }}\n\n{% if sub_agents %}\n## Sub-Agents\n{% for sa in sub_agents %}\n- {{ sa.name }}: {{ sa.description }}\n{% endfor %}\n{% endif %}",
+  "promptTemplate": "You are a research coordinator. Decompose the request, delegate focused research, and synthesize the findings into a single answer.",
   "toolNames": ["web_search"],
   "customSubAgents": [
     {
