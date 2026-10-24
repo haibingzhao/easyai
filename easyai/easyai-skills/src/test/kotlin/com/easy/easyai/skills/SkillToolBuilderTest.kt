@@ -56,7 +56,7 @@ class SkillToolBuilderTest {
         }
 
         @Test
-        fun `search is absent for empty whitelist or disabled discovery`() {
+        fun `search is absent for empty whitelist or disabled discovery`(): Unit = runTest {
             val builder = SkillSearchToolBuilder(storeProvider, catalogProvider, 5, f.registry, true, refresherProvider)
             assertNull(builder.build(context.copy(allowedSkillNames = emptyList()), agentService))
             assertNull(
@@ -66,7 +66,7 @@ class SkillToolBuilderTest {
         }
 
         @Test
-        fun `no registry means neither tool is registered`() {
+        fun `no registry means neither tool is registered`(): Unit = runTest {
             assertNull(SkillToolBuilder(null, catalogProvider, refresherProvider, true).build(context, agentService))
             assertNull(
                 SkillSearchToolBuilder(storeProvider, catalogProvider, 5, null, true, refresherProvider)

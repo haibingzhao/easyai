@@ -124,5 +124,5 @@ interface ToolBuilder {
      * @return Configured ToolDefinition instance, or null if this tool is not applicable
      *         for the current context (e.g., no session, missing dependencies).
      */
-    fun build(context: AgentContext, agentService: AgentService): ToolDefinition?
+    suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition?
 }

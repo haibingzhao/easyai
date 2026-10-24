@@ -23,7 +23,7 @@ abstract class AbstractKnowledgeToolBuilder(
         PermissionRule("tool.execute.knowledge", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         val store = agentService.knowledgeStore ?: return null
         val knowledgeOwnerId = KnowledgeOwnership.ownerId(
             context.userId,

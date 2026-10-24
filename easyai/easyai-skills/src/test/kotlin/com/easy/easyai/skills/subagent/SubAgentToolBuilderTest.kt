@@ -4,6 +4,7 @@ import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.agent.AsyncAgentStore
 import io.mockk.mockk
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import kotlin.test.assertIs
@@ -24,13 +25,13 @@ class SubAgentToolBuilderTest {
     inner class `Registration guards` {
 
         @Test
-        fun `registers task tool for primary agent without predefined sub-agents`() {
+        fun `registers task tool for primary agent without predefined sub-agents`(): Unit = runTest {
             val context = AgentContext(agentId = "primary", subAgents = emptyList())
             assertIs<SubAgentTool>(builder().build(context, agentService))
         }
 
         @Test
-        fun `registers task tool when predefined sub-agents exist`() {
+        fun `registers task tool when predefined sub-agents exist`(): Unit = runTest {
             val context = AgentContext(
                 agentId = "primary",
                 subAgents = listOf(mapOf("id" to "pre1", "name" to "coder"))
@@ -39,13 +40,13 @@ class SubAgentToolBuilderTest {
         }
 
         @Test
-        fun `does not register for sub-agents (recursion guard)`() {
+        fun `does not register for sub-agents (recursion guard)`(): Unit = runTest {
             val context = AgentContext(agentId = "child", parentAgentId = "primary")
             assertNull(builder().build(context, agentService))
         }
 
         @Test
-        fun `does not register without agent store`() {
+        fun `does not register without agent store`(): Unit = runTest {
             val context = AgentContext(agentId = "primary")
             assertNull(builder(store = null).build(context, agentService))
         }

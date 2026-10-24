@@ -28,7 +28,7 @@ class SwarmToolBuilder(
     )
     override val mainAgentOnly = true
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         return SwarmTool(metadata, runtime, presetStore, store)
     }
 }

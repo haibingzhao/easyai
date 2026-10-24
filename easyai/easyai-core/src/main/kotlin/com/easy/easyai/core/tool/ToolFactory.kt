@@ -24,7 +24,7 @@ interface ToolFactory {
      * @param allowedToolNames Tool names to include. Empty = all tools.
      * @return List of created ToolDefinition instances.
      */
-    fun createTools(
+    suspend fun createTools(
         context: AgentContext,
         agentService: AgentService,
         allowedToolNames: List<String> = emptyList()

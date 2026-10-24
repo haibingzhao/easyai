@@ -1,27 +1,13 @@
 package com.easy.easyai.autoconfigure.r2dbc
 
-import com.easy.easyai.core.task.AsyncTask
-import com.easy.easyai.core.task.AsyncTaskRunner
-import com.easy.easyai.core.task.AsyncTaskStore
-import com.easy.easyai.core.task.AsyncTaskType
-import com.easy.easyai.core.task.ScheduledTaskPlanContext
-import com.easy.easyai.core.task.ScheduledTaskPlanner
-import com.easy.easyai.core.task.ScheduledTaskSetting
-import com.easy.easyai.core.task.ScheduledTaskSettingStore
-import com.easy.easyai.core.task.TaskDraft
-import com.easy.easyai.core.task.TaskTrigger
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
+import com.easy.easyai.core.task.*
+import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.DisposableBean
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.scheduling.support.CronExpression
 import java.time.LocalDateTime
-import java.util.UUID
+import java.util.*
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -80,7 +66,7 @@ class ScheduledTaskRunner(
         )
     }
 
-    @Scheduled(cron = "\${easyai.tasks.scheduled.scan-cron:0 * * * * *}")
+    @Scheduled(cron = $$"${easyai.tasks.scheduled.scan-cron:0 * * * * *}")
     fun tick() {
         scope.launch {
             if (!scanning.compareAndSet(false, true)) {

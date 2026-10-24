@@ -35,7 +35,7 @@ class TodoWriteToolBuilder(
         PermissionRule("tool.execute.todo", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         // No session means this is a one-shot prompt — todo tracking not applicable
         val sessionId = context.sessionId ?: return null
 

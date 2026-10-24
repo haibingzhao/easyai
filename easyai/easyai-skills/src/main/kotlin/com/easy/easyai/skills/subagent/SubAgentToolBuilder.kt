@@ -46,7 +46,7 @@ class SubAgentToolBuilder(
     override val defaultPermissionRules = listOf(
         PermissionRule("tool.execute.subagent", "*", PermissionAction.ALLOW)
     )
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         // If this agent is itself a sub-agent, don't register the tool — prevents recursion
         if (context.parentAgentId != null) {
             return null

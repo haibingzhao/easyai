@@ -59,7 +59,7 @@ Parameters:
     )
     override val rulePermissionType = "shell.other"
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
         val workDir = context.projectPath ?: fallbackWorkDir(context.sessionId)
         // Probe the user's login shell env once (cached) so that commands like
         // mvn/node/go resolve correctly even when Spring Boot was launched from

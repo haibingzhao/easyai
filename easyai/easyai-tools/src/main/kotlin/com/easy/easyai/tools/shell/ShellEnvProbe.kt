@@ -1,10 +1,16 @@
 package com.easy.easyai.tools.shell
 
 import com.easy.easyai.common.util.destroyProcessTree
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.coroutineContext
 
 /**
  * Probes the user's login shell environment once and caches the result.
@@ -21,6 +27,7 @@ import java.util.concurrent.atomic.AtomicReference
 object ShellEnvProbe {
 
     private val logger = LoggerFactory.getLogger(ShellEnvProbe::class.java)
+    private val probeMutex = Mutex()
 
     @Volatile
     private var cachedEnv: Map<String, String>? = null
@@ -34,13 +41,14 @@ object ShellEnvProbe {
      * The result is cached after the first successful probe.
      * Returns an empty map on Windows or if the probe fails.
      */
-    fun probe(): Map<String, String> {
+    suspend fun probe(): Map<String, String> {
         cachedEnv?.let { return it }
-        synchronized(this) {
-            cachedEnv?.let { return it }
+        return probeMutex.withLock {
+            cachedEnv?.let { return@withLock it }
             val env = doProbe()
+            coroutineContext.ensureActive()
             cachedEnv = env
-            return env
+            env
         }
     }
 
@@ -49,15 +57,15 @@ object ShellEnvProbe {
         cachedEnv = null
     }
 
-    private fun doProbe(): Map<String, String> {
+    private suspend fun doProbe(): Map<String, String> = withContext(Dispatchers.IO) {
         // Windows doesn't support the bash login-shell probe; fall back to JVM env.
         if (System.getProperty("os.name")?.lowercase()?.contains("windows") == true) {
             logger.debug("Skipping shell env probe on Windows")
-            return emptyMap()
+            return@withContext emptyMap()
         }
 
         val shell = System.getenv("SHELL") ?: "/bin/sh"
-        return try {
+        try {
             val process = ProcessBuilder(shell, "-ilc", "env -0")
                 .redirectErrorStream(true)
                 .start()
@@ -75,10 +83,10 @@ object ShellEnvProbe {
 
             val exited = process.waitFor(PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             if (!exited) {
-                runBlocking { destroyProcessTree(process) }
+                destroyProcessTree(process)
                 readerThread.join(1000)
                 logger.warn("Shell env probe timed out for shell: {}", shell)
-                return emptyMap()
+                return@withContext emptyMap()
             }
 
             // Process exited normally; wait briefly for reader thread to finish
@@ -86,7 +94,7 @@ object ShellEnvProbe {
 
             if (process.exitValue() != 0) {
                 logger.warn("Shell env probe exited with code {} for shell: {}", process.exitValue(), shell)
-                return emptyMap()
+                return@withContext emptyMap()
             }
             val output = outputRef.get()
             val env = output.split('\u0000')
@@ -97,6 +105,8 @@ object ShellEnvProbe {
                 logger.debug("Shell env probe loaded {} vars from shell: {}", env.size, shell)
             }
             env
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             logger.warn("Shell env probe failed for shell {}: {}", shell, e.message)
             emptyMap()

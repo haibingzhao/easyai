@@ -40,7 +40,7 @@ class AskQuestionToolBuilder : ToolBuilder {
         PermissionRule("tool.execute.interaction", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
         return AskQuestionTool(metadata)
     }
 }

@@ -53,7 +53,7 @@ class GoalToolBuilder(
         PermissionRule("tool.execute.goal", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
         return GoalTool(metadata, goalStore, goalStatusNotifier)
     }
 }

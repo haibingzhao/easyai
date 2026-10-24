@@ -34,7 +34,7 @@ class WebFetchToolBuilder : ToolBuilder {
         PermissionRule("tool.execute.web", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
         return WebFetchTool(metadata)
     }
 }
@@ -68,7 +68,7 @@ class WebSearchToolBuilder : ToolBuilder {
         PermissionRule("tool.execute.web", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         val exaApiKey = IntegrationConfig.resolveExaApiKey()
         val parallelApiKey = IntegrationConfig.resolveParallelApiKey()
 

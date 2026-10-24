@@ -17,7 +17,7 @@ abstract class AbstractMemoryToolBuilder : ToolBuilder {
         PermissionRule("tool.execute.memory", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         val store = agentService.memoryStore ?: return null
         return createTool(store)
     }

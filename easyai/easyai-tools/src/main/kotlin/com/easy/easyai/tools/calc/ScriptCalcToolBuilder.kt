@@ -77,7 +77,7 @@ class ScriptCalcToolBuilder : ToolBuilder {
         PermissionRule("tool.execute.calc", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition {
         return ScriptCalcTool(metadata)
     }
 }

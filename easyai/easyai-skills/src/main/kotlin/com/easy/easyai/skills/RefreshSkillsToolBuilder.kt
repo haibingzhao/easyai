@@ -47,7 +47,7 @@ class RefreshSkillsToolBuilder(
         PermissionRule("tool.execute.skill", "*", PermissionAction.ALLOW)
     )
 
-    override fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
+    override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
         val registry = registryProvider.getIfAvailable() ?: return null
         return RefreshSkillsTool(
             metadata, registry, refresherProvider.getIfAvailable(),
