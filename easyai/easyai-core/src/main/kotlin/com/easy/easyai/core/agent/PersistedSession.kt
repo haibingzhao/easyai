@@ -18,5 +18,7 @@ data class PersistedSession(
     val swarmRunId: String? = null,
     val swarmTaskId: String? = null,
     /** Hidden-session marker (`AgentContext.systemKind`); null for ordinary interactive sessions. */
-    val systemKind: String? = null
+    val systemKind: String? = null,
+    /** Host-defined business scope (`AgentContext.sessionScope`); null when not scoped. */
+    val sessionScope: String? = null
 )

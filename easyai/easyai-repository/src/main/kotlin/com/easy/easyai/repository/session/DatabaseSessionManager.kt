@@ -328,12 +328,13 @@ class DatabaseSessionManager(
                 restoreEndReason(chatSession, id, callerId)
             } else {
                 logger.info("Creating new session with agent {}: {}", agentDef.id, id)
-                persistNewSession(id, callerId, projectId, resolvedContext.systemKind)
+                persistNewSession(id, callerId, projectId, resolvedContext.systemKind, resolvedContext.sessionScope)
             }
-            // Only an existing row can lack the marker: a fresh insert carried it. Repeating the
-            // write on every request would cost two statements per turn for a hidden session.
-            if (persistedSession != null && persistedSession.systemKind == null) {
-                markSystemKind(id, resolvedContext)
+            // Only an existing row can lack a marker: a fresh insert carried them. Backfill only
+            // when the caller actually brings a marker the row lacks, so a session that legitimately
+            // has none (an async-task run) does not pay the two statements on every turn.
+            if (persistedSession != null && needsMarkerBackfill(persistedSession, resolvedContext)) {
+                ensureSessionMarkers(id, resolvedContext)
             }
             return chatSession
         }
@@ -355,13 +356,17 @@ class DatabaseSessionManager(
             restoreEndReason(chatSession, id, agentContext.userId ?: "system")
         } else {
             logger.info("Creating new session with config {}: {}", config.id, id)
-            persistNewSession(id, agentContext.userId ?: "system", projectId, resolvedContext.systemKind)
+            persistNewSession(id, agentContext.userId ?: "system", projectId, resolvedContext.systemKind, resolvedContext.sessionScope)
         }
-        if (persistedSession != null && persistedSession.systemKind == null) {
-            markSystemKind(id, resolvedContext)
+        if (persistedSession != null && needsMarkerBackfill(persistedSession, resolvedContext)) {
+            ensureSessionMarkers(id, resolvedContext)
         }
         return chatSession
     }
+
+    private fun needsMarkerBackfill(persisted: PersistedSession, context: AgentContext): Boolean =
+        (context.systemKind != null && persisted.systemKind == null) ||
+            (context.sessionScope != null && persisted.sessionScope == null)
 
     /**
      * Restore session variables from DB into the context's SessionVariables instance.
@@ -705,19 +710,24 @@ class DatabaseSessionManager(
     }
 
     /**
-     * Apply [AgentContext.systemKind] to a row that already exists without it.
+     * Backfill [AgentContext.systemKind] / [AgentContext.sessionScope] on a row that already
+     * exists without them.
      *
-     * New rows carry the marker in [persistNewSession]'s insert, and ordinary (unmarked) sessions
-     * skip the write entirely — this only covers rows created before the marker existed.
+     * New rows carry both in [persistNewSession]'s insert, and ordinary sessions skip the write
+     * entirely — this only covers rows created before a marker existed. The store's update is
+     * conditional on the column being NULL, so a scope is never reassigned to another host.
      */
-    private suspend fun markSystemKind(id: String, context: AgentContext) {
-        if (context.systemKind == null) return
+    private suspend fun ensureSessionMarkers(id: String, context: AgentContext) {
+        if (context.systemKind == null && context.sessionScope == null) return
         try {
             sessionStore.ensureSessionExists(id, context)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.warn("Failed to mark session {} as {}", id, context.systemKind, e)
+            logger.warn(
+                "Failed to backfill markers for session {} (kind={}, scope={})",
+                id, context.systemKind, context.sessionScope, e,
+            )
         }
     }
 
@@ -728,7 +738,8 @@ class DatabaseSessionManager(
         id: String,
         userId: String,
         projectId: String?,
-        systemKind: String? = null
+        systemKind: String? = null,
+        sessionScope: String? = null,
     ) {
         saveMutex.withLock {
             try {
@@ -738,7 +749,8 @@ class DatabaseSessionManager(
                     projectId = projectId,
                     createdAt = Instant.now(),
                     updatedAt = Instant.now(),
-                    systemKind = systemKind
+                    systemKind = systemKind,
+                    sessionScope = sessionScope,
                 )
                 sessionStore.save(persistedSession, userId)
                 logger.debug("Persisted new session to database: {} with projectId: {}", id, projectId)

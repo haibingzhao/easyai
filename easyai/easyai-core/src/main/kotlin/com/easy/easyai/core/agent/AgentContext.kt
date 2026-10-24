@@ -70,6 +70,13 @@ data class AgentContext(
      * does not depend on the task row that points at it still existing.
      */
     val systemKind: String? = null,
+    /**
+     * Opaque business scope written onto the session row when it is created (e.g. the page
+     * assistant's `page_assistant|<familyId>|<pageId>|<entityId>`). Null for ordinary chats.
+     * Independent of [systemKind]: the kind decides whether Chat History lists the row, the
+     * scope lets a host list its own hidden sessions.
+     */
+    val sessionScope: String? = null,
     /** Whether automatic memory generation (MemoryFlushAgent) is enabled for the current project. */
     val memoryAutoGeneration: Boolean = true,
     /** Calling agent ID. Null = top-level (user-selected). Tracks call chain depth. */

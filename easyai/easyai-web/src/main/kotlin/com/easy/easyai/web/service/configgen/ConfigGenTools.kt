@@ -362,7 +362,7 @@ class SubmitConfigBlockTool : BaseToolDefinition(
 
             Agent config blocks:
             - "basic": {"id": string, "name": string, "description": string, "agentType": string,
-              "agentContext": string, "promptTemplate": string, "customInstructions": string,
+              "agentContext": string, "promptTemplate": string (role and workflow only),
               "maxIterations": int, "maxSubAgentDepth": int}
             - "tools": {"toolNames": string[], "skillNames": string[], "commandNames": string[]}
             - "mcp": {"mcpConfigs": [{"serverName": string, "toolNames": string[], "promptNames": string[]}]}

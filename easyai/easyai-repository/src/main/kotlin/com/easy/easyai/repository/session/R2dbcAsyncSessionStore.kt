@@ -67,6 +67,7 @@ class R2dbcAsyncSessionStore(
                     it[Tables.Session.swarmRunId] = session.swarmRunId
                     it[Tables.Session.swarmTaskId] = session.swarmTaskId
                     it[Tables.Session.systemKind] = session.systemKind
+                    it[Tables.Session.sessionScope] = session.sessionScope
                 }
                 logger.info("Inserted session: {} with {} messages", session.id, session.messages.size)
             }
@@ -90,11 +91,16 @@ class R2dbcAsyncSessionStore(
     override suspend fun findSessionMarker(id: String): AsyncSessionStore.SessionMarker? {
         return suspendTransaction(db) {
             Tables.Session
-                .select(Tables.Session.systemKind)
+                .select(Tables.Session.systemKind, Tables.Session.sessionScope)
                 .where { Tables.Session.id eq id }
                 .limit(1)
                 .firstOrNull()
-                ?.let { AsyncSessionStore.SessionMarker(it[Tables.Session.systemKind]) }
+                ?.let {
+                    AsyncSessionStore.SessionMarker(
+                        systemKind = it[Tables.Session.systemKind],
+                        sessionScope = it[Tables.Session.sessionScope],
+                    )
+                }
         }
     }
 
@@ -277,6 +283,65 @@ class R2dbcAsyncSessionStore(
             }
 
             metadataList to hasMore
+        }
+    }
+
+    /**
+     * List hidden host-owned sessions by their exact scope. Deliberately does not apply
+     * [notSystemSession]: the scope is the host's own index into those rows, and a row only
+     * carries one because that host wrote it at creation. Chat History still filters them out.
+     * Team member sub-sessions do inherit the parent's scope, but they are internal coordination
+     * transcripts, so [notTeamMemberSession] keeps them out exactly as Chat History does.
+     */
+    override suspend fun findSummariesBySessionScope(
+        scope: String,
+        userId: String,
+        limit: Int,
+        offset: Int,
+    ): Pair<List<SessionScopeSummary>, Boolean> {
+        if (limit <= 0) return emptyList<SessionScopeSummary>() to false
+        return suspendTransaction(db) {
+            val fetchSize = limit + 1
+            val rows = Tables.Session
+                .select(Tables.Session.id, Tables.Session.createdAt, Tables.Session.status)
+                .where {
+                    (Tables.Session.sessionScope eq scope) and
+                        UserScope.filterStrict(Tables.Session.userId, userId) and
+                        (Tables.Session.status inList listOf("active", "streaming")) and
+                        notTeamMemberSession()
+                }
+                // Id breaks createdAt ties so offset paging cannot repeat or skip a row when two
+                // sessions were created in the same millisecond.
+                .orderBy(Tables.Session.createdAt to SortOrder.DESC, Tables.Session.id to SortOrder.DESC)
+                .limit(fetchSize)
+                .offset(offset.toLong())
+                .toList()
+
+            val hasMore = rows.size > limit
+            val page = if (hasMore) rows.dropLast(1) else rows
+            val summaries = page.map { row ->
+                val id = row[Tables.Session.id]
+                val firstUserText = Tables.Message
+                    .select(Tables.Message.contentBlocks)
+                    .where {
+                        (Tables.Message.sessionId eq id) and
+                            (Tables.Message.role eq "USER") and
+                            (Tables.Message.parentToolCallId.isNull())
+                    }
+                    .orderBy(Tables.Message.createdAt to SortOrder.ASC)
+                    .limit(1)
+                    .firstOrNull()
+                    ?.getOrNull(Tables.Message.contentBlocks)
+                    ?.let { extractTextFromContentBlocks(it) }
+
+                SessionScopeSummary(
+                    id = id,
+                    title = firstUserText,
+                    createdAt = row[Tables.Session.createdAt],
+                    streaming = row[Tables.Session.status] == "streaming",
+                )
+            }
+            summaries to hasMore
         }
     }
 
@@ -541,11 +606,19 @@ class R2dbcAsyncSessionStore(
                 it[Tables.Session.createdAt] = now
                 it[Tables.Session.updatedAt] = now
                 it[Tables.Session.systemKind] = context.systemKind
+                it[Tables.Session.sessionScope] = context.sessionScope
             }
             context.systemKind?.let { kind ->
                 Tables.Session.update(
                     where = { (Tables.Session.id eq sessionId) and Tables.Session.systemKind.isNull() }
                 ) { it[Tables.Session.systemKind] = kind }
+            }
+            // Adopt rows created before the scope column existed. A non-null scope is never
+            // overwritten: a session belongs to the host/page that created it.
+            context.sessionScope?.let { scope ->
+                Tables.Session.update(
+                    where = { (Tables.Session.id eq sessionId) and Tables.Session.sessionScope.isNull() }
+                ) { it[Tables.Session.sessionScope] = scope }
             }
         }
     }
@@ -793,7 +866,8 @@ class R2dbcAsyncSessionStore(
             updatedAt = Instant.ofEpochMilli(row[Tables.Session.updatedAt]),
             swarmRunId = row[Tables.Session.swarmRunId],
             swarmTaskId = row[Tables.Session.swarmTaskId],
-            systemKind = row[Tables.Session.systemKind]
+            systemKind = row[Tables.Session.systemKind],
+            sessionScope = row[Tables.Session.sessionScope]
         )
     }
 

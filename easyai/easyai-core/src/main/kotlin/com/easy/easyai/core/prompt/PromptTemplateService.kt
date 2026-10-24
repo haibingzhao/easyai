@@ -150,24 +150,52 @@ class PromptTemplateService(
         if (promptTemplate != null && promptTemplate.isBlank()) {
             return ""  // Preserve contract: blank = no system prompt
         }
+        var renderedCustomTemplate = false
         val base = when {
             promptTemplate == null ->
                 defaultBuilder.build(buildDefaultConfig(context)).joinToString("\n\n")
             else -> try {
                 renderer.renderLiteralTemplate(promptTemplate, context.toModel())
+                    .also { renderedCustomTemplate = true }
             } catch (e: Exception) {
                 logger.error("Failed to render prompt template, falling back to default: {}", e.message, e)
                 defaultBuilder.build(buildDefaultConfig(context, includeTools = false)).joinToString("\n\n")
             }
         }
+        // Runtime sections belong to the harness, not the authored template: a custom template that
+        // does not reference one of them still needs that content (skills, sub-agents, members,
+        // AGENTS.md, delegated task) in the prompt. Sections the template references stay owned by
+        // the template, so legacy templates are not duplicated. The default path — including the
+        // render-failure fallback — already has them all.
+        val runtimeSections =
+            if (renderedCustomTemplate) appendRuntimeSections(promptTemplate.orEmpty(), context) else emptyList()
         // Unconditionally append session variables (regardless of default or custom template)
         val varsSegment = buildSessionVariablesSegment(context.sessionVariables)
         // Append each registered tool's own static guidance segment (ToolDefinition.systemPromptSegment),
         // already sorted by promptSegmentOrder by the caller. Static text and a declared order keep the
         // system prompt prefix stable for LLM caching; the tools own their guidance instead of this
         // service matching on hard-coded tool names.
-        return (listOfNotNull(base.takeIf { it.isNotBlank() }, varsSegment) + context.toolPromptSegments)
+        return (listOfNotNull(base.takeIf { it.isNotBlank() }) + runtimeSections +
+            listOfNotNull(varsSegment) + context.toolPromptSegments)
             .joinToString("\n\n")
+    }
+
+    /**
+     * Runtime sections the template did not place itself, in default-prompt order. Tools are absent
+     * on purpose: they reach the model as native tool definitions, and memory is retrieved through
+     * the memory tools instead of being injected.
+     */
+    private fun appendRuntimeSections(template: String, context: PromptContext): List<String> {
+        val sections = buildDefaultConfig(context)
+        return listOf(
+            "custom_instructions" to sections.customInstructions,
+            "skills" to sections.skillsList,
+            "sub_agents" to sections.subAgentsList,
+            "team_members" to sections.teamMembersList,
+            "instructions" to sections.instructionsSegment,
+        ).mapNotNull { (variable, text) ->
+            text?.takeIf { it.isNotBlank() && !TemplateVariableReferences.references(template, variable) }
+        }
     }
 
     private fun buildSessionVariablesSegment(vars: Map<String, String>): String? {

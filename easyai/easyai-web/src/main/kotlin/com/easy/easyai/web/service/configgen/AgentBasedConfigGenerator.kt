@@ -16,7 +16,6 @@ import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.web.model.AiConfigGenerateRequest
 import com.easy.easyai.web.model.ConfigValidationResult
 import com.easy.easyai.web.service.ConfigValidator
-import com.easy.easyai.web.service.validation.TemplateConsistencyValidator
 import kotlinx.coroutines.flow.FlowCollector
 import org.slf4j.LoggerFactory
 import org.springframework.http.codec.ServerSentEvent
@@ -321,16 +320,6 @@ class AgentBasedConfigGenerator(
                 }
             }
 
-            // Post-process: strip customInstructions if template doesn't reference it
-            if (request.configType == "agent" && submittedConfig is ObjectNode) {
-                val obj = submittedConfig as ObjectNode
-                val promptTemplate = obj.get("promptTemplate")?.asString() ?: ""
-                if (promptTemplate.isNotBlank() &&
-                    !TemplateConsistencyValidator.referencesTemplateVariable(promptTemplate, "custom_instructions")) {
-                    obj.remove("customInstructions")
-                }
-            }
-
             collector.emit(sseEvent("stream_end", ""))
 
             // Emit final result
@@ -398,8 +387,8 @@ CRITICAL RULES — NEVER output the full configuration JSON as a tool parameter:
 
 ## Block Schemas
 - "basic": {"id": string, "name": string, "description": string, "agentType": "PRIMARY"|"SUBAGENT"|"TEAM"|"ALL",
-  "agentContext": "CHAT"|"SWARM"|"BOTH", "promptTemplate": string (MUST include {{ custom_instructions }}),
-  "customInstructions": string (optional), "maxIterations": int, "maxSubAgentDepth": int}
+  "agentContext": "CHAT"|"SWARM"|"BOTH", "promptTemplate": string (role and workflow only),
+  "maxIterations": int, "maxSubAgentDepth": int}
 - "tools": {"toolNames": string[], "skillNames": string[], "commandNames": string[]}
 - "mcp": {"mcpConfigs": [{"serverName": string, "toolNames": string[], "promptNames": string[]}]}
 - "subagent": {"agentId": string} for global reference, OR {"name": string, "description": string,
@@ -412,7 +401,9 @@ CRITICAL RULES — NEVER output the full configuration JSON as a tool parameter:
 - Skills: via skillNames field, NEVER in toolNames
 - **load_skill requirement**: if skillNames is non-empty, `load_skill` MUST be included in toolNames (otherwise the agent cannot load skill content at runtime)
 - **goal command requirement**: if commandNames includes "goal", `goal` MUST be included in toolNames (otherwise created goals cannot be completed/blocked, stalling the agent loop)
-- promptTemplate: MUST be valid Jinja2 and include {{ custom_instructions }}
+- promptTemplate: MUST be valid Jinja2. Write ONLY the agent's role, goals, workflow, and output rules.
+  Do NOT list tools, skills, sub-agents, team members, project instructions, or memory, and do NOT
+  append {{ custom_instructions }} — the runtime injects those sections automatically.
 - subagent blocks: use {"agentId": "xxx"} for existing agents (from list_resources type="agents"),
   or provide full inline fields for custom sub-agents
 - inputSchema: required when using {{ input.xxx }} in promptTemplate

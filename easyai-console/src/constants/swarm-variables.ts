@@ -3,8 +3,9 @@
  * These reflect the variables actually populated during Swarm task prompt rendering
  * (SwarmWorkerExecutor.renderPrompt → PromptContext.toModel()).
  *
- * Variables NOT listed here (tools, skills, sub_agents, instructions, project, memory, cwd, protocol, input)
+ * Variables NOT listed here (tools, skills, sub_agents, instructions, project, cwd, protocol, input)
  * are always empty in the Swarm context and should NOT be shown in variable dropdowns.
+ * `memory` is not a template variable in any context — memory is retrieved through the memory tools.
  */
 
 /** Variables available in task promptTemplate (UserMessage rendering). */

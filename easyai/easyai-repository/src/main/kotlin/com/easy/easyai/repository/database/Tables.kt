@@ -185,6 +185,13 @@ object Tables {
          * (an `async_task` row) being deleted.
          */
         val systemKind = varchar("system_kind", 32).nullable()
+        /**
+         * Opaque business scope written when a host opens the session (e.g. the page assistant's
+         * `page_assistant|<familyId>|<pageId>|<entityId>`). Null for ordinary chats. Independent
+         * of [systemKind]: the kind decides whether Chat History lists the row, the scope lets a
+         * host list its own hidden sessions.
+         */
+        val sessionScope = varchar("session_scope", 255).nullable()
         /** JSON of the model option overrides actually applied to this session (effort/contextToken). */
         val modelOverrides = text("model_overrides").nullable()
 
@@ -193,6 +200,7 @@ object Tables {
         init {
             index(false, forkRootSessionId)
             index(false, forkedFromSessionId)
+            index(false, sessionScope, userId)
         }
     }
 

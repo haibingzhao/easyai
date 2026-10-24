@@ -40,6 +40,18 @@ data class SessionListMetadata(
 )
 
 /**
+ * Lightweight row for a host-owned session list (e.g. the page assistant's history).
+ * Sessions are selected by [AsyncSessionStore.findSummariesBySessionScope], which deliberately
+ * includes hidden sessions carrying that scope.
+ */
+data class SessionScopeSummary(
+    val id: String,
+    val title: String?,
+    val createdAt: Long,
+    val streaming: Boolean = false
+)
+
+/**
  * One fork branch of a root session, for the Summary panel branch list.
  */
 data class ForkBranchMetadata(
@@ -94,7 +106,7 @@ interface AsyncSessionStore {
      * Marker metadata of a session row. [systemKind] is null for ordinary chat rows and carries
      * the hidden-session kind (e.g. [AgentContext.SYSTEM_KIND_ASYNC_TASK]) otherwise.
      */
-    data class SessionMarker(val systemKind: String?)
+    data class SessionMarker(val systemKind: String?, val sessionScope: String? = null)
 
     /**
      * Lightweight lookup of a session's hidden-session marker without loading its messages.
@@ -130,6 +142,26 @@ interface AsyncSessionStore {
      *         and `second` is a boolean indicating whether more results exist beyond this page
      */
     suspend fun findMetadataByLimit(limit: Int, offset: Int = 0, projectId: String? = null, userId: String = "system", excludeSwarm: Boolean = true, tags: List<String>? = null, tempWorkspaceOnly: Boolean = false): Pair<List<SessionListMetadata>, Boolean>
+
+    /**
+     * List sessions carrying an exact host-defined [AsyncSessionStore.SessionMarker.sessionScope].
+     *
+     * Unlike [findMetadataByLimit] this intentionally includes hidden sessions: the scope is the
+     * host's own index into them, and a row normally carries one because that host wrote it when
+     * the session was created. Team member sub-sessions inherit the parent's scope but are
+     * internal coordination transcripts, so they are excluded exactly as in the listing above.
+     * Results are ordered newest first (creation time, then id as a stable tie-breaker); the
+     * boolean reports whether more rows exist beyond this page.
+     *
+     * Stores without a scope concept keep the default and report an empty page.
+     */
+    suspend fun findSummariesBySessionScope(
+        scope: String,
+        userId: String = "system",
+        limit: Int,
+        offset: Int = 0,
+    ): Pair<List<SessionScopeSummary>, Boolean> = emptyList<SessionScopeSummary>() to false
+
     suspend fun delete(id: String, userId: String = "system")
 
     /**
