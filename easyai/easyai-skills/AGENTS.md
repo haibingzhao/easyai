@@ -26,6 +26,8 @@ easyai-skills/src/main/kotlin/com/easy/easyai/skills/
 ├── SkillCatalogService.kt      # Read/toggle facade for the catalog (management UI facing)
 ├── SkillSyncService.kt         # THE write direction: DB row ↔ OSS zip ↔ owner root (syncFor/addSkill/addUploaded/deleteSkill)
 ├── SkillPackages.kt            # Zip codec: pack (symlink/size reject) / unpack (zip-slip reject, cap)
+├── SkillPackageScanner.kt      # Deterministic easyai-spec + security scan of an about-to-be-installed package
+├── SkillScanModels.kt          # ScanFinding/ScanReport: stable ids, severities, blocking/acknowledgement gates
 ├── SkillPackageStore.kt        # Per-owner ObjectStorage handle + `skills/{owner}/{name}.zip` keying
 ├── SkillRefreshService.kt      # refresh_skills backend: sync → index; ensureSynced() lazy gate
 ├── SkillIndexer.kt             # Catalog row ↔ skill_search projection (checksum-driven, sync_state CAS)
@@ -132,6 +134,9 @@ non-regular files, and the `package-max-bytes` cap; `unpack` rejects absolute pa
 anything that resolves outside the target directory, with a total-size cap. Uploads are staged under
 the system temp directory (`SkillSyncService.addUploaded`) so a concurrent sync pass can never see a
 half-written skill, and the staged tree is the only thing ever copied into an owner root.
+Browser uploads (files and zip alike) also run `SkillPackageScanner` on the staged tree and refuse
+security-critical findings; the agent panel's preview uses the same scanner but only as a preview.
+Local directory installs (`addSkill`) are not scanned: they carry the user's own files.
 
 **Object storage resolves per owner, with a local fallback.** `SkillPackageStore.storageFor(owner)`
 uses `ObjectStorageResolver` (user row, then `system` row) and falls back to a local directory under

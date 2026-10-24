@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { SkillInfo } from '@/types/agent';
+import type { AssetScope } from '@/services/api-client';
 import {
   SkillService,
   type DirectoryInstallRequest,
@@ -29,7 +30,8 @@ interface SkillStore {
   clearError: () => void;
   clearNotice: () => void;
   installFromDirectory: (request: DirectoryInstallRequest) => Promise<SkillInstallResult>;
-  installFromUpload: (request: UploadInstallRequest) => Promise<SkillInstallResult>;
+  /** `scope` pins the write bucket; omitted, the host's current write default decides. */
+  installFromUpload: (request: UploadInstallRequest, scope?: AssetScope) => Promise<SkillInstallResult>;
   setEnabled: (name: string, enabled: boolean) => Promise<void>;
   remove: (name: string) => Promise<void>;
   stopIndexPolling: () => void;
@@ -110,8 +112,8 @@ export const useSkillStore = create<SkillStore>((set, get) => {
       return result;
     },
 
-    installFromUpload: async (request) => {
-      const result = await SkillService.installFromUpload(request);
+    installFromUpload: async (request, scope) => {
+      const result = await SkillService.installFromUpload(request, scope);
       if (result.skill) {
         set({ notice: result.warning });
         await get().load();

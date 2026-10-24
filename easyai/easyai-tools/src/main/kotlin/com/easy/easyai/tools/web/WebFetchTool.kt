@@ -7,12 +7,14 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.reactor.awaitSingle
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpHeaders
+import org.springframework.http.HttpStatusCode
 import org.springframework.http.client.reactive.ReactorClientHttpConnector
 import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.WebClientResponseException
+import reactor.core.publisher.Mono
 import reactor.netty.http.client.HttpClient
-import java.net.InetAddress
 import java.net.URI
+import java.net.UnknownHostException
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -36,19 +38,13 @@ data class WebFetchParams(
  * - 5 MB response size limit
  * - HTML→Markdown via [HtmlConverter]
  */
-class WebFetchTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
+class WebFetchTool(
+    metadata: ToolMetadata,
+    private val client: WebClient = defaultClient(),
+    private val urlValidator: (String) -> Unit = WebUrlSafety::validate
+) : BaseToolDefinition(metadata) {
 
     private val logger = LoggerFactory.getLogger(javaClass)
-
-    /** Shared WebClient instance — avoids creating a new connection pool per request. */
-    private val client: WebClient = WebClient.builder()
-        .clientConnector(
-            ReactorClientHttpConnector(
-                HttpClient.create().followRedirect(false)
-            )
-        )
-        .codecs { it.defaultCodecs().maxInMemorySize(MAX_RESPONSE_SIZE) }
-        .build()
 
     override val executionMode = ToolExecutionMode.PARALLEL
     override fun parameterType() = WebFetchParams::class.java
@@ -69,9 +65,11 @@ class WebFetchTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
             return@withContext errorResult("URL must start with http:// or https://")
         }
         try {
-            validateUrlNotInternal(url)
+            urlValidator(url)
         } catch (e: IllegalArgumentException) {
             return@withContext errorResult(e.message ?: "Invalid URL")
+        } catch (e: UnknownHostException) {
+            return@withContext errorResult("Could not resolve host: ${e.message}")
         }
 
         val format = (args["format"] as? String) ?: "markdown"
@@ -84,18 +82,18 @@ class WebFetchTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
         onUpdate(ToolUpdate.Progress("Fetching $url"))
 
         try {
-            val result = withTimeout(timeoutSec.seconds) {
+            val outcome = withTimeout(timeoutSec.seconds) {
                 fetchUrl(url, format)
             }
-            ToolResult(content = listOf(TextContent(result)))
+            outcomeResult(outcome, url)
         } catch (e: WebClientResponseException) {
             if (e.statusCode.value() == 403 && isCloudflareChallenge(e)) {
                 logger.debug("Cloudflare challenge detected for {}, retrying with simplified UA", url)
                 try {
-                    val result = withTimeout(timeoutSec.seconds) {
+                    val outcome = withTimeout(timeoutSec.seconds) {
                         fetchUrl(url, format, userAgent = FALLBACK_USER_AGENT)
                     }
-                    ToolResult(content = listOf(TextContent(result)))
+                    outcomeResult(outcome, url)
                 } catch (retryEx: Exception) {
                     errorResult("Failed to fetch $url after Cloudflare retry: ${retryEx.message}")
                 }
@@ -110,20 +108,111 @@ class WebFetchTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
         }
     }
 
-    private suspend fun fetchUrl(url: String, format: String, userAgent: String = BROWSER_USER_AGENT): String {
-        val acceptHeader = acceptHeaderFor(format)
+    private fun outcomeResult(outcome: FetchOutcome, requestedUrl: String): ToolResult = when (outcome) {
+        is FetchOutcome.Success -> ToolResult(
+            content = listOf(TextContent(outcome.content)),
+            details = mapOf(
+                "url" to outcome.finalUrl,
+                "requestedUrl" to requestedUrl,
+                "redirects" to outcome.redirects
+            )
+        )
+        is FetchOutcome.Failure -> errorResult(outcome.message)
+    }
 
-        val response = client.get()
-            .uri(url)
+    private suspend fun fetchUrl(
+        url: String,
+        format: String,
+        userAgent: String = BROWSER_USER_AGENT
+    ): FetchOutcome {
+        val acceptHeader = acceptHeaderFor(format)
+        var current = URI(url)
+        var redirects = 0
+        val chain = mutableListOf(current.toString())
+
+        while (true) {
+            val hop = fetchOnce(current, acceptHeader, userAgent)
+
+            if (hop.status.value() in 300..399) {
+                val next = resolveRedirectLocation(current, hop.location)
+                    ?: return FetchOutcome.Failure(
+                        "HTTP ${hop.status.value()} from $current has no usable Location header; " +
+                            "the server may require a browser, or the redirect target is unsupported."
+                    )
+                if (redirects >= MAX_REDIRECTS) {
+                    return FetchOutcome.Failure(
+                        "Too many redirects (>$MAX_REDIRECTS): ${(chain + next.toString()).joinToString(" -> ")}"
+                    )
+                }
+                try {
+                    urlValidator(next.toString())
+                } catch (e: IllegalArgumentException) {
+                    return FetchOutcome.Failure("Redirect to $next was rejected: ${e.message}")
+                } catch (e: UnknownHostException) {
+                    return FetchOutcome.Failure("Redirect to $next could not be resolved: ${e.message}")
+                }
+                redirects++
+                chain += next.toString()
+                current = next
+                continue
+            }
+
+            val content = convertContent(hop.content.orEmpty(), format)
+            if (content.isBlank()) {
+                val contentType = hop.contentType?.let { ", Content-Type: $it" }.orEmpty()
+                return FetchOutcome.Failure(
+                    "Web fetch from $current returned no usable text (HTTP ${hop.status.value()}$contentType). " +
+                        "If the page requires JavaScript, fetch the raw file or API URL instead."
+                )
+            }
+            return FetchOutcome.Success(
+                content = if (redirects == 0) content
+                else "[fetched $current (redirected from $url)]\n\n$content",
+                finalUrl = current.toString(),
+                redirects = redirects
+            )
+        }
+    }
+
+    private suspend fun fetchOnce(uri: URI, acceptHeader: String, userAgent: String): FetchHop =
+        client.get()
+            .uri(uri)
             .header(HttpHeaders.USER_AGENT, userAgent)
             .header(HttpHeaders.ACCEPT, acceptHeader)
             .header(HttpHeaders.ACCEPT_LANGUAGE, "en-US,en;q=0.9")
-            .retrieve()
-            .bodyToMono(String::class.java)
+            .exchangeToMono { response ->
+                val status = response.statusCode()
+                when {
+                    status.value() in 300..399 -> {
+                        val location = response.headers().asHttpHeaders().getFirst(HttpHeaders.LOCATION)
+                        response.releaseBody().thenReturn(FetchHop(status, null, null, location))
+                    }
+                    status.value() >= 400 ->
+                        response.createException().flatMap { Mono.error<FetchHop>(it) }
+                    else -> response.bodyToMono(String::class.java)
+                        .defaultIfEmpty("")
+                        .map { body ->
+                            FetchHop(
+                                status = status,
+                                content = body,
+                                contentType = response.headers().asHttpHeaders().contentType?.toString(),
+                                location = null
+                            )
+                        }
+                }
+            }
             .awaitSingle()
 
-        // Determine content type from the response (best-effort: we trust Accept negotiation)
-        return convertContent(response, format)
+    private data class FetchHop(
+        val status: HttpStatusCode,
+        val content: String?,
+        val contentType: String?,
+        val location: String?
+    )
+
+    private sealed interface FetchOutcome {
+        data class Success(val content: String, val finalUrl: String, val redirects: Int) : FetchOutcome
+        data class Failure(val message: String) : FetchOutcome
     }
 
     /**
@@ -151,27 +240,31 @@ class WebFetchTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
         private const val DEFAULT_TIMEOUT_SEC = 30
         private const val MAX_TIMEOUT_SEC = 120
         private const val MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB
+        private const val MAX_REDIRECTS = 5
         private val VALID_FORMATS = setOf("markdown", "text", "html")
+
+        /** Shared WebClient: one connection pool for every fetch, redirects handled hop by hop in [fetchUrl]. */
+        private fun defaultClient(): WebClient = WebClient.builder()
+            .clientConnector(
+                ReactorClientHttpConnector(
+                    HttpClient.create().followRedirect(false)
+                )
+            )
+            .codecs { it.defaultCodecs().maxInMemorySize(MAX_RESPONSE_SIZE) }
+            .build()
+
+        /**
+         * Resolves a Location header against the current URL, or null when it cannot be followed
+         * safely. Kept as a thin delegate for callers that already import the tool class.
+         */
+        internal fun resolveRedirectLocation(current: URI, location: String?): URI? =
+            WebUrlSafety.resolveRedirect(current, location)
 
         private fun acceptHeaderFor(format: String): String = when (format) {
             "markdown" -> "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1"
             "text" -> "text/plain;q=1.0, text/markdown;q=0.9, text/html;q=0.8, */*;q=0.1"
             "html" -> "text/html;q=1.0, application/xhtml+xml;q=0.9, text/plain;q=0.8, text/markdown;q=0.7, */*;q=0.1"
             else -> "*/*"
-        }
-
-        /**
-         * Validates that the URL does not resolve to an internal/private network address.
-         * Prevents SSRF attacks via direct IP, DNS rebinding to localhost, etc.
-         */
-        private fun validateUrlNotInternal(url: String) {
-            val uri = URI(url)
-            val host = uri.host ?: throw IllegalArgumentException("Invalid URL: no host")
-            val addr = InetAddress.getByName(host)
-            if (addr.isLoopbackAddress() || addr.isLinkLocalAddress() ||
-                addr.isSiteLocalAddress() || addr.isAnyLocalAddress()) {
-                throw IllegalArgumentException("Access to internal network addresses is not allowed: $host")
-            }
         }
 
         private fun isCloudflareChallenge(e: WebClientResponseException): Boolean {

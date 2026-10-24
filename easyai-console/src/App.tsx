@@ -15,6 +15,7 @@ import { KnowledgePage } from './pages/KnowledgePage';
 import { ArticleEditorPage } from './pages/ArticleEditorPageLazy';
 import { CommandsPage } from './pages/CommandsPage';
 import { SkillsPage } from './pages/SkillsPage';
+import { SkillAgentPage } from './pages/SkillAgentPage';
 import { SwarmPresetEditorPage } from './pages/SwarmPresetEditorPage';
 import { WorkflowRunPage } from './pages/WorkflowRunPage';
 import { LoginPage } from './pages/LoginPage';
@@ -162,7 +163,11 @@ function App() {
           />
           <Route
             path="/skills"
-            element={<SkillsPage />}
+            element={<SkillsPage showAgentInstaller />}
+          />
+          <Route
+            path="/skills/agent"
+            element={<SkillAgentPage />}
           />
           <Route
             path="/memories"
