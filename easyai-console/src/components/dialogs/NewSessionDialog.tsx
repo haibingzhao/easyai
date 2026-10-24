@@ -8,6 +8,7 @@ import { useNavStore } from '@/services/stores/nav-store';
 import { sessionService } from '@/services/session-service';
 import { getCheckpoints, getFileReviewState } from '@/services/checkpoint-service';
 import { getStreamingStatus } from '@/services/chat-service';
+import { APP_CONFIG } from '@/constants/navigation';
 import type { CheckpointInfo } from '@/types/checkpoint';
 import { i18n } from '@/utils/i18n';
 import { MessageSquare } from 'lucide-react';
@@ -33,12 +34,15 @@ export const NewSessionDialog: React.FC<NewSessionDialogProps> = ({ open, onClos
       const streamingStatus = await getStreamingStatus(sessionId);
 
       // Load existing messages first (for both running and completed sessions)
+      const workspacePanelsEnabled = APP_CONFIG.showWorkspacePanels;
       const [detail, checkpoints] = await Promise.all([
         sessionService.getSessionDetail(sessionId),
-        getCheckpoints(sessionId).catch((e) => {
-          console.warn('Failed to load checkpoints:', e);
-          return [] as CheckpointInfo[];
-        }),
+        workspacePanelsEnabled
+          ? getCheckpoints(sessionId).catch((e) => {
+              console.warn('Failed to load checkpoints:', e);
+              return [] as CheckpointInfo[];
+            })
+          : Promise.resolve([] as CheckpointInfo[]),
       ]);
       loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, sessionId);
       adoptSessionWorkspace(detail);
@@ -46,7 +50,7 @@ export const NewSessionDialog: React.FC<NewSessionDialogProps> = ({ open, onClos
       const snapshotEnabled = detail.snapshotEnabled !== false;
       useNavStore.getState().setSelectedFile(null);
       // Load file review state (skipped when the backend snapshot system is disabled)
-      const reviewState = snapshotEnabled ? await getFileReviewState(sessionId).catch((e) => {
+      const reviewState = snapshotEnabled && workspacePanelsEnabled ? await getFileReviewState(sessionId).catch((e) => {
         console.warn('Failed to load file review state:', e);
         return null;
       }) : null;

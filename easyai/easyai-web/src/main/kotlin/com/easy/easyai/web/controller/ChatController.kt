@@ -841,7 +841,11 @@ class ChatController(
     ): Mono<FileReviewStateResponse> {
         return mono {
             if (snapshotService == null) return@mono null
-            val projectPath = resolveProjectPath(sessionId)
+            val userId = verifyOwnership(sessionId)
+            // Same gating as getCheckpoints: a project-less session (e.g. a host that runs every
+            // chat in a temporary workspace) has no snapshot state to review, not an error.
+            val context = sessionManager.getSessionContext(sessionId, userId, currentOwners())
+            val projectPath = context?.projectPath ?: return@mono null
             if (!snapshotService.isEnabled(projectPath)) return@mono null
             val state = snapshotService.loadFileReviewState(projectPath, sessionId)
                 ?: return@mono null

@@ -121,7 +121,7 @@ export const UserMessage: React.FC<UserMessageProps> = ({ message, isEditable, o
       onDoubleClick={onDoubleClick}
     >
       <div
-        className={`user-message-container py-2 px-4 rounded-xl max-w-[80%] ${
+        className={`user-message-container min-w-0 py-2 px-4 rounded-xl max-w-[80%] ${
           isCompletionCheck 
             ? 'bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800' 
             : isSystemSteer
@@ -142,7 +142,7 @@ export const UserMessage: React.FC<UserMessageProps> = ({ message, isEditable, o
           </div>
         )}
         <div
-          className={`whitespace-pre-wrap text-sm ${isSystemSteer ? 'text-gray-600 dark:text-gray-300' : 'text-gray-800 dark:text-blue-100'}`}
+          className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm ${isSystemSteer ? 'text-gray-600 dark:text-gray-300' : 'text-gray-800 dark:text-blue-100'}`}
           data-message-content={message.content}
           onCopy={(e) => { if (copyMessageSelection(e.currentTarget, e.clipboardData)) e.preventDefault(); }}
         >
