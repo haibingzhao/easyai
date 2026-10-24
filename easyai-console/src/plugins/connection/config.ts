@@ -13,7 +13,19 @@ export const CONNECTION_CONFIG = {
   intervalHiddenMs: 60000,
   /** Sampling periods are desynchronised by up to this fraction so several devices do not align. */
   jitterRatio: 0.2,
+  /** How long a sample history the report keeps. */
   historyLength: 60,
+  /**
+   * Hide the mobile Chat header's own chip when a host mounts a persistent
+   * `MOBILE_TOP_ITEMS` badge — two readings of the same connection on one screen
+   * is noise. Default false preserves every existing host's header.
+   */
+  hideInlineMobileChip: false,
+  /**
+   * Render the badge on loopback as well. The default hides it (a localhost reading says nothing
+   * about the real link); a host that wants an always-on indicator opts in.
+   */
+  showOnLocal: false,
   /** `.ts.net` + a TTFB under this cannot be a relayed hop — the relay always adds more. */
   directMaxTtfbMs: 40,
   /** A sample claiming DIRECT above this is contradictory and gets flagged in the report. */

@@ -7,6 +7,7 @@ import { useAgentStore } from '@/services/stores/agent-store';
 import { useSettingsStore } from '@/services/stores/settings-store';
 import { adoptSessionWorkspace } from '@/services/stores/project-store';
 import { useNavStore } from '@/services/stores/nav-store';
+import { APP_CONFIG } from '@/constants/navigation';
 import type { CheckpointInfo } from '@/types/checkpoint';
 
 /**
@@ -25,9 +26,14 @@ export async function switchToSession(sessionId: string): Promise<void> {
 
   const streamingStatus = await getStreamingStatus(sessionId);
 
+  // Review/Files are the only consumers of checkpoint and review state; skip the calls
+  // entirely when the host hides those panels.
+  const workspacePanelsEnabled = APP_CONFIG.showWorkspacePanels;
   const [detail, checkpoints] = await Promise.all([
     sessionService.getSessionDetail(sessionId),
-    getCheckpoints(sessionId).catch(() => [] as CheckpointInfo[]),
+    workspacePanelsEnabled
+      ? getCheckpoints(sessionId).catch(() => [] as CheckpointInfo[])
+      : Promise.resolve([] as CheckpointInfo[]),
   ]);
   loadSessionMessages(detail!.messages, detail!.pendingPermission, checkpoints, detail!.endReason, detail!.variables, detail!.modelContextLength, sessionId);
   setForkRootId(detail!.forkRootSessionId ?? sessionId);
@@ -57,7 +63,9 @@ export async function switchToSession(sessionId: string): Promise<void> {
 
   const [groupedTodos, reviewState] = await Promise.all([
     sessionService.getGroupedTodos(sessionId),
-    snapshotEnabled ? getFileReviewState(sessionId).catch(() => null) : Promise.resolve(null),
+    snapshotEnabled && workspacePanelsEnabled
+      ? getFileReviewState(sessionId).catch(() => null)
+      : Promise.resolve(null),
   ]);
   setTodos(groupedTodos.main);
   setAllSubAgentTodos(
@@ -104,7 +112,9 @@ export async function loadTranscriptSession(sessionId: string): Promise<void> {
 
   const [detail, checkpoints] = await Promise.all([
     sessionService.getSessionDetail(sessionId),
-    getCheckpoints(sessionId).catch(() => [] as CheckpointInfo[]),
+    APP_CONFIG.showWorkspacePanels
+      ? getCheckpoints(sessionId).catch(() => [] as CheckpointInfo[])
+      : Promise.resolve([] as CheckpointInfo[]),
   ]);
 
   loadSessionMessages(detail!.messages, detail!.pendingPermission, checkpoints, detail!.endReason, detail!.variables, detail!.modelContextLength, sessionId);

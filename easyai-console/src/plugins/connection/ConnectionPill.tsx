@@ -34,7 +34,7 @@ export const ConnectionPill: React.FC = () => {
     };
   }, [open]);
 
-  if (!CFG.enabled || route.access === 'LOCAL') return null;
+  if (!CFG.enabled || (route.access === 'LOCAL' && !CFG.showOnLocal)) return null;
 
   const summary = `${routeText(route)} · ${msText(p50Ms, reachable)}`;
 

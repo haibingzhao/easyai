@@ -35,6 +35,7 @@ import com.easy.easyai.tools.background.BackgroundTaskManagerRegistry
 import com.easy.easyai.tools.background.BackgroundTaskStatus
 import com.easy.easyai.web.context.ChatContextContributor
 import com.easy.easyai.web.context.ChatContextRejectedException
+import com.easy.easyai.web.context.ChatSessionTagProvider
 import com.easy.easyai.web.context.ChatTurnContext
 import com.easy.easyai.web.handler.ChatEventConverter
 import com.easy.easyai.web.handler.CustomEventConverter
@@ -97,7 +98,12 @@ class ChatStreamService(
      * resume, question/permission answer, manual compaction). Empty keeps the pre-existing
      * behaviour: no variables are injected and no host identity is resolved.
      */
-    private val contextContributors: List<ChatContextContributor> = emptyList()
+    private val contextContributors: List<ChatContextContributor> = emptyList(),
+    /**
+     * Host tags for a freshly opened session. Applied once, on the first user turn, so History
+     * can group sessions by business scenario. Empty keeps sessions untagged.
+     */
+    private val sessionTagProviders: List<ChatSessionTagProvider> = emptyList()
 ) : DisposableBean {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper: ObjectMapper = SharedObjectMapper.instance
@@ -700,6 +706,9 @@ class ChatStreamService(
         }
 
         val history = sessionManager.loadMessages(session.id)
+        // A session row can be pre-created by POST /api/chat/session, so "no history" is the
+        // reliable first-turn signal. Resumed turns keep whatever tags the user has edited.
+        if (history.isEmpty()) applySessionTags(agentContext, session.id)
         commandService?.validateReplay(history, agentContext.userId ?: "system", agentContext.effectiveOwners)
 
         // Resume goal timer if paused (defensive: user may send a new message instead of using dedicated resume endpoints)
@@ -736,6 +745,29 @@ class ChatStreamService(
         return flow {
             emit(ChatStreamEvent.UserMessageAck(messageId = userMessageId).toSse())
             emitAll(sseFlow)
+        }
+    }
+
+    /**
+     * Best-effort initial tags for a fresh session. Tagging is metadata only: a failing host
+     * provider must never block the chat turn, and a cancellation still propagates.
+     */
+    private suspend fun applySessionTags(agentContext: AgentContext, sessionId: String) {
+        val store = sessionStore ?: return
+        if (sessionTagProviders.isEmpty()) return
+        try {
+            val tags = sessionTagProviders
+                .flatMap { it.tags(agentContext) }
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+            if (tags.isNotEmpty()) {
+                store.updateTags(sessionId, tags, agentContext.userId ?: "system")
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("Failed to apply session tags for {}: {}", sessionId, e.message)
         }
     }
 

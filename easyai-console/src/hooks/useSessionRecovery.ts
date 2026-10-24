@@ -5,6 +5,7 @@ import { getCheckpoints, getFileReviewState } from '@/services/checkpoint-servic
 import { adoptSessionWorkspace } from '@/services/stores/project-store';
 import { useChatStore } from '@/services/stores/chat-store';
 import { handleWatchEvent } from '@/services/stores/chat/watch-handler';
+import { APP_CONFIG } from '@/constants/navigation';
 import type { CheckpointInfo } from '@/types/checkpoint';
 
 /** Poll cadence while a session is still running. */
@@ -76,10 +77,14 @@ export function useSessionRecovery(runningSessionId: string | null): SessionReco
     const fetchMessagesIncremental = async (finalize: boolean): Promise<boolean> => {
       const state = useChatStore.getState();
       const lastTimestamp = state._lastSnapshots.reduce((max, s) => Math.max(max, s.timestamp), 0);
+      // No Review tab means no consumer for either payload — don't poll the snapshot system.
+      const workspacePanelsEnabled = APP_CONFIG.showWorkspacePanels;
       const [checkpoints, groupedTodos, reviewState] = await Promise.all([
-        getCheckpoints(sid).catch(() => [] as CheckpointInfo[]),
+        workspacePanelsEnabled
+          ? getCheckpoints(sid).catch(() => [] as CheckpointInfo[])
+          : Promise.resolve([] as CheckpointInfo[]),
         sessionService.getGroupedTodos(sid).catch(() => ({ main: [], subAgents: [] })),
-        getFileReviewState(sid).catch(() => null),
+        workspacePanelsEnabled ? getFileReviewState(sid).catch(() => null) : Promise.resolve(null),
       ]);
       if (cancelled) return false;
 
@@ -175,31 +180,33 @@ export function useSessionRecovery(runningSessionId: string | null): SessionReco
 
     // Periodic checkpoint refresh — surfaces team member file changes
     // that don't flow through the parent's stream (members use isolated session IDs).
-    const checkpointTimer = setInterval(async () => {
-      if (isStalePoll()) return;
-      try {
-        const checkpoints = await getCheckpoints(sid);
-        if (cancelled) return;
-        const state = useChatStore.getState();
-        for (const cp of checkpoints) {
-          const key = cp.assistantMessageId || cp.messageId;
-          if (!key) continue;
-          // Upsert synthetic member checkpoints (their content grows as members write more files);
-          // only add genuinely new keys for real checkpoints.
-          if (!state.checkpointsByMessageId[key] || key.startsWith('member:')) {
-            state.addCheckpoint(key, cp);
+    const checkpointTimer = APP_CONFIG.showWorkspacePanels
+      ? setInterval(async () => {
+          if (isStalePoll()) return;
+          try {
+            const checkpoints = await getCheckpoints(sid);
+            if (cancelled) return;
+            const state = useChatStore.getState();
+            for (const cp of checkpoints) {
+              const key = cp.assistantMessageId || cp.messageId;
+              if (!key) continue;
+              // Upsert synthetic member checkpoints (their content grows as members write more files);
+              // only add genuinely new keys for real checkpoints.
+              if (!state.checkpointsByMessageId[key] || key.startsWith('member:')) {
+                state.addCheckpoint(key, cp);
+              }
+            }
+          } catch {
+            /* best-effort */
           }
-        }
-      } catch {
-        /* best-effort */
-      }
-    }, CHECKPOINT_REFRESH_MS);
+        }, CHECKPOINT_REFRESH_MS)
+      : null;
 
     return () => {
       cancelled = true;
       pollRef.current = null;
       if (timer) clearTimeout(timer);
-      clearInterval(checkpointTimer);
+      if (checkpointTimer) clearInterval(checkpointTimer);
     };
   }, [runningSessionId]);
 

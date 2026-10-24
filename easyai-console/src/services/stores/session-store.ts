@@ -97,6 +97,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         remoteSessionOffset: offset + result.sessions.length,
         remoteSessionHasMore: result.hasMore,
       });
+      // Fresh sessions are tagged server-side on their first turn. Refresh the chip row on a
+      // replace-load so a newly used tag is filterable without reopening the panel.
+      if (!append) void get().loadSessionTags(projectId, tempWorkspace);
     } catch (e) {
       if (seq === loadSeq) console.error('Failed to load remote sessions:', e);
     } finally {

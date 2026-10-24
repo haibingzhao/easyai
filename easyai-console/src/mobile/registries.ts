@@ -67,6 +67,14 @@ export const MOBILE_SHEET_ITEMS: MobileSheetItem[] = [];
 
 export const MOBILE_COMPOSER_PLUS_ITEMS: MobileComposerPlusItem[] = [];
 
+/**
+ * Host components rendered in a slim strip above the page content, at the
+ * leading edge. Intended for persistent status that belongs to every page
+ * (e.g. a connection/latency chip); hosts that register nothing get the exact
+ * layout they had before.
+ */
+export const MOBILE_TOP_ITEMS: React.ComponentType[] = [];
+
 /** Tab bar slots available before the fixed "More" slot takes one. */
 export const MOBILE_TAB_MAX = 4;
 

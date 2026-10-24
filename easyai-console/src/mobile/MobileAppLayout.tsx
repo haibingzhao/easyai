@@ -2,6 +2,7 @@ import React from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { MobileTabBar } from './components/MobileTabBar';
 import { ConnectionBanner } from './components/ConnectionBanner';
+import { MOBILE_TOP_ITEMS } from './registries';
 import { AppUpdateDialog } from './components/AppUpdateDialog';
 import { useKeyboardInset } from './hooks/useKeyboardInset';
 import { useAppUpdate } from '@/hooks/useAppUpdate';
@@ -33,6 +34,13 @@ export const MobileAppLayout: React.FC = () => {
       style={keyboardOpen ? { height: `calc(100dvh - ${keyboardInset}px)` } : undefined}
     >
       <ConnectionBanner />
+      {MOBILE_TOP_ITEMS.length > 0 && (
+        <div className="mobile-app-top-items">
+          {MOBILE_TOP_ITEMS.map((TopItem, index) => (
+            <TopItem key={index} />
+          ))}
+        </div>
+      )}
       <main className="mobile-app-main">
         <Outlet />
       </main>
