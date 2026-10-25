@@ -38,6 +38,8 @@ export interface SettingsMenuItem {
   id: string;
   label: string;
   icon: React.ReactNode;
+  /** Host-rendered body; built-in tabs omit it and are matched by id below. */
+  render?: () => React.ReactNode;
 }
 
 /**
@@ -46,6 +48,9 @@ export interface SettingsMenuItem {
  * Mutate in place before render (`SETTINGS_MENU_ITEMS.splice(...)`); reassigning the binding is a
  * no-op for consumers. Tab bodies below are keyed by id, so removing an entry hides only its menu
  * button — the host also owns routing to `?tab=` to keep hidden tabs unreachable.
+ *
+ * A host can append its own entries (`render`) to surface a page inside Settings; the menu button
+ * and title come from this list, the body from the host.
  */
 export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
   { id: 'account', label: 'Account', icon: <User className="w-4 h-4" /> },
@@ -116,6 +121,7 @@ export const SettingsPage: React.FC = () => {
         {activeTab === 'chat-agents' && <ChatAgentsTab />}
         {activeTab === 'permissions' && <ToolPermissionsTab />}
         {activeTab === 'about' && <AboutTab />}
+        {SETTINGS_MENU_ITEMS.find(item => item.id === activeTab)?.render?.()}
       </main>
     </div>
   );

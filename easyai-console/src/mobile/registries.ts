@@ -28,6 +28,11 @@ export interface MobileMoreItem {
   path: string;
   order?: number;
   visible?: () => boolean;
+  /**
+   * Render on the Config page only, never in the More index — for entries that are settings
+   * subpages rather than sections of their own.
+   */
+  configOnly?: boolean;
 }
 
 /** Host section rendered at the foot of the tasks sheet. */

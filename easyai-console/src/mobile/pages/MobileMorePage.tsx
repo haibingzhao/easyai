@@ -16,7 +16,8 @@ import { i18n } from '@/utils/i18n';
  */
 export const MobileMorePage: React.FC = () => {
   const navigate = useNavigate();
-  const items = resolveMoreItems(MOBILE_MORE_ITEMS);
+  // `configOnly` rows are settings subpages; they belong on the Config page, not this index.
+  const items = resolveMoreItems(MOBILE_MORE_ITEMS).filter((item) => !item.configOnly);
   const notificationsPath = APP_CONFIG.notificationsPath;
   const summary = useNotificationStore((state) => state.summary);
   const badge = summary.attention;
