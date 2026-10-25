@@ -15,12 +15,7 @@ import { i18n } from '@/utils/i18n';
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX = 480;
 
-interface MemoryPanelProps {
-  /** Optional header content rendered on the left side of the toolbar (e.g. page title). */
-  header?: React.ReactNode;
-}
-
-export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
+export const MemoryPanel: React.FC = () => {
   const navigate = useNavigate();
   const entries = useMemoryStore((s) => s.entries);
   const loading = useMemoryStore((s) => s.loading);
@@ -248,8 +243,7 @@ export const MemoryPanel: React.FC<MemoryPanelProps> = ({ header }) => {
       {/* Right: viewer */}
       <div className="flex-1 min-w-0 flex flex-col min-h-0">
         {/* Toolbar */}
-        <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
-          <div className="flex items-center gap-2">{header}</div>
+        <div className="flex items-center justify-end px-4 py-2 border-b border-border shrink-0">
           <div className="flex items-center gap-2">
             {consolidation?.available && (
               <button

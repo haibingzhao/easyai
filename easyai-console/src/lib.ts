@@ -213,6 +213,7 @@ export {
   DEFAULT_TASK_DESCRIPTOR,
   getTaskDescriptor,
   taskTypeLabel,
+  registerTaskTypes,
 } from './constants/task-types';
 export type {
   AsyncTask,
@@ -229,7 +230,6 @@ export { AgentsPage } from './pages/AgentsPage';
 export { AgentCreatePage } from './pages/AgentCreatePage';
 export { ModelsPage } from './pages/ModelsPage';
 export { McpPage } from './pages/McpPage';
-export { MemoriesPage } from './pages/MemoriesPage';
 export { TasksPage } from './pages/TasksPage';
 export { TaskTranscriptPage } from './pages/TaskTranscriptPage';
 export { KnowledgePage } from './pages/KnowledgePage';

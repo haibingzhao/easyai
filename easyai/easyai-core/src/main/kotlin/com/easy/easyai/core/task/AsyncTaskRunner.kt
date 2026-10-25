@@ -107,7 +107,7 @@ class AsyncTaskRunner(
                     )
                     return@launch
                 }
-                when (val outcome = handler.execute(task)) {
+                when (val outcome = executeWithTimeout(task, handler)) {
                     is TaskOutcome.Success -> {
                         taskStore.complete(task.id, outcome.result)
                         logger.info("Async task completed: id={}, type={}", task.id, task.type)
@@ -116,6 +116,20 @@ class AsyncTaskRunner(
                         settleFailure(taskStore, task, outcome.error)
                     }
                 }
+            } catch (e: TimeoutCancellationException) {
+                // TimeoutCancellationException is a CancellationException, so it must be caught first:
+                // otherwise a timeout would be parked as CANCELLED, indistinguishable from a user
+                // cancel. The outer job is still active (only withTimeout's child was cancelled), but
+                // NonCancellable keeps the terminal write safe if shutdown races the timeout.
+                val message = task.timeoutMs?.let { "Timed out after ${it}ms" } ?: "Timed out"
+                withContext(NonCancellable) {
+                    runCatching {
+                        taskStore.markTimedOut(task.id, message)
+                    }.onFailure {
+                        logger.warn("Failed to record timeout for async task {}: {}", task.id, it.message)
+                    }
+                }
+                logger.warn("Async task timed out: id={}, type={}, {}", task.id, task.type, message)
             } catch (e: CancellationException) {
                 // The coroutine is already cancelled, so a plain suspend call would throw before the
                 // UPDATE runs and the row would be stuck RUNNING. NonCancellable lets the terminal
@@ -157,6 +171,15 @@ class AsyncTaskRunner(
             if (!bodyStarted.get()) settleUnstartedTask(taskStore, task.id)
         }
     }
+
+    /**
+     * Run the handler under the task's timeout when one is set. `> 0` is required so a malformed row
+     * cannot turn every dispatch into an immediate timeout.
+     */
+    private suspend fun executeWithTimeout(task: AsyncTask, handler: TaskHandler): TaskOutcome =
+        task.timeoutMs?.takeIf { it > 0 }?.let { timeoutMs ->
+            withTimeout(timeoutMs) { handler.execute(task) }
+        } ?: handler.execute(task)
 
     /**
      * Park a failed task. The write itself must never escape: on the generic failure path it runs

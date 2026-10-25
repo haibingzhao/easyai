@@ -50,16 +50,18 @@ class R2dbcScheduledTaskSettingStoreTest {
         taskType: AsyncTaskType = AsyncTaskType.MEMORY_CONSOLIDATION,
         enabled: Boolean = true,
         cron: String? = "0 0 3 * * *",
-        params: Map<String, Any?> = mapOf("typeThresholds" to mapOf("experience_lessons" to 7))
+        params: Map<String, Any?> = mapOf("typeThresholds" to mapOf("experience_lessons" to 7)),
+        timeoutMs: Long? = null
     ) = ScheduledTaskSetting(
         userId = userId,
         taskType = taskType,
         enabled = enabled,
         cron = cron,
-        params = params
+        params = params,
+        timeoutMs = timeoutMs
     )
 
-    /** Write a row whose type this build does not know, bypassing the enum. */
+    /** Write a sibling type key directly, bypassing the typed setting constructor. */
     private suspend fun insertRawType(userId: String, typeKey: String, enabled: Boolean) = suspendTransaction(db) {
         ScheduledTaskSettingTable.insert {
             it[ScheduledTaskSettingTable.userId] = userId
@@ -134,6 +136,15 @@ class R2dbcScheduledTaskSettingStoreTest {
         }
 
         @Test
+        fun `save round-trips the timeout override`() = runTest {
+            val store = createStore()
+            store.save(setting(userId = "timeout-user", timeoutMs = 90_000))
+
+            val loaded = assertNotNull(store.get("timeout-user", AsyncTaskType.MEMORY_CONSOLIDATION))
+            assertEquals(90_000, loaded.timeoutMs)
+        }
+
+        @Test
         fun `empty params stores no JSON and reads back empty`() = runTest {
             val store = createStore()
             store.save(setting(userId = "no-params", params = emptyMap()))
@@ -200,12 +211,16 @@ class R2dbcScheduledTaskSettingStoreTest {
         }
 
         @Test
-        fun `an unknown task type is skipped, not returned`() = runTest {
-            insertRawType("ghost-user", "no_such_type", enabled = true)
+        fun `a host-defined task type is returned like any other key`() = runTest {
+            insertRawType("host-user", "DAILY_ANALYSIS", enabled = true)
 
             val store = createStore()
-            assertFalse(store.listEnabled().any { it.userId == "ghost-user" })
-            assertNull(store.get("ghost-user", AsyncTaskType.MEMORY_CONSOLIDATION))
+            assertTrue(store.listEnabled().any { it.userId == "host-user" })
+            assertEquals(
+                "DAILY_ANALYSIS",
+                assertNotNull(store.get("host-user", AsyncTaskType("DAILY_ANALYSIS"))).taskType.key
+            )
+            assertNull(store.get("host-user", AsyncTaskType.MEMORY_CONSOLIDATION))
         }
 
         @Test

@@ -97,7 +97,7 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
       {items.map((item) => {
         if (item.type === 'cluster') {
           return (
-            <div key={`cluster-${item.index}`} className="group relative">
+            <div key={`cluster-${item.index}`} className="group relative" data-msg-index={item.index}>
               <AssistantMessageCluster messages={item.messages} />
             </div>
           );
@@ -150,7 +150,7 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
           }
           case 'assistant':
             return (
-              <div key={index} className="group relative">
+              <div key={index} className="group relative" data-msg-index={index}>
                 <AssistantMessage message={message} toolResults={message.toolResults} />
               </div>
             );

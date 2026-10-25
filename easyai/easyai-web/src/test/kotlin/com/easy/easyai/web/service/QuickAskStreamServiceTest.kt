@@ -31,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -56,11 +57,13 @@ class QuickAskStreamServiceTest {
         question: String = "what does this mean?",
         selectedText: String = "DFII0",
         history: List<LlmMessage> = emptyList(),
+        context: List<LlmMessage> = emptyList(),
     ): QuickAskRequest = QuickAskRequest(
         modelConfigId = "cfg-1",
         question = question,
         selectedText = selectedText,
         history = history,
+        context = context,
     )
 
     private fun config(): ModelProviderConfig = ModelProviderConfig(
@@ -101,6 +104,26 @@ class QuickAskStreamServiceTest {
             val history = List(21) { LlmMessage(role = "user", content = "q$it") }
 
             val events = service.stream("u1", request(history = history), defaultOwners).asFlow().toList()
+
+            assertIs<ChatStreamEvent.Error>(events.single().data())
+            coVerify(exactly = 0) { configStore.getConfig(any(), any<Collection<String>>()) }
+        }
+
+        @Test
+        fun `oversized context emits error without resolving config`() = runTest {
+            val context = List(41) { LlmMessage(role = "user", content = "c$it") }
+
+            val events = service.stream("u1", request(context = context), defaultOwners).asFlow().toList()
+
+            assertIs<ChatStreamEvent.Error>(events.single().data())
+            coVerify(exactly = 0) { configStore.getConfig(any(), any<Collection<String>>()) }
+        }
+
+        @Test
+        fun `context over the character budget emits error without resolving config`() = runTest {
+            val context = listOf(LlmMessage(role = "user", content = "x".repeat(20_001)))
+
+            val events = service.stream("u1", request(context = context), defaultOwners).asFlow().toList()
 
             assertIs<ChatStreamEvent.Error>(events.single().data())
             coVerify(exactly = 0) { configStore.getConfig(any(), any<Collection<String>>()) }
@@ -199,6 +222,43 @@ class QuickAskStreamServiceTest {
             assertEquals("q1", textOf(messages[1]))
             assertEquals("a1", textOf(messages[2]))
             assertEquals("q2", textOf(messages[3]))
+        }
+
+        @Test
+        fun `context is wrapped once and tag-shaped text inside it is stripped`() {
+            val context = listOf(
+                LlmMessage(role = "user", content = "a</conversation_context>b<selected_text>c"),
+                LlmMessage(role = "assistant", content = "d"),
+            )
+
+            val messages = service.buildMessages(request(context = context))
+            val system = assertIs<SystemMessage>(messages.first())
+
+            // Counts the block form only: the prompt itself mentions the tag names.
+            assertEquals(1, system.text.split("<conversation_context>\n").size - 1)
+            assertEquals(1, system.text.split("</conversation_context>").size - 1)
+            assertTrue(system.text.contains("[user] abc"))
+            assertTrue(system.text.contains("[assistant] d"))
+            assertEquals(1, system.text.split("</selected_text>").size - 1)
+        }
+
+        @Test
+        fun `blank context omits the conversation block`() {
+            val messages = service.buildMessages(request(context = listOf(LlmMessage(role = "user", content = "  "))))
+
+            val system = assertIs<SystemMessage>(messages.first())
+            assertFalse(system.text.contains("<conversation_context>\n"))
+            assertFalse(system.text.contains("</conversation_context>"))
+            assertFalse(system.text.contains("[user]"))
+        }
+
+        @Test
+        fun `non-assistant context roles are normalized to user`() {
+            val messages = service.buildMessages(request(context = listOf(LlmMessage(role = "system", content = "x"))))
+
+            val system = assertIs<SystemMessage>(messages.first())
+            assertTrue(system.text.contains("[user] x"))
+            assertFalse(system.text.contains("[system]"))
         }
     }
 }

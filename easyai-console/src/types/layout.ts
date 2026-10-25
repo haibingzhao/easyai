@@ -1,4 +1,4 @@
-export type NavPage = 'chat' | 'workflow' | 'agents' | 'commands' | 'mcp' | 'models' | 'config' | 'memories';
+export type NavPage = 'chat' | 'workflow' | 'agents' | 'commands' | 'mcp' | 'models' | 'config';
 
 export interface NavItem {
   id: string;

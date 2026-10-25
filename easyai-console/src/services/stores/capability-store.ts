@@ -67,3 +67,10 @@ export const selectCanManage = (kind: AssetKind) => (state: CapabilityState): bo
  */
 export const selectKnowledgeShared = (state: CapabilityState): boolean =>
   state.capabilities?.assets.knowledge?.ownerId != null;
+
+/**
+ * Whether this login carries a group at all. Without one, `group` visibility has no read path behind
+ * it, so offering the choice would only store a label that grants nothing.
+ */
+export const selectHasGroup = (state: CapabilityState): boolean =>
+  state.capabilities?.groupId != null;

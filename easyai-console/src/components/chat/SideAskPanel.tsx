@@ -16,6 +16,9 @@ const QUOTE_PREVIEW_LENGTH = 60;
 export const SideAskPanel: React.FC = () => {
   const selectedQuote = useSideAskStore((s) => s.selectedQuote);
   const messages = useSideAskStore((s) => s.messages);
+  const context = useSideAskStore((s) => s.context);
+  const contextTruncated = useSideAskStore((s) => s.contextTruncated);
+  const contextClipped = useSideAskStore((s) => s.contextClipped);
   const isStreaming = useSideAskStore((s) => s.isStreaming);
   const modelConfigId = useSideAskStore((s) => s.modelConfigId);
   const setModelConfigId = useSideAskStore((s) => s.setModelConfigId);
@@ -62,6 +65,16 @@ export const SideAskPanel: React.FC = () => {
               : selectedQuote}
           </span>
         </div>
+        {context.length > 0 && (
+          <div className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+            {i18n('Context: {count} messages from this conversation').replace('{count}', String(context.length))}
+            {contextTruncated
+              ? ` · ${i18n('earlier messages omitted')}`
+              : contextClipped
+                ? ` · ${i18n('long messages shortened')}`
+                : ''}
+          </div>
+        )}
       </div>
 
       <div ref={listRef} className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-3">

@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { streamQuickAsk } from '../quick-ask-service';
 import type { QuickAskTurn } from '../quick-ask-service';
+import { useChatStore } from './chat-store';
+import { buildSideAskContext } from './chat/side-ask-context';
 
 export interface SideAskMessage {
   role: 'user' | 'assistant';
@@ -13,12 +15,20 @@ interface SideAskState {
   open: boolean;
   selectedQuote: string;
   messages: SideAskMessage[];
+  /** Frozen snapshot of the main conversation around the selection. Sent as background only. */
+  context: QuickAskTurn[];
+  /** An entry was dropped to fit the context budget. */
+  contextTruncated: boolean;
+  /** An entry was shortened but kept. */
+  contextClipped: boolean;
+  /** Session the snapshot was taken from; a different non-null session invalidates the panel. */
+  contextSessionId: string | null;
   isStreaming: boolean;
   modelConfigId: string | null;
   /** Mailbox signal consumed by MessageEditor to insert a quote chip. */
   pendingQuote: string | null;
   abortController: AbortController | null;
-  openWithQuote: (text: string) => void;
+  openWithQuote: (text: string, anchorIndex?: number | null) => void;
   setModelConfigId: (id: string) => void;
   ask: (question: string) => Promise<void>;
   abort: () => void;
@@ -31,19 +41,29 @@ export const useSideAskStore = create<SideAskState>()((set, get) => ({
   open: false,
   selectedQuote: '',
   messages: [],
+  context: [],
+  contextTruncated: false,
+  contextClipped: false,
+  contextSessionId: null,
   isStreaming: false,
   modelConfigId: null,
   pendingQuote: null,
   abortController: null,
 
-  openWithQuote: (text) => {
+  openWithQuote: (text, anchorIndex = null) => {
     if (get().isStreaming) {
       get().abortController?.abort();
     }
+    const chat = useChatStore.getState();
+    const snapshot = buildSideAskContext(chat.messages, anchorIndex ?? null, text);
     set({
       open: true,
       selectedQuote: text,
       messages: [],
+      context: snapshot.context,
+      contextTruncated: snapshot.truncated,
+      contextClipped: snapshot.clipped,
+      contextSessionId: chat.sessionId,
       isStreaming: false,
       abortController: null,
     });
@@ -63,6 +83,10 @@ export const useSideAskStore = create<SideAskState>()((set, get) => ({
       abortController: null,
       messages: [],
       selectedQuote: '',
+      context: [],
+      contextTruncated: false,
+      contextClipped: false,
+      contextSessionId: null,
     });
   },
 
@@ -114,6 +138,7 @@ export const useSideAskStore = create<SideAskState>()((set, get) => ({
           question,
           selectedText: get().selectedQuote,
           history,
+          context: state.context,
         },
         controller.signal,
         (event) => {

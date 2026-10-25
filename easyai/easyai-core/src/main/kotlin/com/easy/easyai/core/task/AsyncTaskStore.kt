@@ -10,7 +10,7 @@ package com.easy.easyai.core.task
  * before delegating — while list/delete-by-user methods scope in SQL.
  *
  * State transitions are SQL-guarded so a terminal row is never overwritten: [markRunning] only fires
- * from PENDING, and [complete]/[fail]/[cancel]/[markInterrupted]/[updateSessionId]
+ * from PENDING, and [complete]/[fail]/[markTimedOut]/[cancel]/[markInterrupted]/[updateSessionId]
  * only from a non-terminal row. A guarded-out call is a no-op that returns the current row unchanged.
  */
 interface AsyncTaskStore {
@@ -26,6 +26,9 @@ interface AsyncTaskStore {
 
     /** Transition to FAILED with [error], stamping `completed_at`. */
     suspend fun fail(id: String, error: String): AsyncTask?
+
+    /** Transition to TIMED_OUT with [error], stamping `completed_at`. */
+    suspend fun markTimedOut(id: String, error: String): AsyncTask?
 
     /** Transition to CANCELLED, stamping `completed_at`. */
     suspend fun cancel(id: String): AsyncTask?

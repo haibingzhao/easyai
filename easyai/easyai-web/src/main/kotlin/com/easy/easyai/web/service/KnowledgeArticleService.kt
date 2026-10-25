@@ -57,6 +57,10 @@ class KnowledgeArticleService(
         composedFrom: String? = null
     ): KnowledgeArticle {
         val ownerId = KnowledgeOwnership.ownerId(userId, groupUserId, sharedWithinGroup)
+        // `group` visibility only widens reads inside a shared group bucket; without one it would
+        // persist a label no read path honors (group-less deployments such as trading).
+        val groupSharing = sharedWithinGroup && !groupUserId.isNullOrBlank()
+        val effectiveVisibility = if (visibility == "group" && !groupSharing) "private" else visibility
         val ext = relativePath.substringAfterLast('.', "md").lowercase()
         val knowledgeKey = "$source/$relativePath"
         val ossKey = buildOssKey(ownerId, source, relativePath)
@@ -99,7 +103,7 @@ class KnowledgeArticleService(
                 relativePath = relativePath,
                 ext = ext,
                 contentHash = sha256(content),
-                visibility = visibility,
+                visibility = effectiveVisibility,
                 origin = origin,
                 originSessionId = originSessionId,
                 originMessageId = originMessageId,

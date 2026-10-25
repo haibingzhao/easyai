@@ -149,7 +149,7 @@ class ScheduledTaskRunner(
             )
         }
         for (draft in accepted) {
-            val task = toTask(draft)
+            val task = toTask(draft, setting.timeoutMs)
             val submitted = runCatching { runner.submit(task) }
                 .onFailure { logger.error("Failed to submit scheduled task: {}", it.message, it) }
                 .getOrNull()
@@ -168,14 +168,18 @@ class ScheduledTaskRunner(
         }
     }
 
-    /** The driver owns identity and provenance: a planner only proposes what should run. */
-    private fun toTask(draft: TaskDraft): AsyncTask = AsyncTask(
+    /**
+     * The driver owns identity and provenance: a planner only proposes what should run. A bound on the
+     * settings row overrides the planner's default so a host can retune one user without a new planner.
+     */
+    private fun toTask(draft: TaskDraft, settingTimeoutMs: Long?): AsyncTask = AsyncTask(
         id = UUID.randomUUID().toString(),
         userId = draft.userId,
         type = draft.type,
         trigger = TaskTrigger.SCHEDULE,
         title = draft.title,
         sessionId = draft.sessionId,
+        timeoutMs = settingTimeoutMs ?: draft.timeoutMs,
         payload = draft.payload
     )
 

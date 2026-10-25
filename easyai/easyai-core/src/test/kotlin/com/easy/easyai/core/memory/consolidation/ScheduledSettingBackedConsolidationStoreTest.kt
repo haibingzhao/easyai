@@ -28,13 +28,15 @@ class ScheduledSettingBackedConsolidationStoreTest {
         userId: String = "alice",
         enabled: Boolean = true,
         cron: String? = "0 0 3 * * *",
-        params: Map<String, Any?> = mapOf(MemoryConsolidationUserSettings.PARAM_TYPE_THRESHOLDS to mapOf("experience_lessons" to 9))
+        params: Map<String, Any?> = mapOf(MemoryConsolidationUserSettings.PARAM_TYPE_THRESHOLDS to mapOf("experience_lessons" to 9)),
+        timeoutMs: Long? = null
     ) = ScheduledTaskSetting(
         userId = userId,
         taskType = AsyncTaskType.MEMORY_CONSOLIDATION,
         enabled = enabled,
         cron = cron,
-        params = params
+        params = params,
+        timeoutMs = timeoutMs
     )
 
     @Test
@@ -149,7 +151,8 @@ class ScheduledSettingBackedConsolidationStoreTest {
             userId = "alice",
             enabled = true,
             typeThresholds = mapOf("experience_lessons" to 12, "user_profile" to 30),
-            scanCron = "0 */30 * * * *"
+            scanCron = "0 */30 * * * *",
+            timeoutMs = 90_000
         )
 
         val decoded = MemoryConsolidationUserSettings.fromScheduled(
@@ -157,6 +160,17 @@ class ScheduledSettingBackedConsolidationStoreTest {
         )
 
         assertEquals(original, decoded)
+    }
+
+    @Test
+    fun `a host-set timeout survives recording a slice`() = runBlocking {
+        coEvery { generic.get("alice", AsyncTaskType.MEMORY_CONSOLIDATION) } returns row(timeoutMs = 90_000)
+        val saved = slot<ScheduledTaskSetting>()
+        coEvery { generic.save(capture(saved)) } returns Unit
+
+        store().recordSliceState("alice", "global||experience_lessons", MemoryConsolidationSliceState(lastRunAt = 1))
+
+        assertEquals(90_000, saved.captured.timeoutMs)
     }
 
     @Test

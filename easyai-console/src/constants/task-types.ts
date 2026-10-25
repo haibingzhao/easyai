@@ -68,6 +68,14 @@ export const TASK_TYPE_REGISTRY: Record<string, TaskTypeDescriptor> = {
   },
 };
 
+/**
+ * Register host-specific task types (labels/icons/summaries) without editing this package. Call it
+ * once at app startup, before rendering the Tasks page; later registrations win for the same key.
+ */
+export function registerTaskTypes(entries: Record<string, TaskTypeDescriptor>): void {
+  Object.assign(TASK_TYPE_REGISTRY, entries);
+}
+
 export const DEFAULT_TASK_DESCRIPTOR: TaskTypeDescriptor = {
   labelKey: 'Task',
   icon: ListChecks,

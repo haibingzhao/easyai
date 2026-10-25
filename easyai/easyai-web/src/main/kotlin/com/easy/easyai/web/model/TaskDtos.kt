@@ -15,6 +15,7 @@ data class AsyncTaskDto(
     val trigger: String,
     val title: String,
     val sessionId: String? = null,
+    val timeoutMs: Long? = null,
     val payload: Map<String, Any?>? = null,
     val result: Map<String, Any?>? = null,
     val error: String? = null,

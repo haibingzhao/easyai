@@ -21,6 +21,7 @@ interface SelectionToolbarProps {
 export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({ containerRef }) => {
   const [anchor, setAnchor] = useState<{ top: number; center: number } | null>(null);
   const [selectedText, setSelectedText] = useState('');
+  const [anchorIndex, setAnchorIndex] = useState<number | null>(null);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [saveContent, setSaveContent] = useState('');
   const openWithQuote = useSideAskStore((s) => s.openWithQuote);
@@ -30,6 +31,7 @@ export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({ containerRef
   const hide = useCallback(() => {
     setAnchor(null);
     setSelectedText('');
+    setAnchorIndex(null);
   }, []);
 
   useEffect(() => {
@@ -60,6 +62,13 @@ export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({ containerRef
         const center = Math.max(HALF_WIDTH, Math.min(rect.left + rect.width / 2, window.innerWidth - HALF_WIDTH));
         setAnchor({ top: Math.max(TOOLBAR_GAP_ABOVE, rect.top - TOOLBAR_HEIGHT - TOOLBAR_GAP_ABOVE), center });
         setSelectedText(text);
+        // The message the selection lives in anchors the side-panel context window; cross-message
+        // selections and streaming rows have no wrapper here and fall back to the newest turns.
+        const node = range.commonAncestorContainer;
+        const element = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+        const wrapper = element?.closest<HTMLElement>('[data-msg-index]');
+        const parsed = wrapper ? Number(wrapper.dataset.msgIndex) : Number.NaN;
+        setAnchorIndex(Number.isFinite(parsed) ? parsed : null);
       }, 0);
     };
 
@@ -108,7 +117,7 @@ export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({ containerRef
           className={buttonClass}
           title={i18n('Ask in side panel')}
           onClick={() => {
-            openWithQuote(selectedText);
+            openWithQuote(selectedText, anchorIndex);
             hide();
           }}
         >

@@ -598,6 +598,7 @@ object Tables {
         val enabled = bool("enabled").default(false)
         val scheduleCron = varchar("schedule_cron", 64).nullable()
         val params = text("params").nullable()  // JSON: type-specific configuration
+        val timeoutMs = long("timeout_ms").nullable()
         val updatedAt = long("updated_at")
 
         override val primaryKey = PrimaryKey(userId, taskType)
@@ -628,6 +629,7 @@ object Tables {
         val payload = text("payload").nullable()   // JSON: type-specific inputs
         val result = text("result").nullable()      // JSON: type-specific outputs
         val error = text("error").nullable()
+        val timeoutMs = long("timeout_ms").nullable()
         val retryCount = integer("retry_count").default(0)
         val retriedAt = long("retried_at").nullable()
         val createdAt = long("created_at")

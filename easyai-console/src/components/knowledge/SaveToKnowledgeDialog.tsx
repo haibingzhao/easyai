@@ -3,7 +3,7 @@ import { Dialog } from '@/components/ui/Dialog';
 import { Bookmark } from 'lucide-react';
 import { useCategoryStore } from '@/services/stores/category-store';
 import { useKnowledgeStore } from '@/services/stores/knowledge-store';
-import { useCapabilityStore, selectKnowledgeShared } from '@/services/stores/capability-store';
+import { useCapabilityStore, selectKnowledgeShared, selectHasGroup } from '@/services/stores/capability-store';
 import { readErrorMessage } from '@/services/api-client';
 import { i18n } from '@/utils/i18n';
 
@@ -25,6 +25,8 @@ export const SaveToKnowledgeDialog: React.FC<SaveToKnowledgeDialogProps> = ({
   const knowledgeCategories = useCategoryStore((s) => s.knowledgeCategories);
   const saveToKnowledge = useKnowledgeStore((s) => s.saveToKnowledge);
   const knowledgeShared = useCapabilityStore(selectKnowledgeShared);
+  const hasGroup = useCapabilityStore(selectHasGroup);
+  const showVisibility = !knowledgeShared && hasGroup;
 
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('other');
@@ -68,7 +70,7 @@ export const SaveToKnowledgeDialog: React.FC<SaveToKnowledgeDialogProps> = ({
         title: title.trim(),
         content,
         category,
-        visibility: knowledgeShared ? 'group' : visibility,
+        visibility: knowledgeShared ? 'group' : showVisibility ? visibility : 'private',
         originSessionId: sessionId,
         originMessageId: messageId,
       });
@@ -114,7 +116,7 @@ export const SaveToKnowledgeDialog: React.FC<SaveToKnowledgeDialogProps> = ({
               ))}
             </select>
           </div>
-          {!knowledgeShared && (
+          {showVisibility && (
             <div className="flex-1">
               <label className="block text-sm font-medium mb-1">{i18n('Visibility')}</label>
               <div className="flex gap-3 mt-2">

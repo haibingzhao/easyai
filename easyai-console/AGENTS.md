@@ -3,7 +3,7 @@
 This file provides guidance to Qoder (qoder.com) when working with code in this repository.
 
 ## OVERVIEW
-React 18 + TypeScript 5.9 + Vite 6 + TailwindCSS 4 frontend console. Zero test coverage. SSE chat streaming via Zustand. Pages: Chat, Agents, Swarm Workflow, MCP, Memories, Commands, Settings.
+React 18 + TypeScript 5.9 + Vite 6 + TailwindCSS 4 frontend console. Zero test coverage. SSE chat streaming via Zustand. Pages: Chat, Agents, Swarm Workflow, MCP, Knowledge, Commands, Settings.
 
 ## STRUCTURE
 
@@ -16,7 +16,7 @@ easyai-console/src/
 │   ├── WorkflowRunPage.tsx      # Swarm run execution view
 │   ├── SwarmPresetEditorPage.tsx # DAG workflow editor
 │   ├── McpPage.tsx              # MCP server management
-│   ├── MemoriesPage.tsx         # Memory CRUD + search
+│   ├── KnowledgePage.tsx        # Documents / Articles / Memory tabs
 │   ├── SkillsPage.tsx           # Skill management (my skills + shared read-only layer) + AddSkillDialog
 │   ├── SkillAgentPage.tsx       # "Install with Agent" chat panel: scan report, high-risk confirm, install via upload
 │   ├── CommandsPage.tsx         # User command management

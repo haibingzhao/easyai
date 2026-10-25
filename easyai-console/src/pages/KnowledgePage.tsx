@@ -37,7 +37,7 @@ export const KnowledgePage: React.FC = () => {
         <TabButton
           active={activeTab === 'knowledge'}
           icon={<BookOpen className="size-3.5" />}
-          label={i18n('Knowledge Base')}
+          label={i18n('Documents')}
           onClick={() => setActiveTab('knowledge')}
         />
         <TabButton

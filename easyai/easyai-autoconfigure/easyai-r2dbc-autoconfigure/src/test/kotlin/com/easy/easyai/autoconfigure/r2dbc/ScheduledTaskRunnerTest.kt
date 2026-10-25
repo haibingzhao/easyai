@@ -61,13 +61,15 @@ class ScheduledTaskRunnerTest {
     private fun setting(
         userId: String = "alice",
         cron: String? = "0 0 3 * * *",
-        enabled: Boolean = true
+        enabled: Boolean = true,
+        timeoutMs: Long? = null
     ) = ScheduledTaskSetting(
         userId = userId,
         taskType = AsyncTaskType.MEMORY_CONSOLIDATION,
         enabled = enabled,
         cron = cron,
-        params = mapOf("typeThresholds" to mapOf("experience_lessons" to 2))
+        params = mapOf("typeThresholds" to mapOf("experience_lessons" to 2)),
+        timeoutMs = timeoutMs
     )
 
     private fun runner(planners: List<ScheduledTaskPlanner>) = ScheduledTaskRunner(
@@ -98,6 +100,30 @@ class ScheduledTaskRunnerTest {
         assertEquals("alice", task.userId)
         assertNotNull(task.id, "the driver must mint the id a planner leaves blank")
         assertEquals("session-alice-0", task.sessionId)
+    }
+
+    @Test
+    fun `a draft timeout is carried onto the submitted task`() = runBlocking {
+        givenSettings(setting())
+        val submitted = slot<AsyncTask>()
+        coEvery { taskRunner.submit(capture(submitted)) } answers { submitted.captured }
+        val probe = Probe(onPlan = { ctx -> listOf(draftFor(ctx.userId).copy(timeoutMs = 120_000)) })
+
+        runner(listOf(probe)).scanOnce()
+
+        assertEquals(120_000, submitted.captured.timeoutMs)
+    }
+
+    @Test
+    fun `a setting timeout overrides the draft timeout`() = runBlocking {
+        givenSettings(setting(timeoutMs = 60_000))
+        val submitted = slot<AsyncTask>()
+        coEvery { taskRunner.submit(capture(submitted)) } answers { submitted.captured }
+        val probe = Probe(onPlan = { ctx -> listOf(draftFor(ctx.userId).copy(timeoutMs = 120_000)) })
+
+        runner(listOf(probe)).scanOnce()
+
+        assertEquals(60_000, submitted.captured.timeoutMs)
     }
 
     @Test

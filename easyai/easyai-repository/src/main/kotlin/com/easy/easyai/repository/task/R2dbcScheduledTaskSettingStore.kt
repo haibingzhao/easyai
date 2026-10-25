@@ -6,7 +6,7 @@ import com.easy.easyai.core.task.ScheduledTaskSetting
 import com.easy.easyai.core.task.ScheduledTaskSettingStore
 import com.easy.easyai.repository.database.Tables.ScheduledTaskSettingTable
 import com.easy.easyai.repository.database.UserScope
-import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import org.jetbrains.exposed.v1.core.Op
 import org.jetbrains.exposed.v1.core.ResultRow
@@ -44,7 +44,7 @@ class R2dbcScheduledTaskSettingStore(
                     UserScope.filterStrict(table.userId, userId) and (table.taskType eq taskType.key)
                 }
                 .limit(1)
-                .mapNotNull { it.toSetting() }
+                .map { it.toSetting() }
                 .toList()
                 .firstOrNull()
         }
@@ -66,6 +66,7 @@ class R2dbcScheduledTaskSettingStore(
             it[table.enabled] = setting.enabled
             it[table.scheduleCron] = setting.cron
             it[table.params] = params
+            it[table.timeoutMs] = setting.timeoutMs
             it[table.updatedAt] = now
         }
         logger.debug(
@@ -88,25 +89,17 @@ class R2dbcScheduledTaskSettingStore(
             taskType?.let { condition = condition and (table.taskType eq it.key) }
             table.selectAll()
                 .where { condition }
-                .mapNotNull { it.toSetting() }
+                .map { it.toSetting() }
                 .toList()
         }
 
     /**
-     * Map a row, or null when it names a task type this build does not know. An unrecognised row is a
-     * row no planner can serve, so it degrades to "skip" instead of failing the scan for every user.
+     * Map a row. The type key is opaque: a type with no planner registered in this build is skipped
+     * by the runner's planner lookup, not here, so a rolled-back host does not lose the preference.
      */
-    private fun ResultRow.toSetting(): ScheduledTaskSetting? {
+    private fun ResultRow.toSetting(): ScheduledTaskSetting {
         val table = ScheduledTaskSettingTable
         val typeKey = this[table.taskType]
-        val taskType = AsyncTaskType.fromKey(typeKey)
-        if (taskType == null) {
-            logger.warn(
-                "Skipping scheduled settings for user '{}' with unknown task type '{}' (newer writer or rollback?)",
-                this[table.userId], typeKey
-            )
-            return null
-        }
         val params = this[table.params]?.let { json ->
             runCatching { objectMapper.readValue(json, object : TypeReference<Map<String, Any?>>() {}) }
                 .onFailure {
@@ -119,10 +112,11 @@ class R2dbcScheduledTaskSettingStore(
         } ?: emptyMap()
         return ScheduledTaskSetting(
             userId = this[table.userId],
-            taskType = taskType,
+            taskType = AsyncTaskType(typeKey),
             enabled = this[table.enabled],
             cron = this[table.scheduleCron],
             params = params,
+            timeoutMs = this[table.timeoutMs],
             updatedAt = this[table.updatedAt]
         )
     }
