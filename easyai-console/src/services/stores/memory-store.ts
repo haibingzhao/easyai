@@ -135,13 +135,17 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
     if (missing.length > 0) {
       try {
         const fetched = await memoryService.listArchived(missing, scope, projectPath);
+        // The DTO carries no projectPath: it is client-side slice context, same as in loadAll.
+        // Without it a drill-down out of an archived entry loses the slice, and the backend
+        // rejects a PROJECT-scope read that arrives with no projectPath.
+        const slicePath = scope === 'project' ? projectPath : null;
         set((state) => ({
           archivedById: {
             ...state.archivedById,
             ...Object.fromEntries(
               fetched
                 .filter((e) => e.id)
-                .map((e) => [prefix + (e.id as string), e] as const)
+                .map((e) => [prefix + (e.id as string), { ...e, projectPath: slicePath }] as const)
             ),
           },
         }));

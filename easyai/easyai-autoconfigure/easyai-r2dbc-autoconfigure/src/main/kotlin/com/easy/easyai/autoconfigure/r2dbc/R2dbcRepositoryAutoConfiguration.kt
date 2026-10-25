@@ -40,6 +40,8 @@ import com.easy.easyai.repository.model.R2dbcAuxModelSettingsStore
 import com.easy.easyai.repository.permission.R2dbcAsyncPermissionRuleStore
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.repository.project.R2dbcAsyncProjectStore
+import com.easy.easyai.repository.push.PushSubscriptionStore
+import com.easy.easyai.repository.push.R2dbcPushSubscriptionStore
 import com.easy.easyai.repository.session.*
 import com.easy.easyai.repository.skill.R2dbcAsyncSkillCatalogStore
 import com.easy.easyai.repository.storage.R2dbcStorageSettingsStore
@@ -528,6 +530,17 @@ class R2dbcRepositoryAutoConfiguration(
     @ConditionalOnMissingBean(ChatPreferenceStore::class)
     fun chatPreferenceStore(initializer: R2dbcDatabaseInitializer): ChatPreferenceStore {
         return R2dbcChatPreferenceStore(initializer.getDatabase())
+    }
+
+    /**
+     * Account-scoped browser push endpoints ([PushSubscriptionStore]). Registered here rather than
+     * in the push auto-configuration because it is plain persistence: the Web Push service backs
+     * off when no store bean exists, so a deployment without R2DBC keeps the feature off.
+     */
+    @Bean
+    @ConditionalOnMissingBean(PushSubscriptionStore::class)
+    fun pushSubscriptionStore(initializer: R2dbcDatabaseInitializer): PushSubscriptionStore {
+        return R2dbcPushSubscriptionStore(initializer.getDatabase())
     }
 
     /**

@@ -51,6 +51,7 @@
         <!-- Official LLM provider SDKs (adapters built directly on these; spring-ai removed). -->
         <openai-java.version>4.49.0</openai-java.version>
         <anthropic-java.version>2.52.0</anthropic-java.version>
+        <zerodep-web-push.version>2.1.5</zerodep-web-push.version>
         <!-- Build Plugins -->
         <maven.compiler-plugin.version>3.14.0</maven.compiler-plugin.version>
         <maven-install-plugin.version>3.1.4</maven-install-plugin.version>
@@ -86,6 +87,7 @@
         <module>easyai-storage</module>
         <module>easyai-auth</module>
         <module>easyai-repository</module>
+        <module>easyai-push</module>
         <module>easyai-starters</module>
         <module>easyai-skills</module>
         <module>easyai-agent</module>
@@ -284,6 +286,24 @@
                 <groupId>com.easy</groupId>
                 <artifactId>easyai-repository</artifactId>
                 <version>${revision}</version>
+            </dependency>
+            <!-- easyai-push -->
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-push</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <!-- easyai-push-autoconfigure -->
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-push-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <!-- Web Push (VAPID + aes128gcm) -->
+            <dependency>
+                <groupId>com.zerodeplibs</groupId>
+                <artifactId>zerodep-web-push-java</artifactId>
+                <version>${zerodep-web-push.version}</version>
             </dependency>
             <!-- easyai-skills -->
             <dependency>

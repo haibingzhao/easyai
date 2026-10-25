@@ -61,6 +61,9 @@ class SecurityConfig {
                         .pathMatchers("/api/internal/llm/**").permitAll()
                         // Health check is public
                         .pathMatchers("/api/chat/health").permitAll()
+                        // The Web Push service worker is fetched by the browser without an
+                        // Authorization header; every other /api/push endpoint stays authenticated.
+                        .pathMatchers("/api/push/sw.js").permitAll()
                         // Connection diagnostics is public as well: it answers only about the calling
                         // request's own path, and the console reads a 404 here as "this backend has no
                         // adapter". Behind auth that same absence would arrive as a 401 and look like a

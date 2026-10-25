@@ -95,17 +95,6 @@ export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({ containerRef
         </button>
         <button
           className={buttonClass}
-          title={i18n('Ask in side panel')}
-          onClick={() => {
-            openWithQuote(selectedText);
-            hide();
-          }}
-        >
-          <MessageSquareQuote className="w-3.5 h-3.5" />
-          <span>{i18n('Ask in side panel')}</span>
-        </button>
-        <button
-          className={buttonClass}
           title={i18n('Quote to input')}
           onClick={() => {
             requestQuoteToEditor(selectedText);
@@ -114,6 +103,17 @@ export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({ containerRef
         >
           <Quote className="w-3.5 h-3.5" />
           <span>{i18n('Quote to input')}</span>
+        </button>
+        <button
+          className={buttonClass}
+          title={i18n('Ask in side panel')}
+          onClick={() => {
+            openWithQuote(selectedText);
+            hide();
+          }}
+        >
+          <MessageSquareQuote className="w-3.5 h-3.5" />
+          <span>{i18n('Ask in side panel')}</span>
         </button>
         <button
           className={buttonClass}

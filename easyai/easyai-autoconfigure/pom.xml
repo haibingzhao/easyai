@@ -22,5 +22,6 @@
         <module>easyai-rag-autoconfigure</module>
         <module>easyai-storage-autoconfigure</module>
         <module>easyai-swarm-autoconfigure</module>
+        <module>easyai-push-autoconfigure</module>
     </modules>
 </project>

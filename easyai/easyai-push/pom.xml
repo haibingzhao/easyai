@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.easy</groupId>
+        <artifactId>easyai</artifactId>
+        <version>${revision}</version>
+    </parent>
+    <artifactId>easyai-push</artifactId>
+    <packaging>jar</packaging>
+    <name>EasyAI Web Push</name>
+    <description>VAPID Web Push sender and account-scoped device registry shared by EasyAI applications</description>
+
+    <properties>
+        <kotlin.version>2.3.10</kotlin.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-common-util</artifactId>
+        </dependency>
+        <!-- Persistence contract (PushSubscription / PushSubscriptionStore). -->
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-repository</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.zerodeplibs</groupId>
+            <artifactId>zerodep-web-push-java</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <!-- PushProperties is a @ConfigurationProperties class: declare the annotation's module
+             explicitly and generate IDE metadata for easyai.push.* in this module. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>io.mockk</groupId>
+            <artifactId>mockk</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
