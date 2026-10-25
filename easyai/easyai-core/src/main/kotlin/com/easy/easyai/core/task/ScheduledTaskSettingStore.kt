@@ -20,8 +20,8 @@ interface ScheduledTaskSettingStore {
     /**
      * Every enabled row for the scheduled scan. Pass [taskType] to restrict to one type.
      *
-     * A row whose type this build does not know is skipped rather than returned: an unrecognised
-     * preference must not poison the whole scan, and no planner can serve it anyway.
+     * Rows for a type with no planner registered in this build are still returned; the scan skips
+     * them itself, so a rolled-back host keeps the preference for a build that understands it.
      */
     suspend fun listEnabled(taskType: AsyncTaskType? = null): List<ScheduledTaskSetting>
 }

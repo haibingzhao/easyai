@@ -90,6 +90,16 @@ export const ChatPanel: React.FC = () => {
     }
   }, [rightPanelOpen, abortSideAsk]);
 
+  // The context snapshot belongs to one session; switching away must not answer with the old
+  // transcript. A null → id transition (first message of a new chat) is the same conversation.
+  useEffect(() => {
+    if (!sideAskOpen) return;
+    const snapshotSession = useSideAskStore.getState().contextSessionId;
+    if (snapshotSession && snapshotSession !== sessionId) {
+      abortSideAsk();
+    }
+  }, [sessionId, sideAskOpen, abortSideAsk]);
+
   // Auto-scroll related (shared with the mobile shell)
   const {
     containerRef: messagesContainerRef,

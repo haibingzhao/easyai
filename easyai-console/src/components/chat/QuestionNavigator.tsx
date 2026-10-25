@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Message, AssistantMessage, UserMessage as UserMessageType } from '../../types/message';
+import type { Message, AssistantMessage } from '../../types/message';
 import { i18n } from '../../utils/i18n';
+import { isUserQuestion } from '../../utils/message-filters';
 
 interface QuestionMark {
   index: number;
@@ -17,21 +18,6 @@ const MIN_ROW_HEIGHT = 4;
 const MAX_ROW_HEIGHT = 11;
 const MIN_GAP = 3;
 const MAX_GAP = 10;
-
-/**
- * System-injected user-role messages (background-task steering, resume guidance,
- * repetition guard, Auto-continue notices, compaction summaries) are not questions
- * the user typed. Queued steer/followUp messages carry no systemOrigin and count.
- */
-function isUserQuestion(message: Message): message is UserMessageType {
-  return (
-    (message.role === 'user' || message.role === 'user-with-attachments') &&
-    !message.metadata?.systemOrigin &&
-    message.metadata?.isCompactionSummary !== 'true' &&
-    // Legacy fallback for Auto-continue rows persisted before the systemOrigin marker
-    message.metadata?.source !== 'completion_check'
-  );
-}
 
 export function extractQuestionMarks(messages: Message[]): QuestionMark[] {
   const marks: QuestionMark[] = [];

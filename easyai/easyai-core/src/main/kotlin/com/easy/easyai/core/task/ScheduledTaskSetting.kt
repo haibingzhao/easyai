@@ -10,6 +10,7 @@ package com.easy.easyai.core.task
  *
  * @property cron optional override of [ScheduledTaskPlanner.defaultCron]; null follows the default
  * @property params type-specific configuration, JSON-persisted and owned by the planner
+ * @property timeoutMs optional wall-clock bound for each run; null leaves the planner default in charge
  */
 data class ScheduledTaskSetting(
     val userId: String,
@@ -17,5 +18,6 @@ data class ScheduledTaskSetting(
     val enabled: Boolean = false,
     val cron: String? = null,
     val params: Map<String, Any?> = emptyMap(),
+    val timeoutMs: Long? = null,
     val updatedAt: Long = System.currentTimeMillis()
 )

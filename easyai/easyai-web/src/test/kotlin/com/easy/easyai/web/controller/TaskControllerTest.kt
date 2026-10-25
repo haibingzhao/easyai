@@ -28,7 +28,8 @@ class TaskControllerTest {
         id: String,
         userId: String = "system",
         status: AsyncTaskStatus = AsyncTaskStatus.COMPLETED,
-        retryCount: Int = 0
+        retryCount: Int = 0,
+        timeoutMs: Long? = null
     ) = AsyncTask(
         id = id,
         userId = userId,
@@ -36,6 +37,7 @@ class TaskControllerTest {
         trigger = TaskTrigger.FRONTEND,
         title = "记忆归并",
         status = status,
+        timeoutMs = timeoutMs,
         retryCount = retryCount,
         createdAt = 1_000,
         updatedAt = 2_000
@@ -68,6 +70,42 @@ class TaskControllerTest {
         assertEquals("memory_consolidation", dtos?.first()?.type)
         assertEquals("completed", dtos?.first()?.status)
         assertEquals("frontend", dtos?.first()?.trigger)
+    }
+
+    @Test
+    fun `list accepts a host-defined type key`() = runTest {
+        val store = mockk<AsyncTaskStore>()
+        val hostType = AsyncTaskType("DAILY_ANALYSIS")
+        coEvery { store.listByUser("system", hostType, null, null, 100) } returns emptyList()
+        val controller = TaskController(store, null)
+
+        val dtos = controller.listTasks("DAILY_ANALYSIS", null, null, 100).block()
+
+        assertTrue(dtos != null && dtos.isEmpty())
+    }
+
+    @Test
+    fun `list rejects a type key wider than the column`() = runTest {
+        val controller = TaskController(mockk<AsyncTaskStore>(), null)
+
+        val e = assertFailsWith<ResponseStatusException> {
+            controller.listTasks("t".repeat(65), null, null, 100).block()
+        }
+
+        assertEquals(HttpStatus.BAD_REQUEST, e.statusCode)
+    }
+
+    @Test
+    fun `a timed-out task exposes its status and timeout`() = runTest {
+        val store = mockk<AsyncTaskStore>()
+        coEvery { store.listByUser("system", null, null, null, 100) } returns
+            listOf(task("t1", status = AsyncTaskStatus.TIMED_OUT, timeoutMs = 90_000))
+        val controller = TaskController(store, null)
+
+        val dto = controller.listTasks(null, null, null, 100).block()?.single()
+
+        assertEquals("timed_out", dto?.status)
+        assertEquals(90_000, dto?.timeoutMs)
     }
 
     @Test
@@ -152,5 +190,16 @@ class TaskControllerTest {
         val result = controller.clearTasks("completed").block()
 
         assertEquals(3, result?.get("deleted"))
+    }
+
+    @Test
+    fun `clear accepts the timed-out status`() = runTest {
+        val store = mockk<AsyncTaskStore>()
+        coEvery { store.deleteByUser("system", AsyncTaskStatus.TIMED_OUT) } returns 1
+        val controller = TaskController(store, null)
+
+        val result = controller.clearTasks("timed_out").block()
+
+        assertEquals(1, result?.get("deleted"))
     }
 }

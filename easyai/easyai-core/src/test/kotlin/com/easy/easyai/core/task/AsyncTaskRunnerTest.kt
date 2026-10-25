@@ -3,6 +3,7 @@ package com.easy.easyai.core.task
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -34,6 +35,9 @@ class AsyncTaskRunnerTest {
         }
         override suspend fun fail(id: String, error: String) = mutateIf(id, { !it.status.isTerminal }) {
             it.copy(status = AsyncTaskStatus.FAILED, error = error, completedAt = now(), updatedAt = now())
+        }
+        override suspend fun markTimedOut(id: String, error: String) = mutateIf(id, { !it.status.isTerminal }) {
+            it.copy(status = AsyncTaskStatus.TIMED_OUT, error = error, completedAt = now(), updatedAt = now())
         }
         override suspend fun cancel(id: String) = mutateIf(id, { !it.status.isTerminal }) {
             it.copy(status = AsyncTaskStatus.CANCELLED, completedAt = now(), updatedAt = now())
@@ -197,6 +201,26 @@ class AsyncTaskRunnerTest {
 
             assertEquals(AsyncTaskStatus.FAILED, store.rows[id]?.status)
             assertEquals("kaboom", store.rows[id]?.error)
+        }
+
+        @Test
+        fun `a run past its timeout is parked as TIMED_OUT`() = runTest {
+            val store = FakeStore()
+            val handler = object : TaskHandler {
+                override val type = AsyncTaskType.MEMORY_CONSOLIDATION
+                override suspend fun execute(task: AsyncTask): TaskOutcome {
+                    delay(10_000)
+                    return TaskOutcome.Success()
+                }
+            }
+            val runner = AsyncTaskRunner(store, listOf(handler), CoroutineScope(UnconfinedTestDispatcher(testScheduler)))
+
+            val id = idSeq
+            runner.submit(task(id).copy(timeoutMs = 50))
+            advanceUntilIdle()
+
+            assertEquals(AsyncTaskStatus.TIMED_OUT, store.rows[id]?.status)
+            assertTrue(store.rows[id]?.error?.contains("Timed out after 50ms") == true)
         }
 
         @Test

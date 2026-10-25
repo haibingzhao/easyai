@@ -17,7 +17,10 @@ import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import java.nio.file.Path
@@ -470,6 +473,26 @@ class MemoryConsolidationTaskHandlerTest {
             assertTrue(
                 recordedStates.isEmpty(),
                 "a cancel is not a verdict about the slice; the runner parks the row INTERRUPTED instead"
+            )
+        }
+
+        @Test
+        fun `a timed-out run records the failed verdict before propagating`() = runTest {
+            givenBookkeeping()
+            coEvery { agent.consolidate(any(), any(), any(), any(), any(), any()) } coAnswers {
+                delay(10_000)
+                ConsolidationReport(type = MemoryType.EXPERIENCE_LESSONS, scope = MemoryScope.GLOBAL, activeBefore = 0)
+            }
+
+            val thrown = thrownBy {
+                withTimeout(50) { recordingHandler().execute(consolidationTask()) }
+            }
+
+            assertIs<TimeoutCancellationException>(thrown)
+            assertEquals(
+                ConsolidationOutcome.FAILED,
+                recorded().lastOutcome,
+                "a run that outlived its budget owes the same backoff a failed run gets"
             )
         }
 

@@ -26,6 +26,8 @@ import com.easy.easyai.core.task.ScheduledTaskSetting
  * @property typeThresholds per-type "consolidate when active count reaches N", keyed by
  *   [com.easy.easyai.core.memory.MemoryType.dirName]; a type absent here uses the deployment default
  * @property scanCron optional per-user override of the deployment scan cron; null follows the default
+ * @property timeoutMs optional per-run wall-clock bound carried on the generic row; neither edited nor
+ *   displayed here, but preserved across saves so a host-set bound survives a settings edit or a run
  * @property sliceStates what the scheduler remembers per slice, keyed by the consolidation slice key
  * @property updatedAt epoch-ms of the last change
  */
@@ -35,6 +37,7 @@ data class MemoryConsolidationUserSettings(
     val owners: List<String> = listOf(userId),
     val typeThresholds: Map<String, Int> = emptyMap(),
     val scanCron: String? = null,
+    val timeoutMs: Long? = null,
     val sliceStates: Map<String, MemoryConsolidationSliceState> = emptyMap(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {
@@ -57,6 +60,7 @@ data class MemoryConsolidationUserSettings(
                 owners = ownersOf(setting.params[PARAM_OWNERS], setting.userId),
                 typeThresholds = thresholdsOf(setting.params[PARAM_TYPE_THRESHOLDS]),
                 scanCron = setting.cron,
+                timeoutMs = setting.timeoutMs,
                 sliceStates = sliceStatesOf(setting.params[PARAM_SLICE_STATES]),
                 updatedAt = setting.updatedAt
             )
@@ -68,6 +72,7 @@ data class MemoryConsolidationUserSettings(
             taskType = AsyncTaskType.MEMORY_CONSOLIDATION,
             enabled = setting.enabled,
             cron = setting.scanCron,
+            timeoutMs = setting.timeoutMs,
             params = buildMap {
                 if (setting.typeThresholds.isNotEmpty()) put(PARAM_TYPE_THRESHOLDS, setting.typeThresholds)
                 // A single-owner set is what a row without this key already means, so store no noise.

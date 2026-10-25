@@ -1,18 +1,18 @@
 package com.easy.easyai.core.task
 
 /**
- * Kinds of app-scoped asynchronous work tracked in the `async_task` table. Adding a type is one
- * enum value plus a [TaskHandler] bean (backend) and a `TASK_TYPE_REGISTRY` entry (frontend); the
- * table, runner, controller and page need no change. To make the type schedulable as well, add a
- * [ScheduledTaskPlanner] bean — the shared `scheduled_task_setting` table and its scan already cover
- * it, so no table, scheduler or runner change is involved.
+ * Key of an app-scoped asynchronous task type tracked in the `async_task` table.
+ *
+ * Deliberately open: the framework ships [MEMORY_CONSOLIDATION], while a host app defines its own
+ * keys as constants. Adding a type is that constant plus a [TaskHandler] bean and a console
+ * `TASK_TYPE_REGISTRY` entry; no framework enum, table, runner, controller or page change is
+ * involved. Adding a [ScheduledTaskPlanner] bean makes the same type schedulable through the shared
+ * `scheduled_task_setting` table.
  */
-enum class AsyncTaskType(val key: String) {
-    /** Near-duplicate merge + stale decay over a memory slice (see MemoryConsolidationAgent). */
-    MEMORY_CONSOLIDATION("memory_consolidation");
-
+data class AsyncTaskType(val key: String) {
     companion object {
-        fun fromKey(key: String): AsyncTaskType? = entries.firstOrNull { it.key == key }
+        /** Near-duplicate merge + stale decay over a memory slice (see MemoryConsolidationAgent). */
+        val MEMORY_CONSOLIDATION = AsyncTaskType("memory_consolidation")
     }
 }
 
@@ -22,11 +22,14 @@ enum class AsyncTaskStatus {
     RUNNING,
     COMPLETED,
     FAILED,
+    /** The handler did not finish within the task's timeout and its worker was cancelled. */
+    TIMED_OUT,
     CANCELLED,
     /** A task still marked RUNNING when the process restarted — its worker is gone, so it is parked here for manual retry. */
     INTERRUPTED;
 
-    val isTerminal: Boolean get() = this == COMPLETED || this == FAILED || this == CANCELLED || this == INTERRUPTED
+    val isTerminal: Boolean
+        get() = this == COMPLETED || this == FAILED || this == TIMED_OUT || this == CANCELLED || this == INTERRUPTED
 }
 
 /** What caused a task to be created; lets the UI distinguish self-fired work from user/scheduler-initiated. */
@@ -56,6 +59,8 @@ data class AsyncTask(
     val title: String,
     val status: AsyncTaskStatus = AsyncTaskStatus.PENDING,
     val sessionId: String? = null,
+    /** Wall-clock bound enforced by [AsyncTaskRunner]; null means unbounded. */
+    val timeoutMs: Long? = null,
     val payload: Map<String, Any?> = emptyMap(),
     val result: Map<String, Any?>? = null,
     val error: String? = null,

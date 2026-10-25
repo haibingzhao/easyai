@@ -51,5 +51,7 @@ data class TaskDraft(
     val type: AsyncTaskType,
     val title: String,
     val payload: Map<String, Any?> = emptyMap(),
+    /** Wall-clock bound for the run; null leaves the type's handler unbounded. */
+    val timeoutMs: Long? = null,
     val sessionId: String? = null
 )

@@ -13,6 +13,7 @@ import com.easy.easyai.core.memory.consolidation.MemoryConsolidationSliceState
 import com.easy.easyai.core.memory.consolidation.MemoryConsolidationSessionTitlePort
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.nio.file.Paths
@@ -88,9 +89,14 @@ class MemoryConsolidationTaskHandler(
             )
         } catch (e: CancellationException) {
             // Must stay ahead of the catch below: CancellationException is an IllegalStateException, and
-            // so is the timeout a long run reports. Booking a user's cancel as a failed run would push the
-            // slice into a delay nobody asked for, and the runner reads a bare cancellation as exactly
-            // that — parking the row INTERRUPTED on shutdown, CANCELLED otherwise.
+            // so is the timeout a long run reports. Booking a user's cancel or a shutdown as a failed run
+            // would push the slice into a delay nobody asked for, and the runner reads a bare
+            // cancellation as exactly that — parking the row INTERRUPTED on shutdown, CANCELLED otherwise.
+            // A timeout is different: the slice really did outlive its budget, so it owes the same shorter
+            // delay a failed run gets or the next scan re-burns the whole budget.
+            if (e is TimeoutCancellationException && !dryRun) {
+                recordFailedRun(userId, scope, projectPath, memoryType, owner)
+            }
             throw e
         } catch (e: Exception) {
             if (!dryRun) {

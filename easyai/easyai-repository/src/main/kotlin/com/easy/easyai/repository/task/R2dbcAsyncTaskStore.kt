@@ -58,6 +58,7 @@ class R2dbcAsyncTaskStore(
             it[payload] = task.payload.takeIf { p -> p.isNotEmpty() }?.let { p -> objectMapper.writeValueAsString(p) }
             it[result] = task.result?.let { r -> objectMapper.writeValueAsString(r) }
             it[error] = task.error
+            it[timeoutMs] = task.timeoutMs
             it[retryCount] = task.retryCount
             it[retriedAt] = task.retriedAt
             it[createdAt] = task.createdAt
@@ -90,6 +91,15 @@ class R2dbcAsyncTaskStore(
     override suspend fun fail(id: String, error: String): AsyncTask? = transition(id) { now ->
         AsyncTaskTable.update(where = { (AsyncTaskTable.id eq id) and nonTerminal() }) {
             it[status] = AsyncTaskStatus.FAILED.name
+            it[this.error] = error
+            it[completedAt] = now
+            it[updatedAt] = now
+        }
+    }
+
+    override suspend fun markTimedOut(id: String, error: String): AsyncTask? = transition(id) { now ->
+        AsyncTaskTable.update(where = { (AsyncTaskTable.id eq id) and nonTerminal() }) {
+            it[status] = AsyncTaskStatus.TIMED_OUT.name
             it[this.error] = error
             it[completedAt] = now
             it[updatedAt] = now
@@ -208,16 +218,14 @@ class R2dbcAsyncTaskStore(
             .firstOrNull()
 
     /**
-     * Map a row, or null when a column carries a value this build does not know. The frontend treats
-     * the type as an open union (an unknown type still lists, with a generic label), so a row written
-     * by a newer version — or left behind by a rollback — must degrade to "skip", not poison the whole
-     * query with a 500. Status and trigger get the same treatment: this build cannot transition a row
-     * whose status it cannot name, and hiding one row beats failing the list for every other row.
+     * Map a row, or null when a status/trigger column carries a value this build does not know. The
+     * type is an open key now, so a host-defined or newer type still lists (with a generic label in
+     * the frontend). Status and trigger stay closed: this build cannot transition a row whose status
+     * it cannot name, and hiding one row beats failing the list for every other row.
      */
     private fun mapRow(row: ResultRow): AsyncTask? {
         val taskId = row[AsyncTaskTable.id]
-        val typeKey = row[AsyncTaskTable.type]
-        val type = AsyncTaskType.fromKey(typeKey) ?: return unreadableRow(taskId, "type", typeKey)
+        val type = AsyncTaskType(row[AsyncTaskTable.type])
         val statusName = row[AsyncTaskTable.status]
         val status = enumOrNull<AsyncTaskStatus>(statusName) ?: return unreadableRow(taskId, "status", statusName)
         val triggerName = row[AsyncTaskTable.triggerSource]
@@ -234,6 +242,7 @@ class R2dbcAsyncTaskStore(
                 ?: emptyMap(),
             result = row[AsyncTaskTable.result]?.let { json -> parseJsonObject(taskId, "result", json) },
             error = row[AsyncTaskTable.error],
+            timeoutMs = row[AsyncTaskTable.timeoutMs],
             retryCount = row[AsyncTaskTable.retryCount],
             retriedAt = row[AsyncTaskTable.retriedAt],
             createdAt = row[AsyncTaskTable.createdAt],

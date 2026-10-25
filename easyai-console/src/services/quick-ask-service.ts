@@ -12,6 +12,8 @@ export interface QuickAskRequest {
   question: string;
   selectedText: string;
   history: QuickAskTurn[];
+  /** Main-session turns around the selection, frozen when the panel opened. Background only. */
+  context: QuickAskTurn[];
 }
 
 /**

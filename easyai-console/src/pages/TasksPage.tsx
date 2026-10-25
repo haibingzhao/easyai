@@ -13,6 +13,7 @@ const STATUS_STYLE: Record<AsyncTaskStatus, string> = {
   running: 'bg-blue-500/15 text-blue-500',
   completed: 'bg-emerald-500/15 text-emerald-500',
   failed: 'bg-destructive/15 text-destructive',
+  timed_out: 'bg-orange-500/15 text-orange-500',
   cancelled: 'bg-muted text-muted-foreground',
   interrupted: 'bg-amber-500/15 text-amber-500',
 };
@@ -22,6 +23,7 @@ const STATUS_KEY: Record<AsyncTaskStatus, string> = {
   running: 'Running',
   completed: 'Completed',
   failed: 'Failed',
+  timed_out: 'Timed out',
   cancelled: 'Cancelled',
   interrupted: 'Interrupted',
 };
@@ -185,7 +187,7 @@ export const TasksPage: React.FC = () => {
             className="px-3 py-2 rounded-md border border-input bg-background text-sm focus:ring-2 focus:ring-ring focus:outline-none"
           >
             <option value="">{i18n('All statuses')}</option>
-            {(['pending', 'running', 'completed', 'failed', 'cancelled', 'interrupted'] as AsyncTaskStatus[]).map((s) => (
+            {(['pending', 'running', 'completed', 'failed', 'timed_out', 'cancelled', 'interrupted'] as AsyncTaskStatus[]).map((s) => (
               <option key={s} value={s}>{statusLabel(s)}</option>
             ))}
           </select>
@@ -259,7 +261,7 @@ export const TasksPage: React.FC = () => {
                       {/* Retry re-runs the handler and overwrites the row's result, so it only
                           makes sense for a run that did not finish cleanly — a completed pass
                           has already done its work and re-running it just burns model calls. */}
-                      {(task.status === 'failed' || task.status === 'interrupted') && (
+                      {(task.status === 'failed' || task.status === 'interrupted' || task.status === 'timed_out') && (
                         <button
                           onClick={() => void retryTask(task.id)}
                           className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
@@ -310,6 +312,9 @@ export const TasksPage: React.FC = () => {
             <DetailRow label={i18n('Trigger')} value={triggerLabel(detail.trigger)} />
             <DetailRow label={i18n('Created')} value={formatTime(detail.createdAt)} />
             <DetailRow label={i18n('Duration')} value={formatDuration(detail.durationMs)} />
+            {detail.timeoutMs != null && (
+              <DetailRow label={i18n('Timeout')} value={formatDuration(detail.timeoutMs)} />
+            )}
             {detail.retryCount > 0 && (
               <DetailRow label={i18n('Retries')} value={`${detail.retryCount} (${formatTime(detail.retriedAt)})`} />
             )}

@@ -120,8 +120,17 @@ class TaskController(
     private fun storeUnavailable() = ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Task store is not available")
     private fun runnerUnavailable() = ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Task runner is not available")
 
-    private fun parseType(type: String): AsyncTaskType = AsyncTaskType.fromKey(type)
-        ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid task type: $type")
+    /**
+     * Task types are open keys contributed by the host, so only a blank or oversized key is invalid
+     * here. An unknown-but-valid key simply lists nothing.
+     */
+    private fun parseType(type: String): AsyncTaskType {
+        val key = type.trim()
+        if (key.isEmpty() || key.length > TASK_TYPE_MAX_LENGTH) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid task type: $type")
+        }
+        return AsyncTaskType(key)
+    }
 
     private fun parseStatus(status: String): AsyncTaskStatus =
         runCatching { AsyncTaskStatus.valueOf(status.uppercase()) }.getOrNull()
@@ -134,6 +143,7 @@ class TaskController(
         trigger = trigger.name.lowercase(),
         title = title,
         sessionId = sessionId,
+        timeoutMs = timeoutMs,
         payload = payload.takeIf { it.isNotEmpty() },
         result = result,
         error = error,
@@ -145,4 +155,9 @@ class TaskController(
         updatedAt = updatedAt,
         durationMs = durationMs
     )
+
+    private companion object {
+        /** Matches the varchar width of `async_task.type` and `scheduled_task_setting.task_type`. */
+        const val TASK_TYPE_MAX_LENGTH = 64
+    }
 }

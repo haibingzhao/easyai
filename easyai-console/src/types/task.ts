@@ -12,6 +12,7 @@ export type AsyncTaskStatus =
   | 'running'
   | 'completed'
   | 'failed'
+  | 'timed_out'
   | 'cancelled'
   | 'interrupted';
 
@@ -25,6 +26,7 @@ export interface AsyncTask {
   trigger: TaskTrigger;
   title: string;
   sessionId?: string | null;
+  timeoutMs?: number | null;
   payload?: Record<string, unknown> | null;
   result?: Record<string, unknown> | null;
   error?: string | null;
@@ -62,4 +64,8 @@ export interface TaskTypeDescriptor {
 }
 
 export const isTerminalStatus = (status: AsyncTaskStatus): boolean =>
-  status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'interrupted';
+  status === 'completed' ||
+  status === 'failed' ||
+  status === 'timed_out' ||
+  status === 'cancelled' ||
+  status === 'interrupted';

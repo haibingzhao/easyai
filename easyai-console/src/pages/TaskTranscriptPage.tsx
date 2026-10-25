@@ -14,6 +14,7 @@ const STATUS_STYLE: Record<AsyncTaskStatus, string> = {
   running: 'bg-blue-500/15 text-blue-500',
   completed: 'bg-emerald-500/15 text-emerald-500',
   failed: 'bg-destructive/15 text-destructive',
+  timed_out: 'bg-orange-500/15 text-orange-500',
   cancelled: 'bg-muted text-muted-foreground',
   interrupted: 'bg-amber-500/15 text-amber-500',
 };
@@ -23,6 +24,7 @@ const STATUS_KEY: Record<AsyncTaskStatus, string> = {
   running: 'Running',
   completed: 'Completed',
   failed: 'Failed',
+  timed_out: 'Timed out',
   cancelled: 'Cancelled',
   interrupted: 'Interrupted',
 };

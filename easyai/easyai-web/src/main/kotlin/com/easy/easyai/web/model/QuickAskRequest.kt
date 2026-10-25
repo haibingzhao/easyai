@@ -11,4 +11,6 @@ data class QuickAskRequest(
     val selectedText: String,
     /** Previous turns of the side conversation (role: user|assistant). */
     val history: List<LlmMessage> = emptyList(),
+    /** Main-session turns around the selection, oldest first. Background only. */
+    val context: List<LlmMessage> = emptyList(),
 )

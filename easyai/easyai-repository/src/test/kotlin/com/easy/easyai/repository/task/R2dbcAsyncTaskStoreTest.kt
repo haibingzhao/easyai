@@ -43,7 +43,7 @@ class R2dbcAsyncTaskStoreTest {
 
     private fun createStore() = R2dbcAsyncTaskStore(db)
 
-    /** Insert a row with raw enum-column strings, bypassing the enums — a newer writer or a rollback. */
+    /** Insert a row with raw column strings, bypassing the typed constructors — a newer writer or a rollback. */
     private suspend fun insertRawType(
         taskId: String,
         user: String,
@@ -85,6 +85,7 @@ class R2dbcAsyncTaskStoreTest {
         status: AsyncTaskStatus = AsyncTaskStatus.PENDING,
         trigger: TaskTrigger = TaskTrigger.AUTO,
         sessionId: String? = null,
+        timeoutMs: Long? = null,
         payload: Map<String, Any?> = mapOf("scope" to "global", "seedName" to "note-$id"),
         title: String = "记忆归并"
     ) = AsyncTask(
@@ -95,6 +96,7 @@ class R2dbcAsyncTaskStoreTest {
         title = title,
         status = status,
         sessionId = sessionId,
+        timeoutMs = timeoutMs,
         payload = payload
     )
 
@@ -109,6 +111,7 @@ class R2dbcAsyncTaskStoreTest {
                 task(
                     id = id,
                     sessionId = "sess-1",
+                    timeoutMs = 300_000,
                     payload = mapOf("scope" to "project", "owners" to listOf("alice", "system"), "dryRun" to true)
                 )
             )
@@ -119,6 +122,7 @@ class R2dbcAsyncTaskStoreTest {
             assertEquals(TaskTrigger.AUTO, loaded.trigger)
             assertEquals(AsyncTaskStatus.PENDING, loaded.status)
             assertEquals("sess-1", loaded.sessionId)
+            assertEquals(300_000, loaded.timeoutMs)
             assertEquals(0, loaded.retryCount)
             assertNull(loaded.result)
             assertEquals("project", loaded.payload["scope"])
@@ -167,6 +171,20 @@ class R2dbcAsyncTaskStoreTest {
         }
 
         @Test
+        fun `markTimedOut records the timeout and clears no result`() = runTest {
+            val store = createStore()
+            val id = UUID.randomUUID().toString()
+            store.create(task(id = id, timeoutMs = 50))
+            store.markRunning(id)
+
+            val timedOut = assertNotNull(store.markTimedOut(id, "Timed out after 50ms"))
+            assertEquals(AsyncTaskStatus.TIMED_OUT, timedOut.status)
+            assertEquals("Timed out after 50ms", timedOut.error)
+            assertNotNull(timedOut.completedAt)
+            assertEquals(50, timedOut.timeoutMs)
+        }
+
+        @Test
         fun `markInterrupted parks a running task without a completedAt`() = runTest {
             val store = createStore()
             val id = UUID.randomUUID().toString()
@@ -190,7 +208,9 @@ class R2dbcAsyncTaskStoreTest {
             assertEquals(AsyncTaskStatus.COMPLETED, afterCancel.status, "cancel must not overwrite COMPLETED")
             val afterFail = assertNotNull(store.fail(id, "late"))
             assertEquals(AsyncTaskStatus.COMPLETED, afterFail.status, "fail must not overwrite COMPLETED")
-            assertEquals(1, afterFail.result?.get("merged"))
+            val afterTimeout = assertNotNull(store.markTimedOut(id, "late"))
+            assertEquals(AsyncTaskStatus.COMPLETED, afterTimeout.status, "timeout must not overwrite COMPLETED")
+            assertEquals(1, afterTimeout.result?.get("merged"))
         }
 
         @Test
@@ -266,16 +286,17 @@ class R2dbcAsyncTaskStoreTest {
         }
 
         @Test
-        fun `a row with an unknown type is skipped instead of poisoning the whole list`() = runTest {
+        fun `a row with a host-defined type still lists`() = runTest {
             val store = createStore()
             val suffix = UUID.randomUUID().toString().take(8)
             val knownId = "known-$suffix"
+            val hostId = "host-$suffix"
             store.create(task(id = knownId, userId = "ivan"))
-            insertRawType("unknown-$suffix", "ivan", "some_future_type")
+            insertRawType(hostId, "ivan", "DAILY_ANALYSIS")
 
             val ids = store.listByUser("ivan").map { it.id }
-            assertEquals(listOf(knownId), ids, "the unknown-type row is skipped, the known row still lists")
-            assertNull(store.findById("unknown-$suffix"), "an unknown-type row reads as absent, not a 500")
+            assertEquals(setOf(knownId, hostId), ids.toSet(), "types are open keys, so both rows list")
+            assertEquals("DAILY_ANALYSIS", store.findById(hostId)?.type?.key)
         }
 
         @Test
