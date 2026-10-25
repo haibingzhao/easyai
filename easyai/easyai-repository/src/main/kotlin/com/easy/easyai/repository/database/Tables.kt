@@ -80,6 +80,60 @@ object Tables {
     }
 
     /**
+     * One notification **as seen by one account**.
+     *
+     * Per-recipient rows rather than one row per event: read state and which side of the event an
+     * account sits on are properties of the recipient, so a broadcast must stay unread for B just
+     * because A already opened it. Copies of one business event share `eventId`, which is also the
+     * key a decision resolves on.
+     *
+     * `pendingKey` is the portable stand-in for a partial unique index. It holds
+     * `scope|source|type` while the row is a *pending incoming* decision and is nulled by every
+     * terminal transition, so a plain unique index over it forbids two concurrent requests for the
+     * same object. `CREATE UNIQUE INDEX ... WHERE` would do the same job but H2 rejects it, and
+     * Flyway runs these scripts against H2 file databases too. A nullable column in a unique index
+     * is the other half of the trick: resolved rows (NULL) never collide.
+     */
+    object NotificationTable : Table("notification") {
+        val id = varchar("id", 64)
+        val eventId = varchar("event_id", 64)
+        val userId = varchar("user_id", 64)
+        /** Column stays `source`; the Kotlin name avoids clashing with `ColumnSet.source`. */
+        val notificationSource = varchar("source", 50)
+        val type = varchar("type", 50)
+        val direction = varchar("direction", 12)
+        val title = varchar("title", 200)
+        val body = varchar("body", 1000).nullable()
+        val url = varchar("url", 500).nullable()
+        val scopeType = varchar("scope_type", 50).nullable()
+        val scopeId = varchar("scope_id", 64).nullable()
+        val scopeName = varchar("scope_name", 200).nullable()
+        val actorUserId = varchar("actor_user_id", 64).nullable()
+        val actorName = varchar("actor_name", 200).nullable()
+        val targetName = varchar("target_name", 200).nullable()
+        val actionStatus = varchar("action_status", 20)
+        val actionAt = long("action_at").nullable()
+        val actionBy = varchar("action_by", 64).nullable()
+        val readAt = long("read_at").nullable()
+        val createdAt = long("created_at")
+        val expiresAt = long("expires_at").nullable()
+        val dedupeKey = varchar("dedupe_key", 128).nullable()
+        val pendingKey = varchar("pending_key", 300).nullable()
+        val payload = text("payload").nullable()
+
+        override val primaryKey = PrimaryKey(id)
+
+        init {
+            uniqueIndex(userId, notificationSource, dedupeKey)
+            uniqueIndex(pendingKey)
+            index(false, eventId)
+            // Flyway V30 creates (user_id, source, created_at DESC); this definition only serves
+            // the H2 in-memory path and cannot express the sort order.
+            index(false, userId, notificationSource)
+        }
+    }
+
+    /**
      * Agent definition table. Each agent is a reusable template for chat sessions.
      * Agent defines behavior: name, agent_type (PRIMARY/SUBAGENT/ALL),
      * custom instructions, prompt template, and enabled tools.

@@ -39,6 +39,7 @@ class DatabaseMigration(
                 Tables.UserTable,
                 Tables.RefreshTokenTable,
                 Tables.PushSubscriptionTable,
+                Tables.NotificationTable,
                 Tables.AgentTable,
                 Tables.AgentToolTable,
                 Tables.Project,

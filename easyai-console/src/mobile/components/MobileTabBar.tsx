@@ -2,12 +2,12 @@ import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { resolveActiveNavItem } from '@/constants/navigation';
 import { i18n } from '@/utils/i18n';
-import { MOBILE_TAB_ITEMS, resolveMobileTabs, type MobileTabItem } from '../registries';
+import { MOBILE_MORE_TAB_ID, MOBILE_TAB_ITEMS, resolveMobileTabs, type MobileTabItem } from '../registries';
 import { useMobileUiStore } from '../stores/mobile-ui-store';
 import { MobileIcon } from './MobileIcon';
 
 const MORE_TAB: MobileTabItem = {
-  id: 'mobile-more',
+  id: MOBILE_MORE_TAB_ID,
   label: 'More',
   labelKey: 'More',
   icon: 'MoreHorizontal',

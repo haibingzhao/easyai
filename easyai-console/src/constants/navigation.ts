@@ -115,4 +115,12 @@ export const APP_CONFIG = {
    * exists for host policy, e.g. only letting the household owner change tool permissions.
    */
   canConfigureAutoApprove: undefined as (() => boolean) | undefined,
+  /**
+   * Route the host has mounted the shared notification inbox on, e.g. `/notifications`.
+   *
+   * This is the opt-in for the whole feature: unset means the avatar keeps its plain menu, no
+   * badge request is ever sent, and no polling starts. The console cannot probe for the backend
+   * instead — `fetchJson` reports a 404 only as a message, so guessing would show a dead entry.
+   */
+  notificationsPath: undefined as string | undefined,
 };

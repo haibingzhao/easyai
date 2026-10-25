@@ -3,7 +3,7 @@
 This file provides guidance to Qoder (qoder.com) when working with code in this repository.
 
 ## OVERVIEW
-11 Spring Boot auto-configuration sub-modules, each with @ConditionalOnClass guards + EnvironmentPostProcessors.
+13 Spring Boot auto-configuration sub-modules, each with @ConditionalOnClass guards + EnvironmentPostProcessors.
 
 ## STRUCTURE
 
@@ -19,7 +19,9 @@ easyai-autoconfigure/
 ├── easyai-compaction-autoconfigure/    # Compaction orchestrator + strategy beans
 ├── easyai-rag-autoconfigure/           # RAG beans + RagProperties
 ├── easyai-storage-autoconfigure/       # Object storage resolver + storage settings beans
-└── easyai-swarm-autoconfigure/         # SwarmRuntime, SwarmEventBridge, stores
+├── easyai-swarm-autoconfigure/         # SwarmRuntime, SwarmEventBridge, stores
+├── easyai-push-autoconfigure/          # VAPID Web Push sender + subscription registry
+└── easyai-notification-autoconfigure/  # Shared notification inbox service + account-level API
 ```
 
 ## WHERE TO LOOK

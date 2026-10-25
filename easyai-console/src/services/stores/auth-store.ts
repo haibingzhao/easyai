@@ -7,6 +7,7 @@ import { useProjectStore } from './project-store';
 import { useChatStore } from './chat-store';
 import { useCapabilityStore } from './capability-store';
 import { useAgentStore } from './agent-store';
+import { startNotificationPolling, stopNotificationPolling } from './notification-store';
 
 interface AuthState {
   user: UserProfile | null;
@@ -83,6 +84,9 @@ export const useAuthStore = create<AuthState>((set) => ({
     setAccessToken(response.accessToken);
     resetUserScopedState();
     set({ user: response.user, isAuthenticated: true });
+    // `resetUserScopedState` stopped the badge loop above; the new identity has to restart it,
+    // or a login/group switch without a full page reload leaves the badge at zero.
+    startNotificationPolling();
     void useCapabilityStore.getState().load();
   },
 
@@ -91,6 +95,9 @@ export const useAuthStore = create<AuthState>((set) => ({
     setAccessToken(response.accessToken);
     resetUserScopedState();
     set({ user: response.user, isAuthenticated: true });
+    // `resetUserScopedState` stopped the badge loop above; the new identity has to restart it,
+    // or a login/group switch without a full page reload leaves the badge at zero.
+    startNotificationPolling();
     void useCapabilityStore.getState().load();
   },
 
@@ -99,6 +106,9 @@ export const useAuthStore = create<AuthState>((set) => ({
     setAccessToken(response.accessToken);
     resetUserScopedState();
     set({ user: response.user, isAuthenticated: true });
+    // `resetUserScopedState` stopped the badge loop above; the new identity has to restart it,
+    // or a login/group switch without a full page reload leaves the badge at zero.
+    startNotificationPolling();
     void useCapabilityStore.getState().load();
     if (!avatarFile) return;
     // The avatar rides on the account that now exists: picking one must never be a reason to fail signup,
@@ -130,4 +140,7 @@ function resetUserScopedState() {
   useChatStore.getState().clearChat();
   useCapabilityStore.getState().clear();
   useAgentStore.getState().resetForUserSwitch();
+  // An account switch also stops the badge loop: the next identity must not inherit the previous
+  // one's inbox, and an unauthenticated poll would only churn the token refresh path.
+  stopNotificationPolling();
 }

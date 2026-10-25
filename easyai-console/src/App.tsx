@@ -14,6 +14,7 @@ import { TaskTranscriptPage } from './pages/TaskTranscriptPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { ArticleEditorPage } from './pages/ArticleEditorPageLazy';
 import { CommandsPage } from './pages/CommandsPage';
+import { NotificationsPage } from './pages/NotificationsPage';
 import { SkillsPage } from './pages/SkillsPage';
 import { SkillAgentPage } from './pages/SkillAgentPage';
 import { SwarmPresetEditorPage } from './pages/SwarmPresetEditorPage';
@@ -192,6 +193,10 @@ function App() {
           <Route
             path="/commands"
             element={<CommandsPage />}
+          />
+          <Route
+            path="/notifications"
+            element={<NotificationsPage />}
           />
         </Route>
       </Routes>

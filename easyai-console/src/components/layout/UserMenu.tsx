@@ -1,10 +1,15 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LogOut, ChevronDown, Pencil, Settings } from 'lucide-react';
+import { Bell, LogOut, ChevronDown, Pencil, Settings } from 'lucide-react';
 import { useAuthStore } from '@/services/stores/auth-store';
+import { startNotificationPolling, useNotificationStore } from '@/services/stores/notification-store';
+import { APP_CONFIG } from '@/constants/navigation';
 import { useTranslation } from '@/utils/use-translation';
 import { UserAvatar } from '@/components/user/UserAvatar';
 import { ProfileEditDialog } from '@/components/user/ProfileEditDialog';
+
+/** Above this the badge reads `99+`; nobody counts past it accurately anyway. */
+const BADGE_LIMIT = 99;
 
 export const UserMenu: React.FC = () => {
   const user = useAuthStore((state) => state.user);
@@ -14,6 +19,13 @@ export const UserMenu: React.FC = () => {
   const [open, setOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const notificationsPath = APP_CONFIG.notificationsPath;
+  const summary = useNotificationStore((state) => state.summary);
+
+  // The avatar is the only place the badge lives, so it is also what keeps the count fresh.
+  useEffect(() => {
+    if (notificationsPath) startNotificationPolling();
+  }, [notificationsPath]);
 
   // Close on outside click
   useEffect(() => {
@@ -53,14 +65,36 @@ export const UserMenu: React.FC = () => {
     setEditingProfile(true);
   };
 
+  // The dot asks "does anything need me", the number answers "how much I have not opened" — they
+  // are deliberately different: an item can be read and still be waiting for a decision.
+  const badgeCount = summary.unread;
+  const hasDot = summary.attention > 0;
+
+  const toggleMenu = () => {
+    setOpen((next) => !next);
+    // Opening the menu is the moment the user asks the question, so answer it freshly instead of
+    // showing whatever the last poll happened to see.
+    if (!open) void useNotificationStore.getState().refreshSummary();
+  };
+
+  const openNotifications = () => {
+    if (!notificationsPath) return;
+    setOpen(false);
+    navigate(summary.unread > 0 ? `${notificationsPath}?filter=unread` : notificationsPath);
+  };
+
   return (
     <div ref={menuRef} className="relative">
       {/* Trigger button */}
       <button
-        onClick={() => setOpen(!open)}
+        onClick={toggleMenu}
         className="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-muted transition-colors"
       >
-        <UserAvatar avatar={user.avatar} name={displayName} seed={user.id} size="sm" />
+        <span className="relative inline-flex shrink-0">
+          <UserAvatar avatar={user.avatar} name={displayName} seed={user.id} size="sm" />
+          {/* Outside the avatar: `UserAvatar` clips its own box, so a dot inside it would be cut off. */}
+          {hasDot && <span className="absolute -right-0.5 -top-0.5 w-2 h-2 rounded-full bg-destructive ring-2 ring-background" />}
+        </span>
         <span className="text-sm truncate max-w-[80px]">{displayName}</span>
         <ChevronDown className={`w-3 h-3 text-muted-foreground transition-transform shrink-0 ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -87,6 +121,24 @@ export const UserMenu: React.FC = () => {
               )}
             </div>
           </div>
+
+          {/* Notifications: an account-level inbox belongs to "me", so it sits with the identity. */}
+          {notificationsPath && (
+            <div className="px-1 py-1 border-b border-border">
+              <button
+                onClick={openNotifications}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted rounded-md transition-colors"
+              >
+                <Bell className="w-4 h-4 text-muted-foreground" />
+                <span className="flex-1 text-left">{t('Notifications')}</span>
+                {badgeCount > 0 && (
+                  <span className="min-w-[18px] px-1.5 h-[18px] rounded-full bg-destructive text-destructive-foreground text-[11px] leading-[18px] text-center tabular-nums">
+                    {badgeCount > BADGE_LIMIT ? `${BADGE_LIMIT}+` : badgeCount}
+                  </span>
+                )}
+              </button>
+            </div>
+          )}
 
           {/* User details */}
           <div className="px-4 py-3 space-y-2 border-b border-border">

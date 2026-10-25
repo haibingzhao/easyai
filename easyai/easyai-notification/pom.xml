@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.easy</groupId>
+        <artifactId>easyai</artifactId>
+        <version>${revision}</version>
+    </parent>
+    <artifactId>easyai-notification</artifactId>
+    <packaging>jar</packaging>
+    <name>EasyAI Notifications</name>
+    <description>Recipient-granular notification inbox and action workflow shared by EasyAI applications</description>
+
+    <properties>
+        <kotlin.version>2.3.10</kotlin.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-common-util</artifactId>
+        </dependency>
+        <!-- Persistence contract (Notification / NotificationStore). -->
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-repository</artifactId>
+        </dependency>
+        <!-- Optional hand-off only: the notification service pushes through PushNotifier, and a
+             deployment without the push module simply passes a null notifier. -->
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-push</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <!-- NotificationProperties is a @ConfigurationProperties class: declare the annotation's
+             module explicitly and generate IDE metadata for easyai.notification.* in this module. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>io.mockk</groupId>
+            <artifactId>mockk</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

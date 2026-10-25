@@ -1070,6 +1070,20 @@ const translations: Record<string, Record<string, string>> = {
     'The server did not report a result for this skill.': 'The server did not report a result for this skill.',
     'This skill is already installed.': 'This skill is already installed.',
     'This skill is no longer in the archive.': 'This skill is no longer in the archive.',
+    // Shared notification inbox
+    'Notifications': 'Notifications',
+    'Needs your decision': 'Needs your decision',
+    'Waiting for the other side': 'Waiting for the other side',
+    'Notices': 'Notices',
+    'Unread': 'Unread',
+    'Mark all read': 'Mark all read',
+    'Load more': 'Load more',
+    'No notifications yet': 'No notifications yet',
+    'Nothing unread': 'Nothing unread',
+    'Withdraw': 'Withdraw',
+    'Withdrawn': 'Withdrawn',
+    'Expired': 'Expired',
+    'Deadline': 'Deadline',
   },
 
   zh: {
@@ -2186,6 +2200,20 @@ const translations: Record<string, Record<string, string>> = {
     'The server did not report a result for this skill.': '服务端未返回该技能的结果。',
     'This skill is already installed.': '该技能已安装。',
     'This skill is no longer in the archive.': '压缩包中已不存在该技能。',
+    // 共享通知收件箱
+    'Notifications': '通知',
+    'Needs your decision': '待我处理',
+    'Waiting for the other side': '等待对方',
+    'Notices': '通知消息',
+    'Unread': '未读',
+    'Mark all read': '全部已读',
+    'Load more': '加载更多',
+    'No notifications yet': '暂无通知',
+    'Nothing unread': '没有未读通知',
+    'Withdraw': '撤回',
+    'Withdrawn': '已撤回',
+    'Expired': '已过期',
+    'Deadline': '截止时间',
   },
 };
 

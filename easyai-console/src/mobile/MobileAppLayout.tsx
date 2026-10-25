@@ -1,11 +1,14 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { MobileTabBar } from './components/MobileTabBar';
 import { ConnectionBanner } from './components/ConnectionBanner';
-import { MOBILE_TOP_ITEMS } from './registries';
+import { MOBILE_MORE_TAB_ID, MOBILE_TOP_ITEMS } from './registries';
 import { AppUpdateDialog } from './components/AppUpdateDialog';
 import { useKeyboardInset } from './hooks/useKeyboardInset';
 import { useAppUpdate } from '@/hooks/useAppUpdate';
+import { APP_CONFIG } from '@/constants/navigation';
+import { startNotificationPolling, useNotificationStore } from '@/services/stores/notification-store';
+import { useMobileUiStore } from './stores/mobile-ui-store';
 
 /** Routes that own the whole viewport: they bring their own header and must lose the tab bar. */
 const CHROMELESS_PREFIXES = ['/tool', '/artifact'];
@@ -24,6 +27,22 @@ export const MobileAppLayout: React.FC = () => {
   const keyboardInset = useKeyboardInset();
   // In the layout so the prompt also covers the chromeless pages, which own the whole viewport.
   const { updateAvailable, dismiss } = useAppUpdate();
+
+  const notificationsPath = APP_CONFIG.notificationsPath;
+  const summary = useNotificationStore((state) => state.summary);
+  const setTabBadge = useMobileUiStore((state) => state.setTabBadge);
+
+  // The layout is where a phone owns the badge: it renders the tab bar, and the inbox entry lives
+  // one level down inside the "More" page.
+  useEffect(() => {
+    if (!notificationsPath) return;
+    startNotificationPolling();
+  }, [notificationsPath]);
+
+  useEffect(() => {
+    if (!notificationsPath) return;
+    setTabBadge(MOBILE_MORE_TAB_ID, summary.attention);
+  }, [notificationsPath, summary, setTabBadge]);
 
   const chromeless = CHROMELESS_PREFIXES.some((prefix) => location.pathname.startsWith(prefix));
   const keyboardOpen = keyboardInset > 0;
