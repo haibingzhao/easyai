@@ -3,7 +3,7 @@ import { Dialog } from '@/components/ui/Dialog';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { UserPlus, Trash2, Eye, EyeOff, Loader2, Shield, ShieldCheck, X } from 'lucide-react';
 import { useKnowledgeStore } from '@/services/stores/knowledge-store';
-import { useCapabilityStore, selectKnowledgeShared } from '@/services/stores/capability-store';
+import { useCapabilityStore, selectKnowledgeShared, selectHasGroup } from '@/services/stores/capability-store';
 import { i18n } from '@/utils/i18n';
 import type { KnowledgeArticleDto } from '@/services/knowledge-service';
 
@@ -28,6 +28,8 @@ export const AccessManagementDialog: React.FC<AccessManagementDialogProps> = ({
   const updateVisibility = useKnowledgeStore((s) => s.updateVisibility);
   const clearAccessGrants = useKnowledgeStore((s) => s.clearAccessGrants);
   const knowledgeShared = useCapabilityStore(selectKnowledgeShared);
+  const hasGroup = useCapabilityStore(selectHasGroup);
+  const showVisibility = !knowledgeShared && hasGroup;
 
   const [visibility, setVisibility] = useState(article.visibility);
   const [newGranteeId, setNewGranteeId] = useState('');
@@ -104,8 +106,8 @@ export const AccessManagementDialog: React.FC<AccessManagementDialogProps> = ({
           </div>
         )}
 
-        {/* Visibility section — meaningless when the whole bucket is group-shared */}
-        {!knowledgeShared && (
+        {/* Visibility section — meaningless when the whole bucket is group-shared or no group exists */}
+        {showVisibility && (
           <div>
             <label className="block text-sm font-medium mb-2">{i18n('Visibility')}</label>
             <div className="flex gap-2">

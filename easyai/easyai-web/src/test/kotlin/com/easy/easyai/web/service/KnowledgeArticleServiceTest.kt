@@ -234,5 +234,57 @@ class KnowledgeArticleServiceTest {
             assertEquals(42L, saved.createdAt)
             assertEquals("New", saved.title)
         }
+
+        @Test
+        fun `group visibility is downgraded to private without a shared group`() = runTest {
+            val storage = mockk<ObjectStorage>()
+            val resolver = mockk<ObjectStorageResolver>()
+            coEvery { articleStore.findByKey("alice", "manual/a.md") } returns null
+            coEvery { resolver.resolve("alice") } returns storage
+            coEvery { storage.put(any(), any(), "text/markdown") } returns ObjectMeta("", 0)
+            val saved = slot<KnowledgeArticle>()
+
+            service(resolver = resolver).saveArticle(
+                userId = "alice",
+                groupUserId = null,
+                title = "A",
+                content = "body",
+                source = "manual",
+                relativePath = "a.md",
+                category = "other",
+                visibility = "group",
+                origin = "chat_save"
+            )
+
+            coVerify { articleStore.save(capture(saved)) }
+            assertEquals("private", saved.captured.visibility)
+            assertEquals("alice", saved.captured.userId)
+        }
+
+        @Test
+        fun `group visibility is preserved inside a shared group bucket`() = runTest {
+            val storage = mockk<ObjectStorage>()
+            val resolver = mockk<ObjectStorageResolver>()
+            coEvery { articleStore.findByKey("grp-1", "manual/a.md") } returns null
+            coEvery { resolver.resolve("grp-1") } returns storage
+            coEvery { storage.put(any(), any(), "text/markdown") } returns ObjectMeta("", 0)
+            val saved = slot<KnowledgeArticle>()
+
+            service(resolver = resolver, sharedWithinGroup = true).saveArticle(
+                userId = "alice",
+                groupUserId = "grp-1",
+                title = "A",
+                content = "body",
+                source = "manual",
+                relativePath = "a.md",
+                category = "other",
+                visibility = "group",
+                origin = "chat_save"
+            )
+
+            coVerify { articleStore.save(capture(saved)) }
+            assertEquals("group", saved.captured.visibility)
+            assertEquals("grp-1", saved.captured.userId)
+        }
     }
 }
