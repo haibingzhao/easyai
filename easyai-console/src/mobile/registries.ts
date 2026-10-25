@@ -79,6 +79,14 @@ export const MOBILE_TOP_ITEMS: React.ComponentType[] = [];
 export const MOBILE_TAB_MAX = 4;
 
 /**
+ * Id of the fixed "More" slot, which `MobileTabBar` always appends.
+ *
+ * Exported because a framework-owned section that lives *inside* that page still has to badge the
+ * tab that leads to it — the inbox is the one such section today.
+ */
+export const MOBILE_MORE_TAB_ID = 'mobile-more';
+
+/**
  * Framework-owned tabs, always first: the conversation is the product on a phone, and
  * history needs to stay reachable no matter what a host registers. Mutable like
  * `MOBILE_TAB_ITEMS` — a host that wants its own sections to own the four slots splices these out

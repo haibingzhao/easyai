@@ -3,14 +3,14 @@
 This file provides guidance to Qoder (qoder.com) when working with code in this repository.
 
 ## OVERVIEW
-Async data persistence: Exposed R2DBC, 18 tables, full suspend/Flow, zero blocking. Multi-user isolation via UserScope.
+Async data persistence: Exposed R2DBC, 35 tables, full suspend/Flow, zero blocking. Multi-user isolation via UserScope.
 
 ## STRUCTURE
 
 ```
 easyai-repository/src/main/kotlin/com/easy/easyai/repository/
 ├── database/
-│   ├── Tables.kt                 # 18 Exposed table definitions
+│   ├── Tables.kt                 # 35 Exposed table definitions
 │   ├── DatabaseMigration.kt      # Schema evolution (DDL ALTER/CREATE)
 │   └── UserScope.kt              # Multi-user data isolation helper
 ├── session/
@@ -38,6 +38,9 @@ easyai-repository/src/main/kotlin/com/easy/easyai/repository/
 │   └── SqlGoalStore.kt           # Goal state persistence
 ├── mcp/
 │   └── R2dbcMcpServerStore.kt    # MCP server config persistence
+├── notification/
+│   ├── NotificationModels.kt     # Inbox row, summary, cursor, store contract
+│   └── R2dbcNotificationStore.kt # Recipient-granular inbox and decision persistence
 ├── permission/
 │   └── R2dbcAsyncPermissionRuleStore.kt # Permission rule CRUD
 ├── todo/
@@ -48,7 +51,7 @@ easyai-repository/src/main/kotlin/com/easy/easyai/repository/
     └── R2dbcUserStore.kt         # User account CRUD
 ```
 
-## TABLES (18)
+## TABLES (the list below is the core set, not every table)
 
 | Table | Purpose |
 |-------|---------|
@@ -70,6 +73,8 @@ easyai-repository/src/main/kotlin/com/easy/easyai/repository/
 | `swarm_deliberation_verdict` | Judge verdicts |
 | `swarm_escalation_history` | Task escalations |
 | `swarm_team_member_execution` | Team worker executions |
+| `push_subscription` | Browser Web Push endpoints, rebound to the signed-in account |
+| `notification` | One inbox item per recipient; copies of an event share `event_id` |
 
 ## ASYNC RULES
 

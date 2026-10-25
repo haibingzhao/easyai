@@ -19,7 +19,7 @@ The Maven projects use version `2026.0.1-SNAPSHOT`.
 
 ### Backend (easyai/)
 ```bash
-./mvnw clean install                       # Build all 15 modules
+./mvnw clean install                       # Build all 19 modules
 ./mvnw test                                # Tests (en_US locale forced in surefire)
 ./mvnw test -pl easyai-core                # Run single module tests
 ./mvnw test -pl easyai-core -Dtest="AgentLoopTest"  # Run single test class
@@ -60,7 +60,7 @@ These are project-specific traps that differ from framework defaults:
 - **No `.block()`, `.blockFirst()`, `runBlocking { }`** in repository layer
 - **No `any` types** in frontend TypeScript
 - **No inline/dynamic imports** for types in frontend — standard top-level imports only
-- **No frontend tests** — easyai-console has zero test coverage
+- **Frontend tests**: vitest units under `easyai-console/src/services/__tests__`; components have no tests
 
 ## KEY ARCHITECTURE
 
@@ -71,7 +71,7 @@ These are project-specific traps that differ from framework defaults:
 - **Permission system**: Rule-based tool permission evaluation in `easyai-core/permission/`. Auto-approve, ask-user, or deny per tool/action pattern.
 - **Memory system**: File-based memory store with search, scoped to project. LLM-powered memory flush.
 - **Snapshot/Revert**: Git-based checkpoint system in `easyai-snapshot`. Automatic checkpoints on tool executions, file-level revert.
-- **Repository**: Exposed R2DBC (async), never JDBC. 18 tables covering users, agents, sessions, messages, swarm, MCP, permissions, todos.
+- **Repository**: Exposed R2DBC (async), never JDBC. 35 tables covering users, agents, sessions, messages, swarm, MCP, permissions, todos, push and notifications.
 - **SSE bridge**: `ChatStreamService` bridges Kotlin Flow → Reactor Flux via kotlinx-coroutines-reactor.
 - **Auth**: JWT-based authentication with refresh token rotation in `easyai-auth`.
 - **Frontend SSE**: `ChatService` → `useChatStore.handleEvent()` → UI update.

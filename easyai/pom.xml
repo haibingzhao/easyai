@@ -88,6 +88,7 @@
         <module>easyai-auth</module>
         <module>easyai-repository</module>
         <module>easyai-push</module>
+        <module>easyai-notification</module>
         <module>easyai-starters</module>
         <module>easyai-skills</module>
         <module>easyai-agent</module>
@@ -297,6 +298,18 @@
             <dependency>
                 <groupId>com.easy</groupId>
                 <artifactId>easyai-push-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <!-- easyai-notification -->
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-notification</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <!-- easyai-notification-autoconfigure -->
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-notification-autoconfigure</artifactId>
                 <version>${revision}</version>
             </dependency>
             <!-- Web Push (VAPID + aes128gcm) -->

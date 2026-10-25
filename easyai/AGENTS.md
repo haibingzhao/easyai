@@ -20,12 +20,14 @@ easyai/
 ├── easyai-snapshot/       # Git checkpoint/revert: SnapshotService, RevertService, event listener
 ├── easyai-compaction/     # Context compaction: token-triggered, summary/LLM strategies
 ├── easyai-auth/           # JWT token provider, user store, refresh token rotation
-├── easyai-repository/     # Exposed R2DBC: 18 tables, async suspend/Flow, DB migration
+├── easyai-push/           # VAPID Web Push sender + account-scoped device registry (PushNotifier)
+├── easyai-notification/   # Recipient-granular inbox: NotificationService, action-handler SPI
+├── easyai-repository/     # Exposed R2DBC: 35 tables, async suspend/Flow, DB migration
 ├── easyai-api/            # Model config service, ChatModelFactory, provider config
 ├── easyai-observability/  # @Tracked AOP, MDC propagation, OTel+Micrometer handlers
 ├── easyai-web/            # REST controllers (15), SSE streaming, security (JWT filter), services
 ├── easyai-common/         # 4 sub-modules: bom, core (marker interfaces, thinking), textio (Jinja), util
-├── easyai-autoconfigure/  # 11 auto-config sub-modules (core, web, observability, openai, anthropic, dashscope, r2dbc, compaction, rag, storage, swarm)
+├── easyai-autoconfigure/  # 13 auto-config sub-modules (core, web, observability, openai, anthropic, dashscope, r2dbc, compaction, rag, storage, swarm, push, notification)
 └── easyai-starters/       # Starter POM aggregation
 ```
 
@@ -43,7 +45,7 @@ easyai/
 
 **Snapshot** (`easyai-snapshot/`): `GitSnapshotService` creates git checkpoints. `RevertService` supports file-level selective revert. `SnapshotEventListener` auto-checkpoints on tool executions.
 
-**Repository** (`easyai-repository/`): Exposed R2DBC, never JDBC. All ops in `asyncTransaction { }`. 18 tables. `DatabaseMigration` handles schema evolution. `UserScope` provides multi-user data isolation.
+**Repository** (`easyai-repository/`): Exposed R2DBC, never JDBC. All ops in `asyncTransaction { }`. 35 tables. `DatabaseMigration` handles schema evolution. `UserScope` provides multi-user data isolation.
 
 **Skills & Commands** (`easyai-skills/`): Skills are owner-granular — each user (plus the read-only `system` shared layer) owns `~/.easyai/skills/{owner}/{name}/SKILL.md`. The DB `skill` row is authoritative for identity/enablement, the zip in object storage for content, and the local directory is the working copy; `SkillSyncService` reconciles the three on login, first access, and startup. `CommandRegistry` + `CommandService` for slash commands. `SubAgentTool` for spawning child agents.
 

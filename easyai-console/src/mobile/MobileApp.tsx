@@ -5,6 +5,7 @@ import { MobileAppLayout } from './MobileAppLayout';
 import { MobileChatPage } from './pages/MobileChatPage';
 import { MobileHistoryPage } from './pages/MobileHistoryPage';
 import { MobileMorePage } from './pages/MobileMorePage';
+import { MobileNotificationsPage } from './pages/MobileNotificationsPage';
 import { MobileProfilePage } from './pages/MobileProfilePage';
 import { MobileToolDetailPage } from './pages/MobileToolDetailPage';
 import { MobileArtifactPage } from './pages/MobileArtifactPage';
@@ -26,6 +27,7 @@ export const MobileApp: React.FC = () => (
           <Route path="/chat" element={<MobileChatPage />} />
           <Route path="/history" element={<MobileHistoryPage />} />
           <Route path="/more" element={<MobileMorePage />} />
+          <Route path="/notifications" element={<MobileNotificationsPage />} />
           <Route path="/me" element={<MobileProfilePage />} />
           <Route path="/tool/:toolCallId" element={<MobileToolDetailPage />} />
           <Route path="/artifact" element={<MobileArtifactPage />} />

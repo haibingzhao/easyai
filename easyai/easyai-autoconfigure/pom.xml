@@ -23,5 +23,6 @@
         <module>easyai-storage-autoconfigure</module>
         <module>easyai-swarm-autoconfigure</module>
         <module>easyai-push-autoconfigure</module>
+        <module>easyai-notification-autoconfigure</module>
     </modules>
 </project>

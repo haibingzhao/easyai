@@ -102,6 +102,18 @@ export type {
   PushTestResult,
 } from './services/push-service';
 
+// Account-level notification inbox (`/api/notifications/*`). A host publishes through the backend
+// `NotificationService`; this is only the read/answer side the console and host pages call.
+export { notificationService, EMPTY_SUMMARY } from './services/notification-service';
+export type {
+  NotificationActionStatus,
+  NotificationDecision,
+  NotificationDirection,
+  NotificationItem,
+  NotificationPage as NotificationApiPage,
+  NotificationSummary,
+} from './services/notification-service';
+
 // Durable async-task plane (global Tasks page). Exported so a host can mount
 // its own tasks surface or drive task control directly.
 export { taskService } from './services/task-service';
@@ -120,6 +132,11 @@ export { useAgentStore } from './services/stores/agent-store';
 export { useCategoryStore } from './services/stores/category-store';
 export { useTaskStore } from './services/stores/task-store';
 export { useCapabilityStore, selectCanManage } from './services/stores/capability-store';
+export {
+  useNotificationStore,
+  startNotificationPolling,
+  stopNotificationPolling,
+} from './services/stores/notification-store';
 export { convertSnapshot } from './services/stores/chat/message-converter';
 export { mergeToolResults } from './services/stores/chat/session-loader';
 
@@ -137,6 +154,9 @@ export { TextMarkdown } from './components/chat/segments/TextMarkdown';
 export { AppLayout, SIDEBAR_COLLAPSED_WIDTH } from './components/layout/AppLayout';
 export { Sidebar } from './components/layout/Sidebar';
 export { ReadOnlyBanner } from './components/ui/ReadOnlyBanner';
+// One inbox row. Exported so a host that embeds the list in its own surface renders the same
+// decision buttons and the same server-computed flags.
+export { NotificationCard } from './components/notification/NotificationCard';
 
 // === Types ===
 export type { ToolCallStatus, SocketEvent } from './types/socket-event';
@@ -215,6 +235,10 @@ export { TaskTranscriptPage } from './pages/TaskTranscriptPage';
 export { KnowledgePage } from './pages/KnowledgePage';
 export { ArticleEditorPage } from './pages/ArticleEditorPageLazy';
 export { CommandsPage } from './pages/CommandsPage';
+// The shared inbox. A host mounts it on the route it puts in `APP_CONFIG.notificationsPath`, and
+// passes `onActionComplete` when an accepted decision changes its own permissions.
+export { NotificationsPage } from './pages/NotificationsPage';
+export type { NotificationsPageProps } from './pages/NotificationsPage';
 export { SkillsPage } from './pages/SkillsPage';
 export { SkillAgentPage } from './pages/SkillAgentPage';
 export { SettingsPage } from './pages/SettingsPage';
@@ -249,6 +273,7 @@ export { MobileChatPage } from './mobile/pages/MobileChatPage';
 export { MobileHistoryPage } from './mobile/pages/MobileHistoryPage';
 export { MobileProfilePage } from './mobile/pages/MobileProfilePage';
 export { MobileMorePage } from './mobile/pages/MobileMorePage';
+export { MobileNotificationsPage } from './mobile/pages/MobileNotificationsPage';
 export { MobileToolDetailPage } from './mobile/pages/MobileToolDetailPage';
 export { MobileArtifactPage } from './mobile/pages/MobileArtifactPage';
 export { MobileLoginPage } from './mobile/pages/MobileLoginPage';

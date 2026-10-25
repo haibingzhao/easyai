@@ -38,6 +38,8 @@ import com.easy.easyai.repository.goal.SqlGoalStore
 import com.easy.easyai.repository.mcp.R2dbcMcpServerStore
 import com.easy.easyai.repository.model.R2dbcAuxModelSettingsStore
 import com.easy.easyai.repository.permission.R2dbcAsyncPermissionRuleStore
+import com.easy.easyai.repository.notification.NotificationStore
+import com.easy.easyai.repository.notification.R2dbcNotificationStore
 import com.easy.easyai.repository.project.AsyncProjectStore
 import com.easy.easyai.repository.project.R2dbcAsyncProjectStore
 import com.easy.easyai.repository.push.PushSubscriptionStore
@@ -541,6 +543,17 @@ class R2dbcRepositoryAutoConfiguration(
     @ConditionalOnMissingBean(PushSubscriptionStore::class)
     fun pushSubscriptionStore(initializer: R2dbcDatabaseInitializer): PushSubscriptionStore {
         return R2dbcPushSubscriptionStore(initializer.getDatabase())
+    }
+
+    /**
+     * Recipient-granular notification inbox ([NotificationStore]). Plain persistence, so it lives
+     * here next to the push registry: the notification service only switches itself on when a store
+     * bean exists, which keeps the feature off in a deployment without R2DBC.
+     */
+    @Bean
+    @ConditionalOnMissingBean(NotificationStore::class)
+    fun notificationStore(initializer: R2dbcDatabaseInitializer): NotificationStore {
+        return R2dbcNotificationStore(initializer.getDatabase())
     }
 
     /**
