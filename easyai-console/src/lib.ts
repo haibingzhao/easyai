@@ -24,6 +24,8 @@ export {
   getAccessToken,
   downloadBlob,
   JSON_HEADERS,
+  readErrorBody,
+  readErrorMessage,
   // Group-sharing write scope: hosts fold group ownership into login, then call
   // setDefaultAssetScope('group') once so every console write routes to the shared bucket.
   setDefaultAssetScope,
@@ -90,6 +92,15 @@ export { authService, AuthService } from './services/auth-service';
 export type { AuthResponse, UserProfile } from './services/auth-service';
 
 export { storageService } from './services/storage-service';
+
+// Account-level Web Push API (`/api/push/*`): config, device subscribe/unsubscribe, test send.
+// The browser-side plumbing (service worker, VAPID subscription) lives in `./mobile/push`.
+export { pushService } from './services/push-service';
+export type {
+  PushConfig,
+  PushSubscriptionInput,
+  PushTestResult,
+} from './services/push-service';
 
 // Durable async-task plane (global Tasks page). Exported so a host can mount
 // its own tasks surface or drive task control directly.
@@ -272,6 +283,17 @@ export type { MobileSwipeAction } from './mobile/components/MobileSwipeRow';
 export { useMobileUiStore } from './mobile/stores/mobile-ui-store';
 export { useKeyboardInset } from './mobile/hooks/useKeyboardInset';
 export { useLongPress } from './mobile/hooks/useLongPress';
+// Browser Web Push client: capability probes, service-worker registration, VAPID subscription
+// and the boot-time self-heal (`syncPushOnBoot`) hosts call once identity is ready.
+export {
+  supportsPush,
+  isStandalone,
+  urlBase64ToUint8Array,
+  registerPushServiceWorker,
+  ensureSubscription,
+  subscriptionInput,
+  syncPushOnBoot,
+} from './mobile/push';
 
 // === Connection plugin (business-agnostic route + latency self-diagnostics) ===
 // A host mounts the desktop badge with `TOPBAR_EXTRA_ITEMS.push(ConnectionPill)`. The mobile

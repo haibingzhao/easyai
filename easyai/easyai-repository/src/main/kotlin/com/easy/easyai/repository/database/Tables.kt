@@ -52,6 +52,34 @@ object Tables {
     }
 
     /**
+     * Web Push endpoints of a login account.
+     *
+     * Account-scoped on purpose: a device belongs to the signed-in account, not to any one
+     * product's business entity. `endpoint` is a capability URL minted by the push service and
+     * is unique — when the same browser signs in with another account the upsert rebinds the
+     * row instead of leaving two owners for one device.
+     */
+    object PushSubscriptionTable : Table("push_subscription") {
+        val id = varchar("id", 64)
+        val userId = varchar("user_id", 64)
+        val endpoint = varchar("endpoint", 2048)
+        val p256dh = varchar("p256dh", 255)
+        val auth = varchar("auth", 255)
+        val userAgent = varchar("user_agent", 500).nullable()
+        val createdAt = long("created_at")
+        val updatedAt = long("updated_at")
+
+        override val primaryKey = PrimaryKey(id)
+
+        init {
+            uniqueIndex(endpoint)
+            // Flyway V29 creates (user_id, updated_at DESC) for persistent databases; this
+            // definition only serves the H2 in-memory path and cannot express the sort order.
+            index(false, userId)
+        }
+    }
+
+    /**
      * Agent definition table. Each agent is a reusable template for chat sessions.
      * Agent defines behavior: name, agent_type (PRIMARY/SUBAGENT/ALL),
      * custom instructions, prompt template, and enabled tools.
