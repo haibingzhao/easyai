@@ -1,5 +1,6 @@
 package com.easy.easyai.repository.knowledge
 
+import com.easy.easyai.core.knowledge.ArticleStatus
 import com.easy.easyai.core.knowledge.KnowledgeArticle
 import com.easy.easyai.core.knowledge.KnowledgeArticleStore
 import com.easy.easyai.repository.database.Tables
@@ -50,6 +51,7 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
                     it[originSessionId] = article.originSessionId
                     it[originMessageId] = article.originMessageId
                     it[composedFrom] = article.composedFrom
+                    it[status] = ArticleStatus.toWire(article.status)
                     it[updatedAt] = article.updatedAt
                 }
                 logger.debug("Updated knowledge article: {}", article.id)
@@ -71,6 +73,7 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
                     it[originSessionId] = article.originSessionId
                     it[originMessageId] = article.originMessageId
                     it[composedFrom] = article.composedFrom
+                    it[status] = ArticleStatus.toWire(article.status)
                     it[createdAt] = article.createdAt
                     it[updatedAt] = article.updatedAt
                 }
@@ -123,6 +126,7 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
         userIds: Collection<String>,
         source: String?,
         category: String?,
+        status: ArticleStatus?,
     ): Flow<KnowledgeArticle> = flow {
         if (userIds.isEmpty()) return@flow
         val table = Tables.KnowledgeArticleTable
@@ -133,6 +137,9 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
             }
             if (!category.isNullOrBlank()) {
                 condition = condition and (table.category eq category)
+            }
+            if (status != null) {
+                condition = condition and (table.status eq ArticleStatus.toWire(status))
             }
             table.selectAll()
                 .where { condition }
@@ -192,6 +199,7 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
             originSessionId = this[table.originSessionId],
             originMessageId = this[table.originMessageId],
             composedFrom = this[table.composedFrom],
+            status = ArticleStatus.fromColumn(this[table.status]),
             createdAt = this[table.createdAt],
             updatedAt = this[table.updatedAt]
         )

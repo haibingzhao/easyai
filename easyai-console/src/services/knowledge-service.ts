@@ -36,6 +36,8 @@ export interface UploadResponseDto {
   failedCount: number;
 }
 
+export type ArticleStatus = 'draft' | 'published';
+
 export interface KnowledgeArticleDto {
   id: string;
   knowledgeKey: string;
@@ -46,6 +48,9 @@ export interface KnowledgeArticleDto {
   relativePath: string;
   ext: string;
   origin: string;
+  status: ArticleStatus;
+  /** Published content saved but the index write failed; publish again to repair. */
+  indexPending: boolean;
   canWrite: boolean;
   canManage: boolean;
   createdAt: number;
@@ -69,6 +74,12 @@ export interface UpdateArticleRequest {
   content: string;
   title?: string;
   category?: string;
+}
+
+export interface PublishArticleRequest {
+  key: string;
+  category?: string;
+  title?: string;
 }
 
 export interface AiRewriteRequest {
@@ -141,12 +152,28 @@ class KnowledgeService {
     });
   }
 
-  async listArticles(source?: string, category?: string): Promise<KnowledgeArticleDto[]> {
+  async listArticles(source?: string, category?: string, status?: ArticleStatus): Promise<KnowledgeArticleDto[]> {
     const params = new URLSearchParams();
     if (source) params.set('source', source);
     if (category) params.set('category', category);
+    if (status) params.set('status', status);
     const qs = params.toString();
     return fetchJson<KnowledgeArticleDto[]>(`${this.baseUrl}/articles${qs ? `?${qs}` : ''}`);
+  }
+
+  async publishArticle(request: PublishArticleRequest): Promise<KnowledgeArticleDto> {
+    return fetchJson<KnowledgeArticleDto>(`${this.baseUrl}/article/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async unpublishArticle(key: string): Promise<KnowledgeArticleDto> {
+    return fetchJson<KnowledgeArticleDto>(
+      `${this.baseUrl}/article/unpublish?key=${encodeURIComponent(key)}`,
+      { method: 'POST' }
+    );
   }
 
   async getArticleContent(key: string): Promise<string> {

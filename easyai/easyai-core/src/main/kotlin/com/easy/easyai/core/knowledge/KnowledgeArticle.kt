@@ -3,6 +3,9 @@ package com.easy.easyai.core.knowledge
 /**
  * Knowledge article metadata stored in the database.
  * Content lives in OSS (source of truth); EasyRAG holds the derived vector index.
+ *
+ * [status] is the boundary between "a note I wrote" and "knowledge the agent can retrieve": only
+ * [ArticleStatus.PUBLISHED] rows are indexed, and a draft is visible to its creator alone.
  */
 data class KnowledgeArticle(
     val id: String,
@@ -22,6 +25,7 @@ data class KnowledgeArticle(
     val originSessionId: String?,
     val originMessageId: String?,
     val composedFrom: String?,
+    val status: ArticleStatus = ArticleStatus.PUBLISHED,
     val createdAt: Long,
     val updatedAt: Long
 )

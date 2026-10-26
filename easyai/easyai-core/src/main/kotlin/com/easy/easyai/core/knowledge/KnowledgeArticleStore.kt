@@ -31,12 +31,13 @@ interface KnowledgeArticleStore {
     suspend fun findByKeys(userId: String, knowledgeKeys: Collection<String>): List<KnowledgeArticle>
 
     /**
-     * List every article in the given owner buckets, optionally filtered by source/category.
+     * List every article in the given owner buckets, optionally filtered by source/category/status.
      */
     fun findAllInBuckets(
         userIds: Collection<String>,
         source: String? = null,
         category: String? = null,
+        status: ArticleStatus? = null,
     ): Flow<KnowledgeArticle>
 
     /**

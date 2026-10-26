@@ -1,6 +1,7 @@
 package com.easy.easyai.web.service
 
 import com.easy.easyai.api.config.ModelProviderConfigStore
+import com.easy.easyai.core.knowledge.ArticleStatus
 import com.easy.easyai.core.knowledge.DefaultKnowledgeAccessPolicy
 import com.easy.easyai.core.knowledge.KnowledgeAccessContext
 import com.easy.easyai.core.knowledge.KnowledgeAccessPolicy
@@ -18,6 +19,7 @@ import io.mockk.coVerify
 import io.mockk.coVerifyOrder
 import io.mockk.mockk
 import io.mockk.slot
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
@@ -62,7 +64,8 @@ class KnowledgeArticleServiceTest {
         knowledgeKey: String = "manual/a.md",
         ossKey: String = "knowledge-articles/encoded/manual/a.md",
         title: String = "A",
-        createdAt: Long = 1L
+        createdAt: Long = 1L,
+        status: ArticleStatus = ArticleStatus.PUBLISHED,
     ) = KnowledgeArticle(
         id = id,
         userId = userId,
@@ -80,6 +83,7 @@ class KnowledgeArticleServiceTest {
         originSessionId = null,
         originMessageId = null,
         composedFrom = null,
+        status = status,
         createdAt = createdAt,
         updatedAt = createdAt
     )
@@ -130,7 +134,7 @@ class KnowledgeArticleServiceTest {
             val mine = article(id = "mine", knowledgeKey = "manual/mine.md")
             val theirs = article(id = "theirs", createdBy = "bob", knowledgeKey = "manual/theirs.md")
             coEvery {
-                articleStore.findAllInBuckets(listOf("alice"), null, null)
+                articleStore.findAllInBuckets(listOf("alice"), null, null, null)
             } returns flowOf(mine, theirs)
             val svc = service()
 
@@ -143,8 +147,8 @@ class KnowledgeArticleServiceTest {
         fun `personal bucket row shadows a same-key group row`() = runTest {
             val personal = article(id = "personal", knowledgeKey = "manual/a.md")
             val group = article(id = "group", userId = "grp-1", knowledgeKey = "manual/a.md")
-            coEvery { articleStore.findAllInBuckets(listOf("alice"), null, null) } returns flowOf(personal)
-            coEvery { articleStore.findAllInBuckets(listOf("grp-1"), null, null) } returns flowOf(group)
+            coEvery { articleStore.findAllInBuckets(listOf("alice"), null, null, null) } returns flowOf(personal)
+            coEvery { articleStore.findAllInBuckets(listOf("grp-1"), null, null, null) } returns flowOf(group)
             val svc = service(sharedWithinGroup = true)
 
             val visible = svc.listAccessible(context(groupUserId = "grp-1"))
@@ -487,6 +491,46 @@ class KnowledgeArticleServiceTest {
         }
 
         @Test
+        fun `upload never overwrites a draft it cannot see`() = runTest {
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            val draft = article(id = "draft-1", userId = "grp-1", createdBy = "bob", status = ArticleStatus.DRAFT)
+            coEvery { articleStore.findByKeys("grp-1", listOf("manual/a.md")) } returns listOf(draft)
+            val permissive = object : KnowledgeAccessPolicy {
+                override suspend fun canRead(context: KnowledgeAccessContext, article: KnowledgeArticle) = true
+                override suspend fun canWrite(context: KnowledgeAccessContext, article: KnowledgeArticle) = true
+            }
+
+            val results = service(knowledgeStore = store, sharedWithinGroup = true, policy = permissive).uploadItems(
+                context = context("alice", "grp-1"),
+                source = "manual",
+                category = null,
+                items = listOf(KnowledgeUploadItem("a.md", "body")),
+            )
+
+            assertFalse(results.single().success)
+            assertEquals("无权限覆盖或创建该文档", results.single().reason)
+            coVerify(exactly = 0) { store.uploadBatch(any(), any(), any(), any()) }
+        }
+
+        @Test
+        fun `upload cannot silently publish an existing draft`() = runTest {
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            val draft = article(id = "draft-1", status = ArticleStatus.DRAFT)
+            coEvery { articleStore.findByKeys("alice", listOf("manual/a.md")) } returns listOf(draft)
+
+            val results = service(knowledgeStore = store).uploadItems(
+                context = context(),
+                source = "manual",
+                category = null,
+                items = listOf(KnowledgeUploadItem("a.md", "body")),
+            )
+
+            assertFalse(results.single().success)
+            assertEquals("草稿不支持上传覆盖，请先发布或删除", results.single().reason)
+            coVerify(exactly = 0) { store.uploadBatch(any(), any(), any(), any()) }
+        }
+
+        @Test
         fun `metadata failure rolls back a newly indexed entry`() = runTest {
             val store = mockk<KnowledgeStore>(relaxed = true)
             val resolver = mockk<ObjectStorageResolver>()
@@ -510,5 +554,298 @@ class KnowledgeArticleServiceTest {
             coVerify { articleStore.save(any()) }
             coVerify { store.delete("alice", "manual/a.md") }
         }
+
+        @Test
+        fun `uploaded files are published without a second index write`() = runTest {
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            val storage = mockk<ObjectStorage>()
+            val resolver = mockk<ObjectStorageResolver>()
+            coEvery { articleStore.findByKeys("alice", listOf("manual/a.md")) } returns emptyList()
+            coEvery { articleStore.findByKey("alice", "manual/a.md") } returns null
+            coEvery { resolver.resolve("alice") } returns storage
+            coEvery { storage.put(any(), any(), "text/markdown") } returns ObjectMeta("", 0)
+            coEvery { store.uploadBatch(any(), any(), any(), any()) } returns
+                listOf(UploadResult("a.md", true, "manual/a.md"))
+            val saved = slot<KnowledgeArticle>()
+            coEvery { articleStore.save(capture(saved)) } returns Unit
+
+            val results = service(resolver = resolver, knowledgeStore = store).uploadItems(
+                context = context(),
+                source = "manual",
+                category = null,
+                items = listOf(KnowledgeUploadItem("a.md", "body")),
+            )
+
+            assertTrue(results.single().success)
+            assertEquals(ArticleStatus.PUBLISHED, saved.captured.status)
+            coVerify(exactly = 0) { store.index(any(), any(), any(), any(), any()) }
+        }
+    }
+
+    @Nested
+    inner class DraftLifecycle {
+
+        @Test
+        fun `new article is saved as a draft without touching the index`() = runTest {
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            val storage = mockk<ObjectStorage>()
+            val resolver = mockk<ObjectStorageResolver>()
+            coEvery { articleStore.findByKey("alice", "manual/a.md") } returns null
+            coEvery { resolver.resolve("alice") } returns storage
+            coEvery { storage.put(any(), any(), "text/markdown") } returns ObjectMeta("", 0)
+            val saved = slot<KnowledgeArticle>()
+            coEvery { articleStore.save(capture(saved)) } returns Unit
+
+            service(resolver = resolver, knowledgeStore = store).saveArticle(
+                context = context(),
+                title = "A",
+                content = "body",
+                source = "manual",
+                relativePath = "a.md",
+                category = "other",
+                origin = "chat_save",
+            )
+
+            assertEquals(ArticleStatus.DRAFT, saved.captured.status)
+            coVerify(exactly = 0) { store.index(any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) { store.update(any(), any(), any(), any(), any()) }
+        }
+
+        @Test
+        fun `publishing flips the status before indexing`() = runTest {
+            val draft = article(status = ArticleStatus.DRAFT)
+            val (resolver, _) = readingResolver(draft)
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            coEvery { articleStore.findByKey("alice", draft.knowledgeKey) } returns draft
+            coEvery { store.index(any(), any(), any(), any(), any()) } returns true
+            val saved = slot<KnowledgeArticle>()
+            coEvery { articleStore.save(capture(saved)) } returns Unit
+
+            val published = service(resolver = resolver, knowledgeStore = store)
+                .publish(context(), draft.knowledgeKey, category = "architecture")
+
+            assertEquals(ArticleStatus.PUBLISHED, published.status)
+            assertEquals("architecture", published.category)
+            assertEquals(ArticleStatus.PUBLISHED, saved.captured.status)
+            coVerifyOrder {
+                articleStore.save(any())
+                store.index("alice", "manual/a.md", "body", "A", "architecture")
+            }
+        }
+
+        @Test
+        fun `publish failure removes the partial entry and reverts to draft`() = runTest {
+            val draft = article(status = ArticleStatus.DRAFT)
+            val (resolver, _) = readingResolver(draft)
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            coEvery { articleStore.findByKey("alice", draft.knowledgeKey) } returns draft
+            coEvery { store.index(any(), any(), any(), any(), any()) } returns false
+            coEvery { store.delete(any(), any()) } returns true
+
+            val error = assertFailsWith<ResponseStatusException> {
+                service(resolver = resolver, knowledgeStore = store).publish(context(), draft.knowledgeKey)
+            }
+
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, error.statusCode)
+            coVerify { store.delete("alice", "manual/a.md") }
+            val saved = mutableListOf<KnowledgeArticle>()
+            coVerify(exactly = 2) { articleStore.save(capture(saved)) }
+            assertEquals(ArticleStatus.PUBLISHED, saved.first().status)
+            assertEquals(draft, saved.last())
+        }
+
+        @Test
+        fun `reindex failure keeps the article published and its index entry`() = runTest {
+            val published = article(status = ArticleStatus.PUBLISHED)
+            val (resolver, _) = readingResolver(published)
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            coEvery { articleStore.findByKey("alice", published.knowledgeKey) } returns published
+            coEvery { store.index(any(), any(), any(), any(), any()) } returns false
+            val saved = mutableListOf<KnowledgeArticle>()
+            coEvery { articleStore.save(capture(saved)) } returns Unit
+
+            val error = assertFailsWith<ResponseStatusException> {
+                service(resolver = resolver, knowledgeStore = store).publish(context(), published.knowledgeKey)
+            }
+
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, error.statusCode)
+            coVerify(exactly = 0) { store.delete(any(), any()) }
+            assertEquals(ArticleStatus.PUBLISHED, saved.single().status)
+        }
+
+        @Test
+        fun `cancellation while indexing is not treated as an index failure`() = runTest {
+            val published = article(status = ArticleStatus.PUBLISHED)
+            val (resolver, _) = readingResolver(published)
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            coEvery { articleStore.findByKey("alice", published.knowledgeKey) } returns published
+            coEvery { store.index(any(), any(), any(), any(), any()) } throws
+                CancellationException("client disconnected")
+
+            val error = assertFailsWith<CancellationException> {
+                service(resolver = resolver, knowledgeStore = store).publish(context(), published.knowledgeKey)
+            }
+
+            assertEquals("client disconnected", error.message)
+            coVerify(exactly = 0) { store.delete(any(), any()) }
+        }
+
+        @Test
+        fun `deleting a draft does not depend on the search index`() = runTest {
+            val draft = article(status = ArticleStatus.DRAFT)
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            coEvery { articleStore.findByKey("alice", draft.knowledgeKey) } returns draft
+
+            val deleted = service(knowledgeStore = store).deleteArticle(context(), draft.knowledgeKey)
+
+            assertTrue(deleted)
+            coVerify(exactly = 0) { store.delete(any(), any()) }
+        }
+
+        @Test
+        fun `unpublish removes the index before demoting the row`() = runTest {            val published = article(status = ArticleStatus.PUBLISHED)
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            coEvery { articleStore.findByKey("alice", published.knowledgeKey) } returns published
+            coEvery { store.delete("alice", "manual/a.md") } returns true
+
+            val draft = service(knowledgeStore = store).unpublish(context(), published.knowledgeKey)
+
+            assertEquals(ArticleStatus.DRAFT, draft.status)
+            coVerifyOrder {
+                store.delete("alice", "manual/a.md")
+                articleStore.save(match { it.status == ArticleStatus.DRAFT })
+            }
+        }
+
+        @Test
+        fun `unpublish keeps the row published when the index entry survives`() = runTest {
+            val published = article(status = ArticleStatus.PUBLISHED)
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            coEvery { articleStore.findByKey("alice", published.knowledgeKey) } returns published
+            coEvery { store.delete(any(), any()) } throws IllegalStateException("rag down")
+            coEvery { store.read("alice", "manual/a.md") } returns "still indexed"
+
+            val error = assertFailsWith<ResponseStatusException> {
+                service(knowledgeStore = store).unpublish(context(), published.knowledgeKey)
+            }
+
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, error.statusCode)
+            coVerify(exactly = 0) { articleStore.save(any()) }
+        }
+
+        @Test
+        fun `editing a published article rebuilds the index and keeps its status`() = runTest {
+            val existing = article(status = ArticleStatus.PUBLISHED)
+            val (resolver, _) = readingResolver(existing)
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            coEvery { articleStore.findByKey("alice", existing.knowledgeKey) } returns existing
+            coEvery { store.index(any(), any(), any(), any(), any()) } returns true
+
+            val result = service(resolver = resolver, knowledgeStore = store)
+                .updateArticle(context(), existing.knowledgeKey, "new body")
+
+            assertEquals(ArticleStatus.PUBLISHED, result.article.status)
+            assertFalse(result.indexPending)
+            coVerify { store.index("alice", "manual/a.md", "new body", "A", "other") }
+            coVerify(exactly = 0) { store.update(any(), any(), any(), any(), any()) }
+        }
+
+        @Test
+        fun `editing a published article surfaces a failed index write`() = runTest {
+            val existing = article(status = ArticleStatus.PUBLISHED)
+            val (resolver, _) = readingResolver(existing)
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            coEvery { articleStore.findByKey("alice", existing.knowledgeKey) } returns existing
+            coEvery { store.index(any(), any(), any(), any(), any()) } returns false
+
+            val result = service(resolver = resolver, knowledgeStore = store)
+                .updateArticle(context(), existing.knowledgeKey, "new body")
+
+            assertEquals(ArticleStatus.PUBLISHED, result.article.status)
+            assertTrue(result.indexPending)
+        }
+
+        @Test
+        fun `editing a draft never touches the index`() = runTest {
+            val existing = article(status = ArticleStatus.DRAFT)
+            val (resolver, _) = readingResolver(existing)
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            coEvery { articleStore.findByKey("alice", existing.knowledgeKey) } returns existing
+
+            val result = service(resolver = resolver, knowledgeStore = store)
+                .updateArticle(context(), existing.knowledgeKey, "new body")
+
+            assertEquals(ArticleStatus.DRAFT, result.article.status)
+            assertFalse(result.indexPending)
+            coVerify(exactly = 0) { store.index(any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) { store.update(any(), any(), any(), any(), any()) }
+        }
+    }
+
+    @Nested
+    inner class DraftVisibility {
+
+        private val permissive = object : KnowledgeAccessPolicy {
+            override suspend fun canRead(context: KnowledgeAccessContext, article: KnowledgeArticle) = true
+
+            override suspend fun canWrite(context: KnowledgeAccessContext, article: KnowledgeArticle) = true
+        }
+
+        @Test
+        fun `drafts are hidden from other users even when the policy allows reads`() = runTest {
+            val draft = article(createdBy = "bob", status = ArticleStatus.DRAFT)
+            coEvery { articleStore.findAllInBuckets(listOf("alice"), null, null, null) } returns flowOf(draft)
+            coEvery { articleStore.findByKey("alice", draft.knowledgeKey) } returns draft
+            val svc = service(policy = permissive)
+
+            assertTrue(svc.listAccessible(context()).isEmpty())
+            assertNull(svc.readContent(context(), draft.knowledgeKey))
+        }
+
+        @Test
+        fun `writing another user's draft answers 404 instead of leaking existence`() = runTest {
+            val draft = article(createdBy = "bob", status = ArticleStatus.DRAFT)
+            coEvery { articleStore.findByKey("alice", draft.knowledgeKey) } returns draft
+            val svc = service(policy = permissive)
+
+            val error = assertFailsWith<ResponseStatusException> {
+                svc.updateArticle(context(), draft.knowledgeKey, "hijack")
+            }
+
+            assertEquals(HttpStatus.NOT_FOUND, error.statusCode)
+        }
+
+        @Test
+        fun `the creator still sees their own draft`() = runTest {
+            val draft = article(status = ArticleStatus.DRAFT)
+            coEvery { articleStore.findAllInBuckets(listOf("alice"), null, null, null) } returns flowOf(draft)
+
+            val visible = service().listAccessible(context())
+
+            assertEquals(listOf("article-1"), visible.map { it.article.id })
+        }
+
+        @Test
+        fun `status filter is passed through to the store`() = runTest {
+            val draft = article(status = ArticleStatus.DRAFT)
+            coEvery {
+                articleStore.findAllInBuckets(listOf("alice"), null, null, ArticleStatus.DRAFT)
+            } returns flowOf(draft)
+
+            val visible = service().listAccessible(context(), status = ArticleStatus.DRAFT)
+
+            assertEquals(1, visible.size)
+        }
+    }
+
+    private fun readingResolver(article: KnowledgeArticle, body: String = "body"): Pair<ObjectStorageResolver, ObjectStorage> {
+        val bytes = body.toByteArray()
+        val storage = mockk<ObjectStorage>()
+        val resolver = mockk<ObjectStorageResolver>()
+        coEvery { resolver.resolve(article.userId) } returns storage
+        coEvery { storage.get(article.ossKey) } returns
+            ObjectContent(ObjectMeta(article.ossKey, bytes.size.toLong()), bytes)
+        coEvery { storage.put(any(), any(), "text/markdown") } returns ObjectMeta("", 0)
+        return resolver to storage
     }
 }

@@ -4,7 +4,7 @@ import { readErrorMessage } from '@/services/api-client';
 import type {
   KnowledgeEntryDto, KnowledgeDetailDto, UploadResponseDto,
   KnowledgeArticleDto, SaveArticleRequest, UpdateArticleRequest,
-  AiComposeRequest,
+  PublishArticleRequest, ArticleStatus, AiComposeRequest,
 } from '@/services/knowledge-service';
 
 /** Polling interval (ms) for checking indexing progress after upload. */
@@ -42,9 +42,11 @@ interface KnowledgeStore {
   deleteSource: (source: string) => Promise<void>;
   upload: (files: File[], paths: string[], source: string, category?: string) => Promise<UploadResponseDto>;
   saveToKnowledge: (request: SaveArticleRequest) => Promise<KnowledgeArticleDto>;
-  loadArticles: (source?: string, category?: string) => Promise<void>;
+  loadArticles: (source?: string, category?: string, status?: ArticleStatus) => Promise<void>;
   loadArticleContent: (key: string) => Promise<string>;
-  updateArticle: (request: UpdateArticleRequest) => Promise<KnowledgeArticleDto>;
+  updateArticle: (request: UpdateArticleRequest, options?: { reload?: boolean }) => Promise<KnowledgeArticleDto>;
+  publishArticle: (request: PublishArticleRequest) => Promise<KnowledgeArticleDto>;
+  unpublishArticle: (key: string) => Promise<KnowledgeArticleDto>;
   deleteArticle: (key: string) => Promise<void>;
   clearArticleError: () => void;
   aiCompose: (request: AiComposeRequest) => Promise<string>;
@@ -163,10 +165,10 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => {
     return article;
   },
 
-  loadArticles: async (source, category) => {
+  loadArticles: async (source, category, status) => {
     set({ articleLoading: true, articleError: null });
     try {
-      const articles = await knowledgeService.listArticles(source, category);
+      const articles = await knowledgeService.listArticles(source, category, status);
       set({ articles, articleLoading: false });
     } catch (e) {
       set({ articleError: readErrorMessage(e), articleLoading: false });
@@ -186,15 +188,42 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => {
     }
   },
 
-  updateArticle: async (request) => {
+  updateArticle: async (request, options) => {
     set({ articleLoading: true, articleError: null });
     try {
       const article = await knowledgeService.updateArticle(request);
       set({ articleLoading: false });
-      await get().loadArticles().catch(() => undefined);
+      // A caller that publishes right after the save reloads the list itself; skip the duplicate.
+      if (options?.reload !== false) {
+        await get().loadArticles().catch(() => undefined);
+      }
       return article;
     } catch (e) {
       set({ articleError: readErrorMessage(e), articleLoading: false });
+      throw e;
+    }
+  },
+
+  publishArticle: async (request) => {
+    set({ articleError: null });
+    try {
+      const article = await knowledgeService.publishArticle(request);
+      await get().loadArticles().catch(() => undefined);
+      return article;
+    } catch (e) {
+      set({ articleError: readErrorMessage(e) });
+      throw e;
+    }
+  },
+
+  unpublishArticle: async (key) => {
+    set({ articleError: null });
+    try {
+      const article = await knowledgeService.unpublishArticle(key);
+      await get().loadArticles().catch(() => undefined);
+      return article;
+    } catch (e) {
+      set({ articleError: readErrorMessage(e) });
       throw e;
     }
   },

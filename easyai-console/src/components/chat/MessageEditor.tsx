@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Send, Square, Loader2, Paperclip, ShieldCheck, Clock, Mic, Plus, Sparkles } from 'lucide-react';
 import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
@@ -25,7 +25,9 @@ import { useAttachmentManager } from '@/hooks/useAttachmentManager';
 import { ComposerPlusMenu } from '@/mobile/components/ComposerPlusMenu';
 import type { MobileComposerContext } from '@/mobile/registries';
 import { useVoiceInput } from '@/hooks/useVoiceInput';
-import { auxModelConfigService } from '@/services/aux-model-config-service';
+import { createContentEditableSink } from '@/hooks/dictation-sink';
+import { useDictationAvailability } from '@/hooks/useDictationAvailability';
+import { VoiceWaveform } from '@/components/ui/VoiceWaveform';
 import { AttachmentPreviewBar } from './AttachmentPreviewBar';
 import { AttachmentImage } from './AttachmentImage';
 import type { SlashCommand } from '@/types/command';
@@ -120,14 +122,7 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
   const imageRootsRef = useRef<Map<HTMLElement, Root>>(new Map());
   // Voice input: gated on the user's Task Models choices (asr enables the mic,
   // dictation_refine only decides whether the stop-time rewrite runs).
-  const [asrReady, setAsrReady] = useState(false);
-  const refineReadyRef = useRef(false);
-  useEffect(() => {
-    auxModelConfigService.list().then((configs) => {
-      setAsrReady(configs.some((c) => c.taskKey === 'asr' && c.modelConfigId.trim() !== ''));
-      refineReadyRef.current = configs.some((c) => c.taskKey === 'dictation_refine' && c.modelConfigId.trim() !== '');
-    }).catch(() => { /* persistence off: voice input stays unavailable */ });
-  }, []);
+  const { asrReady, isRefineEnabled } = useDictationAvailability();
 
   useEffect(() => {
     if (toolbarRowRef.current) {
@@ -676,7 +671,6 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
   }, []);
 
   const syncEditorValue = useCallback(() => setEditorValue(getEditorText()), [getEditorText]);
-  const isRefineEnabled = useCallback(() => refineReadyRef.current, []);
   // A dictation failure is about the mic, not about the conversation: it belongs in the composer's
   // own notice band, so retrying four times does not leave four error cards in the transcript.
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
@@ -689,10 +683,13 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
   useEffect(() => () => {
     if (voiceNoticeTimerRef.current) clearTimeout(voiceNoticeTimerRef.current);
   }, []);
+  const voiceSink = useMemo(
+    () => createContentEditableSink(editorRef, syncEditorValue),
+    [syncEditorValue],
+  );
   const voice = useVoiceInput({
-    editorRef,
+    sink: voiceSink,
     isRefineEnabled,
-    onEditorChanged: syncEditorValue,
     onError: reportVoiceError,
   });
   const dismissRefine = voice.dismissRefine;
@@ -1519,37 +1516,4 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
       )}
     </div>
   );
-};
-
-/** Live mic-level bars drawn from the recording analyser, replacing the send button while dictating. */
-const VoiceWaveform: React.FC<{ analyserRef: React.RefObject<AnalyserNode | null> }> = ({ analyserRef }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (!canvas || !ctx) return;
-    let raf = 0;
-    const data = new Uint8Array(128);
-    const bars = 16;
-    const draw = () => {
-      raf = requestAnimationFrame(draw);
-      const w = canvas.width;
-      const h = canvas.height;
-      ctx.clearRect(0, 0, w, h);
-      const analyser = analyserRef.current;
-      if (!analyser) return;
-      analyser.getByteTimeDomainData(data);
-      ctx.fillStyle = '#10b981';
-      const step = Math.floor(data.length / bars);
-      for (let i = 0; i < bars; i++) {
-        let peak = 0;
-        for (let j = 0; j < step; j++) peak = Math.max(peak, Math.abs(data[i * step + j] - 128));
-        const bh = Math.max(2, (peak / 128) * (h - 2));
-        ctx.fillRect((i * w) / bars + 1, (h - bh) / 2, w / bars - 2, bh);
-      }
-    };
-    draw();
-    return () => cancelAnimationFrame(raf);
-  }, [analyserRef]);
-  return <canvas ref={canvasRef} width={96} height={20} className="mx-1" />;
 };

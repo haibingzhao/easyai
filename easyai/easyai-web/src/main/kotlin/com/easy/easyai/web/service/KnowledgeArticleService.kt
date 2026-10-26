@@ -3,6 +3,7 @@ package com.easy.easyai.web.service
 import com.easy.easyai.api.config.ChatModelFactory
 import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.api.llm.*
+import com.easy.easyai.core.knowledge.ArticleStatus
 import com.easy.easyai.core.knowledge.KnowledgeAccessContext
 import com.easy.easyai.core.knowledge.KnowledgeAccessPolicy
 import com.easy.easyai.core.knowledge.KnowledgeArticle
@@ -36,6 +37,17 @@ data class AccessibleKnowledgeArticle(
     val canManage: Boolean,
 )
 
+/**
+ * Result of a content write.
+ *
+ * [indexPending] is only meaningful for published articles: the body was saved but the index write
+ * failed, so the article still shows old content to retrieval until it is re-published.
+ */
+data class ArticleWriteResult(
+    val article: KnowledgeArticle,
+    val indexPending: Boolean = false,
+)
+
 @Service
 class KnowledgeArticleService(
     @param:Autowired(required = false) private val objectStorageResolver: ObjectStorageResolver?,
@@ -64,6 +76,11 @@ class KnowledgeArticleService(
 
     // ── CRUD ──────────────────────────────────────────────────────────
 
+    /**
+     * Save article metadata and content. Metadata alone never touches the search index: new articles
+     * default to [ArticleStatus.DRAFT], and only the upload path passes PUBLISHED because
+     * `uploadBatch` already indexed the file.
+     */
     suspend fun saveArticle(
         context: KnowledgeAccessContext,
         title: String,
@@ -75,6 +92,7 @@ class KnowledgeArticleService(
         originSessionId: String? = null,
         originMessageId: String? = null,
         composedFrom: String? = null,
+        status: ArticleStatus = ArticleStatus.DRAFT,
     ): KnowledgeArticle {
         val ownerId = writeOwner(context)
         KnowledgePathValidator.validateSource(source)
@@ -112,6 +130,7 @@ class KnowledgeArticleService(
                 originSessionId = originSessionId,
                 originMessageId = originMessageId,
                 composedFrom = composedFrom,
+                status = status,
                 updatedAt = now
             )
         } else {
@@ -135,6 +154,7 @@ class KnowledgeArticleService(
                 originSessionId = originSessionId,
                 originMessageId = originMessageId,
                 composedFrom = composedFrom,
+                status = status,
                 createdAt = now,
                 updatedAt = now
             )
@@ -170,9 +190,10 @@ class KnowledgeArticleService(
             throw e
         }
 
-        knowledgeStore?.update(article.userId, knowledgeKey, content, title, category)
-
-        logger.info("Saved knowledge article: key={}, createdBy={}, origin={}", knowledgeKey, article.createdBy, origin)
+        logger.info(
+            "Saved knowledge article: key={}, createdBy={}, origin={}, status={}",
+            knowledgeKey, article.createdBy, origin, article.status
+        )
         return article
     }
 
@@ -180,15 +201,17 @@ class KnowledgeArticleService(
         context: KnowledgeAccessContext,
         source: String? = null,
         category: String? = null,
+        status: ArticleStatus? = null,
     ): List<AccessibleKnowledgeArticle> {
         if (!accessPolicy.canView(context)) return emptyList()
         val seen = mutableSetOf<String>()
         val result = mutableListOf<AccessibleKnowledgeArticle>()
         // Self first, then the group bucket: a personal row shadows a group row with the same key.
         for (bucket in visibleBuckets(context)) {
-            val articles = articleStore.findAllInBuckets(listOf(bucket), source, category).toList()
+            val articles = articleStore.findAllInBuckets(listOf(bucket), source, category, status).toList()
             for (article in articles) {
                 if (!seen.add(article.knowledgeKey)) continue
+                if (!canSeeArticle(context, article)) continue
                 if (!accessPolicy.canRead(context, article)) continue
                 result += AccessibleKnowledgeArticle(
                     article = article,
@@ -202,19 +225,29 @@ class KnowledgeArticleService(
 
     suspend fun readContent(context: KnowledgeAccessContext, key: String): String? {
         val article = resolveArticle(context, key) ?: return null
+        if (!canSeeArticle(context, article)) return null
         if (!accessPolicy.canRead(context, article)) return null
         return readArticleContent(article)
     }
 
+    /**
+     * Save edited content.
+     *
+     * A published article keeps its status and has the index rebuilt (upsert, so a missing entry is
+     * recreated); a draft never touches the index. Index failure is reported through
+     * [ArticleWriteResult.indexPending] instead of rolling back the saved body — downgrading a
+     * published article on a transient network error would remove it from retrieval entirely.
+     */
     suspend fun updateArticle(
         context: KnowledgeAccessContext,
         key: String,
         content: String,
         title: String? = null,
         category: String? = null,
-    ): KnowledgeArticle {
+    ): ArticleWriteResult {
         val existing = resolveArticle(context, key)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Article not found: $key")
+        requireVisible(context, existing, key)
         if (!accessPolicy.canWrite(context, existing)) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "No write permission on article: $key")
         }
@@ -235,24 +268,169 @@ class KnowledgeArticleService(
             updatedAt = System.currentTimeMillis()
         )
         articleStore.save(updated)
-        knowledgeStore?.update(existing.userId, existing.knowledgeKey, content, updated.title, updated.category)
 
-        logger.info("Updated knowledge article: key={}", key)
-        return updated
+        var indexPending = false
+        if (updated.status == ArticleStatus.PUBLISHED) {
+            val store = knowledgeStore
+            indexPending = store == null || !try {
+                store.index(updated.userId, updated.knowledgeKey, content, updated.title, updated.category)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger.warn("Index write failed after saving article {}: {}", key, e.message)
+                false
+            }
+            if (indexPending) {
+                logger.warn("Article content saved but index write failed: key={}", key)
+            }
+        }
+
+        logger.info("Updated knowledge article: key={}, status={}", key, updated.status)
+        return ArticleWriteResult(article = updated, indexPending = indexPending)
     }
 
     suspend fun deleteArticle(context: KnowledgeAccessContext, key: String): Boolean {
         val article = resolveArticle(context, key) ?: return false
+        requireVisible(context, article, key)
         if (!accessPolicy.canManage(context, article)) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "No permission to delete article: $key")
         }
 
+        // Index first: deleting metadata before the index can leave a retrievable orphan entry.
+        // Drafts were never indexed, so they must not depend on RAG being reachable to delete.
+        if (article.status == ArticleStatus.PUBLISHED) {
+            knowledgeStore?.delete(article.userId, article.knowledgeKey)
+        }
         objectStorageResolver?.resolve(article.userId)?.delete(article.ossKey)
         articleStore.delete(article.id)
-        knowledgeStore?.delete(article.userId, article.knowledgeKey)
 
         logger.info("Deleted knowledge article: key={}", key)
         return true
+    }
+
+    /**
+     * Publish a draft, or rebuild the index of an already published article.
+     *
+     * A first publish flips the status before the index write so a crash can only leave "published
+     * but not yet indexed"; a failed write removes the partial entry and reverts the row to its
+     * previous metadata. Re-indexing an already published article never demotes it: on failure the
+     * row stays published and the existing index entry is left untouched, because deleting it would
+     * remove the article from retrieval entirely.
+     */
+    suspend fun publish(
+        context: KnowledgeAccessContext,
+        key: String,
+        category: String? = null,
+        title: String? = null,
+    ): KnowledgeArticle {
+        val store = knowledgeStore ?: throw ResponseStatusException(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "Knowledge system is not enabled"
+        )
+        val existing = resolveArticle(context, key)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Article not found: $key")
+        requireVisible(context, existing, key)
+        if (!accessPolicy.canWrite(context, existing)) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "No write permission on article: $key")
+        }
+
+        val wasPublished = existing.status == ArticleStatus.PUBLISHED
+        val resolvedTitle = title?.trim()?.takeIf { it.isNotBlank() } ?: existing.title
+        val resolvedCategory = category?.trim()?.takeIf { it.isNotBlank() } ?: existing.category
+        // Legacy rows may carry an empty oss_key (column default ''); rebuild it like the write
+        // paths do instead of reading the body from an empty object key.
+        val ossKey = existing.ossKey.ifBlank {
+            buildOssKey(existing.userId, existing.source, existing.relativePath)
+        }
+        val content = readArticleContent(existing.copy(ossKey = ossKey))
+
+        val published = existing.copy(
+            ossKey = ossKey,
+            status = ArticleStatus.PUBLISHED,
+            title = resolvedTitle,
+            category = resolvedCategory,
+            updatedAt = System.currentTimeMillis()
+        )
+        articleStore.save(published)
+
+        val indexed = try {
+            store.index(existing.userId, existing.knowledgeKey, content, resolvedTitle, resolvedCategory)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("Failed to index article {}: {}", key, e.message)
+            false
+        }
+
+        if (!indexed) {
+            if (wasPublished) {
+                throw ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Failed to rebuild the search index; the article is still published"
+                )
+            }
+            withContext(NonCancellable) {
+                // The write may have been accepted before the error surfaced; do not leave a
+                // searchable entry behind while the row goes back to draft.
+                runCatching { store.delete(existing.userId, existing.knowledgeKey) }
+                runCatching { articleStore.save(existing) }
+            }
+            throw ResponseStatusException(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "Failed to index the article; it remains a draft"
+            )
+        }
+
+        logger.info("Published knowledge article: key={}, category={}", key, resolvedCategory)
+        return published
+    }
+
+    /** Take a published article out of the index. The index delete happens before the status flip. */
+    suspend fun unpublish(context: KnowledgeAccessContext, key: String): KnowledgeArticle {
+        val store = knowledgeStore ?: throw ResponseStatusException(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "Knowledge system is not enabled"
+        )
+        val existing = resolveArticle(context, key)
+            ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Article not found: $key")
+        requireVisible(context, existing, key)
+        if (!accessPolicy.canManage(context, existing)) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "No permission to unpublish article: $key")
+        }
+        if (existing.status == ArticleStatus.DRAFT) return existing
+
+        val removed = try {
+            store.delete(existing.userId, existing.knowledgeKey)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("Failed to remove article {} from the index: {}", key, e.message)
+            false
+        }
+        // null-equivalent: store.delete returns false when nothing was indexed, which is the
+        // desired end state. A thrown error means the entry may still be searchable, so the row
+        // must stay published.
+        if (!removed) {
+            val stillIndexed = try {
+                store.read(existing.userId, existing.knowledgeKey) != null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                true
+            }
+            if (stillIndexed) {
+                throw ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Failed to remove the article from the search index; it is still published"
+                )
+            }
+        }
+
+        val draft = existing.copy(status = ArticleStatus.DRAFT, updatedAt = System.currentTimeMillis())
+        articleStore.save(draft)
+
+        logger.info("Unpublished knowledge article: key={}", key)
+        return draft
     }
 
     /**
@@ -260,7 +438,9 @@ class KnowledgeArticleService(
      *
      * Every file is authorized before the RAG write (an overwrite is checked against the existing
      * article), denied files are reported per item, and a failed metadata write rolls back the RAG
-     * entry only when the file did not exist before.
+     * entry only when the file did not exist before. Drafts are creator-only and never indexed, so
+     * an upload may not replace one: the batch indexer would make content the caller cannot see
+     * retrievable and flip the row to PUBLISHED as a side effect.
      */
     suspend fun uploadItems(
         context: KnowledgeAccessContext,
@@ -287,15 +467,20 @@ class KnowledgeArticleService(
         val allowed = mutableListOf<KnowledgeUploadItem>()
         for (item in items) {
             val existing = existingByKey[keyOf(item.relativePath)]
-            val permitted = if (existing != null) {
-                accessPolicy.canWrite(context, existing)
-            } else {
-                canCreate
+            val rejection = when {
+                existing == null -> if (canCreate) null else UPLOAD_DENIED_REASON
+                // A host may grant group-wide write while drafts stay creator-only; do not reveal
+                // (or touch) another user's draft through the overwrite path.
+                !canSeeArticle(context, existing) -> UPLOAD_DENIED_REASON
+                // Even the creator's own draft must not be silently published by a re-upload.
+                existing.status == ArticleStatus.DRAFT -> UPLOAD_DRAFT_OVERWRITE_REASON
+                !accessPolicy.canWrite(context, existing) -> UPLOAD_DENIED_REASON
+                else -> null
             }
-            if (permitted) {
+            if (rejection == null) {
                 allowed += item
             } else {
-                denied[item.relativePath] = UPLOAD_DENIED_REASON
+                denied[item.relativePath] = rejection
             }
         }
         if (allowed.isEmpty()) {
@@ -314,7 +499,8 @@ class KnowledgeArticleService(
                     source = source,
                     relativePath = item.relativePath,
                     category = category ?: "other",
-                    origin = "upload"
+                    origin = "upload",
+                    status = ArticleStatus.PUBLISHED
                 )
             } catch (e: CancellationException) {
                 throw e
@@ -357,6 +543,7 @@ class KnowledgeArticleService(
     ): String {
         val article = resolveArticle(context, key)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Article content not found: $key")
+        requireVisible(context, article, key)
         if (!accessPolicy.canWrite(context, article)) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "No write permission on article: $key")
         }
@@ -393,6 +580,7 @@ $instruction
     ): String {
         val article = resolveArticle(context, key)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Article content not found: $key")
+        requireVisible(context, article, key)
         if (!accessPolicy.canWrite(context, article)) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "No write permission on article: $key")
         }
@@ -432,6 +620,7 @@ $instruction
     ): String {
         val materials = sourceKeys.mapNotNull { key ->
             val article = resolveArticle(context, key) ?: return@mapNotNull null
+            if (!canSeeArticle(context, article)) return@mapNotNull null
             if (!accessPolicy.canRead(context, article)) return@mapNotNull null
             "### Material: ${article.title}\n\n${readArticleContent(article)}"
         }
@@ -465,6 +654,20 @@ $guidance$styleHint
 
     private fun writeOwner(context: KnowledgeAccessContext): String =
         KnowledgeOwnership.ownerId(context.userId, context.groupUserId, sharedWithinGroup)
+
+    /**
+     * Drafts are creator-only regardless of the host policy: publishing is what widens visibility,
+     * so a policy that grants group-wide reads must not expose someone's unfinished notes.
+     */
+    private fun canSeeArticle(context: KnowledgeAccessContext, article: KnowledgeArticle): Boolean =
+        article.status != ArticleStatus.DRAFT || article.createdBy == context.userId
+
+    /** A hidden draft answers 404 like a missing key, so callers cannot probe that it exists. */
+    private fun requireVisible(context: KnowledgeAccessContext, article: KnowledgeArticle, key: String) {
+        if (!canSeeArticle(context, article)) {
+            throw ResponseStatusException(HttpStatus.NOT_FOUND, "Article not found: $key")
+        }
+    }
 
     private fun visibleBuckets(context: KnowledgeAccessContext): List<String> =
         listOfNotNull(context.userId.takeIf { it.isNotBlank() }, context.groupUserId?.takeIf { it.isNotBlank() })
@@ -591,6 +794,7 @@ $guidance$styleHint
         /** Postgres/H2 unique-violation SQLState. */
         const val UNIQUE_VIOLATION_SQLSTATE = "23505"
         const val UPLOAD_DENIED_REASON = "无权限覆盖或创建该文档"
+        const val UPLOAD_DRAFT_OVERWRITE_REASON = "草稿不支持上传覆盖，请先发布或删除"
         const val UPLOAD_METADATA_FAILED_REASON = "元数据保存失败"
         const val UPLOAD_NOT_ATTEMPTED_REASON = "未上传"
     }

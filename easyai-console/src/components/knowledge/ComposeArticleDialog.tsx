@@ -241,7 +241,7 @@ export const ComposeArticleDialog: React.FC<ComposeArticleDialogProps> = ({
               <pre className="text-xs text-foreground whitespace-pre-wrap font-sans">{composeResult}</pre>
             </div>
             <div className="mt-3">
-              <label className="block text-sm font-medium mb-1">{i18n('Save as')}</label>
+              <label className="block text-sm font-medium mb-1">{i18n('Title')}</label>
               <input
                 type="text"
                 value={savingTitle}
@@ -329,6 +329,11 @@ const ArticleCheckbox: React.FC<{
     </div>
     <FileText className="size-3.5 text-muted-foreground shrink-0" />
     <span className="text-xs truncate flex-1">{article.title || article.relativePath}</span>
+    {article.status === 'draft' && (
+      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
+        {i18n('Draft')}
+      </span>
+    )}
     <span className="text-[10px] text-muted-foreground shrink-0">{article.source}</span>
   </button>
 );

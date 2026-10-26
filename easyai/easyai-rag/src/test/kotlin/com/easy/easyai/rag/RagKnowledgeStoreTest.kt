@@ -38,6 +38,28 @@ class RagKnowledgeStoreTest {
     }
 
     @Test
+    fun `index upserts without requiring an existing entry`() = runTest {
+        val client = mockk<RagClient>(relaxed = true)
+        val store = RagKnowledgeStore(client)
+
+        val indexed = store.index("alice", "manual/a.md", "# A\n\nbody", "A", "other")
+
+        assertEquals(true, indexed)
+        coVerify(exactly = 0) { client.readByExternalId(any(), any()) }
+        coVerify(exactly = 1) { client.upsert(any(), any(), false) }
+    }
+
+    @Test
+    fun `update keeps the existing-entry contract`() = runTest {
+        val client = mockk<RagClient>(relaxed = true)
+        coEvery { client.readByExternalId(any(), any()) } returns null
+        val store = RagKnowledgeStore(client)
+
+        assertEquals(false, store.update("alice", "manual/a.md", "body", null, null))
+        coVerify(exactly = 0) { client.upsert(any(), any(), false) }
+    }
+
+    @Test
     fun `deleteEntries batch-deletes only the requested keys`() = runTest {
         val client = mockk<RagClient>()
         coEvery { client.list("${RagConstants.FILE_PATH_ROOT}/manual/", any(), any()) } returns listOf(

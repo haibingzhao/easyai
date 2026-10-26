@@ -16,12 +16,18 @@ import {
   Bold, Italic, Strikethrough,
   Heading1, Heading2, List, ListOrdered,
   Quote, Code, Link2, Minus,
-  Check, X, Wand2,
+  Check, X, Wand2, Send, RefreshCw, Undo2, Mic, Square,
 } from 'lucide-react';
 import { useKnowledgeStore } from '@/services/stores/knowledge-store';
 import { knowledgeService } from '@/services/knowledge-service';
 import { useEnabledModels } from '@/hooks/useEnabledModels';
+import { useVoiceInput } from '@/hooks/useVoiceInput';
+import { useDictationAvailability } from '@/hooks/useDictationAvailability';
+import { useTiptapDictationSink } from '@/components/knowledge/dictation/tiptapDictation';
+import { VoiceWaveform } from '@/components/ui/VoiceWaveform';
+import { useCategoryStore } from '@/services/stores/category-store';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { Dialog } from '@/components/ui/Dialog';
 import { NEW_ARTICLE_KEY } from '@/components/knowledge/constants';
 import { readErrorMessage } from '@/services/api-client';
 import { i18n } from '@/utils/i18n';
@@ -46,8 +52,11 @@ export const ArticleEditorPage: React.FC = () => {
   const loadArticleContent = useKnowledgeStore((s) => s.loadArticleContent);
   const updateArticle = useKnowledgeStore((s) => s.updateArticle);
   const saveToKnowledge = useKnowledgeStore((s) => s.saveToKnowledge);
+  const publishArticle = useKnowledgeStore((s) => s.publishArticle);
+  const unpublishArticle = useKnowledgeStore((s) => s.unpublishArticle);
   const articles = useKnowledgeStore((s) => s.articles);
   const loadArticles = useKnowledgeStore((s) => s.loadArticles);
+  const knowledgeCategories = useCategoryStore((s) => s.knowledgeCategories);
   const { models, selectedModelId, setSelectedModelId, error: modelsError } = useEnabledModels();
 
   // Set once the first save of a new draft succeeds, so later saves update instead of creating.
@@ -71,6 +80,16 @@ export const ArticleEditorPage: React.FC = () => {
   const [linkPanelOpen, setLinkPanelOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');
   const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [noticeWarn, setNoticeWarn] = useState(false);
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishTitle, setPublishTitle] = useState('');
+  const [publishCategory, setPublishCategory] = useState('other');
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [unpublishOpen, setUnpublishOpen] = useState(false);
+  const [unpublishing, setUnpublishing] = useState(false);
   const initializedRef = useRef(false);
   const appliedContentKeyRef = useRef<string | null>(null);
   const titleKeyRef = useRef<string | null>(null);
@@ -84,6 +103,9 @@ export const ArticleEditorPage: React.FC = () => {
     [articles, activeKey, isNewDraft],
   );
   const readOnly = !!currentArticle && !currentArticle.canWrite;
+  // Unknown status means an older backend: treat an existing row as published, a new one as draft.
+  const articleStatus = currentArticle ? (currentArticle.status ?? 'published') : 'draft';
+  const isPublished = articleStatus === 'published';
 
   const load = useCallback(async (key: string) => {
     setLoadError(null);
@@ -159,6 +181,14 @@ export const ArticleEditorPage: React.FC = () => {
     },
   });
 
+  const dictationSink = useTiptapDictationSink(editor);
+  const { asrReady, isRefineEnabled } = useDictationAvailability();
+  const voice = useVoiceInput({
+    sink: dictationSink,
+    isRefineEnabled,
+    onError: setVoiceNotice,
+  });
+
   useEffect(() => {
     if (!editor || initialContent === null || contentRequestKey === null) return;
     if (appliedContentKeyRef.current === contentRequestKey) return;
@@ -196,7 +226,10 @@ export const ArticleEditorPage: React.FC = () => {
     }
   }, [dirty, navigate]);
 
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(async (
+    origin: 'manual' | 'voice' = 'manual',
+    options: { navigateAfterCreate?: boolean } = {},
+  ) => {
     if (!editor || saving || readOnly) return;
     const markdown = getMarkdown(editor);
     if (markdown === null) {
@@ -215,7 +248,7 @@ export const ArticleEditorPage: React.FC = () => {
           title: savedTitle,
           content: markdown,
           source: 'manual',
-          origin: 'manual',
+          origin,
         });
         targetKey = article.knowledgeKey;
         savedTitle = article.title;
@@ -230,7 +263,9 @@ export const ArticleEditorPage: React.FC = () => {
           }
         }
         loadedKeyRef.current = targetKey;
-        navigate(`/knowledge/editor/${encodeURIComponent(targetKey)}`, { replace: true });
+        if (options.navigateAfterCreate !== false) {
+          navigate(`/knowledge/editor/${encodeURIComponent(targetKey)}`, { replace: true });
+        }
       } else {
         const article = await updateArticle({
           key: targetKey,
@@ -239,6 +274,12 @@ export const ArticleEditorPage: React.FC = () => {
         });
         // Backend keeps the previous title when `title` is omitted — mirror that here.
         savedTitle = article.title;
+        if (article.indexPending) {
+          setNoticeWarn(true);
+          setNotice(i18n('Saved, but the search index update failed. Rebuild the index to retry.'));
+        } else {
+          setNotice(null);
+        }
       }
 
       if (docVersionRef.current === versionAtSave) {
@@ -251,6 +292,103 @@ export const ArticleEditorPage: React.FC = () => {
       setSaving(false);
     }
   }, [editor, saving, readOnly, activeKey, isNewDraft, title, saveToKnowledge, updateArticle, navigate]);
+
+  const stopVoice = voice.stopAndFinish;
+  const handleVoiceStop = useCallback(async () => {
+    await stopVoice();
+    // A brand-new article exists only in the editor; persist the dictation as a draft rather than
+    // letting a voice-created note vanish. An empty round (stray mic tap, silence) must not create
+    // an "Untitled" blank draft.
+    if (isNewDraft && editor && !editor.isEmpty) {
+      // Keep this editor mounted: navigating to the new key remounts the page (App key={articleKey})
+      // and would drop this round's polish offer plus any late final correction still in flight.
+      await handleSave('voice', { navigateAfterCreate: false });
+    }
+  }, [stopVoice, isNewDraft, editor, handleSave]);
+
+  const openPublish = useCallback(() => {
+    if (!currentArticle) return;
+    setPublishTitle(title.trim() || currentArticle.title || i18n('Untitled'));
+    setPublishCategory(currentArticle.category || 'other');
+    setPublishError(null);
+    setPublishOpen(true);
+  }, [currentArticle, title]);
+
+  const handlePublish = useCallback(async () => {
+    if (!activeKey || isNewDraft || publishing) return;
+    setPublishing(true);
+    setPublishError(null);
+    try {
+      // Publish reads the stored body from object storage; flush unsaved editor changes first or
+      // the index would capture a stale draft.
+      if (dirty) {
+        const markdown = getMarkdown(editor);
+        if (markdown === null) {
+          setPublishError(i18n('Failed to read editor content'));
+          return;
+        }
+        // publishArticle reloads the list; skip the duplicate fetch inside updateArticle.
+        await updateArticle({ key: activeKey, content: markdown }, { reload: false });
+        setDirty(false);
+      }
+      const article = await publishArticle({
+        key: activeKey,
+        category: publishCategory,
+        title: publishTitle.trim() || undefined,
+      });
+      setTitle(article.title);
+      setPublishOpen(false);
+      setNoticeWarn(false);
+      setNotice(i18n('Published — indexing shortly'));
+    } catch (e) {
+      setPublishError(readErrorMessage(e, i18n('Publish failed')));
+    } finally {
+      setPublishing(false);
+    }
+  }, [activeKey, editor, dirty, isNewDraft, publishing, updateArticle, publishArticle, publishCategory, publishTitle]);
+
+  const handleReindex = useCallback(async () => {
+    if (!activeKey || isNewDraft || publishing) return;
+    setPublishing(true);
+    try {
+      // Reindex reads the stored body too; flush first or the notice would claim a rebuild that
+      // never saw the edits on screen.
+      if (dirty) {
+        const markdown = getMarkdown(editor);
+        if (markdown === null) {
+          setNoticeWarn(true);
+          setNotice(i18n('Failed to read editor content'));
+          return;
+        }
+        await updateArticle({ key: activeKey, content: markdown }, { reload: false });
+        setDirty(false);
+      }
+      await publishArticle({ key: activeKey });
+      setNoticeWarn(false);
+      setNotice(i18n('Reindex submitted'));
+    } catch (e) {
+      setNoticeWarn(true);
+      setNotice(readErrorMessage(e, i18n('Reindex failed')));
+    } finally {
+      setPublishing(false);
+    }
+  }, [activeKey, editor, dirty, isNewDraft, publishing, updateArticle, publishArticle]);
+
+  const handleUnpublish = useCallback(async () => {
+    if (!activeKey || unpublishing) return;
+    setUnpublishing(true);
+    try {
+      await unpublishArticle(activeKey);
+      setUnpublishOpen(false);
+      setNoticeWarn(false);
+      setNotice(i18n('Unpublished — removed from the search index'));
+    } catch (e) {
+      setUnpublishOpen(false);
+      setSaveError(readErrorMessage(e, i18n('Unpublish failed')));
+    } finally {
+      setUnpublishing(false);
+    }
+  }, [activeKey, unpublishing, unpublishArticle]);
 
   const handleAiApply = useCallback(async () => {
     if (!editor || !selectedModelId || !aiInstruction.trim() || aiRunning || readOnly) return;
@@ -377,6 +515,15 @@ export const ArticleEditorPage: React.FC = () => {
         >
           <ArrowLeft className="size-4" />
         </button>
+        <span
+          className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded ${
+            isPublished
+              ? 'bg-green-500/10 text-green-600 dark:text-green-400'
+              : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+          }`}
+        >
+          {isPublished ? i18n('Published') : i18n('Draft')}
+        </span>
         <input
           type="text"
           value={title}
@@ -391,14 +538,58 @@ export const ArticleEditorPage: React.FC = () => {
           className="flex-1 text-sm font-medium bg-transparent border-none focus:outline-none placeholder:text-muted-foreground/50"
         />
         <button
-          onClick={handleSave}
-          disabled={saving || !dirty || readOnly}
+          onClick={() => { void handleSave(); }}
+          disabled={saving || !dirty || readOnly || voice.phase !== 'idle'}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
         >
           {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
           {i18n('Save')}
         </button>
+        {currentArticle !== null && !readOnly && !isNewDraft && !isPublished && (
+          <button
+            onClick={openPublish}
+            disabled={voice.phase !== 'idle'}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs border border-primary/40 text-primary hover:bg-primary/10 transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Send className="size-3.5" />
+            {i18n('Publish')}
+          </button>
+        )}
+        {currentArticle !== null && !readOnly && !isNewDraft && isPublished && (
+          <>
+            <button
+              onClick={handleReindex}
+              disabled={publishing || voice.phase !== 'idle'}
+              title={i18n('Rebuild index')}
+              className="p-1.5 rounded-md border border-border text-muted-foreground hover:bg-muted transition-colors shrink-0 disabled:opacity-50"
+            >
+              {publishing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+            </button>
+            <button
+              onClick={() => setUnpublishOpen(true)}
+              title={i18n('Unpublish')}
+              className="p-1.5 rounded-md border border-border text-muted-foreground hover:bg-muted transition-colors shrink-0"
+            >
+              <Undo2 className="size-3.5" />
+            </button>
+          </>
+        )}
       </div>
+
+      {notice && (
+        <div
+          className={`flex items-center justify-between px-4 py-1.5 border-b text-xs shrink-0 ${
+            noticeWarn
+              ? 'border-amber-500/40 bg-amber-500/5 text-amber-600 dark:text-amber-400'
+              : 'border-border bg-muted/40 text-muted-foreground'
+          }`}
+        >
+          <span className="truncate">{notice}</span>
+          <button onClick={() => setNotice(null)} className="hover:opacity-70 shrink-0">
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )}
 
       {readOnly && (
         <div className="px-4 py-1.5 border-b border-border bg-muted/40 text-xs text-muted-foreground shrink-0">
@@ -410,6 +601,15 @@ export const ArticleEditorPage: React.FC = () => {
         <div className="flex items-center justify-between px-4 py-2 border-b border-destructive/50 bg-destructive/5 text-xs text-destructive shrink-0">
           <span className="truncate">{saveError}</span>
           <button onClick={() => setSaveError(null)} className="text-destructive hover:opacity-70 shrink-0">
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )}
+
+      {voiceNotice && (
+        <div className="flex items-center justify-between px-4 py-1.5 border-b border-destructive/40 bg-destructive/5 text-xs text-destructive shrink-0">
+          <span className="truncate">{voiceNotice}</span>
+          <button onClick={() => setVoiceNotice(null)} className="hover:opacity-70 shrink-0">
             <X className="size-3.5" />
           </button>
         </div>
@@ -470,6 +670,40 @@ export const ArticleEditorPage: React.FC = () => {
             <Sparkles className="size-3.5" />
             {i18n('AI Rewrite')}
           </button>
+          <div className="w-px h-5 bg-border mx-1" />
+          {voice.phase === 'recording' ? (
+            <>
+              <VoiceWaveform analyserRef={voice.analyserRef} />
+              <button
+                onClick={() => { void handleVoiceStop(); }}
+                title={i18n('Stop voice input')}
+                className="p-1.5 rounded bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+              >
+                <Square className="size-4" />
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => { void voice.start(); }}
+              disabled={!asrReady || voice.phase !== 'idle'}
+              title={!asrReady
+                ? i18n('Please configure an ASR model in Settings → Task Models')
+                : i18n('Start voice input')}
+              className={`${toolbarBtnClass(false)} disabled:opacity-40 disabled:cursor-not-allowed`}
+            >
+              {voice.phase === 'processing' ? <Loader2 className="size-4 animate-spin" /> : <Mic className="size-4" />}
+            </button>
+          )}
+          {voice.canRefine && voice.phase === 'idle' && (
+            <button
+              onClick={() => { void voice.refine(); }}
+              disabled={voice.refining}
+              title={i18n('Polish dictation')}
+              className={`${toolbarBtnClass(false)} disabled:opacity-40`}
+            >
+              {voice.refining ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+            </button>
+          )}
         </div>
       )}
 
@@ -607,6 +841,68 @@ export const ArticleEditorPage: React.FC = () => {
           navigate('/knowledge?tab=articles');
         }}
         onCancel={() => setLeaveConfirmOpen(false)}
+      />
+
+      <Dialog
+        open={publishOpen}
+        onClose={() => { if (!publishing) setPublishOpen(false); }}
+        title={i18n('Publish Article')}
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">{i18n('Title')}</label>
+            <input
+              type="text"
+              value={publishTitle}
+              onChange={(e) => setPublishTitle(e.target.value)}
+              className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">{i18n('Category')}</label>
+            <select
+              value={publishCategory}
+              onChange={(e) => setPublishCategory(e.target.value)}
+              className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+            >
+              {knowledgeCategories.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {i18n(c.labelKey)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {i18n('Published articles are indexed a few seconds later and are the only ones the assistant can retrieve.')}
+          </p>
+          {publishError && <div className="text-sm text-destructive">{publishError}</div>}
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              onClick={() => setPublishOpen(false)}
+              disabled={publishing}
+              className="px-4 py-2 rounded-md text-sm border border-border hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              {i18n('Cancel')}
+            </button>
+            <button
+              onClick={handlePublish}
+              disabled={publishing || !publishTitle.trim()}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-md text-sm bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              {publishing ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
+              {i18n('Publish')}
+            </button>
+          </div>
+        </div>
+      </Dialog>
+
+      <ConfirmDialog
+        open={unpublishOpen}
+        message={i18n('Unpublish this article? It will be removed from the search index and become a draft again.')}
+        confirmLabel={i18n('Unpublish')}
+        onConfirm={() => { void handleUnpublish(); }}
+        onCancel={() => setUnpublishOpen(false)}
       />
     </div>
   );

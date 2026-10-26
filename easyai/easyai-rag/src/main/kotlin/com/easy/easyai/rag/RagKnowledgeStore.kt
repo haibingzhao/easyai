@@ -321,20 +321,55 @@ internal class RagKnowledgeStore(
         val existing = client.readByExternalId(externalId, bizId) ?: return false
 
         val oldMeta = parseFrontmatter(splitFrontmatter(existing.content ?: "").first)
-        val source = key.substringBefore('/')
         val relativePath = key.substringAfter('/')
-        val ext = relativePath.substringAfterLast('.', "").lowercase()
-        val now = Instant.now()
 
         val resolvedTitle = title ?: oldMeta["title"] ?: extractTitle(content, relativePath)
         val resolvedDescription = oldMeta["description"] ?: extractDescription(content)
         val resolvedCategory = kcategory ?: oldMeta["kcategory"] ?: "other"
 
+        return upsertDoc(bizId, key, content, resolvedTitle, resolvedDescription, resolvedCategory)
+    }
+
+    override suspend fun index(
+        userId: String,
+        key: String,
+        content: String,
+        title: String?,
+        kcategory: String?
+    ): Boolean {
+        val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
+        val relativePath = key.substringAfter('/')
+
+        return upsertDoc(
+            bizId = bizId,
+            key = key,
+            content = content,
+            title = title?.takeIf { it.isNotBlank() } ?: extractTitle(content, relativePath),
+            description = extractDescription(content),
+            kcategory = kcategory?.takeIf { it.isNotBlank() } ?: "other"
+        )
+    }
+
+    /** Shared create-or-update write used by [update] and [index]. */
+    private suspend fun upsertDoc(
+        bizId: String,
+        key: String,
+        content: String,
+        title: String,
+        description: String,
+        kcategory: String
+    ): Boolean {
+        val source = key.substringBefore('/')
+        val relativePath = key.substringAfter('/')
+        val ext = relativePath.substringAfterLast('.', "").lowercase()
+        val now = Instant.now()
+        val externalId = RagConstants.externalIdOf(key)
+
         val wrappedContent = buildFileContent(
-            title = resolvedTitle,
-            description = resolvedDescription,
+            title = title,
+            description = description,
             source = source,
-            kcategory = resolvedCategory,
+            kcategory = kcategory,
             ext = ext,
             updatedMillis = now.toEpochMilli(),
             body = stripFrontmatter(content)
@@ -342,9 +377,9 @@ internal class RagKnowledgeStore(
 
         val metadata = buildMap<String, String> {
             put("source", source)
-            put("kcategory", resolvedCategory)
+            put("kcategory", kcategory)
             put("ext", ext)
-            put("title", resolvedTitle)
+            put("title", title)
         }
 
         val options = processingOptionsFor(ext) ?: RagProcessingOptions(skipKg = false)
@@ -359,10 +394,10 @@ internal class RagKnowledgeStore(
 
         return try {
             client.upsert(doc, bizId, awaitIndexing = false)
-            logger.debug("Knowledge entry updated: {}", externalId)
+            logger.debug("Knowledge entry written: {}", externalId)
             true
         } catch (e: RagException) {
-            logger.warn("Knowledge update failed for {}: {}", key, e.message)
+            logger.warn("Knowledge write failed for {}: {}", key, e.message)
             false
         }
     }
