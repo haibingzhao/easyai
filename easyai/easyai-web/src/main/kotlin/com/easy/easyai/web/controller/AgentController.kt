@@ -9,6 +9,7 @@ import com.easy.easyai.core.agent.AgentDefinition
 import com.easy.easyai.core.agent.AgentToolConfig
 import com.easy.easyai.core.agent.AgentType
 import com.easy.easyai.core.agent.AsyncAgentStore
+import com.easy.easyai.core.agent.McpBindingSpec
 import com.easy.easyai.core.agent.TargetType
 import com.easy.easyai.core.tool.ToolFactory
 import com.easy.easyai.web.model.ConfigValidationError
@@ -165,6 +166,12 @@ class AgentController(
     ): Mono<AgentDto> = mono {
         require((request.description?.length ?: 0) <= MAX_DESCRIPTION_LENGTH) {
             "Description must be $MAX_DESCRIPTION_LENGTH characters or less"
+        }
+        if (request.id in RESERVED_RUNTIME_AGENT_IDS) {
+            throw ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Agent ID '${request.id}' is reserved by the runtime. Please choose a different ID."
+            )
         }
         val owner = resolveWriteOwner(parseAssetScope(scope))
         // Check conflict with built-in system agent first (clearer error message)
@@ -600,50 +607,33 @@ class AgentController(
     private companion object {
         private const val MAX_DESCRIPTION_LENGTH = 200
 
+        /**
+         * Ids the runtime itself passes to the session manager for hidden sessions (watch runs and
+         * memory consolidation). A user agent with one of these ids would be looked up in its place
+         * and its definition would override the hidden run's tools and output contract.
+         */
+        private val RESERVED_RUNTIME_AGENT_IDS = setOf("watch-runner", "memory-consolidation")
+
         /** Clamp for [AgentCreateRequest.toolFoldKeepRecentRuns]; mirrors the frontend 0..5 range. */
         private const val MIN_TOOL_FOLD_KEEP_RECENT_RUNS = 0
         private const val MAX_TOOL_FOLD_KEEP_RECENT_RUNS = 5
         private val objectMapper = SharedObjectMapper.instance
 
-        /** Convert AgentToolConfig list (targetType=MCP) to McpBindingDto list.
-         *  Reads both legacy array format `["tool1"]` and new object format `{"toolNames":[...],"promptNames":[...]}`. */
+        /** Convert AgentToolConfig list (targetType=MCP) to McpBindingDto list. */
         fun List<AgentToolConfig>.toMcpBindingDtos(): List<McpBindingDto> = map { config ->
-            val (toolNames, promptNames) = config.metadata?.let { meta ->
-                try {
-                    val node = objectMapper.readTree(meta)
-                    if (node.isArray) {
-                        val names = mutableListOf<String>()
-                        for (el in node) { names.add(el.asString()) }
-                        names to emptyList()
-                    } else {
-                        val tools = mutableListOf<String>()
-                        val toolNode = node.get("toolNames")
-                        if (toolNode != null && toolNode.isArray) { for (el in toolNode) { tools.add(el.asString()) } }
-                        val prompts = mutableListOf<String>()
-                        val promptNode = node.get("promptNames")
-                        if (promptNode != null && promptNode.isArray) { for (el in promptNode) { prompts.add(el.asString()) } }
-                        tools to prompts
-                    }
-                } catch (_: Exception) {
-                    emptyList<String>() to emptyList<String>()
-                }
-            } ?: (emptyList<String>() to emptyList<String>())
-            McpBindingDto(serverName = config.targetName, toolNames = toolNames, promptNames = promptNames)
+            val spec = McpBindingSpec.parse(config.metadata)
+            McpBindingDto(serverName = config.targetName, toolNames = spec.toolNames, promptNames = spec.promptNames)
         }
 
         /** Convert McpBindingDto list to AgentToolConfig list.
          *  Always writes new object format; legacy array format is only read, never written. */
         fun List<McpBindingDto>.toAgentToolConfigs(agentId: String): List<AgentToolConfig> = map { binding ->
-            val metadataObj = mutableMapOf<String, List<String>>()
-            if (binding.toolNames.isNotEmpty()) metadataObj["toolNames"] = binding.toolNames
-            if (binding.promptNames.isNotEmpty()) metadataObj["promptNames"] = binding.promptNames
-            val metadata = metadataObj.takeIf { it.isNotEmpty() }?.let { objectMapper.writeValueAsString(it) }
             AgentToolConfig(
                 id = "${agentId}_mcp_${binding.serverName}",
                 agentId = agentId,
                 targetType = TargetType.MCP,
                 targetName = binding.serverName,
-                metadata = metadata
+                metadata = McpBindingSpec(binding.toolNames, binding.promptNames).toMetadata()
             )
         }
 

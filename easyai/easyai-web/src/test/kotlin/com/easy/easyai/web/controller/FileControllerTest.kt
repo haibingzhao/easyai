@@ -1,5 +1,6 @@
 package com.easy.easyai.web.controller
 
+import com.easy.easyai.auth.group.GroupClaims
 import com.easy.easyai.core.storage.ObjectContent
 import com.easy.easyai.core.storage.ObjectMeta
 import com.easy.easyai.core.storage.ObjectStorage
@@ -118,7 +119,7 @@ class FileControllerTest {
             controller.serveFile(reference).contextWrite(auth).awaitSingle()
         }
         assertEquals(HttpStatus.NOT_FOUND, error.statusCode)
-        coVerify(exactly = 0) { resolver.resolve(any<String>()) }
+        coVerify(exactly = 0) { resolver.resolve(any<Collection<String>>()) }
     }
 
     @Test
@@ -135,7 +136,7 @@ class FileControllerTest {
                 .contextWrite(auth).awaitSingle()
         }
         assertEquals(HttpStatus.BAD_REQUEST, unsupported.statusCode)
-        coVerify(exactly = 0) { resolver.resolve(any<String>()) }
+        coVerify(exactly = 0) { resolver.resolve(any<Collection<String>>()) }
     }
 
     @Test
@@ -143,7 +144,7 @@ class FileControllerTest {
         val resolver = mockk<ObjectStorageResolver>()
         val storage = mockk<ObjectStorage>()
         val bytes = byteArrayOf(1, 2, 3)
-        coEvery { resolver.resolve("alice") } returns storage
+        coEvery { resolver.resolve(setOf("alice", "system")) } returns storage
         coEvery { storage.put(any(), any(), any()) } answers { ObjectMeta(firstArg(), 3) }
         coEvery { storage.head(any()) } answers { ObjectMeta(firstArg(), 3) }
         coEvery { storage.get(any()) } answers { ObjectContent(ObjectMeta(firstArg(), 3), bytes) }
@@ -165,7 +166,7 @@ class FileControllerTest {
     fun `object upload failure is returned rather than saved locally`() = runTest {
         val resolver = mockk<ObjectStorageResolver>()
         val storage = mockk<ObjectStorage>()
-        coEvery { resolver.resolve("alice") } returns storage
+        coEvery { resolver.resolve(setOf("alice", "system")) } returns storage
         coEvery { storage.put(any(), any(), any()) } throws ObjectStorageException("offline")
         coEvery { store.isSessionOwnedByUser("session-1", "alice") } returns true
         val service = FileStorageService(root.toString(), resolver)
@@ -174,5 +175,36 @@ class FileControllerTest {
         }
         assertEquals(HttpStatus.BAD_GATEWAY, error.statusCode)
         assertFalse(Files.exists(service.imagesRoot.resolve("session-1")))
+    }
+
+    @Test
+    fun `group scoped uploads write through the chat boundary owners`() = runTest {
+        val resolver = mockk<ObjectStorageResolver>()
+        val groupStorage = mockk<ObjectStorage>()
+        val systemStorage = mockk<ObjectStorage>()
+        val groupOwners = setOf("alice", "grp_1", "system")
+        coEvery { resolver.resolve(groupOwners) } returns groupStorage
+        coEvery { resolver.resolve(listOf("alice")) } returns systemStorage
+        coEvery { groupStorage.put(any(), any(), any()) } answers { ObjectMeta(firstArg(), 3) }
+        coEvery { groupStorage.head(any()) } answers { ObjectMeta(firstArg(), 3) }
+        coEvery { groupStorage.presignedGetUrl(any(), any()) } returns "https://oss.example/group.png"
+        coEvery { store.isSessionOwnedByUser("session-1", "alice") } returns true
+        val service = FileStorageService(root.toString(), resolver)
+        val controller = FileController(service, store)
+        val groupAuth = ReactiveSecurityContextHolder.withAuthentication(
+            UsernamePasswordAuthenticationToken("alice", null, emptyList()).apply {
+                details = GroupClaims(
+                    owners = listOf("grp_1"), groupId = "fam-1", groupUserId = "grp_1", isGroupOwner = false
+                )
+            }
+        )
+
+        val result = controller.uploadFile(part(byteArrayOf(1, 2, 3)), "session-1")
+            .contextWrite(groupAuth).awaitSingle()
+
+        assertTrue(StoredFileReference.isStored(result.getValue("filePath")))
+        assertEquals("https://oss.example/group.png", result["url"])
+        coVerify(exactly = 1) { groupStorage.put(any(), any(), any()) }
+        coVerify(exactly = 0) { systemStorage.put(any(), any(), any()) }
     }
 }

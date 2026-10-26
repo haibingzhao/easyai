@@ -31,7 +31,8 @@ define "tags" as the vocabulary findings may use. mode="remind" just delivers "r
 "until" (YYYY-MM-DD) sets the last day; when it passes, a review decides whether to renew, complete
 or expire the watch. "sourceHints" records where to look (account, URL, table) and is shown to every
 run. "allowedTools" narrows the read-only tools; omit it for the agent's defaults, and name MCP tools
-explicitly if they are needed.
+explicitly if they are needed. The sandboxed `calc` tool is always available so a large result can be
+analyzed later; do not list it.
 
 Lifecycle: action="list" shows watches and their last finding; "update" edits or renews one (pass
 "watchId" plus the fields to change; a completed or expired watch needs a new schedule); "pause",

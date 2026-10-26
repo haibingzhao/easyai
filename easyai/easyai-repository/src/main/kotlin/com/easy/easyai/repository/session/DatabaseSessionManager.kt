@@ -288,7 +288,14 @@ class DatabaseSessionManager(
         // Look the agent up before touching any whitelist: the rows belong to the bucket the agent
         // itself lives in, which for a built-in or shared agent is not the caller's. An id with no
         // row falls back to the seeded system bucket, whose whitelist is the one that applies.
-        val agentDef = agentLookup?.invoke(agentId, callerOwners)
+        // A background run is the exception: it names its own internal agent id and brings the tools
+        // and instructions it wants, so a user-created agent that happens to share the id must not
+        // be substituted for those.
+        val agentDef = if (agentContext.systemKind == AgentContext.SYSTEM_KIND_ASYNC_TASK) {
+            null
+        } else {
+            agentLookup?.invoke(agentId, callerOwners)
+        }
         val agentOwnerId = agentDef?.userId ?: UserScope.SYSTEM_USER_ID
         // Build resolved context with actual projectPath for downstream tool creation. Sub-agents are the
         // one field resolved here: this is the fresh-chat path's only resolution point, and
@@ -463,9 +470,11 @@ class DatabaseSessionManager(
         // window/effort silently drop back to the model config mid-conversation.
         val config = applyStoredOverrides(storedConfig, sessionId)
 
-        // Restore session with correct agent configuration
+        // Restore session with correct agent configuration. A background run's transcript carries
+        // its internal agent id, which must not resolve to whatever agent row now uses that id.
         val restoredKind = project?.kind ?: ProjectKind.USER
-        val chatSession = if (agentId != null) {
+        val runtimeOwned = persistedSession.systemKind == AgentContext.SYSTEM_KIND_ASYNC_TASK
+        val chatSession = if (agentId != null && !runtimeOwned) {
             restoreSessionWithAgent(agentId, sessionId, config, projectPath, persistedSession.projectId, userId, restoredKind, owners)
         } else {
             restoreSessionWithConfig(sessionId, config, projectPath, persistedSession.projectId, userId, restoredKind, owners)

@@ -29,10 +29,13 @@ enum class ToolCapability {
     SKILL_LOADING,
 
     /**
-     * Tool only reads (web fetch/search, memory search/read/list, file read/grep/glob/ls) and never
-     * changes local or remote state. This is the allowlist for unattended watch runs: a tool without
-     * it could write files, run commands or pause for input, none of which a background run may do.
-     * MCP tools never declare it — a remote tool's side effects are not knowable here.
+     * Tool only reads (web fetch/search, memory search/read/list, file read/grep/glob/ls, sandboxed
+     * calc) and never changes local or remote state. This is the allowlist for unattended watch
+     * runs: a tool without it could write files, run commands or pause for input, none of which a
+     * background run may do. A read-only tool that accepts host file paths still has to bound them
+     * itself, because there is no user to approve a path in a background run.
+     * MCP tools never declare it — a remote tool's side effects are not knowable here. A watch can
+     * still use one when the user approved it by name, which accepts that unknown side effect.
      */
     READ_ONLY
 }

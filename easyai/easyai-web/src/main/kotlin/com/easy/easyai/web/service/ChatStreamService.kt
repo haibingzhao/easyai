@@ -9,11 +9,7 @@ import com.easy.easyai.auth.AuthConstants
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.compaction.CompactionTransformContextService
 import com.easy.easyai.compaction.ContextCompactionOrchestrator
-import com.easy.easyai.core.agent.AgentContext
-import com.easy.easyai.core.agent.AsyncAgentStore
-import com.easy.easyai.core.agent.ChatSession
-import com.easy.easyai.core.agent.SessionManager
-import com.easy.easyai.core.agent.TransformContextService
+import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.event.*
 import com.easy.easyai.core.goal.GoalStatusListener
 import com.easy.easyai.core.goal.GoalStatusNotifier
@@ -55,12 +51,12 @@ import org.springframework.web.server.ResponseStatusException
 import tools.jackson.databind.ObjectMapper
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.DateTimeException
+import java.time.ZoneId
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
-import java.time.DateTimeException
-import java.time.ZoneId
 
 /**
  * Coroutine-based service that bridges EasyAI Agent with SSE streaming.
@@ -267,7 +263,7 @@ class ChatStreamService(
 
             // Launch detached pump to process the steering message
             backgroundScope.launch {
-                val handle = executionService?.beginExecution(sessionId, userId, session)
+                val handle = executionService.beginExecution(sessionId, userId, session)
                 var endReason = "normal"
                 try {
                     stream.asFlow().collect { event ->
@@ -286,7 +282,7 @@ class ChatStreamService(
                     logger.error("Error in auto-resume for session {}", sessionId, e)
                 } finally {
                     sessionTaps.remove(sessionId)
-                    handle?.let { executionService.endExecution(it, endReason) }
+                    handle.let { executionService.endExecution(it, endReason) }
                     logger.debug("Auto-resume terminated for session {}", sessionId)
                 }
             }
@@ -500,17 +496,18 @@ class ChatStreamService(
         // fails fast without leaving partial state.
         // Attachments have no inline position — anchor them at the end of the cleaned text.
         val projectDir = session.agentContext.projectPath?.toAbsolutePath()?.normalize()
-        val contentBlocks = AttachmentProcessor.buildContentBlocks(content, projectDir, userId, fileStorageService).toMutableList()
+        val owners = session.agentContext.effectiveOwners
+        val contentBlocks = AttachmentProcessor.buildContentBlocks(content, projectDir, userId, owners, fileStorageService).toMutableList()
         if (fileStorageService != null) {
             // New path: process all attachments via FileRefContent (no base64 in DB).
             // Skip attachments already covered by an inline ref so the same image is not sent twice.
             val inlinePaths = contentBlocks.filterIsInstance<FileRefContent>().mapTo(mutableSetOf()) { it.filePath }
-            val pendingAttachments = attachments?.filterNot { it.filePath != null && it.filePath in inlinePaths }
             val textEnd = contentBlocks.filterIsInstance<TextContent>().firstOrNull()?.text?.length ?: 0
+            val pendingAttachments = attachments?.filterNot { it.filePath != null && it.filePath in inlinePaths }
             contentBlocks.addAll(
                 AttachmentProcessor.processAttachments(
                     pendingAttachments, fileStorageService, sessionId,
-                    anchorOffset = textEnd, projectDir = projectDir, userId = userId
+                    anchorOffset = textEnd, projectDir = projectDir, userId = userId, owners = owners
                 )
             )
         } else {
@@ -567,7 +564,7 @@ class ChatStreamService(
         }
         val blocks = AttachmentProcessor.buildContentBlocks(
             newContent, session.agentContext.projectPath,
-            session.agentContext.userId ?: "system", fileStorageService
+            session.agentContext.userId ?: "system", session.agentContext.effectiveOwners, fileStorageService
         ).toMutableList()
         blocks.addAll(previous.content.filter { it !is TextContent })
         val replacement = prepareCommandMessage(
@@ -633,7 +630,7 @@ class ChatStreamService(
                 session.resume(messages = messages)
             } else {
                 val content = AttachmentProcessor.buildContentBlocks(
-                    message, session.agentContext.projectPath, userId, fileStorageService
+                    message, session.agentContext.projectPath, userId, session.agentContext.effectiveOwners, fileStorageService
                 )
                 val prepared = prepareCommandMessage(message, UserMessage(content = content), session)
                 sessionManager.saveSessionMessages(session.agentContext, listOf(prepared))
@@ -680,7 +677,8 @@ class ChatStreamService(
         // anchored at their sentence position; attachments have no inline position and are
         // anchored at the end of the cleaned text.
         val chatUserId = agentContext.userId ?: "system"
-        val contentBlocks = AttachmentProcessor.buildContentBlocks(messageText, projectDir, chatUserId, fileStorageService).toMutableList()
+        val owners = agentContext.effectiveOwners
+        val contentBlocks = AttachmentProcessor.buildContentBlocks(messageText, projectDir, chatUserId, owners, fileStorageService).toMutableList()
         if (fileStorageService != null) {
             // New path: attachments → FileRefContent/FolderRefContent (no base64 in DB).
             // Skip attachments already covered by an inline ref so the same image is not sent twice.
@@ -691,7 +689,7 @@ class ChatStreamService(
                 contentBlocks.addAll(
                     AttachmentProcessor.processAttachments(
                         pendingAttachments, fileStorageService, session.id,
-                        anchorOffset = textEnd, projectDir = projectDir, userId = chatUserId
+                        anchorOffset = textEnd, projectDir = projectDir, userId = chatUserId, owners = owners
                     )
                 )
             } catch (e: AttachmentValidationException) {

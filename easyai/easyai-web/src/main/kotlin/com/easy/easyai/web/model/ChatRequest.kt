@@ -64,7 +64,8 @@ data class ChatRequest(
     /**
      * IANA time zone of the browser (e.g. `Asia/Shanghai`). Background work created from this turn —
      * watches — resolves "tomorrow 9am" against it instead of the server's default. Null falls back
-     * to the agent's previous value or the server zone, and the watch result warns when that happens.
+     * to the server zone; a resumed turn does not inherit the zone of the request that opened the
+     * session, and the watch result warns when the fallback was used.
      */
     val timezone: String? = null
 )

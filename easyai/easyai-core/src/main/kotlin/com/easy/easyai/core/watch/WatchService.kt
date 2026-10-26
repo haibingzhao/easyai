@@ -1,5 +1,6 @@
 package com.easy.easyai.core.watch
 
+import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.task.AsyncTask
 import com.easy.easyai.core.task.AsyncTaskStatus
 import com.easy.easyai.core.task.AsyncTaskStore
@@ -47,11 +48,6 @@ class WatchService(
     private val logger = LoggerFactory.getLogger(javaClass)
 
     suspend fun create(origin: WatchOrigin, input: WatchCreateInput): WatchCreateResult {
-        if (origin.modelConfigId.isNullOrBlank()) {
-            throw WatchException(
-                "A watch needs a saved model configuration; select a model in the composer and retry"
-            )
-        }
         val now = clock()
         val warnings = mutableListOf<String>()
         val (zone, zoneWarnings) = resolveZone(input.timezone, origin.timeZone)
@@ -59,6 +55,12 @@ class WatchService(
         val schedule = resolveSchedule(input.schedule, zone, now)
 
         val mode = input.mode
+        // A reminder never calls a model; only a check (and its expiry review) needs one.
+        if (mode != WatchMode.REMIND && origin.modelConfigId.isNullOrBlank()) {
+            throw WatchException(
+                "A watch needs a saved model configuration; select a model in the composer and retry"
+            )
+        }
         val reminder = input.reminder?.trim()?.takeIf { it.isNotEmpty() }
         val condition = input.condition.trim().ifEmpty {
             if (mode == WatchMode.REMIND) reminder.orEmpty() else ""
@@ -117,6 +119,14 @@ class WatchService(
         }
 
         val nowMs = now.toEpochMilli()
+        // A project-less chat runs in a temporary workspace that the orphan sweep releases. Keeping
+        // that path would point every later run at a directory that no longer exists, so the watch
+        // starts without it and the caller is told to use durable sources.
+        val retainedProjectPath = origin.projectPath?.takeIf { origin.projectKind != ProjectKind.TEMP }
+        if (origin.projectKind == ProjectKind.TEMP && origin.projectPath != null) {
+            warnings += "This chat's workspace is temporary and is not kept for the life of the watch; " +
+                "use URLs or other durable sources for evidence."
+        }
         val watch = Watch(
             id = UUID.randomUUID().toString(),
             userId = origin.userId,
@@ -138,7 +148,7 @@ class WatchService(
             sourceAgentId = origin.sourceAgentId,
             modelConfigId = origin.modelConfigId,
             projectId = origin.projectId,
-            projectPath = origin.projectPath,
+            projectPath = retainedProjectPath,
             projectKind = origin.projectKind,
             owners = origin.owners,
             originSessionId = origin.originSessionId,
@@ -161,8 +171,9 @@ class WatchService(
      * Apply a partial edit.
      *
      * An ACTIVE or PAUSED watch keeps its status; a COMPLETED/EXPIRED one is renewed by a new future
-     * schedule and goes back to ACTIVE. Every edit bumps [Watch.version], which is what lets an
-     * in-flight run tell that the definition it started with is gone.
+     * schedule and goes back to ACTIVE. A changed definition bumps [Watch.version], which is what lets
+     * an in-flight run tell that the definition it started with is gone; a save that changes nothing
+     * keeps the version so an open edit dialog cannot cancel a run for free.
      */
     suspend fun update(userId: String, watchId: String, input: WatchUpdateInput): WatchUpdateResult {
         val watch = requireOwned(userId, watchId)
@@ -179,7 +190,10 @@ class WatchService(
         val warnings = mutableListOf<String>()
 
         val mode = input.mode ?: watch.mode
-        val reminder = input.reminder?.let { it.trim().takeIf(String::isNotEmpty) } ?: watch.reminderText
+        val reminder = when {
+            input.clearReminder -> null
+            else -> input.reminder?.let { it.trim().takeIf(String::isNotEmpty) } ?: watch.reminderText
+        }
         val condition = (input.condition?.trim() ?: watch.condition).ifEmpty {
             if (mode == WatchMode.REMIND) reminder.orEmpty() else ""
         }
@@ -212,7 +226,7 @@ class WatchService(
             else -> watch.schedule
         }
         val scheduleMoved = input.schedule != null || zoneChanged
-        val nextDue = if (scheduleMoved) WatchScheduleCalculator.firstDue(schedule, now) else watch.nextDueAt
+        var nextDue = if (scheduleMoved) WatchScheduleCalculator.firstDue(schedule, now) else watch.nextDueAt
 
         var untilAt = when {
             input.clearUntil -> null
@@ -220,17 +234,13 @@ class WatchService(
             else -> watch.untilAt
         }
         if (renewing) {
-            // Carrying a dead deadline into the new lifecycle would expire the watch at once.
-            if (!input.clearUntil && input.until == null && untilAt != null && !untilAt.isAfter(nextDue)) {
-                warnings += "The previous until date had already passed, so it was cleared."
+            // Carrying a dead deadline into the new lifecycle would expire the watch at once. This
+            // covers a date the caller supplied too: the edit page prefills the old until, and
+            // refusing the save for it reads as "save does nothing".
+            if (!input.clearUntil && untilAt != null && !untilAt.isAfter(nextDue)) {
+                warnings += "The until date was before the new first run, so it was cleared."
                 untilAt = null
             }
-        }
-        if (untilAt != null && untilAt.isBefore(nextDue)) {
-            throw WatchException(
-                "'until' must be after the next run at ${format(nextDue, zone)}; " +
-                    "use a later date, or clear it"
-            )
         }
 
         val untilChanged = when {
@@ -239,6 +249,21 @@ class WatchService(
             else -> false
         }
         val deadlineMoved = untilChanged || scheduleMoved
+        if (untilChanged && watch.pendingAction == WatchPendingAction.EXPIRY_REVIEW &&
+            schedule.kind != WatchScheduleKind.AT
+        ) {
+            // Ending a pending expiry review drops its short guard from next_due_at; the recurrence
+            // owns the next run again. A one-shot keeps the guard: its anchor is already in the past
+            // and rescheduling to it would fire immediately.
+            nextDue = WatchScheduleCalculator.nextAfter(schedule, now)
+        }
+        if (untilAt != null && untilAt.isBefore(nextDue)) {
+            throw WatchException(
+                "'until' must be after the next run at ${format(nextDue, zone)}; " +
+                    "use a later date, or clear it"
+            )
+        }
+
         val pendingAction = if (watch.pendingAction == WatchPendingAction.EXPIRY_REVIEW && !deadlineMoved) {
             WatchPendingAction.EXPIRY_REVIEW
         } else {
@@ -273,6 +298,12 @@ class WatchService(
             statusReason = if (renewing) null else watch.statusReason,
             updatedAt = now.toEpochMilli()
         )
+        if (updated.copy(version = watch.version, updatedAt = watch.updatedAt) == watch) {
+            // Nothing to save: keeping the version means an unchanged dialog cannot invalidate a run
+            // that is executing right now.
+            logger.debug("Watch edit changed nothing: id={}, user={}", watchId, userId)
+            return WatchUpdateResult(watch = watch, warnings = warnings)
+        }
         val saved = store.updateDefinition(updated, watch.version, watch.status)
             ?: throw WatchConflictException(
                 "This watch changed while the edit was being applied; reload it and try again"
@@ -307,8 +338,9 @@ class WatchService(
         if (watch.status != WatchStatus.PAUSED) {
             throw WatchException("Only a paused watch can be resumed (this one is ${watch.status.name.lowercase()})")
         }
-        return store.setStatus(watchId, WatchStatus.ACTIVE, null, expectedStatus = watch.status)
-            ?: throw WatchConflictException("This watch changed while it was being resumed; reload and try again")
+        return store.setStatus(
+            watchId, WatchStatus.ACTIVE, null, expectedStatus = watch.status, clearFailures = true
+        ) ?: throw WatchConflictException("This watch changed while it was being resumed; reload and try again")
     }
 
     suspend fun cancel(userId: String, watchId: String): Watch {

@@ -34,7 +34,7 @@ class WatchTaskHandlerTest {
         properties = properties,
         sessionManager = model?.sessionManager,
         agentService = model?.agentService,
-        modelConfigService = model?.modelConfigService,
+        modelConfigStore = model?.modelConfigStore,
         notifier = notifier,
         clock = { now }
     )
@@ -282,7 +282,7 @@ class WatchTaskHandlerTest {
         fun `a deleted model configuration is booked as a failure with backoff`() = runTest {
             val store = RecordingWatchStore(testWatch())
             val model = WatchModelStub(checkAnswer())
-            coEvery { model.modelConfigService.getUserConfiguration(any<String>(), any<Collection<String>>()) } returns null
+            coEvery { model.modelConfigStore.getConfig(any<String>(), any<Collection<String>>()) } returns null
             val outcome = handler(store, model = model).execute(watchTask(store.current))
             val failure = assertIs<TaskOutcome.Failure>(outcome)
             assertTrue(failure.error.contains("deleted"))
@@ -297,7 +297,7 @@ class WatchTaskHandlerTest {
             val store = RecordingWatchStore(testWatch(consecutiveFailures = 2))
             val notifier = RecordingNotifier()
             val model = WatchModelStub(checkAnswer())
-            coEvery { model.modelConfigService.getUserConfiguration(any<String>(), any<Collection<String>>()) } returns null
+            coEvery { model.modelConfigStore.getConfig(any<String>(), any<Collection<String>>()) } returns null
             handler(store, notifier, model).execute(watchTask(store.current))
             assertEquals(WatchStatus.PAUSED, store.failureStatus)
             assertEquals(3, store.failureCount)
@@ -330,7 +330,7 @@ class WatchTaskHandlerTest {
             )
             val model = WatchModelStub(checkAnswer())
             coEvery {
-                model.modelConfigService.getUserConfiguration(any<String>(), any<Collection<String>>())
+                model.modelConfigStore.getConfig(any<String>(), any<Collection<String>>())
             } returns null
 
             handler(store, model = model)
@@ -346,7 +346,7 @@ class WatchTaskHandlerTest {
             val scheduled = store.current.nextDueAt
             val model = WatchModelStub(checkAnswer())
             coEvery {
-                model.modelConfigService.getUserConfiguration(any<String>(), any<Collection<String>>())
+                model.modelConfigStore.getConfig(any<String>(), any<Collection<String>>())
             } returns null
 
             handler(store, model = model)

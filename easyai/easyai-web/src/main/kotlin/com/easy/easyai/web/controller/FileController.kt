@@ -3,6 +3,7 @@ package com.easy.easyai.web.controller
 import com.easy.easyai.core.storage.ObjectStorageException
 import com.easy.easyai.core.storage.StoredFileReference
 import com.easy.easyai.repository.session.AsyncSessionStore
+import com.easy.easyai.web.security.currentOwners
 import com.easy.easyai.web.security.getCurrentUserId
 import com.easy.easyai.web.service.FileStorageService
 import com.easy.easyai.web.util.AttachmentProcessor
@@ -46,6 +47,7 @@ class FileController(
         @RequestParam("sessionId") sessionId: String
     ): Mono<Map<String, String>> = mono {
         val userId = getCurrentUserId()
+        val owners = currentOwners()
         verifyOwnership(sessionId, userId)
         val name = filePart.filename()
         val extension = name.substringAfterLast('.', "bin").lowercase()
@@ -71,7 +73,7 @@ class FileController(
         }
         if (bytes.isEmpty()) throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Empty file")
         val filePath = try {
-            fileStorageService.saveImage(sessionId, bytes, extension, userId, mimeType)
+            fileStorageService.saveImage(sessionId, bytes, extension, userId, owners, mimeType)
         } catch (e: IllegalArgumentException) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message, e)
         } catch (e: ObjectStorageException) {
@@ -79,7 +81,7 @@ class FileController(
         }
         val url = if (isImage) {
             try {
-                fileStorageService.resolveImageUrl(filePath, userId) ?: fileStorageService.proxyUrl(filePath)
+                fileStorageService.resolveImageUrl(filePath, userId, owners) ?: fileStorageService.proxyUrl(filePath)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -106,7 +108,7 @@ class FileController(
         verifyOwnership(sessionId, userId)
         val resource: Resource = if (StoredFileReference.isStored(path)) {
             val bytes = try {
-                fileStorageService.readStoredImage(path, userId)
+                fileStorageService.readStoredImage(path, userId, currentOwners())
             } catch (e: ObjectStorageException) {
                 throw ResponseStatusException(HttpStatus.BAD_GATEWAY, "Image storage unavailable", e)
             } catch (e: IllegalArgumentException) {

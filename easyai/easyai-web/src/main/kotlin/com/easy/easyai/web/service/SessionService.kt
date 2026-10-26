@@ -141,7 +141,7 @@ class SessionService(
             createdAt = session.createdAt.toEpochMilli(),
             updatedAt = session.updatedAt.toEpochMilli(),
             messageCount = session.messages.size,
-            messages = toMessageSnapshots(messagesWithTimestamps, userId),
+            messages = toMessageSnapshots(messagesWithTimestamps, userId, readOwners),
             pendingPermission = pendingPermission,
             endReason = endReason?.takeIf { it != "normal" },
             lastAgentId = lastConfig?.agentId,
@@ -214,8 +214,12 @@ class SessionService(
     suspend fun getSessionMessagesAfter(
         id: String,
         afterTimestamp: Long,
-        userId: String = "system"
+        userId: String = "system",
+        owners: Collection<String>
     ): SessionMessagesAfterResponse? {
+        // Same fallback as getSessionDetail: an empty visibility set still sees the caller's
+        // own rows plus the shared system layer.
+        val readOwners = owners.ifEmpty { setOf(userId, AuthConstants.SYSTEM_USER_ID) }
         // Lightweight existence check + contentUpdatedAt in one query (avoids loading all messages)
         val contentUpdatedAt = sessionStore.findContentUpdatedAt(id, userId) ?: return null
 
@@ -231,7 +235,7 @@ class SessionService(
 
         return SessionMessagesAfterResponse(
             sessionId = id,
-            messages = toMessageSnapshots(messagesWithTimestamps, userId),
+            messages = toMessageSnapshots(messagesWithTimestamps, userId, readOwners),
             compactionOccurredAfter = compactionAt != null,
             contentUpdatedAt = contentUpdatedAt,
             streaming = sessionStatus == "streaming",
@@ -711,7 +715,11 @@ class SessionService(
         return if (text.isNullOrBlank()) null else text.take(50)
     }
 
-    private suspend fun toMessageSnapshots(messages: List<MessageWithTimestamp>, userId: String): List<MessageSnapshot> {
+    private suspend fun toMessageSnapshots(
+        messages: List<MessageWithTimestamp>,
+        userId: String,
+        owners: Collection<String>
+    ): List<MessageSnapshot> {
         val urls = mutableMapOf<String, String?>()
         return messages.map { message ->
             val fileUrls = mutableMapOf<String, String>()
@@ -720,7 +728,7 @@ class SessionService(
                     if (!ref.mimeType.startsWith("image/")) continue
                     if (!urls.containsKey(ref.filePath)) {
                         urls[ref.filePath] = try {
-                            fileStorageService.resolveImageUrl(ref.filePath, userId)
+                            fileStorageService.resolveImageUrl(ref.filePath, userId, owners)
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {

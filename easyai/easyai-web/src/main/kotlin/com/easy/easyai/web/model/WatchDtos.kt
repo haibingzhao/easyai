@@ -100,6 +100,7 @@ data class WatchUpdateRequest(
     val condition: String? = null,
     val mode: String? = null,
     val reminder: String? = null,
+    val clearReminder: Boolean? = null,
     val timezone: String? = null,
     val until: String? = null,
     val clearUntil: Boolean? = null,
@@ -108,6 +109,7 @@ data class WatchUpdateRequest(
     val notifyPolicy: String? = null,
     val notifyTags: List<String>? = null,
     val sourceHints: String? = null,
+    val clearSourceHints: Boolean? = null,
     val schedule: WatchScheduleRequest? = null
 )
 

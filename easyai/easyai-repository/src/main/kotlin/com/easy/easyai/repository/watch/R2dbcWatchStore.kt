@@ -218,10 +218,14 @@ class R2dbcWatchStore(
         taskId: String?,
         at: Long
     ): Watch? = suspendTransaction(db) {
+        // Same race guard as applyFinding: a failure belongs to the run that last claimed the row, so
+        // a superseded task cannot overwrite the state of a newer one.
+        val claimedByCaller = if (taskId == null) Op.TRUE else (WatchTable.lastTaskId eq taskId)
         val updated = WatchTable.update(where = {
             (WatchTable.id eq id) and
                 (WatchTable.version eq expectedVersion) and
-                (WatchTable.status eq expectedStatus.name)
+                (WatchTable.status eq expectedStatus.name) and
+                claimedByCaller
         }) {
             it[WatchTable.status] = status.name
             it[WatchTable.nextDueAt] = nextDueAt
@@ -319,7 +323,8 @@ class R2dbcWatchStore(
         statusReason: String?,
         pendingAction: WatchPendingAction?,
         nextDueAt: Long?,
-        expectedStatus: WatchStatus?
+        expectedStatus: WatchStatus?,
+        clearFailures: Boolean
     ): Watch? = suspendTransaction(db) {
         val condition = if (expectedStatus == null) {
             WatchTable.id eq id
@@ -331,6 +336,10 @@ class R2dbcWatchStore(
             it[WatchTable.statusReason] = statusReason
             if (pendingAction != null) it[WatchTable.pendingAction] = pendingAction.name
             if (nextDueAt != null) it[WatchTable.nextDueAt] = nextDueAt
+            if (clearFailures) {
+                it[consecutiveFailures] = 0
+                it[lastError] = null
+            }
             it[updatedAt] = System.currentTimeMillis()
         }
         if (updated == 0) null else readRow(id)

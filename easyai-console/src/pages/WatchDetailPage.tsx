@@ -103,7 +103,12 @@ function editStateOf(watch: Watch): EditState {
     weekday: watch.schedule.weekday ?? 'MONDAY',
     dayOfMonth: String(watch.schedule.dayOfMonth ?? 1),
     timezone: watch.schedule.timezone,
-    until: watch.untilAt ? zonedParts(watch.untilAt, watch.schedule.timezone).date : '',
+    // A terminal watch is being renewed, and that starts a new lifecycle: a prefilled past deadline
+    // would be cleared by the server anyway, so leave the field empty for the new one.
+    until:
+      !isWatchTerminal(watch.status) && watch.untilAt
+        ? zonedParts(watch.untilAt, watch.schedule.timezone).date
+        : '',
     tags: watch.tags.map((tag) => ({ ...tag })),
     completeOnMet: watch.completeOnMet,
     notifyPolicy: watch.notifyPolicy,
@@ -164,7 +169,7 @@ const FindingEntry: React.FC<{
     <div className="border border-border rounded-lg bg-card p-3">
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
         <div className="flex items-center gap-2">
-          <span>{new Date(task.createdAt).toLocaleString()}</span>
+          <span>{formatInZone(task.createdAt, timeZone)}</span>
           <span className="rounded bg-muted px-1.5 py-0.5">{i18n(TASK_STATUS[task.status])}</span>
           {parsed?.stale && (
             <span className="text-amber-600 dark:text-amber-400">{i18n('Stale result')}</span>
@@ -346,6 +351,8 @@ export const WatchDetailPage: React.FC = () => {
       condition: edit.condition.trim(),
       mode: edit.mode,
       reminder: edit.mode === 'remind' ? edit.reminder.trim() : undefined,
+      // A check watch never shows a reminder, so switching modes drops the stale one.
+      clearReminder: edit.mode === 'check' ? true : undefined,
       timezone: edit.timezone.trim(),
       tags: edit.tags
         .map((tag) => ({
@@ -373,7 +380,10 @@ export const WatchDetailPage: React.FC = () => {
       payload.schedule = schedule;
     }
     const saved = await updateWatch(watch.id, payload);
-    if (!saved) return;
+    if (!saved) {
+      setFormError(useWatchStore.getState().error ?? i18n('Save failed'));
+      return;
+    }
     setEditOpen(false);
     setNotice(i18n('Saved'));
     refresh(true);
@@ -400,7 +410,7 @@ export const WatchDetailPage: React.FC = () => {
     if (await remove(watch.id)) navigate('/watches');
   };
 
-  if (detailLoading && !watch) {
+  if (!watch && (detailLoading || !error)) {
     return <div className="p-6 text-sm text-muted-foreground">{i18n('Loading...')}</div>;
   }
 
@@ -440,7 +450,13 @@ export const WatchDetailPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={doRunNow}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted"
+                  disabled={watch.pendingAction !== 'check'}
+                  title={
+                    watch.pendingAction === 'check'
+                      ? undefined
+                      : i18n('An expiry review is pending; wait for it or edit the schedule')
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <PlayCircle className="size-4" />
                   {i18n('Check now')}
@@ -465,14 +481,16 @@ export const WatchDetailPage: React.FC = () => {
                 {i18n('Resume')}
               </button>
             )}
-            <button
-              type="button"
-              onClick={openEdit}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted"
-            >
-              <Pencil className="size-4" />
-              {i18n('Edit')}
-            </button>
+            {watch.status !== 'cancelled' && (
+              <button
+                type="button"
+                onClick={openEdit}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted"
+              >
+                <Pencil className="size-4" />
+                {i18n('Edit')}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => refresh()}
@@ -538,6 +556,11 @@ export const WatchDetailPage: React.FC = () => {
         {isWatchTerminal(watch.status) && (
           <div className="mt-3 rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
             {i18n('This watch has ended. Supplying a new schedule renews it.')}
+          </div>
+        )}
+        {watch.statusReason && (
+          <div className="mt-3 rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+            {i18n('Status reason')}: {watch.statusReason}
           </div>
         )}
         {watch.consecutiveFailures > 0 && (

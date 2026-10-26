@@ -353,6 +353,7 @@ class R2dbcWatchStoreTest {
             val store = store()
             val original = watch()
             store.create(original)
+            store.markRunStarted(original.id, "task-1", 1)
             val updated = store.recordFailure(
                 id = original.id,
                 expectedVersion = original.version,
@@ -369,6 +370,29 @@ class R2dbcWatchStoreTest {
             assertEquals(3, updated.consecutiveFailures)
             assertEquals("model unavailable", updated.lastError)
             assertEquals(123, updated.nextDueAt.toEpochMilli())
+        }
+
+        @Test
+        fun `a failure from a superseded task is refused`() = runTest {
+            val store = store()
+            val original = watch()
+            store.create(original)
+            store.markRunStarted(original.id, "task-2", 2)
+
+            assertNull(
+                store.recordFailure(
+                    id = original.id,
+                    expectedVersion = original.version,
+                    expectedStatus = WatchStatus.ACTIVE,
+                    error = "model unavailable",
+                    nextDueAt = 123,
+                    status = WatchStatus.PAUSED,
+                    consecutiveFailures = 3,
+                    statusReason = "Paused after 3 consecutive failures",
+                    taskId = "task-1",
+                    at = 99
+                )
+            )
         }
 
         @Test
@@ -464,6 +488,24 @@ class R2dbcWatchStoreTest {
             assertEquals(WatchStatus.ACTIVE, store.setStatus(original.id, WatchStatus.ACTIVE, null)!!.status)
             assertTrue(store.delete(original.id))
             assertNull(store.findById(original.id))
+        }
+
+        @Test
+        fun `a resume can clear the failure streak`() = runTest {
+            val store = store()
+            val original = watch(status = WatchStatus.PAUSED)
+            store.create(original)
+
+            val resumed = store.setStatus(
+                original.id,
+                WatchStatus.ACTIVE,
+                null,
+                expectedStatus = WatchStatus.PAUSED,
+                clearFailures = true
+            )!!
+
+            assertEquals(0, resumed.consecutiveFailures)
+            assertNull(resumed.lastError)
         }
 
         @Test

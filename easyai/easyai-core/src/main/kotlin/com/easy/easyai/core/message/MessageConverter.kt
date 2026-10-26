@@ -6,6 +6,8 @@ import com.easy.easyai.api.llm.MediaSource
 import com.easy.easyai.api.llm.Message
 import com.easy.easyai.api.llm.ToolResponseMessage
 import com.easy.easyai.core.model.*
+import com.easy.easyai.core.storage.ObjectMeta
+import com.easy.easyai.core.storage.ObjectStorage
 import com.easy.easyai.core.storage.ObjectStorageException
 import com.easy.easyai.core.storage.ObjectStorageResolver
 import com.easy.easyai.core.storage.StoredFileReference
@@ -361,9 +363,9 @@ class DefaultMessageConverter(
     private suspend fun resolveStoredImage(ref: FileRefContent, userId: String, owners: Collection<String>): StoredImage {
         val stored = StoredFileReference.parse(ref.filePath, userId)
         require(ref.mimeType in STORED_IMAGE_MIME_TYPES) { "Unsupported stored chat image MIME type" }
-        val storage = objectStorageResolver?.resolve(owners)
+        val ownerStorage = objectStorageResolver?.resolve(owners)
             ?: throw ObjectStorageException("Object storage is unavailable for the stored chat image")
-        val meta = storage.head(stored.key)
+        val (storage, meta) = locateStoredImage(ownerStorage, stored.key, userId)
             ?: throw ObjectStorageException("Stored chat image does not exist: ${stored.key}")
         validateStoredImageSize(meta.size)
         val signedUri = try {
@@ -383,6 +385,30 @@ class DefaultMessageConverter(
         validateStoredImageSize(content.meta.size)
         validateStoredImageSize(content.bytes.size.toLong())
         return StoredImage(Media(ref.mimeType, MediaSource.Bytes(content.bytes)), null)
+    }
+
+    /**
+     * The storage that actually holds [key], preferring the owner-scoped chain.
+     *
+     * A stored reference carries only a key, not its bucket. Images uploaded before chat uploads
+     * honoured the chat boundary's owners can sit in the storage the author alone resolves to
+     * (self -> system) while the owner-scoped storage resolves to a group bucket; probing the
+     * author's resolution keeps those older references readable.
+     */
+    private suspend fun locateStoredImage(
+        primary: ObjectStorage,
+        key: String,
+        authorId: String
+    ): Pair<ObjectStorage, ObjectMeta>? {
+        primary.head(key)?.let { return primary to it }
+        val legacy = objectStorageResolver?.resolve(listOf(authorId)) ?: return null
+        if (legacy === primary) return null
+        val meta = legacy.head(key) ?: return null
+        logger.warn(
+            "Stored chat image {} is missing from the owner-scoped storage; reading it from the author's chain (legacy upload)",
+            key
+        )
+        return legacy to meta
     }
 
     private fun validateStoredImageSize(size: Long) {

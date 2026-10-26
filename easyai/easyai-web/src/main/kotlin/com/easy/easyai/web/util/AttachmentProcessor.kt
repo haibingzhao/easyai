@@ -96,6 +96,7 @@ object AttachmentProcessor {
      * @param anchorOffset displayOffset assigned to the produced blocks (end of cleaned text).
      * @param projectDir project directory for directory-attachment validation; a directory
      *   attachment outside it is rejected with the same fail-closed rule as inline folder refs.
+     * @param owners the chat boundary's storage visibility set (self -> group -> system).
      * @return List of [FileRefContent] / [FolderRefContent] blocks.
      * @throws AttachmentValidationException when validation fails.
      */
@@ -105,7 +106,8 @@ object AttachmentProcessor {
         sessionId: String,
         anchorOffset: Int,
         projectDir: Path?,
-        userId: String = "system"
+        userId: String = "system",
+        owners: Collection<String>
     ): List<ContentBlock> {
         if (attachments.isNullOrEmpty()) return emptyList()
 
@@ -121,7 +123,7 @@ object AttachmentProcessor {
                     if (att.mimeType !in SUPPORTED_IMAGE_MIMES) {
                         throw AttachmentValidationException("Unsupported stored image type '${att.mimeType}'")
                     }
-                    val accessibleUrl = fileStorageService.resolveImageUrl(att.filePath, userId)
+                    val accessibleUrl = fileStorageService.resolveImageUrl(att.filePath, userId, owners)
                     blocks.add(FileRefContent(att.filePath, att.name, att.mimeType, displayOffset = anchorOffset, accessibleUrl = accessibleUrl))
                     continue
                 }
@@ -178,7 +180,7 @@ object AttachmentProcessor {
                     throw AttachmentValidationException("Image '${att.name}' exceeds the 6 MB decoded size limit")
                 }
                 val extension = att.mimeType.substringAfterLast('/', "png")
-                val filePath = fileStorageService.saveImage(sessionId, bytes, extension, userId, att.mimeType)
+                val filePath = fileStorageService.saveImage(sessionId, bytes, extension, userId, owners, att.mimeType)
                 blocks.add(FileRefContent(
                     filePath = filePath,
                     name = att.name,
@@ -237,6 +239,7 @@ object AttachmentProcessor {
      * @param text the raw message text from the frontend
      * @param projectDir optional project directory for local path validation; if null, local refs are dropped
      * @param userId owner used to validate stored chat image references
+     * @param owners the chat boundary's storage visibility set for signing stored images
      * @param fileStorageService optional service used to sign stored image URLs
      * @return [InlineRefResult] with cleaned text, file ref blocks and folder ref blocks
      */
@@ -244,6 +247,7 @@ object AttachmentProcessor {
         text: String,
         projectDir: Path? = null,
         userId: String = "system",
+        owners: Collection<String>,
         fileStorageService: FileStorageService? = null
     ): InlineRefResult {
         if (!text.contains(FILE_REF_CHAR)) return InlineRefResult(text, emptyList())
@@ -258,7 +262,7 @@ object AttachmentProcessor {
             if (!StoredFileReference.isStored(path) || path in storedImageUrls) continue
             storedImageUrls[path] = try {
                 StoredFileReference.parse(path, userId)
-                fileStorageService?.resolveImageUrl(path, userId)
+                fileStorageService?.resolveImageUrl(path, userId, owners)
             } catch (_: Exception) {
                 null
             }
@@ -380,6 +384,7 @@ object AttachmentProcessor {
      * @param messageText the raw message text from the frontend
      * @param projectDir optional project directory for local path validation
      * @param userId owner used to validate stored chat image references
+     * @param owners the chat boundary's storage visibility set for signing stored images
      * @param fileStorageService optional service used to sign stored image URLs
      * @return list of [ContentBlock]s: one [TextContent] (if non-blank) + [FileRefContent]s + [FolderRefContent]s
      */
@@ -387,9 +392,10 @@ object AttachmentProcessor {
         messageText: String,
         projectDir: Path? = null,
         userId: String = "system",
+        owners: Collection<String>,
         fileStorageService: FileStorageService? = null
     ): List<ContentBlock> {
-        val result = extractInlineFileRefs(messageText, projectDir, userId, fileStorageService)
+        val result = extractInlineFileRefs(messageText, projectDir, userId, owners, fileStorageService)
         val blocks = mutableListOf<ContentBlock>()
         if (result.cleanedText.isNotBlank()) {
             blocks.add(TextContent(result.cleanedText))

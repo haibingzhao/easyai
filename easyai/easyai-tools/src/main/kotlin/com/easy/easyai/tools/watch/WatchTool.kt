@@ -43,7 +43,8 @@ import java.time.format.DateTimeFormatter
  * Tool set for a watch is approved here, against the tools this session actually has: by default the
  * read-only static tools, never MCP. Explicit names must exist and pass the unattended safety rules;
  * an unsafe name is an error, not silently dropped, because the user would otherwise believe the
- * watch can use something it cannot.
+ * watch can use something it cannot. Naming an MCP tool is itself the approval: its capabilities
+ * cannot be declared here, so the caller is accepting that its remote side effects are unknown.
  */
 class WatchTool(
     metadata: ToolMetadata,
@@ -205,6 +206,7 @@ class WatchTool(
             condition = params.condition,
             mode = params.mode?.let { parseMode(it) },
             reminder = params.reminder,
+            clearReminder = params.clearReminder ?: false,
             schedule = resolveSchedule(params, context, require = false, zone = zone),
             timezone = zone,
             until = parseUntil(params.until),
@@ -214,6 +216,7 @@ class WatchTool(
             notifyPolicy = params.notify?.let { parseNotifyPolicy(it) },
             notifyTags = params.notifyTags?.map { it.trim().lowercase() }?.toSet(),
             sourceHints = params.sourceHints,
+            clearSourceHints = params.clearSourceHints ?: false,
             allowedTools = allowedTools
         )
         val result = watchService.update(userId, watchId, input)
@@ -330,7 +333,9 @@ class WatchTool(
 
     /**
      * Resolve the tools a watch run may use, against the tools this session actually carries.
-     * Omitted means "the agent's read-only static tools"; MCP tools are never implied.
+     * Omitted means "the agent's read-only static tools"; MCP tools are never implied. `calc` is
+     * appended in both forms: it reads nothing on its own and is the only way a shell-less run can
+     * analyze a result the harness spilled to a file.
      */
     private fun resolveAllowedTools(
         agentContext: AgentContext,
@@ -346,7 +351,7 @@ class WatchTool(
                 warnings += "No read-only data tools are available to this agent; " +
                     "watch runs will report that they could not verify anything."
             }
-            return defaults.map { it.name }
+            return withAnalysisTool(defaults.map { it.name }, byName)
         }
         val accepted = mutableListOf<String>()
         for (name in cleaned) {
@@ -363,7 +368,20 @@ class WatchTool(
             }
             accepted += name
         }
-        return accepted
+        return withAnalysisTool(accepted, byName)
+    }
+
+    /**
+     * `calc` is a computation primitive, not a data source: it gathers nothing and its host-side file
+     * access is bounded, so it rides along even when `allowedTools` narrows the set. Without it, a
+     * watch that names an MCP tool would have no way to analyze an oversized result that the harness
+     * spilled to a temp file — those runs have no shell.
+     */
+    private fun withAnalysisTool(names: List<String>, byName: Map<String, ToolDefinition>): List<String> {
+        if (ANALYSIS_TOOL in names) return names
+        val analysisTool = byName[ANALYSIS_TOOL] ?: return names
+        if (!analysisTool.isWatchSafe()) return names
+        return names + ANALYSIS_TOOL
     }
 
     private fun ToolDefinition.isWatchSafe(): Boolean {
@@ -448,6 +466,7 @@ class WatchTool(
 
     private companion object {
         const val MCP_SEPARATOR = "__"
+        const val ANALYSIS_TOOL = "calc"
         val DISPLAY_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm z")
     }
 }
@@ -478,6 +497,9 @@ data class WatchToolParameter(
 
     @param:JsonPropertyDescription("Reminder text for mode=remind, shown as the conclusion")
     val reminder: String? = null,
+
+    @param:JsonPropertyDescription("Update only: clear the reminder text")
+    val clearReminder: Boolean? = null,
 
     @param:JsonPropertyDescription(
         "One-shot trigger: ISO-8601 date-time, e.g. 2026-11-01T09:00:00+08:00. " +
@@ -544,9 +566,13 @@ data class WatchToolParameter(
     )
     val sourceHints: String? = null,
 
+    @param:JsonPropertyDescription("Update only: clear the stored source hints")
+    val clearSourceHints: Boolean? = null,
+
     @param:JsonPropertyDescription(
         "Explicit tool names the run may use. Omit for the agent's read-only tools; MCP tools must " +
-            "be named explicitly. Tools that write files, run commands or ask the user are refused."
+            "be named explicitly, which accepts that their side effects are unknown. Tools that " +
+            "write files, run commands or ask the user are refused."
     )
     val allowedTools: List<String>? = null
 )

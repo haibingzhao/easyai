@@ -114,6 +114,7 @@ class WatchController(
             condition = request.condition,
             mode = request.mode?.let(::parseMode),
             reminder = request.reminder,
+            clearReminder = request.clearReminder ?: false,
             schedule = request.schedule?.let { schedule(it, zone) },
             timezone = requestZone,
             until = parseUntil(request.until),
@@ -122,7 +123,8 @@ class WatchController(
             completeOnMet = request.completeOnMet,
             notifyPolicy = request.notifyPolicy?.let(::parseNotifyPolicy),
             notifyTags = request.notifyTags?.toSet(),
-            sourceHints = request.sourceHints
+            sourceHints = request.sourceHints,
+            clearSourceHints = request.clearSourceHints ?: false
         )
         onWatch { WatchDtos.toDto(service().update(userId, id, input).watch) }
     }

@@ -55,6 +55,7 @@ internal class ChatStreamServiceImageTest {
     private val queued = slot<UserMessage>()
     private val config = ModelProviderConfig("model-1", "Test model", Protocol.OPENAI, false, modelId = "test-model")
     private val context = AgentContext("default-agent", modelConfig = config, sessionId = "session-1", userId = "alice")
+    private val owners = setOf("alice", "system")
     private val text = "Look at this"
     private val bytes = byteArrayOf(1, 2, 3, 4)
     private val attachment = ChatAttachment("shot.png", "image/png", data = Base64.getEncoder().encodeToString(bytes))
@@ -84,7 +85,7 @@ internal class ChatStreamServiceImageTest {
         every { execution.getActiveSession("session-1") } returns session
         every { stream.asFlow() } returns flowOf(AgentEndEvent("session-1", "completed"))
         coEvery { stream.result() } returns emptyList()
-        coEvery { files.saveImage(any(), any(), any(), any(), any()) } coAnswers {
+        coEvery { files.saveImage(any(), any(), any(), any(), any(), any()) } coAnswers {
             yield()
             reference
         }
@@ -106,7 +107,7 @@ internal class ChatStreamServiceImageTest {
             assertEquals(message.id, assertIs<ChatStreamEvent.UserMessageAck>(events.first().data()).messageId)
             assertIs<ChatStreamEvent.Done>(events.last().data())
             coVerify(exactly = 1) {
-                files.saveImage("session-1", match { it.contentEquals(bytes) }, "png", "alice", "image/png")
+                files.saveImage("session-1", match { it.contentEquals(bytes) }, "png", "alice", owners, "image/png")
                 manager.saveSessionMessages(context, any())
             }
             verify(exactly = 1) { session.promptWithHistory(any()) }
@@ -114,12 +115,12 @@ internal class ChatStreamServiceImageTest {
 
         @Test
         fun `upload failure emits only an error without saving or starting the model`() = runTest {
-            coEvery { files.saveImage(any(), any(), any(), any(), any()) } throws ObjectStorageException("upload failed")
+            coEvery { files.saveImage(any(), any(), any(), any(), any(), any()) } throws ObjectStorageException("upload failed")
             val event = service.streamChat(request, "alice").toList().single()
             assertEquals("error", event.event())
             assertEquals("upload failed", assertIs<ChatStreamEvent.Error>(event.data()).errorMessage)
             coVerify(exactly = 1) {
-                files.saveImage("session-1", match { it.contentEquals(bytes) }, "png", "alice", "image/png")
+                files.saveImage("session-1", match { it.contentEquals(bytes) }, "png", "alice", owners, "image/png")
             }
             coVerify(exactly = 0) { manager.saveSessionMessages(any(), any()) }
             verify(exactly = 0) {
@@ -131,7 +132,7 @@ internal class ChatStreamServiceImageTest {
 
         @Test
         fun `upload cancellation propagates without persisting or prompting`() = runTest {
-            coEvery { files.saveImage(any(), any(), any(), any(), any()) } throws CancellationException("cancelled")
+            coEvery { files.saveImage(any(), any(), any(), any(), any(), any()) } throws CancellationException("cancelled")
             assertFailsWith<CancellationException> { service.streamChat(request, "alice") }
             coVerify(exactly = 0) { manager.saveSessionMessages(any(), any()) }
             verify(exactly = 0) { session.promptWithHistory(any()) }
@@ -144,7 +145,21 @@ internal class ChatStreamServiceImageTest {
             assertEquals(listOf(TextContent(plainText)), saved.captured.single().content)
             assertEquals(saved.captured, prompted.captured)
             assertIs<ChatStreamEvent.Done>(events.last().data())
-            coVerify(exactly = 0) { files.saveImage(any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) { files.saveImage(any(), any(), any(), any(), any(), any()) }
+        }
+
+        @Test
+        fun `uploads use the chat boundary owner set when a group is visible`() = runTest {
+            val groupOwners = setOf("alice", "g_family", "system")
+            coEvery { manager.saveSessionMessages(any(), capture(saved)) } returns Unit
+
+            service.streamChat(request, "alice", owners = groupOwners).toList()
+
+            coVerify(exactly = 1) {
+                files.saveImage(
+                    "session-1", match { it.contentEquals(bytes) }, "png", "alice", groupOwners, "image/png"
+                )
+            }
         }
     }
 
@@ -160,7 +175,7 @@ internal class ChatStreamServiceImageTest {
                 assertEquals(expectedContent, queued.captured.content)
             }
             coVerify(exactly = 2) {
-                files.saveImage("session-1", match { it.contentEquals(bytes) }, "png", "alice", "image/png")
+                files.saveImage("session-1", match { it.contentEquals(bytes) }, "png", "alice", owners, "image/png")
             }
             verify(exactly = 1) {
                 session.followUpWithId(any<UserMessage>())
@@ -171,14 +186,14 @@ internal class ChatStreamServiceImageTest {
         @Test
         fun `upload failure cannot save prompt or enqueue either queue type`() = runTest {
             val failure = ObjectStorageException("upload failed")
-            coEvery { files.saveImage(any(), any(), any(), any(), any()) } throws failure
+            coEvery { files.saveImage(any(), any(), any(), any(), any(), any()) } throws failure
             for (type in listOf("followUp", "steer")) {
                 assertSame(failure, assertFailsWith<ObjectStorageException> {
                     service.addQueuedMessage("session-1", "alice", text, type, listOf(attachment))
                 })
             }
             coVerify(exactly = 2) {
-                files.saveImage("session-1", match { it.contentEquals(bytes) }, "png", "alice", "image/png")
+                files.saveImage("session-1", match { it.contentEquals(bytes) }, "png", "alice", owners, "image/png")
             }
             coVerify(exactly = 0) { manager.saveSessionMessages(any(), any()) }
             verify(exactly = 0) {
@@ -198,7 +213,7 @@ internal class ChatStreamServiceImageTest {
             assertEquals(plainText, response.content)
             assertEquals(listOf(TextContent(plainText)), queued.captured.content)
             verify(exactly = 1) { session.followUpWithId(any<UserMessage>()) }
-            coVerify(exactly = 0) { files.saveImage(any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) { files.saveImage(any(), any(), any(), any(), any(), any()) }
         }
     }
 }

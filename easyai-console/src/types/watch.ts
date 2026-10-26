@@ -108,6 +108,7 @@ export interface WatchUpdatePayload {
   condition?: string;
   mode?: WatchMode;
   reminder?: string | null;
+  clearReminder?: boolean;
   timezone?: string;
   until?: string | null;
   clearUntil?: boolean;
@@ -116,6 +117,7 @@ export interface WatchUpdatePayload {
   notifyPolicy?: WatchNotifyPolicy;
   notifyTags?: string[];
   sourceHints?: string | null;
+  clearSourceHints?: boolean;
   schedule?: WatchScheduleDraft;
 }
 

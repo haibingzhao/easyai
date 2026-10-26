@@ -1,7 +1,7 @@
 package com.easy.easyai.core.watch
 
 import com.easy.easyai.api.config.ChatModelFactory
-import com.easy.easyai.api.config.ModelConfigService
+import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo
 import com.easy.easyai.core.agent.AgentContext
@@ -211,6 +211,7 @@ internal class RecordingWatchStore(var current: Watch) : WatchStore {
         at: Long
     ): Watch? {
         failureCalls++
+        if (taskId != null && lastTaskId != taskId) return null
         failureStatus = status
         failureCount = consecutiveFailures
         failureNextDue = nextDueAt
@@ -276,10 +277,15 @@ internal class RecordingWatchStore(var current: Watch) : WatchStore {
         statusReason: String?,
         pendingAction: WatchPendingAction?,
         nextDueAt: Long?,
-        expectedStatus: WatchStatus?
+        expectedStatus: WatchStatus?,
+        clearFailures: Boolean
     ): Watch? {
         if (expectedStatus != null && current.status != expectedStatus) return null
-        current = current.copy(status = status)
+        current = current.copy(
+            status = status,
+            consecutiveFailures = if (clearFailures) 0 else current.consecutiveFailures,
+            lastError = if (clearFailures) null else current.lastError
+        )
         return current
     }
 
@@ -293,7 +299,7 @@ internal class WatchModelStub(
 ) {
     val sessionManager: SessionManager = mockk(relaxed = true)
     val agentService: AgentService = mockk()
-    val modelConfigService: ModelConfigService = mockk()
+    val modelConfigStore: ModelProviderConfigStore = mockk()
     private val factory: ChatModelFactory = mockk()
     private val session: ChatSession = mockk(relaxed = true)
 
@@ -305,7 +311,7 @@ internal class WatchModelStub(
             isCustom = false,
             modelId = "gpt-test"
         )
-        coEvery { modelConfigService.getUserConfiguration(eq("model-1"), any<Collection<String>>()) } returns config
+        coEvery { modelConfigStore.getConfig(eq("model-1"), any<Collection<String>>()) } returns config
         every { agentService.chatModelFactories } returns listOf(factory)
         every { factory.supports(any()) } returns true
         every { session.agentContext } returns AgentContext(agentId = "watch-runner", sessionId = "run-session")

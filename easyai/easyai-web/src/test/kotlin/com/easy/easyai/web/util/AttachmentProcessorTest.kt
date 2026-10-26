@@ -28,6 +28,7 @@ import kotlin.test.assertTrue
 class AttachmentProcessorTest {
 
     private val fileStorageService = mockk<FileStorageService>(relaxed = true)
+    private val owners = listOf("alice")
 
     /** ‛[name](path)‛ encoding matching the frontend buildFolderRef. */
     private fun folderRef(name: String, path: Path): String = "‛[\uD83D\uDCC1$name]($path)‛"
@@ -46,7 +47,7 @@ class AttachmentProcessorTest {
             val dir = Files.createDirectories(projectDir.resolve("summary"))
             val text = "Save results to ${folderRef("summary", dir)} folder"
 
-            val result = AttachmentProcessor.extractInlineFileRefs(text, projectDir)
+            val result = AttachmentProcessor.extractInlineFileRefs(text, projectDir, owners = owners)
 
             assertEquals("Save results to  folder", result.cleanedText)
             assertTrue(result.fileRefBlocks.isEmpty())
@@ -63,7 +64,7 @@ class AttachmentProcessorTest {
             val dir = Files.createDirectories(otherDir.resolve("secret"))
             val text = "ref ${folderRef("secret", dir)} end"
 
-            val result = AttachmentProcessor.extractInlineFileRefs(text, projectDir)
+            val result = AttachmentProcessor.extractInlineFileRefs(text, projectDir, owners = owners)
 
             assertTrue(result.folderRefBlocks.isEmpty())
             assertEquals("ref  end", result.cleanedText)
@@ -74,7 +75,7 @@ class AttachmentProcessorTest {
             val dir = Files.createDirectories(tempDir.resolve("summary"))
             val text = "ref ${folderRef("summary", dir)} end"
 
-            val result = AttachmentProcessor.extractInlineFileRefs(text, null)
+            val result = AttachmentProcessor.extractInlineFileRefs(text, null, owners = owners)
 
             assertTrue(result.folderRefBlocks.isEmpty())
             assertEquals("ref  end", result.cleanedText)
@@ -85,7 +86,7 @@ class AttachmentProcessorTest {
             val dir = Files.createDirectories(projectDir.resolve("summary"))
             val text = "save to ${folderRef("summary", dir)} folder please"
 
-            val result = AttachmentProcessor.extractInlineFileRefs(text, projectDir)
+            val result = AttachmentProcessor.extractInlineFileRefs(text, projectDir, owners = owners)
 
             assertEquals("save to  folder please", result.cleanedText)
             // "save to " is 8 chars — the chip sat at cleaned-text offset 8
@@ -99,7 +100,7 @@ class AttachmentProcessorTest {
             val dir = Files.createDirectories(projectDir.resolve("d"))
             val text = "${fileRef("a.txt", file)} then ${folderRef("d", dir)} end"
 
-            val result = AttachmentProcessor.extractInlineFileRefs(text, projectDir)
+            val result = AttachmentProcessor.extractInlineFileRefs(text, projectDir, owners = owners)
 
             assertEquals(" then  end", result.cleanedText)
             // " then " is 6 chars once the leading file ref is stripped
@@ -112,7 +113,7 @@ class AttachmentProcessorTest {
             Files.writeString(file, "hello")
             val text = "read ${fileRef("note.txt", file)} please"
 
-            val result = AttachmentProcessor.extractInlineFileRefs(text, projectDir)
+            val result = AttachmentProcessor.extractInlineFileRefs(text, projectDir, owners = owners)
 
             assertTrue(result.folderRefBlocks.isEmpty())
             val ref = result.fileRefBlocks.single()
@@ -125,10 +126,10 @@ class AttachmentProcessorTest {
         @Test
         fun `converts stored chat image refs to FileRefContent blocks with signed url`() = runTest {
             val reference = StoredFileReference.create("alice", "session-1", "png")
-            coEvery { fileStorageService.resolveImageUrl(reference, "alice") } returns "https://oss.example/signed.png"
+            coEvery { fileStorageService.resolveImageUrl(reference, "alice", owners) } returns "https://oss.example/signed.png"
             val text = "look at ${fileRef("shot.png", reference)} here"
 
-            val result = AttachmentProcessor.extractInlineFileRefs(text, null, "alice", fileStorageService)
+            val result = AttachmentProcessor.extractInlineFileRefs(text, null, "alice", owners, fileStorageService)
 
             val ref = result.fileRefBlocks.single()
             assertEquals(reference, ref.filePath)
@@ -145,7 +146,7 @@ class AttachmentProcessorTest {
             val reference = StoredFileReference.create("bob", "session-1", "png")
             val text = "look at ${fileRef("shot.png", reference)} here"
 
-            val result = AttachmentProcessor.extractInlineFileRefs(text, null, "alice", fileStorageService)
+            val result = AttachmentProcessor.extractInlineFileRefs(text, null, "alice", owners, fileStorageService)
 
             assertTrue(result.fileRefBlocks.isEmpty())
             assertEquals("look at  here", result.cleanedText)
@@ -159,7 +160,7 @@ class AttachmentProcessorTest {
         fun `includes folder ref blocks alongside text`(@TempDir projectDir: Path) = runTest {
             val dir = Files.createDirectories(projectDir.resolve("out"))
 
-            val blocks = AttachmentProcessor.buildContentBlocks("put it in ${folderRef("out", dir)}", projectDir)
+            val blocks = AttachmentProcessor.buildContentBlocks("put it in ${folderRef("out", dir)}", projectDir, owners = owners)
 
             assertEquals(2, blocks.size)
             assertIs<TextContent>(blocks[0])
@@ -174,13 +175,13 @@ class AttachmentProcessorTest {
         fun `keeps stable stored image references without uploading again`() = runTest {
             val reference = StoredFileReference.create("alice", "session-1", "png")
             val presigned = "https://oss.example/signed-url.png"
-            coEvery { fileStorageService.resolveImageUrl(reference, "alice") } returns presigned
+            coEvery { fileStorageService.resolveImageUrl(reference, "alice", owners) } returns presigned
             val result = AttachmentProcessor.processAttachments(
                 listOf(ChatAttachment("shot.png", "image/png", filePath = reference)),
-                fileStorageService, "session-1", 12, null, "alice"
+                fileStorageService, "session-1", 12, null, "alice", owners
             )
             assertEquals(FileRefContent(reference, "shot.png", "image/png", displayOffset = 12, accessibleUrl = presigned), result.single())
-            coVerify(exactly = 0) { fileStorageService.saveImage(any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) { fileStorageService.saveImage(any(), any(), any(), any(), any(), any()) }
         }
 
         @Test
@@ -189,7 +190,7 @@ class AttachmentProcessorTest {
                 assertFailsWith<AttachmentValidationException> {
                     AttachmentProcessor.processAttachments(
                         listOf(ChatAttachment("shot.png", "image/png", filePath = reference)),
-                        fileStorageService, "session-1", 0, null, "alice"
+                        fileStorageService, "session-1", 0, null, "alice", owners
                     )
                 }
             }
@@ -198,13 +199,13 @@ class AttachmentProcessorTest {
         @Test
         fun `base64 images use the same user scoped storage path`() = runTest {
             val reference = StoredFileReference.create("alice", "session-1", "png")
-            coEvery { fileStorageService.saveImage("session-1", any(), "png", "alice", "image/png") } returns reference
+            coEvery { fileStorageService.saveImage("session-1", any(), "png", "alice", owners, "image/png") } returns reference
             val result = AttachmentProcessor.processAttachments(
                 listOf(ChatAttachment("shot.png", "image/png", data = "AQID")),
-                fileStorageService, "session-1", 0, null, "alice"
+                fileStorageService, "session-1", 0, null, "alice", owners
             )
             assertEquals(reference, (result.single() as FileRefContent).filePath)
-            coVerify(exactly = 1) { fileStorageService.saveImage("session-1", byteArrayOf(1, 2, 3), "png", "alice", "image/png") }
+            coVerify(exactly = 1) { fileStorageService.saveImage("session-1", byteArrayOf(1, 2, 3), "png", "alice", owners, "image/png") }
         }
 
         @Test
@@ -216,7 +217,8 @@ class AttachmentProcessorTest {
                 fileStorageService,
                 "session-1",
                 anchorOffset = 42,
-                projectDir = tempDir
+                projectDir = tempDir,
+                owners = owners
             )
 
             val folder = blocks.single() as FolderRefContent
@@ -238,7 +240,8 @@ class AttachmentProcessorTest {
                     fileStorageService,
                     "session-1",
                     anchorOffset = 0,
-                    projectDir = projectDir
+                    projectDir = projectDir,
+                    owners = owners
                 )
             }
             assertTrue(e.message!!.contains("inside the project directory"))
@@ -254,7 +257,8 @@ class AttachmentProcessorTest {
                     fileStorageService,
                     "session-1",
                     anchorOffset = 0,
-                    projectDir = null
+                    projectDir = null,
+                    owners = owners
                 )
             }
         }
@@ -269,7 +273,8 @@ class AttachmentProcessorTest {
                 fileStorageService,
                 "session-1",
                 anchorOffset = 7,
-                projectDir = tempDir
+                projectDir = tempDir,
+                owners = owners
             )
 
             val ref = blocks.single() as FileRefContent

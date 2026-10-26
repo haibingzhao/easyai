@@ -111,6 +111,11 @@ class ToolResultGuardTest {
             assertTrue(guarded.result.contains("(3 lines)"))
             assertTrue(guarded.result.contains("RE-RUN the tool"))
             assertTrue(guarded.result.contains("Access patterns"))
+            assertTrue(guarded.result.contains("calc tool"), "notice must point at calc for whole-file analysis")
+            assertFalse(
+                guarded.result.contains("calc cannot read files"),
+                "calc supports filePath; stale guidance would send a shell-less background run to bash"
+            )
             assertTrue(guarded.result.contains("[TRUNCATED]"))
         }
 
