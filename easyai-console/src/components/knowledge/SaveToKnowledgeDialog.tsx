@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Dialog } from '@/components/ui/Dialog';
 import { Bookmark } from 'lucide-react';
-import { useCategoryStore } from '@/services/stores/category-store';
 import { useKnowledgeStore } from '@/services/stores/knowledge-store';
 import { readErrorMessage } from '@/services/api-client';
 import { i18n } from '@/utils/i18n';
@@ -21,11 +20,9 @@ export const SaveToKnowledgeDialog: React.FC<SaveToKnowledgeDialogProps> = ({
   sessionId,
   messageId,
 }) => {
-  const knowledgeCategories = useCategoryStore((s) => s.knowledgeCategories);
   const saveToKnowledge = useKnowledgeStore((s) => s.saveToKnowledge);
 
   const [title, setTitle] = useState('');
-  const [category, setCategory] = useState('other');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedTitle, setSavedTitle] = useState<string | null>(null);
@@ -43,7 +40,6 @@ export const SaveToKnowledgeDialog: React.FC<SaveToKnowledgeDialogProps> = ({
         .replace(/^[-*+]\s+/, '')
         .trim();
       setTitle(cleaned.slice(0, 80));
-      setCategory('other');
       setSaving(false);
       setError(null);
       setSavedTitle(null);
@@ -58,7 +54,6 @@ export const SaveToKnowledgeDialog: React.FC<SaveToKnowledgeDialogProps> = ({
       const article = await saveToKnowledge({
         title: title.trim(),
         content,
-        category,
         originSessionId: sessionId,
         originMessageId: messageId,
       });
@@ -73,7 +68,7 @@ export const SaveToKnowledgeDialog: React.FC<SaveToKnowledgeDialogProps> = ({
   const success = savedTitle !== null && !saving;
 
   return (
-    <Dialog open={open} onClose={onClose} title={i18n('Save to Knowledge')}>
+    <Dialog open={open} onClose={onClose} title={i18n('Save as Draft')}>
       <div className="space-y-4">
         {/* Title input */}
         <div>
@@ -88,22 +83,6 @@ export const SaveToKnowledgeDialog: React.FC<SaveToKnowledgeDialogProps> = ({
           />
         </div>
 
-        {/* Category */}
-        <div>
-          <label className="block text-sm font-medium mb-1">{i18n('Category')}</label>
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-          >
-            {knowledgeCategories.map((c) => (
-              <option key={c.code} value={c.code}>
-                {i18n(c.labelKey)}
-              </option>
-            ))}
-          </select>
-        </div>
-
         {/* Content preview */}
         <div>
           <label className="block text-sm font-medium mb-1">{i18n('Content Preview')}</label>
@@ -116,7 +95,7 @@ export const SaveToKnowledgeDialog: React.FC<SaveToKnowledgeDialogProps> = ({
         {success && (
           <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
             <Bookmark className="size-4" />
-            {i18n('Saved successfully!')}
+            {i18n('Saved as draft')}
             <span className="text-muted-foreground">
               — {savedTitle}
             </span>
@@ -150,7 +129,7 @@ export const SaveToKnowledgeDialog: React.FC<SaveToKnowledgeDialogProps> = ({
                 disabled={saving || !title.trim() || !content.trim()}
                 className="px-4 py-2 rounded-md text-sm bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {saving ? i18n('Saving...') : i18n('Save')}
+                {saving ? i18n('Saving...') : i18n('Save as Draft')}
               </button>
             </>
           )}

@@ -1,12 +1,14 @@
 package com.easy.easyai.web.tool
 
 import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.knowledge.ArticleStatus
 import com.easy.easyai.core.knowledge.KnowledgeAccessContext
 import com.easy.easyai.core.knowledge.KnowledgeArticle
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.model.ToolResultContent
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.web.service.AccessibleKnowledgeArticle
+import com.easy.easyai.web.service.ArticleWriteResult
 import com.easy.easyai.web.service.KnowledgeArticleService
 import io.mockk.coEvery
 import io.mockk.mockk
@@ -28,6 +30,7 @@ class KnowledgeArticleToolTest {
     private fun article(
         id: String = "article-1",
         knowledgeKey: String = "assistant/a.md",
+        status: ArticleStatus = ArticleStatus.PUBLISHED,
     ) = KnowledgeArticle(
         id = id,
         userId = "g_1",
@@ -45,6 +48,7 @@ class KnowledgeArticleToolTest {
         originSessionId = null,
         originMessageId = null,
         composedFrom = null,
+        status = status,
         createdAt = 1L,
         updatedAt = 2L,
     )
@@ -74,7 +78,7 @@ class KnowledgeArticleToolTest {
 
     @Test
     fun `list returns readable articles with permission flags`() = runTest {
-        coEvery { service.listAccessible(accessContext, null, null) } returns listOf(
+        coEvery { service.listAccessible(accessContext, null, null, null) } returns listOf(
             AccessibleKnowledgeArticle(article(), canWrite = true, canManage = false)
         )
 
@@ -95,7 +99,7 @@ class KnowledgeArticleToolTest {
                 canManage = true,
             )
         }
-        coEvery { service.listAccessible(accessContext, null, null) } returns articles
+        coEvery { service.listAccessible(accessContext, null, null, null) } returns articles
 
         val (isError, output) = run(mapOf("action" to "list", "limit" to 2, "offset" to 1))
 
@@ -122,13 +126,50 @@ class KnowledgeArticleToolTest {
     @Test
     fun `create stamps assistant origin and defaults`() = runTest {
         coEvery {
-            service.saveArticle(accessContext, "A", "body", "assistant", null, "other", "assistant", null, null, null)
+            service.saveArticle(
+                accessContext, "A", "body", "assistant", null, "other", "assistant", null, null, null,
+                ArticleStatus.DRAFT,
+            )
         } returns article()
 
         val (isError, output) = run(mapOf("action" to "create", "title" to "A", "content" to "body"))
 
         assertEquals(false, isError)
         assertContains(output, "\"created\":true")
+    }
+
+    @Test
+    fun `list reports each article status`() = runTest {
+        coEvery { service.listAccessible(accessContext, null, null, null) } returns listOf(
+            AccessibleKnowledgeArticle(article(status = ArticleStatus.DRAFT), canWrite = true, canManage = true)
+        )
+
+        val (isError, output) = run(mapOf("action" to "list"))
+
+        assertEquals(false, isError)
+        assertContains(output, "\"status\":\"draft\"")
+    }
+
+    @Test
+    fun `list rejects an unknown status filter instead of listing everything`() = runTest {
+        val (isError, output) = run(mapOf("action" to "list", "status" to "draftt"))
+
+        assertTrue(isError)
+        assertContains(output, "Invalid status filter")
+    }
+
+    @Test
+    fun `update reports a pending index write`() = runTest {
+        coEvery {
+            service.updateArticle(accessContext, "assistant/a.md", "body", null, null)
+        } returns ArticleWriteResult(article(), indexPending = true)
+
+        val (isError, output) = run(
+            mapOf("action" to "update", "key" to "assistant/a.md", "content" to "body")
+        )
+
+        assertEquals(false, isError)
+        assertContains(output, "\"indexPending\":true")
     }
 
     @Test

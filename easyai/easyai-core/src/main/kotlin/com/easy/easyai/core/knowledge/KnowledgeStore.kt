@@ -166,6 +166,9 @@ interface KnowledgeStore {
     /**
      * Update the content of an existing knowledge entry and re-index it.
      *
+     * Article flows no longer call this: content updates use [index] so a missing entry is
+     * recreated. Kept for host callers that need the existing-entry contract.
+     *
      * @param userId owner user id for biz_id isolation
      * @param key logical key `{source}/{relativePath}`
      * @param content new full content (without frontmatter — wrapping is handled internally)
@@ -174,6 +177,26 @@ interface KnowledgeStore {
      * @return true if the entry existed and was updated
      */
     suspend fun update(
+        userId: String,
+        key: String,
+        content: String,
+        title: String? = null,
+        kcategory: String? = null
+    ): Boolean = false
+
+    /**
+     * Insert or re-index one entry by key. Idempotent. Used by publishing/re-indexing and by
+     * content updates of an already published article; the upload batch indexes files before their
+     * metadata rows are written. Drafts never reach the index.
+     *
+     * @param userId owner user id for biz_id isolation
+     * @param key logical key `{source}/{relativePath}`
+     * @param content full content (without frontmatter — wrapping is handled internally)
+     * @param title article title; derived from the content when null
+     * @param kcategory knowledge category; defaults to "other"
+     * @return true when the document was accepted for indexing
+     */
+    suspend fun index(
         userId: String,
         key: String,
         content: String,

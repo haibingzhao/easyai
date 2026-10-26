@@ -1,6 +1,7 @@
 package com.easy.easyai.web.controller
 
 import com.easy.easyai.common.util.SharedObjectMapper
+import com.easy.easyai.core.knowledge.ArticleStatus
 import com.easy.easyai.core.knowledge.KnowledgeAccessContext
 import com.easy.easyai.core.knowledge.KnowledgeAccessGuard
 import com.easy.easyai.core.knowledge.KnowledgeArticle
@@ -42,18 +43,20 @@ import reactor.core.publisher.Mono
  * - DELETE /api/knowledge/source/{source} — Delete readable entries from a source
  *
  * Article editing endpoints (require KnowledgeArticleService):
- * - GET /api/knowledge/articles — List visible articles (DB-backed)
- * - POST /api/knowledge/save-text — Save article from text/chat
- * - PUT /api/knowledge/article — Update article content
- * - DELETE /api/knowledge/article — Delete article (DB + OSS + RAG)
+ * - GET /api/knowledge/articles — List visible articles (DB-backed, optional status filter)
+ * - POST /api/knowledge/save-text — Save a DRAFT article from text/chat
+ * - PUT /api/knowledge/article — Update article content (published rows re-index)
+ * - POST /api/knowledge/article/publish — Publish a draft / rebuild its index
+ * - POST /api/knowledge/article/unpublish — Remove a published article from the index
+ * - DELETE /api/knowledge/article — Delete article (RAG + OSS + DB)
  * - POST /api/knowledge/ai-rewrite — AI full article rewrite
  * - POST /api/knowledge/ai-modify-selection — AI modify selected text
  * - POST /api/knowledge/ai-compose — AI compose article from materials
  *
  * All content access goes through [KnowledgeAccessGuard] / [KnowledgeArticleService], which
  * delegate to the host-provided KnowledgeAccessPolicy. Listing endpoints answer an empty
- * collection when the policy denies view; entry lookups answer 404 instead of leaking
- * existence, while article writes answer 403.
+ * collection when the policy denies view; single-entry lookups answer 404 instead of leaking
+ * existence, including writes aimed at another user's draft, while other denied writes answer 403.
  */
 @RestController
 @RequestMapping("/api/knowledge")
@@ -222,13 +225,16 @@ class KnowledgeController(
     @GetMapping("/articles")
     fun listArticles(
         @RequestParam(required = false) source: String?,
-        @RequestParam(required = false) category: String?
+        @RequestParam(required = false) category: String?,
+        @RequestParam(required = false) status: String?
     ): Mono<List<KnowledgeArticleDto>> {
         return mono {
             val service = articleService ?: throw knowledgeNotEnabled()
             // Same rule as /entries and /sources: a denied view yields an empty list, while
             // single-entry endpoints answer 404 instead of leaking existence.
-            service.listAccessible(accessContext(), source, category).map { toArticleDto(it) }
+            service.listAccessible(
+                accessContext(), source, category, resolveStatusFilter(status)
+            ).map { toArticleDto(it) }
         }
     }
 
@@ -259,13 +265,40 @@ class KnowledgeController(
             val service = articleService ?: throw knowledgeNotEnabled()
             validateRelativePath(request.key)
             val context = accessContext()
-            val article = service.updateArticle(
+            val result = service.updateArticle(
                 context = context,
                 key = request.key,
                 content = request.content,
                 title = request.title,
                 category = request.category
             )
+            toArticleDto(context, result.article, service, result.indexPending)
+        }
+    }
+
+    @PostMapping("/article/publish")
+    fun publishArticle(@RequestBody request: PublishArticleRequestDto): Mono<KnowledgeArticleDto> {
+        return mono {
+            val service = articleService ?: throw knowledgeNotEnabled()
+            validateRelativePath(request.key)
+            val context = accessContext()
+            val article = service.publish(
+                context = context,
+                key = request.key,
+                category = request.category,
+                title = request.title
+            )
+            toArticleDto(context, article, service)
+        }
+    }
+
+    @PostMapping("/article/unpublish")
+    fun unpublishArticle(@RequestParam key: String): Mono<KnowledgeArticleDto> {
+        return mono {
+            val service = articleService ?: throw knowledgeNotEnabled()
+            validateRelativePath(key)
+            val context = accessContext()
+            val article = service.unpublish(context, key)
             toArticleDto(context, article, service)
         }
     }
@@ -358,6 +391,13 @@ class KnowledgeController(
     private fun badRequest(message: String): ResponseStatusException =
         ResponseStatusException(HttpStatus.BAD_REQUEST, message)
 
+    /** Blank means "no filter"; a typo must fail instead of quietly listing everything. */
+    private fun resolveStatusFilter(status: String?): ArticleStatus? {
+        val value = status?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return ArticleStatus.fromFilter(value)
+            ?: throw badRequest("Invalid status filter: $value (expected draft or published)")
+    }
+
     /**
      * Read a Part's content into a String without blocking the event loop.
      * Aggregation respects `spring.codec.max-in-memory-size`.
@@ -404,16 +444,19 @@ class KnowledgeController(
         context: KnowledgeAccessContext,
         article: KnowledgeArticle,
         service: KnowledgeArticleService,
+        indexPending: Boolean = false,
     ): KnowledgeArticleDto = toArticleDto(
         article = article,
         canWrite = service.canWrite(context, article),
         canManage = service.canManage(context, article),
+        indexPending = indexPending,
     )
 
     private fun toArticleDto(
         article: KnowledgeArticle,
         canWrite: Boolean,
         canManage: Boolean,
+        indexPending: Boolean = false,
     ): KnowledgeArticleDto = KnowledgeArticleDto(
         id = article.id,
         knowledgeKey = article.knowledgeKey,
@@ -424,6 +467,8 @@ class KnowledgeController(
         relativePath = article.relativePath,
         ext = article.ext,
         origin = article.origin,
+        status = ArticleStatus.toWire(article.status),
+        indexPending = indexPending,
         canWrite = canWrite,
         canManage = canManage,
         createdAt = article.createdAt,

@@ -63,6 +63,10 @@ data class KnowledgeArticleDto(
     val relativePath: String,
     val ext: String,
     val origin: String,
+    /** `draft` or `published`. */
+    val status: String,
+    /** Published content saved but the index write failed; re-publish to repair. */
+    val indexPending: Boolean = false,
     val canWrite: Boolean,
     val canManage: Boolean,
     val createdAt: Long,
@@ -92,6 +96,16 @@ data class UpdateArticleRequestDto(
     val content: String,
     val title: String? = null,
     val category: String? = null
+)
+
+/**
+ * Request body for publishing (or re-indexing) an article. Status is not a request field:
+ * publishing is the only action that can make an article searchable.
+ */
+data class PublishArticleRequestDto(
+    val key: String,
+    val category: String? = null,
+    val title: String? = null
 )
 
 /**

@@ -988,6 +988,7 @@ object Tables {
         val originSessionId = varchar("origin_session_id", 255).nullable()
         val originMessageId = varchar("origin_message_id", 255).nullable()
         val composedFrom = text("composed_from").nullable()
+        val status = varchar("status", 16).default("published")
         val createdAt = long("created_at")
         val updatedAt = long("updated_at")
 
@@ -997,6 +998,7 @@ object Tables {
             uniqueIndex(userId, knowledgeKey)
             index(false, userId, articleSource)
             index(false, userId, origin)
+            index(false, userId, status)
         }
     }
 

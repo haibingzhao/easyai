@@ -3,6 +3,7 @@ package com.easy.easyai.web.tool
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.AgentService
+import com.easy.easyai.core.knowledge.ArticleStatus
 import com.easy.easyai.core.knowledge.KnowledgeAccessContext
 import com.easy.easyai.core.knowledge.KnowledgeArticle
 import com.easy.easyai.core.knowledge.KnowledgeOwnership
@@ -40,6 +41,7 @@ class KnowledgeArticleTool(
         val content: String? = null,
         val category: String? = null,
         val source: String? = null,
+        val status: String? = null,
         val limit: Int? = null,
         val offset: Int? = null,
     )
@@ -66,10 +68,20 @@ class KnowledgeArticleTool(
                 "list" -> {
                     val limit = intArg(args, "limit", DEFAULT_LIST_LIMIT).coerceIn(1, MAX_LIST_LIMIT)
                     val offset = intArg(args, "offset", 0).coerceAtLeast(0)
+                    val statusArg = stringArg(args, "status")
+                    val statusFilter = ArticleStatus.fromFilter(statusArg)
+                    if (statusArg != null && statusFilter == null) {
+                        return errorResult(
+                            toolCallId,
+                            name,
+                            "Invalid status filter: $statusArg (expected draft or published)"
+                        )
+                    }
                     val articles = service.listAccessible(
                         accessContext,
                         source = stringArg(args, "source"),
                         category = stringArg(args, "category"),
+                        status = statusFilter,
                     )
                     val page = articles.drop(offset).take(limit)
                     jsonResult(
@@ -80,6 +92,7 @@ class KnowledgeArticleTool(
                                     "title" to item.article.title,
                                     "category" to item.article.category,
                                     "source" to item.article.source,
+                                    "status" to ArticleStatus.toWire(item.article.status),
                                     "updatedAt" to item.article.updatedAt,
                                     "canWrite" to item.canWrite,
                                     "canManage" to item.canManage,
@@ -122,14 +135,20 @@ class KnowledgeArticleTool(
                         ?: return errorResult(toolCallId, name, "update requires 'key'")
                     val content = args["content"] as? String
                         ?: return errorResult(toolCallId, name, "update requires 'content'")
-                    val article = service.updateArticle(
+                    val result = service.updateArticle(
                         context = accessContext,
                         key = key,
                         content = content,
                         title = stringArg(args, "title"),
                         category = stringArg(args, "category"),
                     )
-                    jsonResult(mapOf("updated" to true, "article" to articleToMap(article)))
+                    jsonResult(
+                        mapOf(
+                            "updated" to true,
+                            "indexPending" to result.indexPending,
+                            "article" to articleToMap(result.article),
+                        )
+                    )
                 }
 
                 "delete" -> {
@@ -157,6 +176,7 @@ class KnowledgeArticleTool(
         "title" to article.title,
         "category" to article.category,
         "source" to article.source,
+        "status" to ArticleStatus.toWire(article.status),
         "updatedAt" to article.updatedAt,
     )
 
@@ -188,9 +208,10 @@ class KnowledgeArticleToolBuilder(
     override val metadata = ToolMetadata(
         name = "knowledge_article",
         description = """Manage knowledge base articles (the single entry point for family and personal articles).
-action: list (readable articles; optional source/category filters plus limit/offset) / read (full content by key) / create (new article; requires title and content, optional category and source) / update (update content by key; optional title and category) / delete (by key).
+action: list (readable articles; optional source/category/status filters plus limit/offset) / read (full content by key) / create (new DRAFT article; requires title and content, optional category and source) / update (update content by key; optional title and category) / delete (by key).
 Access is decided by the host application's policy; unauthorized actions fail, so do not try to bypass them.
-list returns at most 50 articles by default (max 200) and reports total/offset/limit.""",
+Status: 'draft' articles are private to their creator and are NOT in the search index; only 'published' articles are retrievable via knowledge_search. An article created here stays a draft until the user publishes it in the UI — do not claim it is searchable.
+list returns at most 50 articles by default (max 200), includes each article's status, and reports total/offset/limit.""",
         permissionCategory = "knowledge",
         isDefaultTool = false,
         patternKeys = listOf("key", "source"),

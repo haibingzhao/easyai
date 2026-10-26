@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { asrService } from '@/services/asr-service';
 import { encodeWav, downmixTo16k } from '@/utils/wav-encoder';
-import { readMessageEditorText } from '@/utils/attachment-utils';
+import type { DictationSink, DictationSlotHandle } from '@/hooks/dictation-sink';
 import { i18n } from '@/utils/i18n';
 
 export type VoicePhase = 'idle' | 'recording' | 'processing';
+
+/** A failed correction pass degrades to "no better text" so the visible draft still gets committed. */
+async function tryTranscribe(samples: Float32Array): Promise<string> {
+  try {
+    return await asrService.transcribeSegment(encodeWav(samples));
+  } catch {
+    return '';
+  }
+}
 
 /** Draft flush cadence: a fresh chunk of this many 16k samples is transcribed right away. */
 const DRAFT_SAMPLES = 32_000;
@@ -26,13 +35,11 @@ const REFINE_TIMEOUT_MS = 20_000;
  * slot's conflict check.
  */
 const FINALIZE_TIMEOUT_MS = 2_500;
-/** Context handed to the refine model, both sides. */
-const CONTEXT_WINDOW_CHARS = 2_000;
 /** Shown when capture ends without the user pressing stop. */
 const INTERRUPT_NOTICE = 'Voice input stopped (screen off or app switched away); captured audio was kept';
 
 interface Slot {
-  el: HTMLSpanElement;
+  handle: DictationSlotHandle;
   /** Draft fragments keyed by issue order; rendering joins them by key, immune to out-of-order responses. */
   fragments: Map<number, string>;
   lastWritten: string;
@@ -53,31 +60,32 @@ interface Session {
   sentenceSamples: number;
   silenceMs: number;
   inFlight: Set<Promise<unknown>>;
+  /** Serializes final-sentence commits so editor sinks insert sentences in spoken order. */
+  finalChain: Promise<unknown>;
   stopped: boolean;
   draftFailureReported: boolean;
   wakeLock: WakeLockSentinel | null;
 }
 
 export interface UseVoiceInputOptions {
-  editorRef: React.RefObject<HTMLDivElement>;
+  /** Where dictated text is rendered; owns editor-specific writes and the caller's state sync. */
+  sink: DictationSink;
   /** Whether the dictation-refine task model is configured; read live at stop time to decide whether to offer polish. */
   isRefineEnabled: () => boolean;
-  /** Re-sync the caller's editorValue state after every DOM write. */
-  onEditorChanged: () => void;
   onError: (message: string) => void;
 }
 
 /**
- * Chat-composer dictation: near-real-time draft transcription plus per-pause
- * whole-sentence retranscription. The context-aware LLM rewrite is manual — after
- * a round ends the composer offers a polish action the user triggers on demand,
- * so a slow network never blocks stopping.
+ * Dictation with near-real-time draft transcription plus per-pause whole-sentence
+ * retranscription. The context-aware LLM rewrite is manual — after a round ends the caller
+ * offers a polish action the user triggers on demand, so a slow network never blocks stopping.
  *
- * Text lands in `<span data-dict-slot>` elements appended to the editor end —
- * one slot per sentence, never character offsets — so sentence replacement,
- * manual-edit conflict detection and multi-round append all stay DOM-local.
+ * Text rendering is delegated to a DictationSink: the chat composer writes one
+ * `<span data-dict-slot>` per sentence, while the article editor commits finalized sentences into
+ * Tiptap. Sentence replacement, manual-edit conflict detection and multi-round append all stay
+ * sink-local.
  */
-export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onError }: UseVoiceInputOptions) {
+export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputOptions) {
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const sessionRef = useRef<Session | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -141,28 +149,21 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
     setPhase('idle');
   }, [onError, teardown]);
 
-  const renderSlot = useCallback((slot: Slot) => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    if (!slot.el.isConnected) editor.appendChild(slot.el);
+  const renderSlot = useCallback((slot: Slot, final: boolean) => {
     const text = [...slot.fragments.entries()]
       .sort((a, b) => a[0] - b[0])
       .map(([, t]) => t)
       .join('');
-    slot.el.textContent = text;
     slot.lastWritten = text;
-    onEditorChanged();
-  }, [editorRef, onEditorChanged]);
+    slot.handle.setText(text, final);
+  }, []);
 
   const openSlot = useCallback((session: Session): Slot => {
-    const editor = editorRef.current!;
-    const el = document.createElement('span');
-    el.dataset.dictSlot = String(session.slots.length);
-    const slot: Slot = { el, fragments: new Map(), lastWritten: '', finalized: false };
-    editor.appendChild(el);
+    const handle = sink.openSlot();
+    const slot: Slot = { handle, fragments: new Map(), lastWritten: '', finalized: false };
     session.slots.push(slot);
     return slot;
-  }, [editorRef]);
+  }, [sink]);
 
   const track = useCallback((session: Session, promise: Promise<unknown>) => {
     session.inFlight.add(promise);
@@ -185,7 +186,7 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
       .then((text) => {
         if (slot.finalized || !text) return;
         slot.fragments.set(seq, text);
-        renderSlot(slot);
+        renderSlot(slot, false);
       })
       .catch((e: unknown) => {
         failSession(session, e);
@@ -208,21 +209,43 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
 
     if (samples.length >= MIN_SENTENCE_SAMPLES) {
       slot.finalized = true;
-      track(session, asrService.transcribeSegment(encodeWav(samples)).then((text) => {
-        if (!text) return;
+      // Final passes run one after another: a slow earlier response must not commit after a later
+      // sentence in single-anchor editor sinks.
+      const finalPass = session.finalChain.then(async () => {
+        const text = await tryTranscribe(samples);
         // Manual-edit conflict: only replace a slot the user has not touched.
-        if (slot.el.textContent !== slot.lastWritten) return;
+        if (slot.handle.getText() !== slot.lastWritten) return;
+        if (!text) {
+          // Empty or failed correction while draft text is already visible. Editor sinks only
+          // commit on `final`, so this is the last chance to keep that text.
+          renderSlot(slot, true);
+          return;
+        }
         slot.fragments.clear();
         slot.fragments.set(0, text);
-        renderSlot(slot);
-      }).catch(() => { /* the draft text stands; a failed correction pass must not end dictation */ }));
+        renderSlot(slot, true);
+      });
+      session.finalChain = finalPass;
+      track(session, finalPass);
     }
 
     if (openNext) {
       session.current = openSlot(session);
-    } else if (slot.fragments.size === 0 && slot.el.textContent === '') {
-      slot.el.remove();
+    } else if (slot.fragments.size === 0 && slot.handle.getText() === '') {
+      slot.finalized = true;
+      slot.handle.remove();
       session.slots.pop();
+    } else if (samples.length < MIN_SENTENCE_SAMPLES) {
+      // Too little audio for a correction pass: commit the visible draft through the final chain,
+      // so an earlier sentence whose correction is still in flight cannot land after it in a
+      // single-anchor editor sink. Marking the slot closed also rejects any late draft write.
+      slot.finalized = true;
+      const tailCommit = session.finalChain.then(async () => {
+        if (slot.handle.getText() !== slot.lastWritten) return;
+        renderSlot(slot, true);
+      });
+      session.finalChain = tailCommit;
+      track(session, tailCommit);
     }
   }, [openSlot, renderSlot, track]);
 
@@ -243,31 +266,6 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
     const pauseHit = session.silenceMs >= SILENCE_MS && session.sentenceSamples >= MIN_SENTENCE_SAMPLES;
     if (pauseHit || session.sentenceSamples >= SENTENCE_MAX_SAMPLES) closeSentence(session, true);
   }, [closeSentence, flushDraft]);
-
-  /** Editor text strictly outside the given slot range, via scratch clones. */
-  const contextAround = useCallback((slots: Slot[]): { before: string; after: string } => {
-    const editor = editorRef.current;
-    const first = slots[0]?.el;
-    const last = slots[slots.length - 1]?.el;
-    if (!editor || !first || !last) return { before: '', after: '' };
-    const head = document.createElement('div');
-    const tail = document.createElement('div');
-    let walk: 'head' | 'skip' | 'tail' = 'head';
-    for (const node of Array.from(editor.childNodes)) {
-      if (node === first) {
-        // A single-slot round ends at `first`; there is no middle to skip.
-        walk = slots.length === 1 ? 'tail' : 'skip';
-        continue;
-      }
-      if (node === last) { walk = 'tail'; continue; }
-      if (walk === 'head') head.appendChild(node.cloneNode(true));
-      else if (walk === 'tail') tail.appendChild(node.cloneNode(true));
-    }
-    return {
-      before: readMessageEditorText(head).slice(-CONTEXT_WINDOW_CHARS),
-      after: readMessageEditorText(tail).slice(0, CONTEXT_WINDOW_CHARS),
-    };
-  }, [editorRef]);
 
   const stopAndFinish = useCallback(async () => {
     const session = sessionRef.current;
@@ -298,10 +296,10 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
     // Offer a manual polish of this round instead of blocking on an LLM rewrite —
     // the composer is usable immediately, and the user decides whether to spend it.
     lastRoundRef.current = session.slots;
-    const roundText = session.slots.map((s) => s.el.textContent ?? '').join('');
+    const roundText = sink.roundText(session.slots.map((s) => s.handle));
     if (isRefineEnabled() && roundText.trim().length >= REFINE_MIN_CHARS) setCanRefine(true);
     setPhase('idle');
-  }, [closeSentence, isRefineEnabled, teardown]);
+  }, [closeSentence, isRefineEnabled, sink, teardown]);
 
   /**
    * Capture dies when the page is hidden (screen lock, app switch) or the system
@@ -318,8 +316,6 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
 
   const start = useCallback(async () => {
     if (sessionRef.current || startingRef.current) return;
-    const editor = editorRef.current;
-    if (!editor) return;
     // A new round supersedes the previous one's polish offer.
     setCanRefine(false);
     startingRef.current = true;
@@ -347,7 +343,8 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
         slots: [], current: null as unknown as Slot, seq: 0,
         draftBuf: [], draftSamples: 0,
         sentenceBuf: [], sentenceSamples: 0,
-        silenceMs: 0, inFlight: new Set(), stopped: false, draftFailureReported: false,
+        silenceMs: 0, inFlight: new Set(), finalChain: Promise.resolve(),
+        stopped: false, draftFailureReported: false,
         wakeLock: null,
       };
       // The page can go away while permissions and the worklet load; starting
@@ -358,6 +355,7 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
         pendingInterruptNoticeRef.current = true;
         return;
       }
+      sink.beginRound();
       session.current = openSlot(session);
       sessionRef.current = session;
       analyserRef.current = analyser;
@@ -375,7 +373,7 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
     } finally {
       startingRef.current = false;
     }
-  }, [acquireWakeLock, editorRef, interrupt, onError, onFrame, openSlot, teardown]);
+  }, [acquireWakeLock, interrupt, onError, onFrame, openSlot, sink, teardown]);
 
   /**
    * Manual polish: LLM-rewrite the last dictation round in place, using surrounding
@@ -384,22 +382,21 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
    */
   const refine = useCallback(async () => {
     if (refining) return;
-    const editor = editorRef.current;
-    const slots = lastRoundRef.current.filter((s) => s.el.isConnected);
-    if (!editor || slots.length === 0) { setCanRefine(false); return; }
-    const roundText = slots.map((s) => s.el.textContent ?? '').join('');
+    const slots = lastRoundRef.current.filter((s) => s.handle.isConnected());
+    if (slots.length === 0) { setCanRefine(false); return; }
+    const handles = slots.map((s) => s.handle);
+    const roundText = sink.roundText(handles);
     if (roundText.trim().length < REFINE_MIN_CHARS) return;
     setRefining(true);
-    const { before, after } = contextAround(slots);
+    const { before, after } = sink.contextAround(handles);
     try {
       const refined = await Promise.race([
         asrService.refineText(roundText, before, after),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('refine timeout')), REFINE_TIMEOUT_MS)),
       ]);
-      const current = slots.map((s) => s.el.textContent ?? '').join('');
+      const current = sink.roundText(handles);
       if (refined && current === roundText) {
-        slots.forEach((s, i) => { s.el.textContent = i === 0 ? refined : ''; });
-        onEditorChanged();
+        sink.replaceRound(handles, refined);
       }
     } catch {
       // raw transcription stands
@@ -407,7 +404,7 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
       setRefining(false);
       setCanRefine(false);
     }
-  }, [contextAround, editorRef, onEditorChanged, refining]);
+  }, [refining, sink]);
 
   /** Drop the polish offer — used when the editor is cleared (sent or deleted). */
   const dismissRefine = useCallback(() => {
