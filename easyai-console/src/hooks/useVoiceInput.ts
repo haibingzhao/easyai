@@ -28,6 +28,8 @@ const REFINE_TIMEOUT_MS = 20_000;
 const FINALIZE_TIMEOUT_MS = 2_500;
 /** Context handed to the refine model, both sides. */
 const CONTEXT_WINDOW_CHARS = 2_000;
+/** Shown when capture ends without the user pressing stop. */
+const INTERRUPT_NOTICE = 'Voice input stopped (screen off or app switched away); captured audio was kept';
 
 interface Slot {
   el: HTMLSpanElement;
@@ -53,6 +55,7 @@ interface Session {
   inFlight: Set<Promise<unknown>>;
   stopped: boolean;
   draftFailureReported: boolean;
+  wakeLock: WakeLockSentinel | null;
 }
 
 export interface UseVoiceInputOptions {
@@ -81,6 +84,8 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
   // start() awaits getUserMedia/addModule before sessionRef exists — without this
   // guard a second click during that window creates a second, unstoppable session.
   const startingRef = useRef(false);
+  /** An interrupt fired while the page was hidden; the notice waits for the user to return. */
+  const pendingInterruptNoticeRef = useRef(false);
   /** Manual polish in flight; drives the spinner on the polish action. */
   const [refining, setRefining] = useState(false);
   /** Whether to offer the manual polish action for the last completed round. */
@@ -90,11 +95,35 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
 
   const teardown = useCallback((session: Session) => {
     session.stopped = true;
+    session.ctx.onstatechange = null;
+    if (session.wakeLock) {
+      void session.wakeLock.release().catch(() => undefined);
+      session.wakeLock = null;
+    }
     session.worklet.port.onmessage = null;
     session.stream.getTracks().forEach((t) => t.stop());
     void session.ctx.close().catch(() => undefined);
     if (sessionRef.current === session) sessionRef.current = null;
     if (analyserRef.current === session.analyser) analyserRef.current = null;
+  }, []);
+
+  /**
+   * Phones drop microphone capture the moment the screen turns off, so a display
+   * that auto-locks mid-dictation would silently end the recording. Failure to
+   * acquire (unsupported browser, battery saver, iframe policy) is not fatal —
+   * the visibility handling below still finalizes the captured audio cleanly.
+   */
+  const acquireWakeLock = useCallback((session: Session) => {
+    if (!('wakeLock' in navigator)) return;
+    void navigator.wakeLock.request('screen')
+      .then((sentinel) => {
+        if (session.stopped) {
+          void sentinel.release().catch(() => undefined);
+          return;
+        }
+        session.wakeLock = sentinel;
+      })
+      .catch(() => undefined);
   }, []);
 
   /** A backend transcription error is not transient here — close the mic instead of retrying. */
@@ -215,52 +244,6 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
     if (pauseHit || session.sentenceSamples >= SENTENCE_MAX_SAMPLES) closeSentence(session, true);
   }, [closeSentence, flushDraft]);
 
-  const start = useCallback(async () => {
-    if (sessionRef.current || startingRef.current) return;
-    const editor = editorRef.current;
-    if (!editor) return;
-    // A new round supersedes the previous one's polish offer.
-    setCanRefine(false);
-    startingRef.current = true;
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
-    } catch {
-      startingRef.current = false;
-      onError(i18n('Microphone unavailable or permission denied'));
-      return;
-    }
-    try {
-      const ctx = new AudioContext({ sampleRate: 16_000 });
-      await ctx.audioWorklet.addModule(new URL('../audio/capture-processor.js', import.meta.url).toString());
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      const worklet = new AudioWorkletNode(ctx, 'capture-processor');
-      source.connect(analyser);
-      analyser.connect(worklet);
-      worklet.connect(ctx.destination);
-
-      const session: Session = {
-        ctx, stream, analyser, worklet,
-        slots: [], current: null as unknown as Slot, seq: 0,
-        draftBuf: [], draftSamples: 0,
-        sentenceBuf: [], sentenceSamples: 0,
-        silenceMs: 0, inFlight: new Set(), stopped: false, draftFailureReported: false,
-      };
-      session.current = openSlot(session);
-      sessionRef.current = session;
-      analyserRef.current = analyser;
-      worklet.port.onmessage = (ev: MessageEvent<Float32Array>) => onFrame(session, ev.data);
-      setPhase('recording');
-    } catch (e) {
-      stream.getTracks().forEach((t) => t.stop());
-      onError(e instanceof Error ? e.message : i18n('Microphone unavailable or permission denied'));
-    } finally {
-      startingRef.current = false;
-    }
-  }, [editorRef, onError, onFrame, openSlot]);
-
   /** Editor text strictly outside the given slot range, via scratch clones. */
   const contextAround = useCallback((slots: Slot[]): { before: string; after: string } => {
     const editor = editorRef.current;
@@ -321,6 +304,80 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
   }, [closeSentence, isRefineEnabled, teardown]);
 
   /**
+   * Capture dies when the page is hidden (screen lock, app switch) or the system
+   * interrupts the audio session. Finalize what was captured instead of leaving a
+   * dead recorder on screen; while hidden the notice is deferred to the return to
+   * foreground, otherwise the user never sees it.
+   */
+  const interrupt = useCallback((session: Session) => {
+    if (sessionRef.current !== session || session.stopped) return;
+    if (document.visibilityState === 'hidden') pendingInterruptNoticeRef.current = true;
+    else onError(i18n(INTERRUPT_NOTICE));
+    void stopAndFinish();
+  }, [onError, stopAndFinish]);
+
+  const start = useCallback(async () => {
+    if (sessionRef.current || startingRef.current) return;
+    const editor = editorRef.current;
+    if (!editor) return;
+    // A new round supersedes the previous one's polish offer.
+    setCanRefine(false);
+    startingRef.current = true;
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+    } catch {
+      startingRef.current = false;
+      onError(i18n('Microphone unavailable or permission denied'));
+      return;
+    }
+    try {
+      const ctx = new AudioContext({ sampleRate: 16_000 });
+      await ctx.audioWorklet.addModule(new URL('../audio/capture-processor.js', import.meta.url).toString());
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      const worklet = new AudioWorkletNode(ctx, 'capture-processor');
+      source.connect(analyser);
+      analyser.connect(worklet);
+      worklet.connect(ctx.destination);
+
+      const session: Session = {
+        ctx, stream, analyser, worklet,
+        slots: [], current: null as unknown as Slot, seq: 0,
+        draftBuf: [], draftSamples: 0,
+        sentenceBuf: [], sentenceSamples: 0,
+        silenceMs: 0, inFlight: new Set(), stopped: false, draftFailureReported: false,
+        wakeLock: null,
+      };
+      // The page can go away while permissions and the worklet load; starting
+      // capture is impossible then, so fail cleanly instead of showing a live
+      // recorder that is not receiving audio.
+      if (document.visibilityState === 'hidden') {
+        teardown(session);
+        pendingInterruptNoticeRef.current = true;
+        return;
+      }
+      session.current = openSlot(session);
+      sessionRef.current = session;
+      analyserRef.current = analyser;
+      ctx.onstatechange = () => {
+        // iOS reports lock-screen as "interrupted"; any non-running state means
+        // capture is dead, so finalize instead of leaving a fake recorder open.
+        if (ctx.state !== 'running') interrupt(session);
+      };
+      worklet.port.onmessage = (ev: MessageEvent<Float32Array>) => onFrame(session, ev.data);
+      setPhase('recording');
+      acquireWakeLock(session);
+    } catch (e) {
+      stream.getTracks().forEach((t) => t.stop());
+      onError(e instanceof Error ? e.message : i18n('Microphone unavailable or permission denied'));
+    } finally {
+      startingRef.current = false;
+    }
+  }, [acquireWakeLock, editorRef, interrupt, onError, onFrame, openSlot, teardown]);
+
+  /**
    * Manual polish: LLM-rewrite the last dictation round in place, using surrounding
    * editor text as context. Reads the slots' current text so edits made after stopping
    * are honored; if the region changes during the call, the user's text wins.
@@ -357,6 +414,27 @@ export function useVoiceInput({ editorRef, isRefineEnabled, onEditorChanged, onE
     setCanRefine(false);
     lastRoundRef.current = [];
   }, []);
+
+  // Hidden pages lose the microphone, so close the round the moment it happens;
+  // on return, surface the deferred notice and re-arm the wake lock if the
+  // browser dropped it with the screen.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        const session = sessionRef.current;
+        if (session) interrupt(session);
+        return;
+      }
+      if (pendingInterruptNoticeRef.current) {
+        pendingInterruptNoticeRef.current = false;
+        onError(i18n(INTERRUPT_NOTICE));
+      }
+      const session = sessionRef.current;
+      if (session && (!session.wakeLock || session.wakeLock.released)) acquireWakeLock(session);
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [acquireWakeLock, interrupt, onError]);
 
   // Release the microphone if the composer unmounts mid-recording.
   useEffect(() => () => {
