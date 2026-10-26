@@ -12,7 +12,7 @@ import { Markdown } from 'tiptap-markdown';
 import type { Editor } from '@tiptap/core';
 import type { MarkdownStorage } from 'tiptap-markdown';
 import {
-  ArrowLeft, Save, Loader2, Sparkles, Share2,
+  ArrowLeft, Save, Loader2, Sparkles,
   Bold, Italic, Strikethrough,
   Heading1, Heading2, List, ListOrdered,
   Quote, Code, Link2, Minus,
@@ -21,7 +21,6 @@ import {
 import { useKnowledgeStore } from '@/services/stores/knowledge-store';
 import { knowledgeService } from '@/services/knowledge-service';
 import { useEnabledModels } from '@/hooks/useEnabledModels';
-import { AccessManagementDialog } from '@/components/knowledge/AccessManagementDialog';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { NEW_ARTICLE_KEY } from '@/components/knowledge/constants';
 import { readErrorMessage } from '@/services/api-client';
@@ -71,7 +70,6 @@ export const ArticleEditorPage: React.FC = () => {
   const [aiError, setAiError] = useState<string | null>(null);
   const [linkPanelOpen, setLinkPanelOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');
-  const [shareOpen, setShareOpen] = useState(false);
   const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const initializedRef = useRef(false);
   const appliedContentKeyRef = useRef<string | null>(null);
@@ -400,15 +398,6 @@ export const ArticleEditorPage: React.FC = () => {
           {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
           {i18n('Save')}
         </button>
-        {currentArticle?.canManage && (
-          <button
-            onClick={() => setShareOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs border border-border hover:bg-muted transition-colors"
-          >
-            <Share2 className="size-3.5" />
-            {i18n('Share')}
-          </button>
-        )}
       </div>
 
       {readOnly && (
@@ -604,15 +593,6 @@ export const ArticleEditorPage: React.FC = () => {
             </button>
           </div>
         </BubbleMenu>
-      )}
-
-      {/* Share dialog */}
-      {currentArticle?.canManage && (
-        <AccessManagementDialog
-          open={shareOpen}
-          onClose={() => setShareOpen(false)}
-          article={currentArticle}
-        />
       )}
 
       <ConfirmDialog

@@ -57,9 +57,10 @@ import com.easy.easyai.repository.todo.AsyncTodoStore
 import com.easy.easyai.repository.todo.R2dbcAsyncTodoStore
 import com.easy.easyai.repository.todo.TodoCompletionCheck
 import com.easy.easyai.repository.user.R2dbcUserStore
-import com.easy.easyai.core.knowledge.KnowledgeAccessStore
+import com.easy.easyai.core.knowledge.DefaultKnowledgeAccessPolicy
+import com.easy.easyai.core.knowledge.KnowledgeAccessGuard
+import com.easy.easyai.core.knowledge.KnowledgeAccessPolicy
 import com.easy.easyai.core.knowledge.KnowledgeArticleStore
-import com.easy.easyai.repository.knowledge.R2dbcKnowledgeAccessStore
 import com.easy.easyai.repository.knowledge.R2dbcKnowledgeArticleStore
 import com.easy.easyai.skills.SkillPromptSource
 import com.easy.easyai.skills.SkillRegistry
@@ -70,6 +71,7 @@ import com.easy.easyai.tools.mcp.AsyncMcpServerStore
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.tools.mcp.McpToolProvider
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
@@ -623,8 +625,19 @@ class R2dbcRepositoryAutoConfiguration(
     }
 
     @Bean
-    @ConditionalOnMissingBean(KnowledgeAccessStore::class)
-    fun knowledgeAccessStore(initializer: R2dbcDatabaseInitializer): KnowledgeAccessStore {
-        return R2dbcKnowledgeAccessStore(initializer.getDatabase())
-    }
+    @ConditionalOnMissingBean(KnowledgeAccessPolicy::class)
+    fun knowledgeAccessPolicy(
+        @Value("\${easyai.knowledge.shared-within-group:false}") sharedWithinGroup: Boolean,
+    ): KnowledgeAccessPolicy = DefaultKnowledgeAccessPolicy(sharedWithinGroup)
+
+    /**
+     * Lives next to the [KnowledgeArticleStore] it needs; knowledge tools fail closed when no
+     * guard bean is present, so a host without this autoconfigure must provide both beans.
+     */
+    @Bean
+    @ConditionalOnMissingBean(KnowledgeAccessGuard::class)
+    fun knowledgeAccessGuard(
+        policy: KnowledgeAccessPolicy,
+        articleStore: KnowledgeArticleStore,
+    ): KnowledgeAccessGuard = KnowledgeAccessGuard(policy, articleStore)
 }

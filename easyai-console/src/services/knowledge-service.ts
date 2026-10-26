@@ -45,7 +45,6 @@ export interface KnowledgeArticleDto {
   source: string;
   relativePath: string;
   ext: string;
-  visibility: string;
   origin: string;
   canWrite: boolean;
   canManage: boolean;
@@ -59,7 +58,6 @@ export interface SaveArticleRequest {
   source?: string;
   relativePath?: string;
   category?: string;
-  visibility?: string;
   origin?: string;
   originSessionId?: string;
   originMessageId?: string;
@@ -97,26 +95,6 @@ export interface AiComposeRequest {
   guidance: string;
   style: string;
   modelConfigId: string;
-}
-
-export interface KnowledgeAccessDto {
-  id: string;
-  articleId: string;
-  granteeId: string;
-  permission: string;
-  grantedBy: string;
-  grantedAt: number;
-}
-
-export interface GrantAccessRequest {
-  articleId: string;
-  granteeId: string;
-  permission: string;
-}
-
-export interface UpdateVisibilityRequest {
-  articleId: string;
-  visibility: string;
 }
 
 class KnowledgeService {
@@ -212,33 +190,6 @@ class KnowledgeService {
   async aiCompose(request: AiComposeRequest): Promise<AiResultDto> {
     return fetchJson<AiResultDto>(`${this.baseUrl}/ai-compose`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    });
-  }
-
-  async listAccess(articleId: string): Promise<KnowledgeAccessDto[]> {
-    return fetchJson<KnowledgeAccessDto[]>(`${this.baseUrl}/access/${encodeURIComponent(articleId)}`);
-  }
-
-  async grantAccess(request: GrantAccessRequest): Promise<{ success: boolean }> {
-    return fetchJson<{ success: boolean }>(`${this.baseUrl}/access`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    });
-  }
-
-  async revokeAccess(articleId: string, granteeId: string): Promise<{ success: boolean }> {
-    return fetchJson<{ success: boolean }>(
-      `${this.baseUrl}/access?articleId=${encodeURIComponent(articleId)}&granteeId=${encodeURIComponent(granteeId)}`,
-      { method: 'DELETE' }
-    );
-  }
-
-  async updateVisibility(request: UpdateVisibilityRequest): Promise<{ success: boolean }> {
-    return fetchJson<{ success: boolean }>(`${this.baseUrl}/visibility`, {
-      method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     });

@@ -966,15 +966,15 @@ object Tables {
 
     /**
      * Knowledge article metadata. OSS holds the content (source of truth), EasyRAG the derived
-     * vector index; this table powers the article listing page with permission-aware queries.
+     * vector index.
      *
-     * `visibility` controls the default read scope: 'private' = creator only (+ granted users),
-     * 'group' = all members of the creator's group. Write access always requires ownership or
-     * an explicit 'write' grant in [KnowledgeAccessTable].
+     * `user_id` is the storage/RAG bucket (personal or group), while `created_by` is the login
+     * user used by the host [com.easy.easyai.core.knowledge.KnowledgeAccessPolicy].
      */
     object KnowledgeArticleTable : Table("knowledge_article") {
         val id = varchar("id", 255)
         val userId = varchar("user_id", 255).default("system")
+        val createdBy = varchar("created_by", 255).nullable()
         val knowledgeKey = varchar("knowledge_key", 512)
         val ossKey = varchar("oss_key", 1024).default("")
         val title = varchar("title", 255).default("")
@@ -984,7 +984,6 @@ object Tables {
         val relativePath = varchar("relative_path", 512)
         val ext = varchar("ext", 16).default("md")
         val contentHash = varchar("content_hash", 64).nullable()
-        val visibility = varchar("visibility", 16).default("private")
         val origin = varchar("origin", 32).default("upload")
         val originSessionId = varchar("origin_session_id", 255).nullable()
         val originMessageId = varchar("origin_message_id", 255).nullable()
@@ -998,28 +997,7 @@ object Tables {
             uniqueIndex(userId, knowledgeKey)
             index(false, userId, articleSource)
             index(false, userId, origin)
-            index(false, userId, visibility)
         }
     }
 
-    /**
-     * Per-document access control list. Each row grants a specific permission ('read' or 'write')
-     * to a specific user on a specific article. Absence means no access (unless the article's
-     * visibility grants it implicitly).
-     */
-    object KnowledgeAccessTable : Table("knowledge_article_access") {
-        val id = varchar("id", 255)
-        val articleId = varchar("article_id", 255)
-        val granteeId = varchar("grantee_id", 255)
-        val permission = varchar("permission", 16).default("read")
-        val grantedBy = varchar("granted_by", 255)
-        val grantedAt = long("granted_at")
-
-        override val primaryKey = PrimaryKey(id)
-
-        init {
-            uniqueIndex(articleId, granteeId)
-            index(false, granteeId)
-        }
-    }
 }

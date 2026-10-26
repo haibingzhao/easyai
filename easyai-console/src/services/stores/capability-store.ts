@@ -60,17 +60,3 @@ export const useCapabilityStore = create<CapabilityState>((set) => {
  */
 export const selectCanManage = (kind: AssetKind) => (state: CapabilityState): boolean =>
   state.capabilities?.assets[kind]?.canManage ?? true;
-
-/**
- * Whether this login writes knowledge into a shared group bucket. In that mode `private` has no
- * meaning — every member can read/write the bucket — so the UI hides per-article visibility.
- */
-export const selectKnowledgeShared = (state: CapabilityState): boolean =>
-  state.capabilities?.assets.knowledge?.ownerId != null;
-
-/**
- * Whether this login carries a group at all. Without one, `group` visibility has no read path behind
- * it, so offering the choice would only store a label that grants nothing.
- */
-export const selectHasGroup = (state: CapabilityState): boolean =>
-  state.capabilities?.groupId != null;

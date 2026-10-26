@@ -7,6 +7,8 @@ package com.easy.easyai.core.knowledge
 data class KnowledgeArticle(
     val id: String,
     val userId: String,
+    /** Login user that created the article; used by the host access policy. Null for legacy rows. */
+    val createdBy: String? = null,
     val knowledgeKey: String,
     val ossKey: String,
     val title: String,
@@ -16,7 +18,6 @@ data class KnowledgeArticle(
     val relativePath: String,
     val ext: String,
     val contentHash: String?,
-    val visibility: String,
     val origin: String,
     val originSessionId: String?,
     val originMessageId: String?,

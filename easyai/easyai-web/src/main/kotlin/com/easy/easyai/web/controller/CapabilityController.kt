@@ -1,5 +1,7 @@
 package com.easy.easyai.web.controller
 
+import com.easy.easyai.core.knowledge.KnowledgeAccessContext
+import com.easy.easyai.core.knowledge.KnowledgeAccessPolicy
 import com.easy.easyai.core.storage.StorageSettingsService
 import com.easy.easyai.core.storage.StorageSource
 import com.easy.easyai.rag.RagConfig
@@ -7,6 +9,7 @@ import com.easy.easyai.tools.web.IntegrationConfig
 import com.easy.easyai.web.security.currentGroupId
 import com.easy.easyai.web.security.currentGroupUserId
 import com.easy.easyai.web.security.currentOwners
+import com.easy.easyai.web.security.getCurrentUserId
 import com.easy.easyai.web.security.isGroupOwner
 import kotlinx.coroutines.reactor.mono
 import org.springframework.beans.factory.annotation.Autowired
@@ -22,12 +25,13 @@ import reactor.core.publisher.Mono
  *
  * The framework shares every A-class asset (model / aux / mcp / agent / skill / storage) through one
  * group bucket, so the answer is uniform: a member reads the group's assets but may not manage them
- * ([AssetCapability.canManage] mirrors `isGroupOwner`), while the owner may. Two kinds differ:
+ * Two kinds differ:
  *  - **storage** — a deployment-wide `easyai.storage.*` STATIC layer pins the bucket for everyone, so
  *    nobody manages it through the UI and [CapabilitiesDto.setupMode] reports `static`;
- *  - **knowledge** — with `easyai.knowledge.shared-within-group=true` every member reads *and writes*
- *    the same group slice by design (there is no owner gate in `KnowledgeController`), so `canManage`
- *    stays true for all members; when it is off, knowledge is personal and again self-managed.
+ *  - **knowledge** — visibility and creation are delegated to the host
+ *    [KnowledgeAccessPolicy]. Its [AssetCapability.canManage] is projected from `canCreate`
+ *    (the console uses it as the "new article" gate); per-article write/manage flags come from
+ *    the article list, not from this snapshot.
  *
  * Three kinds are **platform-level**, not group assets: `rag`, `integrations` and `database`. They are
  * deployment-wide file configurations in a single-tenant / desktop deployment (everyone manages their
@@ -44,8 +48,7 @@ import reactor.core.publisher.Mono
 class CapabilityController(
     @param:Autowired(required = false)
     private val storageSettingsService: StorageSettingsService? = null,
-    @param:Value("\${easyai.knowledge.shared-within-group:false}")
-    private val knowledgeSharedWithinGroup: Boolean = false,
+    private val knowledgeAccessPolicy: KnowledgeAccessPolicy,
     /** Which layer pinned the database: `file` (editable) or `spring` (deployment-wide, read-only). */
     @param:Value("\${easyai.database.source:file}")
     private val databaseSource: String = "file"
@@ -57,12 +60,17 @@ class CapabilityController(
         val groupUserId = currentGroupUserId()
         val owner = isGroupOwner()
         val storageStatic = storageSettingsService?.effectiveSource(currentOwners()) == StorageSource.STATIC
+        val knowledgeContext = KnowledgeAccessContext(
+            userId = getCurrentUserId(),
+            groupUserId = groupUserId,
+            owners = currentOwners(),
+        )
+        val knowledgeCanView = knowledgeAccessPolicy.canView(knowledgeContext)
+        val knowledgeCanCreate = knowledgeAccessPolicy.canCreate(knowledgeContext)
 
         // Without a group there is nothing shared to gate: every user manages their own assets.
         val groupManaged = groupId != null
         val canManageGroup = !groupManaged || owner
-        // Knowledge is shared-writable: members write the group slice too, so it is never owner-gated.
-        val knowledgeShared = groupManaged && knowledgeSharedWithinGroup
 
         // Platform-level kinds: manageable only while they are file-driven, not pinned by properties.
         val ragStatic = RagConfig.isStaticOverridden()
@@ -74,7 +82,13 @@ class CapabilityController(
                 kind == KIND_STORAGE && storageStatic ->
                     AssetCapability(canRead = true, canManage = false, ownerId = null)
                 kind == KIND_KNOWLEDGE ->
-                    AssetCapability(canRead = true, canManage = true, ownerId = if (knowledgeShared) groupUserId else null)
+                    AssetCapability(
+                        canRead = knowledgeCanView,
+                        // The console uses this as the "new article" gate; per-article flags come
+                        // from /api/knowledge/articles.
+                        canManage = knowledgeCanCreate,
+                        ownerId = null
+                    )
                 else ->
                     AssetCapability(
                         canRead = true,
@@ -109,7 +123,10 @@ class CapabilityController(
     }
 }
 
-/** Whether the current login may read and/or manage one asset kind's group bucket. */
+/**
+ * Whether the current login may read and/or manage one asset kind's group bucket.
+ * For knowledge, [canManage] is the create gate (`canCreate`), not "manage any article".
+ */
 data class AssetCapability(
     val canRead: Boolean,
     val canManage: Boolean,

@@ -105,6 +105,17 @@ interface KnowledgeStore {
     ): List<KnowledgeEntry>
 
     /**
+     * List entry keys under an owner bucket without reading document bodies.
+     * Access filtering only needs keys; implementations backed by remote storage should
+     * override this to skip the per-document content fetch of [list].
+     *
+     * @param userId owner user id
+     * @param source filter by source (null = all)
+     */
+    suspend fun listKeys(userId: String, source: String? = null): List<String> =
+        list(userId, source).map { it.key }
+
+    /**
      * Read full detail of a knowledge entry including relationships.
      *
      * @param userId owner user id
@@ -136,6 +147,16 @@ interface KnowledgeStore {
      * @return number of entries deleted
      */
     suspend fun deleteSource(userId: String, source: String): Int
+
+    /**
+     * Delete a known set of entries (the caller has already filtered them by access).
+     * The default implementation deletes one by one; remote stores should override it with a
+     * batch delete.
+     *
+     * @return number of entries deleted
+     */
+    suspend fun deleteEntries(userId: String, keys: Collection<String>): Int =
+        keys.count { delete(userId, it) }
 
     /**
      * List all distinct sources for the user.

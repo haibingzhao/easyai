@@ -1,6 +1,9 @@
 package com.easy.easyai.web.controller
 
 import com.easy.easyai.common.util.SharedObjectMapper
+import com.easy.easyai.core.knowledge.KnowledgeAccessContext
+import com.easy.easyai.core.knowledge.KnowledgeAccessGuard
+import com.easy.easyai.core.knowledge.KnowledgeArticle
 import com.easy.easyai.core.knowledge.KnowledgeEntry
 import com.easy.easyai.core.knowledge.KnowledgeOwnership
 import com.easy.easyai.core.knowledge.KnowledgeStore
@@ -9,7 +12,9 @@ import com.easy.easyai.web.model.*
 import com.easy.easyai.web.security.currentGroupUserId
 import com.easy.easyai.web.security.currentOwners
 import com.easy.easyai.web.security.getCurrentUserId
+import com.easy.easyai.web.service.AccessibleKnowledgeArticle
 import com.easy.easyai.web.service.KnowledgeArticleService
+import com.easy.easyai.web.service.KnowledgePathValidator
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.coroutines.reactor.mono
 import org.slf4j.LoggerFactory
@@ -34,7 +39,7 @@ import reactor.core.publisher.Mono
  * - GET /api/knowledge/sources — List distinct sources
  * - GET /api/knowledge/detail — Get full detail with relationships
  * - DELETE /api/knowledge — Delete a single entry by key
- * - DELETE /api/knowledge/source/{source} — Delete all entries from a source
+ * - DELETE /api/knowledge/source/{source} — Delete readable entries from a source
  *
  * Article editing endpoints (require KnowledgeArticleService):
  * - GET /api/knowledge/articles — List visible articles (DB-backed)
@@ -44,16 +49,18 @@ import reactor.core.publisher.Mono
  * - POST /api/knowledge/ai-rewrite — AI full article rewrite
  * - POST /api/knowledge/ai-modify-selection — AI modify selected text
  * - POST /api/knowledge/ai-compose — AI compose article from materials
- * - POST /api/knowledge/access — Grant access to article
- * - DELETE /api/knowledge/access — Revoke access
- * - GET /api/knowledge/access/{articleId} — List access grants
- * - PUT /api/knowledge/visibility — Update article visibility
+ *
+ * All content access goes through [KnowledgeAccessGuard] / [KnowledgeArticleService], which
+ * delegate to the host-provided KnowledgeAccessPolicy. Listing endpoints answer an empty
+ * collection when the policy denies view; entry lookups answer 404 instead of leaking
+ * existence, while article writes answer 403.
  */
 @RestController
 @RequestMapping("/api/knowledge")
 class KnowledgeController(
     @param:Autowired(required = false) private val knowledgeStore: KnowledgeStore?,
     @param:Autowired(required = false) private val articleService: KnowledgeArticleService?,
+    @param:Autowired(required = false) private val accessGuard: KnowledgeAccessGuard?,
     @param:Value("\${easyai.knowledge.shared-within-group:false}") private val sharedWithinGroup: Boolean = false
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -65,20 +72,24 @@ class KnowledgeController(
             KnowledgeOwnership.ownerId(getCurrentUserId(), null, false)
         }
 
+    private suspend fun accessContext(): KnowledgeAccessContext = KnowledgeAccessContext(
+        userId = getCurrentUserId(),
+        groupUserId = currentGroupUserId(),
+        owners = currentOwners(),
+    )
+
     // ── Original RAG-backed endpoints ─────────────────────────────────
 
     @PostMapping("/upload", consumes = [MediaType.MULTIPART_FORM_DATA_VALUE])
     fun uploadFiles(
         exchange: ServerWebExchange,
         @RequestParam(value = "source", required = false) source: String?,
-        @RequestParam(value = "category", required = false) category: String?,
-        @RequestParam(value = "visibility", required = false, defaultValue = "private") visibility: String
+        @RequestParam(value = "category", required = false) category: String?
     ): Mono<UploadResponseDto> {
         return exchange.multipartData.flatMap { multipartData ->
             mono {
-                val store = knowledgeStore ?: throw knowledgeNotEnabled()
-                val userId = getCurrentUserId()
-                val ownerId = knowledgeOwnerId()
+                val service = articleService ?: throw knowledgeNotEnabled()
+                val context = accessContext()
 
                 val fileParts = multipartData["files"]?.filterIsInstance<FilePart>() ?: emptyList()
                 val pathsPart = multipartData["paths"]?.firstOrNull()
@@ -92,56 +103,24 @@ class KnowledgeController(
                     )
                 }
 
+                // Validate before reading file bodies; the service repeats the check for callers
+                // that do not come through this controller.
                 paths.forEach { path -> validateRelativePath(path) }
 
                 val resolvedSource = source?.takeIf { it.isNotBlank() } ?: "default"
                 validateSource(resolvedSource)
 
-                logger.info("Uploading {} file(s) for source '{}' with category '{}' by user '{}'", fileParts.size, resolvedSource, category, userId)
+                logger.info(
+                    "Uploading {} file(s) for source '{}' with category '{}' by user '{}'",
+                    fileParts.size, resolvedSource, category, context.userId
+                )
 
                 val items = fileParts.zip(paths).map { (filePart, path) ->
-                    val content = readPartContent(filePart)
-                    KnowledgeUploadItem(relativePath = path, content = content)
+                    KnowledgeUploadItem(relativePath = path, content = readPartContent(filePart))
                 }
-
-                val results = store.uploadBatch(ownerId, resolvedSource, items, category)
-
-                // Also save to DB + OSS when article service is available
-                if (articleService != null) {
-                    for ((item, result) in items.zip(results)) {
-                        if (result.success) {
-                            try {
-                                val title = item.content.lines().firstOrNull { it.startsWith("#") }
-                                    ?.trimStart('#')?.trim()
-                                    ?: item.relativePath.substringAfterLast('/').substringBeforeLast('.')
-                                articleService.saveArticle(
-                                    userId = userId,
-                                    groupUserId = currentGroupUserId(),
-                                    title = title,
-                                    content = item.content,
-                                    source = resolvedSource,
-                                    relativePath = item.relativePath,
-                                    category = category ?: "other",
-                                    visibility = visibility,
-                                    origin = "upload"
-                                )
-                            } catch (e: Exception) {
-                                logger.warn("Failed to save article metadata for {}: {}", item.relativePath, e.message)
-                            }
-                        }
-                    }
-                }
-
-                val dtoResults = results.map { r ->
-                    UploadResultDto(
-                        relativePath = r.relativePath,
-                        success = r.success,
-                        key = r.key,
-                        reason = r.reason
-                    )
-                }
+                val results = service.uploadItems(context, resolvedSource, category, items)
                 UploadResponseDto(
-                    results = dtoResults,
+                    results = results.map { UploadResultDto(it.relativePath, it.success, it.key, it.reason) },
                     totalFiles = results.size,
                     successCount = results.count { it.success },
                     failedCount = results.count { !it.success }
@@ -158,7 +137,14 @@ class KnowledgeController(
     ): Mono<List<KnowledgeEntryDto>> {
         return mono {
             val store = knowledgeStore ?: return@mono emptyList()
-            store.list(knowledgeOwnerId(), source, category, q).map { toEntryDto(it) }
+            val service = articleService
+            val context = accessContext()
+            if (service != null && !service.canView(context)) return@mono emptyList()
+            val guard = accessGuard ?: throw knowledgeNotEnabled()
+            val ownerId = knowledgeOwnerId()
+            val entries = store.list(ownerId, source, category, q)
+            val readable = guard.filterReadableEntries(context, ownerId, entries.map { it.key })
+            entries.filter { it.key in readable }.map { toEntryDto(it) }
         }
     }
 
@@ -166,16 +152,27 @@ class KnowledgeController(
     fun listSources(): Mono<List<String>> {
         return mono {
             val store = knowledgeStore ?: return@mono emptyList()
-            store.sources(knowledgeOwnerId())
+            val service = articleService
+            val context = accessContext()
+            if (service != null && !service.canView(context)) return@mono emptyList()
+            val guard = accessGuard ?: throw knowledgeNotEnabled()
+            val ownerId = knowledgeOwnerId()
+            // Keys only: listing document bodies just to derive their sources is an N+1.
+            val readable = guard.filterReadableEntries(context, ownerId, store.listKeys(ownerId))
+            readable.map { it.substringBefore('/') }.distinct().sorted()
         }
     }
 
     @GetMapping("/detail")
     fun getDetail(@RequestParam key: String): Mono<KnowledgeDetailDto> {
         return mono {
-            val store = knowledgeStore
-                ?: throw knowledgeNotEnabled()
+            val store = knowledgeStore ?: throw knowledgeNotEnabled()
+            val guard = accessGuard ?: throw knowledgeNotEnabled()
+            val context = accessContext()
             validateRelativePath(key)
+            if (!guard.canReadEntry(context, knowledgeOwnerId(), key)) {
+                throw ResponseStatusException(HttpStatus.NOT_FOUND, "Knowledge entry not found: $key")
+            }
             val detail = store.detail(knowledgeOwnerId(), key)
                 ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Knowledge entry not found: $key")
             KnowledgeDetailDto(
@@ -192,9 +189,13 @@ class KnowledgeController(
     @DeleteMapping
     fun deleteEntry(@RequestParam key: String): Mono<Map<String, Boolean>> {
         return mono {
-            val store = knowledgeStore
-                ?: throw knowledgeNotEnabled()
+            val store = knowledgeStore ?: throw knowledgeNotEnabled()
+            val guard = accessGuard ?: throw knowledgeNotEnabled()
+            val context = accessContext()
             validateRelativePath(key)
+            if (!guard.canManageEntry(context, knowledgeOwnerId(), key)) {
+                throw ResponseStatusException(HttpStatus.NOT_FOUND, "Knowledge entry not found: $key")
+            }
             val deleted = store.delete(knowledgeOwnerId(), key)
             mapOf("deleted" to deleted)
         }
@@ -203,11 +204,16 @@ class KnowledgeController(
     @DeleteMapping("/source/{source}")
     fun deleteSource(@PathVariable source: String): Mono<Map<String, Int>> {
         return mono {
-            val store = knowledgeStore
-                ?: throw knowledgeNotEnabled()
+            val store = knowledgeStore ?: throw knowledgeNotEnabled()
+            val guard = accessGuard ?: throw knowledgeNotEnabled()
+            val context = accessContext()
             validateSource(source)
-            val count = store.deleteSource(knowledgeOwnerId(), source)
-            mapOf("deleted" to count)
+            val ownerId = knowledgeOwnerId()
+            val keys = store.listKeys(ownerId, source)
+            val deletable = guard.filterManageableEntries(context, ownerId, keys)
+            // Batch delete only the entries the caller may manage; deleteSource() would remove
+            // entries that were just filtered out.
+            mapOf("deleted" to store.deleteEntries(ownerId, deletable))
         }
     }
 
@@ -220,26 +226,9 @@ class KnowledgeController(
     ): Mono<List<KnowledgeArticleDto>> {
         return mono {
             val service = articleService ?: throw knowledgeNotEnabled()
-            val userId = getCurrentUserId()
-            val groupUserId = currentGroupUserId()
-            service.listVisible(userId, groupUserId, source, category).map { article ->
-                KnowledgeArticleDto(
-                    id = article.id,
-                    knowledgeKey = article.knowledgeKey,
-                    title = article.title,
-                    description = article.description,
-                    category = article.category,
-                    source = article.source,
-                    relativePath = article.relativePath,
-                    ext = article.ext,
-                    visibility = article.visibility,
-                    origin = article.origin,
-                    canWrite = service.canWrite(article, userId, groupUserId),
-                    canManage = service.canManage(article, userId, groupUserId),
-                    createdAt = article.createdAt,
-                    updatedAt = article.updatedAt
-                )
-            }
+            // Same rule as /entries and /sources: a denied view yields an empty list, while
+            // single-entry endpoints answer 404 instead of leaking existence.
+            service.listAccessible(accessContext(), source, category).map { toArticleDto(it) }
         }
     }
 
@@ -247,41 +236,20 @@ class KnowledgeController(
     fun saveArticle(@RequestBody request: SaveArticleRequestDto): Mono<KnowledgeArticleDto> {
         return mono {
             val service = articleService ?: throw knowledgeNotEnabled()
-            val userId = getCurrentUserId()
-            val groupUserId = currentGroupUserId()
-            val relativePath = request.relativePath
-                ?: "${request.title.lowercase().replace(Regex("[^a-z0-9\\u4e00-\\u9fff]+"), "-").trim('-')}.md"
-
+            val context = accessContext()
             val article = service.saveArticle(
-                userId = userId,
-                groupUserId = groupUserId,
+                context = context,
                 title = request.title,
                 content = request.content,
                 source = request.source,
-                relativePath = relativePath,
+                relativePath = request.relativePath,
                 category = request.category,
-                visibility = request.visibility,
                 origin = request.origin,
                 originSessionId = request.originSessionId,
                 originMessageId = request.originMessageId,
                 composedFrom = request.composedFrom
             )
-            KnowledgeArticleDto(
-                id = article.id,
-                knowledgeKey = article.knowledgeKey,
-                title = article.title,
-                description = article.description,
-                category = article.category,
-                source = article.source,
-                relativePath = article.relativePath,
-                ext = article.ext,
-                visibility = article.visibility,
-                origin = article.origin,
-                canWrite = true,
-                canManage = service.canManage(article, userId, groupUserId),
-                createdAt = article.createdAt,
-                updatedAt = article.updatedAt
-            )
+            toArticleDto(context, article, service)
         }
     }
 
@@ -290,32 +258,15 @@ class KnowledgeController(
         return mono {
             val service = articleService ?: throw knowledgeNotEnabled()
             validateRelativePath(request.key)
-            val userId = getCurrentUserId()
-            val groupUserId = currentGroupUserId()
+            val context = accessContext()
             val article = service.updateArticle(
-                userId = userId,
-                groupUserId = groupUserId,
+                context = context,
                 key = request.key,
                 content = request.content,
                 title = request.title,
                 category = request.category
             )
-            KnowledgeArticleDto(
-                id = article.id,
-                knowledgeKey = article.knowledgeKey,
-                title = article.title,
-                description = article.description,
-                category = article.category,
-                source = article.source,
-                relativePath = article.relativePath,
-                ext = article.ext,
-                visibility = article.visibility,
-                origin = article.origin,
-                canWrite = true,
-                canManage = service.canManage(article, userId, groupUserId),
-                createdAt = article.createdAt,
-                updatedAt = article.updatedAt
-            )
+            toArticleDto(context, article, service)
         }
     }
 
@@ -324,7 +275,7 @@ class KnowledgeController(
         return mono {
             val service = articleService ?: throw knowledgeNotEnabled()
             validateRelativePath(key)
-            val deleted = service.deleteArticle(getCurrentUserId(), currentGroupUserId(), key)
+            val deleted = service.deleteArticle(accessContext(), key)
             mapOf("deleted" to deleted)
         }
     }
@@ -334,7 +285,7 @@ class KnowledgeController(
         return mono {
             val service = articleService ?: throw knowledgeNotEnabled()
             validateRelativePath(key)
-            val content = service.readContent(getCurrentUserId(), currentGroupUserId(), key)
+            val content = service.readContent(accessContext(), key)
                 ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Article content not found: $key")
             mapOf("content" to content)
         }
@@ -346,8 +297,7 @@ class KnowledgeController(
             val service = articleService ?: throw knowledgeNotEnabled()
             validateRelativePath(request.key)
             val result = service.aiRewrite(
-                userId = getCurrentUserId(),
-                groupUserId = currentGroupUserId(),
+                context = accessContext(),
                 key = request.key,
                 content = request.content,
                 instruction = request.instruction,
@@ -364,8 +314,7 @@ class KnowledgeController(
             val service = articleService ?: throw knowledgeNotEnabled()
             validateRelativePath(request.key)
             val result = service.aiModifySelection(
-                userId = getCurrentUserId(),
-                groupUserId = currentGroupUserId(),
+                context = accessContext(),
                 key = request.key,
                 content = request.content,
                 selectedText = request.selectedText,
@@ -382,8 +331,7 @@ class KnowledgeController(
         return mono {
             val service = articleService ?: throw knowledgeNotEnabled()
             val result = service.aiCompose(
-                userId = getCurrentUserId(),
-                groupUserId = currentGroupUserId(),
+                context = accessContext(),
                 sourceKeys = request.sourceKeys,
                 guidance = request.guidance,
                 style = request.style,
@@ -394,83 +342,18 @@ class KnowledgeController(
         }
     }
 
-    @PostMapping("/access")
-    fun grantAccess(@RequestBody request: GrantAccessRequestDto): Mono<Map<String, Boolean>> {
-        return mono {
-            val service = articleService ?: throw knowledgeNotEnabled()
-            service.grantAccess(
-                articleId = request.articleId,
-                granteeId = request.granteeId,
-                permission = request.permission,
-                grantedBy = getCurrentUserId(),
-                groupUserId = currentGroupUserId()
-            )
-            mapOf("success" to true)
-        }
-    }
-
-    @DeleteMapping("/access")
-    fun revokeAccess(
-        @RequestParam articleId: String,
-        @RequestParam granteeId: String
-    ): Mono<Map<String, Boolean>> {
-        return mono {
-            val service = articleService ?: throw knowledgeNotEnabled()
-            service.revokeAccess(articleId, granteeId, getCurrentUserId(), currentGroupUserId())
-            mapOf("success" to true)
-        }
-    }
-
-    @GetMapping("/access/{articleId}")
-    fun listAccess(@PathVariable articleId: String): Mono<List<KnowledgeAccessDto>> {
-        return mono {
-            val service = articleService ?: throw knowledgeNotEnabled()
-            service.listAccess(articleId, getCurrentUserId(), currentGroupUserId()).map { access ->
-                KnowledgeAccessDto(
-                    id = access.id,
-                    articleId = access.articleId,
-                    granteeId = access.granteeId,
-                    permission = access.permission,
-                    grantedBy = access.grantedBy,
-                    grantedAt = access.grantedAt
-                )
-            }
-        }
-    }
-
-    @PutMapping("/visibility")
-    fun updateVisibility(@RequestBody request: UpdateVisibilityRequestDto): Mono<Map<String, Boolean>> {
-        return mono {
-            val service = articleService ?: throw knowledgeNotEnabled()
-            service.updateVisibility(request.articleId, request.visibility, getCurrentUserId(), currentGroupUserId())
-            mapOf("success" to true)
-        }
-    }
-
     // ── Helpers ────────────────────────────────────────────────────────
 
     private fun knowledgeNotEnabled(): ResponseStatusException =
         ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Knowledge system is not enabled")
 
-    /**
-     * Validate that a path is relative and does not contain traversal sequences.
-     */
-    private fun validateRelativePath(path: String) {
-        if (path.isBlank()) throw badRequest("Path must not be blank")
-        if (path.startsWith("/")) throw badRequest("Path must be relative, not absolute: $path")
-        if (path.contains("..")) throw badRequest("Path must not contain '..': $path")
-        if (path.contains("\\")) throw badRequest("Path must not contain backslash: $path")
-    }
+    /** Delegates to the service-boundary validator so HTTP and tool callers share one rule. */
+    private fun validateRelativePath(path: String) = KnowledgePathValidator.validateRelativePath(path)
 
     /**
      * Validate a source label: single path segment without separators or traversal.
      */
-    private fun validateSource(source: String) {
-        if (source.isBlank()) throw badRequest("Source must not be blank")
-        if (source.contains("/")) throw badRequest("Source must not contain '/': $source")
-        if (source.contains("..")) throw badRequest("Source must not contain '..': $source")
-        if (source.contains("\\")) throw badRequest("Source must not contain backslash: $source")
-    }
+    private fun validateSource(source: String) = KnowledgePathValidator.validateSource(source)
 
     private fun badRequest(message: String): ResponseStatusException =
         ResponseStatusException(HttpStatus.BAD_REQUEST, message)
@@ -513,4 +396,37 @@ class KnowledgeController(
             updatedAt = e.updatedAt,
             chunksCount = e.chunksCount
         )
+
+    private fun toArticleDto(item: AccessibleKnowledgeArticle): KnowledgeArticleDto =
+        toArticleDto(item.article, item.canWrite, item.canManage)
+
+    private suspend fun toArticleDto(
+        context: KnowledgeAccessContext,
+        article: KnowledgeArticle,
+        service: KnowledgeArticleService,
+    ): KnowledgeArticleDto = toArticleDto(
+        article = article,
+        canWrite = service.canWrite(context, article),
+        canManage = service.canManage(context, article),
+    )
+
+    private fun toArticleDto(
+        article: KnowledgeArticle,
+        canWrite: Boolean,
+        canManage: Boolean,
+    ): KnowledgeArticleDto = KnowledgeArticleDto(
+        id = article.id,
+        knowledgeKey = article.knowledgeKey,
+        title = article.title,
+        description = article.description,
+        category = article.category,
+        source = article.source,
+        relativePath = article.relativePath,
+        ext = article.ext,
+        origin = article.origin,
+        canWrite = canWrite,
+        canManage = canManage,
+        createdAt = article.createdAt,
+        updatedAt = article.updatedAt
+    )
 }
