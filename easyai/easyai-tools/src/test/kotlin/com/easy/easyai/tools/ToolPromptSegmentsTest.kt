@@ -1,5 +1,6 @@
 package com.easy.easyai.tools
 
+import com.easy.easyai.core.knowledge.KnowledgeAccessGuard
 import com.easy.easyai.tools.background.BackgroundTaskManagerRegistry
 import com.easy.easyai.tools.background.RunBackgroundToolBuilder
 import com.easy.easyai.tools.calc.ScriptCalcToolBuilder
@@ -8,6 +9,7 @@ import com.easy.easyai.tools.memory.MemorySearchToolBuilder
 import com.easy.easyai.tools.visual.RenderVisualToolBuilder
 import io.mockk.mockk
 import org.junit.jupiter.api.Test
+import org.springframework.beans.factory.ObjectProvider
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -24,6 +26,12 @@ class ToolPromptSegmentsTest {
         assertNotNull(value, "builder must declare a systemPromptSegment")
         return value
     }
+
+    private fun knowledgeSearchBuilder(sharedWithinGroup: Boolean = false) =
+        KnowledgeSearchToolBuilder(
+            sharedWithinGroup,
+            mockk<ObjectProvider<KnowledgeAccessGuard>>(relaxed = true),
+        )
 
     @Test
     fun `calc segment teaches on-demand time access without a concrete timestamp`() {
@@ -62,7 +70,7 @@ class ToolPromptSegmentsTest {
 
     @Test
     fun `knowledge segment guides parallel issuance together with memory search`() {
-        val guidance = segment(KnowledgeSearchToolBuilder(false).metadata.systemPromptSegment)
+        val guidance = segment(knowledgeSearchBuilder().metadata.systemPromptSegment)
         assertTrue(guidance.contains("## Knowledge Base"), guidance)
         assertTrue(guidance.contains("knowledge_search"), guidance)
         assertTrue(guidance.contains("SAME response"), guidance)
@@ -86,7 +94,7 @@ class ToolPromptSegmentsTest {
     fun `segments sort into the declared order regardless of registration order`() {
         val registered = listOf(
             RenderVisualToolBuilder(),
-            KnowledgeSearchToolBuilder(false),
+            knowledgeSearchBuilder(),
             RunBackgroundToolBuilder(mockk<BackgroundTaskManagerRegistry>(relaxed = true)),
             ScriptCalcToolBuilder(),
             MemorySearchToolBuilder()

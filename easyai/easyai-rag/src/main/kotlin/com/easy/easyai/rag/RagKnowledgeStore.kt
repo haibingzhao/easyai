@@ -265,6 +265,23 @@ internal class RagKnowledgeStore(
         return deleted
     }
 
+    override suspend fun deleteEntries(userId: String, keys: Collection<String>): Int {
+        if (keys.isEmpty()) return 0
+        val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
+        var deleted = 0
+        // One list + one batch delete per source instead of a read/delete round-trip per key.
+        for ((source, sourceKeys) in keys.groupBy { it.substringBefore('/') }) {
+            val prefix = "${RagConstants.FILE_PATH_ROOT}/$source/"
+            val docIds = client.list(prefix, bizId)
+                .filter { extractKeyFromPath(it.filePath) in sourceKeys }
+                .map { it.docId }
+                .distinct()
+            if (docIds.isNotEmpty()) deleted += client.batchDelete(docIds, bizId)
+        }
+        logger.debug("Deleted {} knowledge entries by key", deleted)
+        return deleted
+    }
+
     // ── sources ────────────────────────────────────────────────────────
 
     override suspend fun sources(userId: String): List<String> {
@@ -277,6 +294,16 @@ internal class RagKnowledgeStore(
             val afterPrefix = fp.removePrefix(prefix)
             afterPrefix.substringBefore('/')
         }.distinct().sorted()
+    }
+
+    override suspend fun listKeys(userId: String, source: String?): List<String> {
+        val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
+        val pathPrefix = if (source != null) {
+            "${RagConstants.FILE_PATH_ROOT}/$source/"
+        } else {
+            "${RagConstants.FILE_PATH_ROOT}/"
+        }
+        return client.list(pathPrefix, bizId).mapNotNull { extractKeyFromPath(it.filePath) }.distinct()
     }
 
     // ── update ─────────────────────────────────────────────────────────

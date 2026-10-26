@@ -1,6 +1,8 @@
 package com.easy.easyai.tools.knowledge
 
 import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.knowledge.KnowledgeAccessContext
+import com.easy.easyai.core.knowledge.KnowledgeAccessGuard
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.tool.BaseToolDefinition
@@ -12,7 +14,9 @@ import kotlinx.coroutines.CoroutineScope
 internal class KnowledgeReadTool(
     metadata: ToolMetadata,
     private val store: KnowledgeStore,
-    private val knowledgeOwnerId: String
+    private val knowledgeOwnerId: String,
+    private val accessGuard: KnowledgeAccessGuard,
+    private val accessContext: KnowledgeAccessContext,
 ) : BaseToolDefinition(metadata) {
 
     data class Parameters(val key: String)
@@ -31,6 +35,9 @@ internal class KnowledgeReadTool(
             return errorResult("Error: 'key' parameter is required.")
         }
 
+        if (!accessGuard.canReadEntry(accessContext, knowledgeOwnerId, key)) {
+            return errorResult("Knowledge entry not found: $key")
+        }
         val content = store.read(knowledgeOwnerId, key)
             ?: return errorResult("Knowledge entry not found: $key")
         return ToolResult(content = listOf(TextContent(content)))

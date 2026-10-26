@@ -5,6 +5,9 @@ import kotlinx.coroutines.flow.Flow
 /**
  * Async knowledge article storage interface using Exposed R2DBC.
  * All operations are non-blocking and return suspend functions or Flow.
+ *
+ * Access control is not part of the store: callers resolve the owner buckets and ask the
+ * configured [KnowledgeAccessPolicy].
  */
 interface KnowledgeArticleStore {
     /**
@@ -13,7 +16,7 @@ interface KnowledgeArticleStore {
     suspend fun save(article: KnowledgeArticle)
 
     /**
-     * Find an article by its knowledge key for a specific user.
+     * Find an article by its knowledge key for a specific owner bucket.
      */
     suspend fun findByKey(userId: String, knowledgeKey: String): KnowledgeArticle?
 
@@ -23,30 +26,17 @@ interface KnowledgeArticleStore {
     suspend fun findById(id: String): KnowledgeArticle?
 
     /**
-     * Find an article explicitly granted to [granteeId] by [knowledgeKey].
-     * Keys are only unique per owner, so when several granted rows share the key the newest wins.
+     * Batch lookup by knowledge keys inside one owner bucket.
      */
-    suspend fun findGrantedByKey(granteeId: String, knowledgeKey: String): KnowledgeArticle?
+    suspend fun findByKeys(userId: String, knowledgeKeys: Collection<String>): List<KnowledgeArticle>
 
     /**
-     * List all articles visible to a user, including:
-     * - Articles owned by the user
-     * - Articles with visibility='group' owned by users in the same group
-     * - Every article in a shared owner bucket (group-shared knowledge), regardless of visibility
-     * - Articles explicitly granted via knowledge_article_access
-     *
-     * @param userId the user requesting the list
-     * @param groupUserIds optional list of group member IDs for group visibility
-     * @param sharedOwnerIds owner buckets whose whole article set is shared with the caller
-     * @param source optional filter by source
-     * @param category optional filter by category
+     * List every article in the given owner buckets, optionally filtered by source/category.
      */
-    fun findAllVisible(
-        userId: String,
-        groupUserIds: List<String> = emptyList(),
-        sharedOwnerIds: List<String> = emptyList(),
+    fun findAllInBuckets(
+        userIds: Collection<String>,
         source: String? = null,
-        category: String? = null
+        category: String? = null,
     ): Flow<KnowledgeArticle>
 
     /**
@@ -55,7 +45,17 @@ interface KnowledgeArticleStore {
     suspend fun delete(id: String)
 
     /**
-     * Delete all articles for a user.
+     * Delete all articles for an owner bucket.
      */
     suspend fun deleteByUser(userId: String)
+
+    /**
+     * Delete all article metadata created by one login user inside an owner bucket.
+     * Used by hosts when a member is removed. This is a metadata-only delete: content in
+     * object storage and RAG entries are left behind. Access is revoked only when the policy
+     * denies entries without metadata ([KnowledgeAccessPolicy.canReadEntry] is permissive by
+     * default), so hosts that call this must override that method or clean the content/index
+     * themselves.
+     */
+    suspend fun deleteByCreatedBy(userId: String, createdBy: String)
 }

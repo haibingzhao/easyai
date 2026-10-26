@@ -62,7 +62,6 @@ data class KnowledgeArticleDto(
     val source: String,
     val relativePath: String,
     val ext: String,
-    val visibility: String,
     val origin: String,
     val canWrite: Boolean,
     val canManage: Boolean,
@@ -79,7 +78,6 @@ data class SaveArticleRequestDto(
     val source: String = "chat-saved",
     val relativePath: String? = null,
     val category: String = "other",
-    val visibility: String = "private",
     val origin: String = "chat_save",
     val originSessionId: String? = null,
     val originMessageId: String? = null,
@@ -132,33 +130,4 @@ data class AiComposeRequestDto(
  */
 data class AiResultDto(
     val content: String
-)
-
-/**
- * Request body for granting access to an article.
- */
-data class GrantAccessRequestDto(
-    val articleId: String,
-    val granteeId: String,
-    val permission: String
-)
-
-/**
- * DTO for access grant entries.
- */
-data class KnowledgeAccessDto(
-    val id: String,
-    val articleId: String,
-    val granteeId: String,
-    val permission: String,
-    val grantedBy: String,
-    val grantedAt: Long
-)
-
-/**
- * Request body for updating article visibility.
- */
-data class UpdateVisibilityRequestDto(
-    val articleId: String,
-    val visibility: String
 )

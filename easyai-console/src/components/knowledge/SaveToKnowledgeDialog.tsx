@@ -3,7 +3,6 @@ import { Dialog } from '@/components/ui/Dialog';
 import { Bookmark } from 'lucide-react';
 import { useCategoryStore } from '@/services/stores/category-store';
 import { useKnowledgeStore } from '@/services/stores/knowledge-store';
-import { useCapabilityStore, selectKnowledgeShared, selectHasGroup } from '@/services/stores/capability-store';
 import { readErrorMessage } from '@/services/api-client';
 import { i18n } from '@/utils/i18n';
 
@@ -24,13 +23,9 @@ export const SaveToKnowledgeDialog: React.FC<SaveToKnowledgeDialogProps> = ({
 }) => {
   const knowledgeCategories = useCategoryStore((s) => s.knowledgeCategories);
   const saveToKnowledge = useKnowledgeStore((s) => s.saveToKnowledge);
-  const knowledgeShared = useCapabilityStore(selectKnowledgeShared);
-  const hasGroup = useCapabilityStore(selectHasGroup);
-  const showVisibility = !knowledgeShared && hasGroup;
 
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('other');
-  const [visibility, setVisibility] = useState<'private' | 'group'>('private');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedTitle, setSavedTitle] = useState<string | null>(null);
@@ -49,17 +44,11 @@ export const SaveToKnowledgeDialog: React.FC<SaveToKnowledgeDialogProps> = ({
         .trim();
       setTitle(cleaned.slice(0, 80));
       setCategory('other');
-      setVisibility('private');
       setSaving(false);
       setError(null);
       setSavedTitle(null);
     }
   }, [open, content]);
-
-  // The shared bucket is group-wide by construction; forcing the value keeps the UI honest.
-  useEffect(() => {
-    if (open && knowledgeShared) setVisibility('group');
-  }, [open, knowledgeShared]);
 
   const handleSave = async () => {
     if (!title.trim() || !content.trim() || saving) return;
@@ -70,7 +59,6 @@ export const SaveToKnowledgeDialog: React.FC<SaveToKnowledgeDialogProps> = ({
         title: title.trim(),
         content,
         category,
-        visibility: knowledgeShared ? 'group' : showVisibility ? visibility : 'private',
         originSessionId: sessionId,
         originMessageId: messageId,
       });
@@ -100,51 +88,20 @@ export const SaveToKnowledgeDialog: React.FC<SaveToKnowledgeDialogProps> = ({
           />
         </div>
 
-        {/* Category + Visibility row */}
-        <div className="flex gap-4">
-          <div className="flex-1">
-            <label className="block text-sm font-medium mb-1">{i18n('Category')}</label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-            >
-              {knowledgeCategories.map((c) => (
-                <option key={c.code} value={c.code}>
-                  {i18n(c.labelKey)}
-                </option>
-              ))}
-            </select>
-          </div>
-          {showVisibility && (
-            <div className="flex-1">
-              <label className="block text-sm font-medium mb-1">{i18n('Visibility')}</label>
-              <div className="flex gap-3 mt-2">
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input
-                    type="radio"
-                    name="visibility"
-                    value="private"
-                    checked={visibility === 'private'}
-                    onChange={() => setVisibility('private')}
-                    className="accent-primary"
-                  />
-                  {i18n('Private')}
-                </label>
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input
-                    type="radio"
-                    name="visibility"
-                    value="group"
-                    checked={visibility === 'group'}
-                    onChange={() => setVisibility('group')}
-                    className="accent-primary"
-                  />
-                  {i18n('Group')}
-                </label>
-              </div>
-            </div>
-          )}
+        {/* Category */}
+        <div>
+          <label className="block text-sm font-medium mb-1">{i18n('Category')}</label>
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+          >
+            {knowledgeCategories.map((c) => (
+              <option key={c.code} value={c.code}>
+                {i18n(c.labelKey)}
+              </option>
+            ))}
+          </select>
         </div>
 
         {/* Content preview */}

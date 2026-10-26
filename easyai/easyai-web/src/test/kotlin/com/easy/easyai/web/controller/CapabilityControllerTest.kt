@@ -1,6 +1,10 @@
 package com.easy.easyai.web.controller
 
 import com.easy.easyai.auth.group.GroupClaims
+import com.easy.easyai.core.knowledge.DefaultKnowledgeAccessPolicy
+import com.easy.easyai.core.knowledge.KnowledgeAccessContext
+import com.easy.easyai.core.knowledge.KnowledgeAccessPolicy
+import com.easy.easyai.core.knowledge.KnowledgeArticle
 import com.easy.easyai.core.storage.StorageSettingsService
 import com.easy.easyai.core.storage.StorageSource
 import com.easy.easyai.rag.RagConfig
@@ -23,9 +27,16 @@ class CapabilityControllerTest {
 
     private fun controller(
         storage: StorageSettingsService? = null,
-        knowledgeSharedWithinGroup: Boolean = false,
+        knowledgeAccessPolicy: KnowledgeAccessPolicy = DefaultKnowledgeAccessPolicy(),
         databaseSource: String = "file"
-    ) = CapabilityController(storage, knowledgeSharedWithinGroup, databaseSource)
+    ) = CapabilityController(storage, knowledgeAccessPolicy, databaseSource)
+
+    private fun readOnlyKnowledgePolicy() = object : KnowledgeAccessPolicy {
+        override suspend fun canView(context: KnowledgeAccessContext) = true
+        override suspend fun canCreate(context: KnowledgeAccessContext) = false
+        override suspend fun canRead(context: KnowledgeAccessContext, article: KnowledgeArticle) = true
+        override suspend fun canWrite(context: KnowledgeAccessContext, article: KnowledgeArticle) = false
+    }
 
     @AfterEach
     fun tearDown() {
@@ -90,24 +101,25 @@ class CapabilityControllerTest {
         }
 
         @Test
-        fun `knowledge stays member-writable when shared within the group`() {
-            val dto = controller(knowledgeSharedWithinGroup = true)
+        fun `knowledge creation follows the host policy`() {
+            val dto = controller(knowledgeAccessPolicy = readOnlyKnowledgePolicy())
                 .capabilities().contextWrite(asGroupMember(isOwner = false)).block()!!
 
             val knowledge = dto.assets.getValue("knowledge")
             // A member may not manage the owner-gated kinds…
             assertFalse(dto.assets.getValue("model").canManage)
-            // …but knowledge is shared-writable by design: every member writes the group slice.
-            assertTrue(knowledge.canManage)
-            assertEquals("grp-1", knowledge.ownerId)
+            // …and the article capability mirrors the host policy exactly.
+            assertTrue(knowledge.canRead)
+            assertFalse(knowledge.canManage)
+            assertNull(knowledge.ownerId)
         }
 
         @Test
-        fun `knowledge is personal when not shared within the group`() {
-            val dto = controller(knowledgeSharedWithinGroup = false)
-                .capabilities().contextWrite(asGroupMember(isOwner = false)).block()!!
+        fun `knowledge is personal and writable under the default policy`() {
+            val dto = controller().capabilities().contextWrite(asGroupMember(isOwner = false)).block()!!
 
             val knowledge = dto.assets.getValue("knowledge")
+            assertTrue(knowledge.canRead)
             assertTrue(knowledge.canManage)
             assertNull(knowledge.ownerId)
         }

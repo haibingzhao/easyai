@@ -5,9 +5,11 @@ package com.easy.easyai.core.knowledge
  *
  * Knowledge lives in one RAG slice per owner id (biz_id `u_{owner}_k`). By default that owner is the
  * calling user, so knowledge is personal. When `easyai.knowledge.shared-within-group` is on and the
- * login carries a group bucket, the owner becomes the group id instead — the household owner and every
- * member then read and write the very same slice, which is how knowledge is shared without any new
- * table or RAG configuration. Memory is deliberately NOT shared this way (it stays per-user).
+ * login carries a group bucket, the owner becomes the group id instead — every member then uses the
+ * very same storage slice without any new table or RAG configuration. Access to that slice is still
+ * decided by [KnowledgeAccessPolicy]: the default policy narrows stamped rows to their creator, so
+ * group-wide read/write requires the host to override the policy. Memory is deliberately NOT shared
+ * this way (it stays per-user).
  *
  * The group bucket is either known explicitly (a request reads it from the token claims) or derived
  * from a runtime owner set `{self, group, system}` by dropping self and system.

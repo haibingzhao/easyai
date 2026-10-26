@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileText, Pencil, Trash2, Eye, EyeOff, Loader2, Plus, Search, Wand2, X } from 'lucide-react';
+import { FileText, Pencil, Trash2, Eye, Loader2, Plus, Search, Wand2, X } from 'lucide-react';
 import { useKnowledgeStore } from '@/services/stores/knowledge-store';
 import { useCategoryStore } from '@/services/stores/category-store';
-import { useCapabilityStore, selectKnowledgeShared } from '@/services/stores/capability-store';
+import { useCapabilityStore, selectCanManage } from '@/services/stores/capability-store';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { ComposeArticleDialog } from '@/components/knowledge/ComposeArticleDialog';
 import { NEW_ARTICLE_KEY } from '@/components/knowledge/constants';
@@ -17,7 +17,9 @@ export const ArticleListPanel: React.FC = () => {
   const loadArticles = useKnowledgeStore((s) => s.loadArticles);
   const deleteArticle = useKnowledgeStore((s) => s.deleteArticle);
   const knowledgeCategories = useCategoryStore((s) => s.knowledgeCategories);
-  const knowledgeShared = useCapabilityStore(selectKnowledgeShared);
+  // Knowledge reports its create permission through canManage; per-article write flags come
+  // from the article rows themselves.
+  const canCreate = useCapabilityStore(selectCanManage('knowledge'));
   const navigate = useNavigate();
 
   const [query, setQuery] = useState('');
@@ -94,21 +96,25 @@ export const ArticleListPanel: React.FC = () => {
               </option>
             ))}
           </select>
-          <button
-            onClick={() => navigate(`/knowledge/editor/${NEW_ARTICLE_KEY}`)}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shrink-0"
-          >
-            <Plus className="size-3.5" />
-            {i18n('New Article')}
-          </button>
-          <button
-            onClick={() => setComposeOpen(true)}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs border border-border hover:bg-muted transition-colors shrink-0"
-            title={i18n('Compose Article')}
-          >
-            <Wand2 className="size-3.5" />
-            {i18n('Compose')}
-          </button>
+          {canCreate && (
+            <button
+              onClick={() => navigate(`/knowledge/editor/${NEW_ARTICLE_KEY}`)}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shrink-0"
+            >
+              <Plus className="size-3.5" />
+              {i18n('New Article')}
+            </button>
+          )}
+          {canCreate && (
+            <button
+              onClick={() => setComposeOpen(true)}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs border border-border hover:bg-muted transition-colors shrink-0"
+              title={i18n('Compose Article')}
+            >
+              <Wand2 className="size-3.5" />
+              {i18n('Compose')}
+            </button>
+          )}
         </div>
       </div>
 
@@ -140,11 +146,6 @@ export const ArticleListPanel: React.FC = () => {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium truncate">{article.title || article.relativePath}</span>
-                {!knowledgeShared && (article.visibility === 'group' ? (
-                  <span title={i18n('Group visible')}><Eye className="size-3 text-muted-foreground shrink-0" /></span>
-                ) : (
-                  <span title={i18n('Private')}><EyeOff className="size-3 text-muted-foreground shrink-0" /></span>
-                ))}
               </div>
               <div className="flex items-center gap-2 mt-0.5">
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-600 dark:text-green-400">

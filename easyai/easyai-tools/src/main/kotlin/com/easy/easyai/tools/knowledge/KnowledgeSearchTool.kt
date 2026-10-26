@@ -1,6 +1,8 @@
 package com.easy.easyai.tools.knowledge
 
 import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.knowledge.KnowledgeAccessContext
+import com.easy.easyai.core.knowledge.KnowledgeAccessGuard
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.tool.BaseToolDefinition
@@ -12,7 +14,9 @@ import kotlinx.coroutines.CoroutineScope
 internal class KnowledgeSearchTool(
     metadata: ToolMetadata,
     private val store: KnowledgeStore,
-    private val knowledgeOwnerId: String
+    private val knowledgeOwnerId: String,
+    private val accessGuard: KnowledgeAccessGuard,
+    private val accessContext: KnowledgeAccessContext,
 ) : BaseToolDefinition(metadata) {
 
     data class Parameters(
@@ -38,11 +42,17 @@ internal class KnowledgeSearchTool(
         val kcategory = args["kcategory"] as? String
 
         val entries = store.list(knowledgeOwnerId, source = source, kcategory = kcategory, query = query)
+        val readable = accessGuard.filterReadableEntries(
+            accessContext,
+            knowledgeOwnerId,
+            entries.map { it.key },
+        )
+        val visible = entries.filter { it.key in readable }
 
-        val text = if (entries.isEmpty()) {
+        val text = if (visible.isEmpty()) {
             "No knowledge entries found matching '$query'."
         } else {
-            val results = entries.map { entry ->
+            val results = visible.map { entry ->
                 "[${entry.key}] ${entry.title} — ${entry.description}\n${entry.content.take(CONTENT_PREVIEW_LIMIT)}"
             }
             "Found ${results.size} knowledge entries:\n\n${results.joinToString("\n\n")}"

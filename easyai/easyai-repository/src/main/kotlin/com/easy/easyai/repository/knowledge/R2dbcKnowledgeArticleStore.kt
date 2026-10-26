@@ -3,7 +3,6 @@ package com.easy.easyai.repository.knowledge
 import com.easy.easyai.core.knowledge.KnowledgeArticle
 import com.easy.easyai.core.knowledge.KnowledgeArticleStore
 import com.easy.easyai.repository.database.Tables
-import com.easy.easyai.repository.database.UserScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
@@ -13,7 +12,6 @@ import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.inList
-import org.jetbrains.exposed.v1.core.or
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
 import org.jetbrains.exposed.v1.r2dbc.deleteWhere
 import org.jetbrains.exposed.v1.r2dbc.insert
@@ -47,7 +45,7 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
                     it[relativePath] = article.relativePath
                     it[ext] = article.ext
                     it[contentHash] = article.contentHash
-                    it[visibility] = article.visibility
+                    it[createdBy] = article.createdBy
                     it[origin] = article.origin
                     it[originSessionId] = article.originSessionId
                     it[originMessageId] = article.originMessageId
@@ -59,6 +57,7 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
                 table.insert {
                     it[id] = article.id
                     it[userId] = article.userId
+                    it[createdBy] = article.createdBy
                     it[knowledgeKey] = article.knowledgeKey
                     it[ossKey] = article.ossKey
                     it[title] = article.title
@@ -68,7 +67,6 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
                     it[relativePath] = article.relativePath
                     it[ext] = article.ext
                     it[contentHash] = article.contentHash
-                    it[visibility] = article.visibility
                     it[origin] = article.origin
                     it[originSessionId] = article.originSessionId
                     it[originMessageId] = article.originMessageId
@@ -105,71 +103,42 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
                 ?.toArticle()
         }
 
-    override suspend fun findGrantedByKey(granteeId: String, knowledgeKey: String): KnowledgeArticle? =
-        suspendTransaction(db) {
+    override suspend fun findByKeys(
+        userId: String,
+        knowledgeKeys: Collection<String>,
+    ): List<KnowledgeArticle> {
+        if (knowledgeKeys.isEmpty()) return emptyList()
+        return suspendTransaction(db) {
             val table = Tables.KnowledgeArticleTable
-            val accessTable = Tables.KnowledgeAccessTable
-
-            val grantedArticleIds = accessTable.selectAll()
-                .where { accessTable.granteeId eq granteeId }
-                .toList()
-                .map { it[accessTable.articleId] }
-
-            if (grantedArticleIds.isEmpty()) return@suspendTransaction null
-
             table.selectAll()
                 .where {
-                    (table.knowledgeKey eq knowledgeKey) and (table.id inList grantedArticleIds)
+                    (table.userId eq userId) and (table.knowledgeKey inList knowledgeKeys.toList())
                 }
-                .orderBy(table.updatedAt to SortOrder.DESC)
-                .limit(1)
                 .toList()
-                .firstOrNull()
-                ?.toArticle()
+                .map { it.toArticle() }
         }
+    }
 
-    override fun findAllVisible(
-        userId: String,
-        groupUserIds: List<String>,
-        sharedOwnerIds: List<String>,
+    override fun findAllInBuckets(
+        userIds: Collection<String>,
         source: String?,
-        category: String?
+        category: String?,
     ): Flow<KnowledgeArticle> = flow {
+        if (userIds.isEmpty()) return@flow
         val table = Tables.KnowledgeArticleTable
-        val accessTable = Tables.KnowledgeAccessTable
-
-        val rows: List<ResultRow> = suspendTransaction(db) {
-            val grantedArticleIds = accessTable.selectAll()
-                .where { accessTable.granteeId eq userId }
-                .toList()
-                .map { it[accessTable.articleId] }
-
-            val filters = mutableListOf<Op<Boolean>>(UserScope.filterStrict(table.userId, userId))
-
-            if (groupUserIds.isNotEmpty()) {
-                filters += (table.visibility eq "group") and (table.userId inList groupUserIds)
-            }
-            if (sharedOwnerIds.isNotEmpty()) {
-                filters += table.userId inList sharedOwnerIds
-            }
-            if (grantedArticleIds.isNotEmpty()) {
-                filters += table.id inList grantedArticleIds
-            }
-
-            var condition = filters.reduce { acc, filter -> acc or filter }
+        val rows = suspendTransaction(db) {
+            var condition: Op<Boolean> = table.userId inList userIds.toList()
             if (!source.isNullOrBlank()) {
                 condition = condition and (table.articleSource eq source)
             }
             if (!category.isNullOrBlank()) {
                 condition = condition and (table.category eq category)
             }
-
             table.selectAll()
                 .where { condition }
                 .orderBy(table.updatedAt to SortOrder.DESC)
                 .toList()
         }
-
         for (row in rows) {
             emit(row.toArticle())
         }
@@ -193,11 +162,23 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
         }
     }
 
+    /** Metadata-only delete; the caller owns OSS/RAG cleanup or a policy that denies orphans. */
+    override suspend fun deleteByCreatedBy(userId: String, createdBy: String) {
+        suspendTransaction(db) {
+            val table = Tables.KnowledgeArticleTable
+            val deleted = table.deleteWhere {
+                (table.userId eq userId) and (table.createdBy eq createdBy)
+            }
+            logger.debug("Deleted {} knowledge articles created by '{}' in bucket '{}'", deleted, createdBy, userId)
+        }
+    }
+
     private fun ResultRow.toArticle(): KnowledgeArticle {
         val table = Tables.KnowledgeArticleTable
         return KnowledgeArticle(
             id = this[table.id],
             userId = this[table.userId],
+            createdBy = this[table.createdBy],
             knowledgeKey = this[table.knowledgeKey],
             ossKey = this[table.ossKey],
             title = this[table.title],
@@ -207,7 +188,6 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
             relativePath = this[table.relativePath],
             ext = this[table.ext],
             contentHash = this[table.contentHash],
-            visibility = this[table.visibility],
             origin = this[table.origin],
             originSessionId = this[table.originSessionId],
             originMessageId = this[table.originMessageId],

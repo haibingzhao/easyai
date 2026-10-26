@@ -4,7 +4,7 @@ import { readErrorMessage } from '@/services/api-client';
 import type {
   KnowledgeEntryDto, KnowledgeDetailDto, UploadResponseDto,
   KnowledgeArticleDto, SaveArticleRequest, UpdateArticleRequest,
-  KnowledgeAccessDto, GrantAccessRequest, AiComposeRequest,
+  AiComposeRequest,
 } from '@/services/knowledge-service';
 
 /** Polling interval (ms) for checking indexing progress after upload. */
@@ -28,11 +28,8 @@ interface KnowledgeStore {
   articleLoading: boolean;
   /** Content fetch state for a single article; separate so the list spinner does not flash. */
   articleContentLoading: boolean;
-  /** Last article operation failure (load/save/delete/permissions). */
+  /** Last article operation failure (load/save/delete). */
   articleError: string | null;
-  /** Access grants for the currently selected article. */
-  accessGrants: KnowledgeAccessDto[];
-  accessLoading: boolean;
   /** AI compose state. */
   composing: boolean;
   composeResult: string | null;
@@ -50,11 +47,6 @@ interface KnowledgeStore {
   updateArticle: (request: UpdateArticleRequest) => Promise<KnowledgeArticleDto>;
   deleteArticle: (key: string) => Promise<void>;
   clearArticleError: () => void;
-  loadAccessGrants: (articleId: string) => Promise<void>;
-  grantAccess: (request: GrantAccessRequest) => Promise<void>;
-  revokeAccess: (articleId: string, granteeId: string) => Promise<void>;
-  updateVisibility: (articleId: string, visibility: string) => Promise<void>;
-  clearAccessGrants: () => void;
   aiCompose: (request: AiComposeRequest) => Promise<string>;
   clearComposeResult: () => void;
   /** Start polling for indexing progress of the given keys. */
@@ -90,8 +82,6 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => {
     articleLoading: false,
     articleContentLoading: false,
     articleError: null,
-    accessGrants: [],
-    accessLoading: false,
     composing: false,
     composeResult: null,
     composeError: null,
@@ -221,52 +211,6 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => {
   },
 
   clearArticleError: () => set({ articleError: null }),
-
-  loadAccessGrants: async (articleId) => {
-    set({ accessLoading: true, articleError: null });
-    try {
-      const accessGrants = await knowledgeService.listAccess(articleId);
-      set({ accessGrants, accessLoading: false });
-    } catch (e) {
-      set({ articleError: readErrorMessage(e), accessLoading: false });
-      throw e;
-    }
-  },
-
-  grantAccess: async (request) => {
-    set({ articleError: null });
-    try {
-      await knowledgeService.grantAccess(request);
-      await get().loadAccessGrants(request.articleId);
-    } catch (e) {
-      set({ articleError: readErrorMessage(e) });
-      throw e;
-    }
-  },
-
-  revokeAccess: async (articleId, granteeId) => {
-    set({ articleError: null });
-    try {
-      await knowledgeService.revokeAccess(articleId, granteeId);
-      await get().loadAccessGrants(articleId);
-    } catch (e) {
-      set({ articleError: readErrorMessage(e) });
-      throw e;
-    }
-  },
-
-  updateVisibility: async (articleId, visibility) => {
-    set({ articleError: null });
-    try {
-      await knowledgeService.updateVisibility({ articleId, visibility });
-      await get().loadArticles().catch(() => undefined);
-    } catch (e) {
-      set({ articleError: readErrorMessage(e) });
-      throw e;
-    }
-  },
-
-  clearAccessGrants: () => set({ accessGrants: [] }),
 
   aiCompose: async (request) => {
     set({ composing: true, composeError: null, composeResult: null });

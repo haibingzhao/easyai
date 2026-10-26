@@ -1,16 +1,21 @@
 package com.easy.easyai.web.service
 
 import com.easy.easyai.api.config.ModelProviderConfigStore
-import com.easy.easyai.core.knowledge.KnowledgeAccessStore
+import com.easy.easyai.core.knowledge.DefaultKnowledgeAccessPolicy
+import com.easy.easyai.core.knowledge.KnowledgeAccessContext
+import com.easy.easyai.core.knowledge.KnowledgeAccessPolicy
 import com.easy.easyai.core.knowledge.KnowledgeArticle
 import com.easy.easyai.core.knowledge.KnowledgeArticleStore
 import com.easy.easyai.core.knowledge.KnowledgeStore
+import com.easy.easyai.core.knowledge.KnowledgeUploadItem
+import com.easy.easyai.core.knowledge.UploadResult
 import com.easy.easyai.core.storage.ObjectContent
 import com.easy.easyai.core.storage.ObjectMeta
 import com.easy.easyai.core.storage.ObjectStorage
 import com.easy.easyai.core.storage.ObjectStorageResolver
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.coVerifyOrder
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.flow.flowOf
@@ -19,42 +24,49 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.springframework.http.HttpStatus
 import org.springframework.web.server.ResponseStatusException
+import java.sql.SQLException
+import java.util.Base64
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class KnowledgeArticleServiceTest {
 
     private val articleStore = mockk<KnowledgeArticleStore>(relaxed = true)
-    private val accessStore = mockk<KnowledgeAccessStore>(relaxed = true)
     private val configStore = mockk<ModelProviderConfigStore>(relaxed = true)
 
     private fun service(
         resolver: ObjectStorageResolver? = null,
         knowledgeStore: KnowledgeStore? = null,
-        sharedWithinGroup: Boolean = false
+        sharedWithinGroup: Boolean = false,
+        policy: KnowledgeAccessPolicy = DefaultKnowledgeAccessPolicy(sharedWithinGroup),
     ) = KnowledgeArticleService(
         objectStorageResolver = resolver,
         knowledgeStore = knowledgeStore,
         articleStore = articleStore,
-        accessStore = accessStore,
+        accessPolicy = policy,
         configStore = configStore,
         modelFactories = emptyList(),
         sharedWithinGroup = sharedWithinGroup
     )
 
+    private fun context(userId: String = "alice", groupUserId: String? = null) =
+        KnowledgeAccessContext(userId = userId, groupUserId = groupUserId)
+
     private fun article(
         id: String = "article-1",
         userId: String = "alice",
+        createdBy: String? = "alice",
         knowledgeKey: String = "manual/a.md",
         ossKey: String = "knowledge-articles/encoded/manual/a.md",
-        visibility: String = "private",
         title: String = "A",
         createdAt: Long = 1L
     ) = KnowledgeArticle(
         id = id,
         userId = userId,
+        createdBy = createdBy,
         knowledgeKey = knowledgeKey,
         ossKey = ossKey,
         title = title,
@@ -64,7 +76,6 @@ class KnowledgeArticleServiceTest {
         relativePath = "a.md",
         ext = "md",
         contentHash = null,
-        visibility = visibility,
         origin = "manual",
         originSessionId = null,
         originMessageId = null,
@@ -74,113 +85,142 @@ class KnowledgeArticleServiceTest {
     )
 
     @Nested
-    inner class SharedGroup {
-
-        private val groupId = "group-1"
+    inner class PolicyAccess {
 
         @Test
-        fun `group bucket rows are writable and manageable by any member`() = runTest {
-            val groupArticle = article(userId = groupId)
-            val svc = service(sharedWithinGroup = true)
+        fun `creator can read and write their own article`() = runTest {
+            val owned = article()
+            val svc = service()
 
-            assertTrue(svc.canWrite(groupArticle, "alice", groupId))
-            assertTrue(svc.canManage(groupArticle, "alice", groupId))
+            assertTrue(svc.canWrite(context(), owned))
+            assertTrue(svc.canManage(context(), owned))
         }
 
         @Test
-        fun `member can delete a group bucket article`() = runTest {
-            val groupArticle = article(id = "article-g", userId = groupId)
-            coEvery { articleStore.findByKey(groupId, groupArticle.knowledgeKey) } returns groupArticle
-            val svc = service(sharedWithinGroup = true)
+        fun `another user cannot read a creator-stamped article`() = runTest {
+            val owned = article()
+            val svc = service()
 
-            assertTrue(svc.deleteArticle("alice", groupId, groupArticle.knowledgeKey))
-            coVerify(exactly = 1) { articleStore.delete("article-g") }
+            assertFalse(svc.canWrite(context("bob"), owned))
         }
 
         @Test
-        fun `member can change visibility of a group bucket article`() = runTest {
-            val groupArticle = article(id = "article-g", userId = groupId)
-            coEvery { articleStore.findById("article-g") } returns groupArticle
-            val svc = service(sharedWithinGroup = true)
+        fun `legacy row without createdBy falls back to the owner bucket`() = runTest {
+            val legacy = article(userId = "bob", createdBy = null)
+            val svc = service()
 
-            svc.updateVisibility("article-g", "group", "alice", groupId)
-
-            coVerify(exactly = 1) {
-                articleStore.save(match { it.id == "article-g" && it.visibility == "group" })
-            }
+            assertTrue(svc.canWrite(context("bob"), legacy))
+            assertFalse(svc.canWrite(context("alice"), legacy))
         }
 
         @Test
-        fun `listVisible includes private rows from the shared bucket`() = runTest {
-            val privateRow = article(userId = groupId, visibility = "private")
-            coEvery {
-                articleStore.findAllVisible("alice", listOf(groupId), listOf(groupId), null, null)
-            } returns flowOf(privateRow)
+        fun `legacy group row stays writable by any member in a shared group`() = runTest {
+            val legacy = article(userId = "grp-1", createdBy = null)
             val svc = service(sharedWithinGroup = true)
 
-            val visible = svc.listVisible("alice", groupId)
-
-            assertEquals(listOf(privateRow), visible)
+            assertTrue(svc.canWrite(context("bob", "grp-1"), legacy))
         }
     }
 
     @Nested
-    inner class IndividualGrants {
+    inner class ListAccessible {
 
         @Test
-        fun `read grant lets a non-owner read content from the owner bucket`() = runTest {
+        fun `unreadable rows are filtered out`() = runTest {
+            val mine = article(id = "mine", knowledgeKey = "manual/mine.md")
+            val theirs = article(id = "theirs", createdBy = "bob", knowledgeKey = "manual/theirs.md")
+            coEvery {
+                articleStore.findAllInBuckets(listOf("alice"), null, null)
+            } returns flowOf(mine, theirs)
+            val svc = service()
+
+            val visible = svc.listAccessible(context())
+
+            assertEquals(listOf("mine"), visible.map { it.article.id })
+        }
+
+        @Test
+        fun `personal bucket row shadows a same-key group row`() = runTest {
+            val personal = article(id = "personal", knowledgeKey = "manual/a.md")
+            val group = article(id = "group", userId = "grp-1", knowledgeKey = "manual/a.md")
+            coEvery { articleStore.findAllInBuckets(listOf("alice"), null, null) } returns flowOf(personal)
+            coEvery { articleStore.findAllInBuckets(listOf("grp-1"), null, null) } returns flowOf(group)
+            val svc = service(sharedWithinGroup = true)
+
+            val visible = svc.listAccessible(context(groupUserId = "grp-1"))
+
+            assertEquals(listOf("personal"), visible.map { it.article.id })
+        }
+    }
+
+    @Nested
+    inner class ContentAccess {
+
+        @Test
+        fun `readContent returns content for the creator`() = runTest {
             val owned = article()
             val bytes = "hello".toByteArray()
             val storage = mockk<ObjectStorage>()
             val resolver = mockk<ObjectStorageResolver>()
-            coEvery { articleStore.findByKey("bob", owned.knowledgeKey) } returns null
-            coEvery { articleStore.findGrantedByKey("bob", owned.knowledgeKey) } returns owned
-            coEvery { accessStore.hasPermission(owned.id, "bob", "read") } returns true
-            coEvery { accessStore.hasPermission(owned.id, "bob", "write") } returns false
+            coEvery { articleStore.findByKey("alice", owned.knowledgeKey) } returns owned
             coEvery { resolver.resolve("alice") } returns storage
             coEvery { storage.get(owned.ossKey) } returns
                 ObjectContent(ObjectMeta(owned.ossKey, bytes.size.toLong()), bytes)
             val svc = service(resolver = resolver)
 
-            assertEquals("hello", svc.readContent("bob", null, owned.knowledgeKey))
+            assertEquals("hello", svc.readContent(context(), owned.knowledgeKey))
         }
 
         @Test
-        fun `write grant saves through the owner bucket, not the caller's`() = runTest {
-            val owned = article()
-            val storage = mockk<ObjectStorage>()
-            val resolver = mockk<ObjectStorageResolver>()
-            val knowledgeStore = mockk<KnowledgeStore>(relaxed = true)
-            val putKey = slot<String>()
-            coEvery { articleStore.findByKey("bob", owned.knowledgeKey) } returns null
-            coEvery { articleStore.findGrantedByKey("bob", owned.knowledgeKey) } returns owned
-            coEvery { accessStore.hasPermission(owned.id, "bob", "write") } returns true
-            coEvery { resolver.resolve("alice") } returns storage
-            coEvery { storage.put(capture(putKey), any(), "text/markdown") } returns
-                ObjectMeta(owned.ossKey, 0)
-            coEvery { knowledgeStore.update(any(), any(), any(), any(), any()) } returns true
-            val svc = service(resolver = resolver, knowledgeStore = knowledgeStore)
-
-            val updated = svc.updateArticle("bob", null, owned.knowledgeKey, "new content")
-
-            assertEquals(owned.ossKey, putKey.captured)
-            assertEquals("alice", updated.userId)
-            coVerify(exactly = 1) {
-                knowledgeStore.update("alice", owned.knowledgeKey, "new content", null, null)
-            }
-            coVerify(exactly = 1) {
-                articleStore.save(match { it.userId == "alice" && it.knowledgeKey == owned.knowledgeKey })
-            }
-        }
-
-        @Test
-        fun `user without a grant reads nothing`() = runTest {
-            val owned = article()
-            coEvery { articleStore.findByKey("carol", owned.knowledgeKey) } returns null
-            coEvery { articleStore.findGrantedByKey("carol", owned.knowledgeKey) } returns null
+        fun `readContent hides articles the policy rejects`() = runTest {
+            val theirs = article(createdBy = "bob")
+            coEvery { articleStore.findByKey("alice", theirs.knowledgeKey) } returns theirs
             val svc = service()
 
-            assertNull(svc.readContent("carol", null, owned.knowledgeKey))
+            assertNull(svc.readContent(context(), theirs.knowledgeKey))
+        }
+
+        @Test
+        fun `updateArticle rejects a reader without write access`() = runTest {
+            val theirs = article(createdBy = "bob")
+            coEvery { articleStore.findByKey("alice", theirs.knowledgeKey) } returns theirs
+            val svc = service()
+
+            val error = assertFailsWith<ResponseStatusException> {
+                svc.updateArticle(context(), theirs.knowledgeKey, "new content")
+            }
+            assertEquals(HttpStatus.FORBIDDEN, error.statusCode)
+        }
+
+        @Test
+        fun `deleteArticle rejects a caller without manage access`() = runTest {
+            val theirs = article(createdBy = "bob")
+            coEvery { articleStore.findByKey("alice", theirs.knowledgeKey) } returns theirs
+            val svc = service()
+
+            val error = assertFailsWith<ResponseStatusException> {
+                svc.deleteArticle(context(), theirs.knowledgeKey)
+            }
+            assertEquals(HttpStatus.FORBIDDEN, error.statusCode)
+        }
+
+        @Test
+        fun `aiRewrite rejects a reader without write access`() = runTest {
+            val theirs = article(createdBy = "bob")
+            coEvery { articleStore.findByKey("alice", theirs.knowledgeKey) } returns theirs
+            val svc = service()
+
+            val error = assertFailsWith<ResponseStatusException> {
+                svc.aiRewrite(
+                    context = context(),
+                    key = theirs.knowledgeKey,
+                    content = "body",
+                    instruction = "shorten",
+                    modelConfigId = "model-1",
+                    owners = setOf("alice"),
+                )
+            }
+            assertEquals(HttpStatus.FORBIDDEN, error.statusCode)
         }
     }
 
@@ -194,14 +234,12 @@ class KnowledgeArticleServiceTest {
 
             val error = assertFailsWith<ResponseStatusException> {
                 svc.saveArticle(
-                    userId = "alice",
-                    groupUserId = null,
+                    context = context(),
                     title = "A",
                     content = "body",
                     source = "manual",
                     relativePath = "a.md",
                     category = "other",
-                    visibility = "private",
                     origin = "manual"
                 )
             }
@@ -219,14 +257,12 @@ class KnowledgeArticleServiceTest {
             val svc = service(resolver = resolver)
 
             val saved = svc.saveArticle(
-                userId = "alice",
-                groupUserId = null,
+                context = context(),
                 title = "New",
                 content = "fresh",
                 source = "manual",
                 relativePath = "a.md",
                 category = "other",
-                visibility = "private",
                 origin = "upload"
             )
 
@@ -236,7 +272,7 @@ class KnowledgeArticleServiceTest {
         }
 
         @Test
-        fun `group visibility is downgraded to private without a shared group`() = runTest {
+        fun `new article is stamped with its creator`() = runTest {
             val storage = mockk<ObjectStorage>()
             val resolver = mockk<ObjectStorageResolver>()
             coEvery { articleStore.findByKey("alice", "manual/a.md") } returns null
@@ -245,24 +281,22 @@ class KnowledgeArticleServiceTest {
             val saved = slot<KnowledgeArticle>()
 
             service(resolver = resolver).saveArticle(
-                userId = "alice",
-                groupUserId = null,
+                context = context(),
                 title = "A",
                 content = "body",
                 source = "manual",
                 relativePath = "a.md",
                 category = "other",
-                visibility = "group",
                 origin = "chat_save"
             )
 
             coVerify { articleStore.save(capture(saved)) }
-            assertEquals("private", saved.captured.visibility)
             assertEquals("alice", saved.captured.userId)
+            assertEquals("alice", saved.captured.createdBy)
         }
 
         @Test
-        fun `group visibility is preserved inside a shared group bucket`() = runTest {
+        fun `shared group writes into the group bucket`() = runTest {
             val storage = mockk<ObjectStorage>()
             val resolver = mockk<ObjectStorageResolver>()
             coEvery { articleStore.findByKey("grp-1", "manual/a.md") } returns null
@@ -271,20 +305,210 @@ class KnowledgeArticleServiceTest {
             val saved = slot<KnowledgeArticle>()
 
             service(resolver = resolver, sharedWithinGroup = true).saveArticle(
-                userId = "alice",
-                groupUserId = "grp-1",
+                context = context(groupUserId = "grp-1"),
                 title = "A",
                 content = "body",
                 source = "manual",
                 relativePath = "a.md",
                 category = "other",
-                visibility = "group",
                 origin = "chat_save"
             )
 
             coVerify { articleStore.save(capture(saved)) }
-            assertEquals("group", saved.captured.visibility)
             assertEquals("grp-1", saved.captured.userId)
+            assertEquals("alice", saved.captured.createdBy)
+        }
+
+        @Test
+        fun `personal mode ignores the group bucket`() = runTest {
+            val storage = mockk<ObjectStorage>()
+            val resolver = mockk<ObjectStorageResolver>()
+            coEvery { articleStore.findByKey("alice", "manual/a.md") } returns null
+            coEvery { resolver.resolve("alice") } returns storage
+            coEvery { storage.put(any(), any(), "text/markdown") } returns ObjectMeta("", 0)
+            val saved = slot<KnowledgeArticle>()
+
+            service(resolver = resolver).saveArticle(
+                context = context(groupUserId = "grp-1"),
+                title = "A",
+                content = "body",
+                source = "manual",
+                relativePath = "a.md",
+                category = "other",
+                origin = "chat_save"
+            )
+
+            coVerify { articleStore.save(capture(saved)) }
+            assertEquals("alice", saved.captured.userId)
+        }
+    }
+
+    @Nested
+    inner class UpdateArticle {
+
+        @Test
+        fun `blank oss key is rebuilt and content is written before metadata`() = runTest {
+            val legacy = article(ossKey = "")
+            val storage = mockk<ObjectStorage>()
+            val resolver = mockk<ObjectStorageResolver>()
+            coEvery { articleStore.findByKey("alice", legacy.knowledgeKey) } returns legacy
+            coEvery { resolver.resolve("alice") } returns storage
+            coEvery { storage.put(any(), any(), "text/markdown") } returns ObjectMeta("", 0)
+            val expectedKey = "knowledge-articles/" +
+                Base64.getUrlEncoder().withoutPadding().encodeToString("alice".toByteArray()) +
+                "/manual/a.md"
+
+            service(resolver = resolver).updateArticle(context(), legacy.knowledgeKey, "new content")
+
+            coVerifyOrder {
+                storage.put(expectedKey, any(), "text/markdown")
+                articleStore.save(match { it.ossKey == expectedKey })
+            }
+        }
+
+        @Test
+        fun `storage failure leaves metadata untouched`() = runTest {
+            val existing = article()
+            val storage = mockk<ObjectStorage>()
+            val resolver = mockk<ObjectStorageResolver>()
+            coEvery { articleStore.findByKey("alice", existing.knowledgeKey) } returns existing
+            coEvery { resolver.resolve("alice") } returns storage
+            coEvery { storage.put(any(), any(), "text/markdown") } throws IllegalStateException("oss down")
+
+            val error = assertFailsWith<ResponseStatusException> {
+                service(resolver = resolver).updateArticle(context(), existing.knowledgeKey, "new content")
+            }
+
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, error.statusCode)
+            coVerify(exactly = 0) { articleStore.save(any()) }
+        }
+    }
+
+    @Nested
+    inner class Validation {
+
+        @Test
+        fun `traversal relative path is rejected`() = runTest {
+            val error = assertFailsWith<ResponseStatusException> {
+                service().saveArticle(
+                    context = context(),
+                    title = "A",
+                    content = "body",
+                    source = "manual",
+                    relativePath = "../a.md",
+                    category = "other",
+                    origin = "manual"
+                )
+            }
+
+            assertEquals(HttpStatus.BAD_REQUEST, error.statusCode)
+        }
+
+        @Test
+        fun `source with a separator is rejected`() = runTest {
+            val error = assertFailsWith<ResponseStatusException> {
+                service().saveArticle(
+                    context = context(),
+                    title = "A",
+                    content = "body",
+                    source = "a/b",
+                    relativePath = "a.md",
+                    category = "other",
+                    origin = "manual"
+                )
+            }
+
+            assertEquals(HttpStatus.BAD_REQUEST, error.statusCode)
+        }
+
+        @Test
+        fun `malformed update key is rejected before lookup`() = runTest {
+            val error = assertFailsWith<ResponseStatusException> {
+                service().updateArticle(context(), "manual/../../secret.md", "body")
+            }
+
+            assertEquals(HttpStatus.BAD_REQUEST, error.statusCode)
+            coVerify(exactly = 0) { articleStore.findByKey(any(), any()) }
+        }
+    }
+
+    @Nested
+    inner class UniqueViolation {
+
+        @Test
+        fun `a racy duplicate maps to 409`() = runTest {
+            val storage = mockk<ObjectStorage>()
+            val resolver = mockk<ObjectStorageResolver>()
+            coEvery { articleStore.findByKey("alice", "manual/a.md") } returns null
+            coEvery { resolver.resolve("alice") } returns storage
+            coEvery { storage.put(any(), any(), "text/markdown") } returns ObjectMeta("", 0)
+            coEvery { articleStore.save(any()) } throws
+                SQLException("duplicate key value violates unique constraint", "23505")
+
+            val error = assertFailsWith<ResponseStatusException> {
+                service(resolver = resolver).saveArticle(
+                    context = context(),
+                    title = "A",
+                    content = "body",
+                    source = "manual",
+                    relativePath = "a.md",
+                    category = "other",
+                    origin = "manual"
+                )
+            }
+
+            assertEquals(HttpStatus.CONFLICT, error.statusCode)
+        }
+    }
+
+    @Nested
+    inner class UploadItems {
+
+        @Test
+        fun `denied items never reach the RAG store`() = runTest {
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            coEvery { articleStore.findByKeys("alice", listOf("manual/a.md")) } returns emptyList()
+            val denyCreate = object : KnowledgeAccessPolicy {
+                override suspend fun canCreate(context: KnowledgeAccessContext) = false
+                override suspend fun canRead(context: KnowledgeAccessContext, article: KnowledgeArticle) = true
+                override suspend fun canWrite(context: KnowledgeAccessContext, article: KnowledgeArticle) = true
+            }
+
+            val results = service(knowledgeStore = store, policy = denyCreate).uploadItems(
+                context = context(),
+                source = "manual",
+                category = null,
+                items = listOf(KnowledgeUploadItem("a.md", "body")),
+            )
+
+            assertFalse(results.single().success)
+            assertEquals("无权限覆盖或创建该文档", results.single().reason)
+            coVerify(exactly = 0) { store.uploadBatch(any(), any(), any(), any()) }
+        }
+
+        @Test
+        fun `metadata failure rolls back a newly indexed entry`() = runTest {
+            val store = mockk<KnowledgeStore>(relaxed = true)
+            val resolver = mockk<ObjectStorageResolver>()
+            coEvery { articleStore.findByKeys("alice", listOf("manual/a.md")) } returns emptyList()
+            coEvery { articleStore.findByKey("alice", "manual/a.md") } returns null
+            coEvery { articleStore.save(any()) } throws IllegalStateException("db down")
+            coEvery { resolver.resolve("alice") } returns mockk<ObjectStorage>(relaxed = true)
+            coEvery { store.uploadBatch(any(), any(), any(), any()) } returns
+                listOf(UploadResult("a.md", true, "manual/a.md"))
+            coEvery { store.delete(any(), any()) } returns true
+
+            val results = service(resolver = resolver, knowledgeStore = store).uploadItems(
+                context = context(),
+                source = "manual",
+                category = null,
+                items = listOf(KnowledgeUploadItem("a.md", "body")),
+            )
+
+            assertFalse(results.single().success)
+            assertEquals("元数据保存失败", results.single().reason)
+            coVerify { articleStore.save(any()) }
+            coVerify { store.delete("alice", "manual/a.md") }
         }
     }
 }
