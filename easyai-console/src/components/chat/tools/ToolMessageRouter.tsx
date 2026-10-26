@@ -2,7 +2,8 @@
  * Tool消息路由组件
  * 基于注册式映射表根据 toolName 选择渲染组件。
  * 新增 tool 时只需在 TOOL_RENDERERS 中添加一行。
- * MCP 工具名遵循 "serverName__toolName" 格式，自动路由到 McpToolCard。
+ * 宿主可通过 registerToolRenderers 追加或覆盖渲染组件；MCP 工具名遵循
+ * "serverName__toolName" 格式，未注册时自动路由到 McpToolCard。
  */
 
 import type { ToolMessageProps } from './types';
@@ -29,8 +30,10 @@ import { MediaResultCard } from './MediaResultCard';
 import { GenericToolMessage } from './GenericToolMessage';
 import { McpToolCard } from './McpToolCard';
 
+export type ToolRenderer = React.ComponentType<ToolMessageProps>;
+
 /** Renderer registry — add new tool renderers here */
-const TOOL_RENDERERS: Record<string, React.ComponentType<ToolMessageProps>> = {
+const TOOL_RENDERERS: Record<string, ToolRenderer> = {
   bash: BashToolMessage,
   read: ReadToolMessage,
   write: FileEditToolMessage,
@@ -67,11 +70,21 @@ const TOOL_RENDERERS: Record<string, React.ComponentType<ToolMessageProps>> = {
   watch: WatchToolMessage,
 };
 
+/**
+ * Host extension point: register renderers by tool name, overriding built-ins on conflict.
+ * Call once at startup, before the transcript renders. Registered names are matched first, so a
+ * host can also take over an MCP tool ("serverName__toolName") that would otherwise go to McpToolCard.
+ */
+export function registerToolRenderers(renderers: Record<string, ToolRenderer>): void {
+  Object.assign(TOOL_RENDERERS, renderers);
+}
+
 export function ToolMessageRouter(props: ToolMessageProps) {
+  const Renderer = TOOL_RENDERERS[props.toolCall.toolName];
+  if (Renderer) return <Renderer {...props} />;
   // MCP tool names contain "__" (serverName__toolName)
   if (props.toolCall.toolName.includes('__')) {
     return <McpToolCard {...props} />;
   }
-  const Renderer = TOOL_RENDERERS[props.toolCall.toolName] ?? GenericToolMessage;
-  return <Renderer {...props} />;
+  return <GenericToolMessage {...props} />;
 }

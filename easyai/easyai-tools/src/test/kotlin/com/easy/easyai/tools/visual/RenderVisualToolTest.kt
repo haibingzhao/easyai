@@ -71,8 +71,11 @@ class RenderVisualToolTest {
             val text = (result.content.first() as TextContent).text
             assertTrue(text.contains("diagram"))
             assertTrue(text.contains("Do not repeat"))
-            assertTrue(text.contains("elided from context"), text)
-            assertTrue(text.contains("never call render_visual again"), text)
+            assertTrue(text.contains("already rendered for the user"), text)
+            assertTrue(text.contains("including the next step of this same turn"), text)
+            assertTrue(text.contains("not what you sent and not a failure"), text)
+            assertTrue(text.contains("Never call render_visual again"), text)
+            assertTrue(text.contains("never describe this call as empty or failed"), text)
         }
     }
 
@@ -94,6 +97,8 @@ class RenderVisualToolTest {
             assertTrue(segment.contains("## Inline Visuals"), segment)
             assertTrue(segment.contains("MIDDLE of your narrative"), segment)
             assertTrue(segment.contains("never repeat or summarize the fragment code"), segment)
+            assertTrue(segment.contains("Replayed history shows your own earlier"), segment)
+            assertTrue(segment.contains("not an empty call you made and not a failed render"), segment)
             assertTrue(segment.contains("ONE continuous document"), segment)
             assertTrue(segment.contains("never rewrite, renumber or re-polish sections already delivered"), segment)
         }

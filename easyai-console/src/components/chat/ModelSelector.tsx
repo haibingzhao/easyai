@@ -266,12 +266,22 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       }
     };
     const handleScroll = (e: Event) => {
+      const target = e.target as Node | null;
+      const insideDropdown = !!target && !!dropdownRef.current?.contains(target);
+      const insidePanel = !!target && !!panelRef.current?.contains(target);
+      // Scrolling the hover panel's own content keeps its row in place.
+      if (insidePanel) return;
+      if (!insideDropdown) {
+        // Only a scroll that can move the button invalidates the measured anchor. The transcript
+        // auto-scrolls on every streaming delta and lives outside the composer, so closing on it
+        // made the dropdown flash away one frame after opening.
+        const movesButton = !!target && target.contains(buttonRef.current);
+        if (!movesButton) return;
+      }
       // The hover panel is anchored to a one-shot rect; scrolling the list would leave it stale.
       setHoveredConfig(null);
       setPanelPos(null);
-      if (dropdownRef.current && dropdownRef.current.contains(e.target as Node)) return;
-      if (panelRef.current && panelRef.current.contains(e.target as Node)) return;
-      setDropdownOpen(false);
+      if (!insideDropdown) setDropdownOpen(false);
     };
     document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('scroll', handleScroll, true);

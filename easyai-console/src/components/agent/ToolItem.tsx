@@ -88,6 +88,7 @@ export const ToolTooltip: React.FC<ToolTooltipProps> = ({ name, description, chi
           style={tooltipStyle}
           onMouseEnter={clearHideTimer}
           onMouseLeave={() => setVisible(false)}
+          onClick={(e) => e.stopPropagation()}
         >
           {name && (
             <p className="text-sm font-mono font-semibold text-zinc-100 mb-1 break-all">{name}</p>
