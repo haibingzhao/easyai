@@ -4,6 +4,7 @@ import { Bot, Terminal, FileText, Search, FolderSearch, List, MessageSquare, Che
 import { selectableTools, subAgentBlockedToolNames, toolGroupOf } from '@/constants/tools';
 import { useWebSearchStatus } from '@/hooks/useWebSearchStatus';
 import { i18n } from '@/utils/i18n';
+import { ToolTooltip } from './ToolItem';
 
 interface ToolSelectorProps {
   selectedTools: string[];
@@ -129,7 +130,9 @@ export const ToolSelector: React.FC<ToolSelectorProps> = ({ selectedTools, onCha
                     </span>
                   )}
                 </div>
-                <div className="text-xs text-muted-foreground">{tool.description}</div>
+                <ToolTooltip description={tool.description} className="block">
+                  <div className="text-xs text-muted-foreground line-clamp-3 break-words">{tool.description}</div>
+                </ToolTooltip>
               </div>
             </label>
           );
