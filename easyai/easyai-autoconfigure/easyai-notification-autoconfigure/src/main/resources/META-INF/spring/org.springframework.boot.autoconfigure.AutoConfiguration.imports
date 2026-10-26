@@ -1,1 +1,2 @@
 com.easy.easyai.autoconfigure.notification.NotificationAutoConfiguration
+com.easy.easyai.autoconfigure.notification.WatchNotificationAutoConfiguration

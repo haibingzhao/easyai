@@ -10,6 +10,8 @@ import { ModelsPage } from './pages/ModelsPage';
 import { McpPage } from './pages/McpPage';
 import { TasksPage } from './pages/TasksPage';
 import { TaskTranscriptPage } from './pages/TaskTranscriptPage';
+import { WatchesPage } from './pages/WatchesPage';
+import { WatchDetailPage } from './pages/WatchDetailPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { ArticleEditorPage } from './pages/ArticleEditorPageLazy';
 import { CommandsPage } from './pages/CommandsPage';
@@ -176,6 +178,14 @@ function App() {
           <Route
             path="/tasks/:taskId/transcript"
             element={<TaskTranscriptPage />}
+          />
+          <Route
+            path="/watches"
+            element={<WatchesPage />}
+          />
+          <Route
+            path="/watches/:id"
+            element={<WatchDetailPage />}
           />
           <Route
             path="/knowledge"

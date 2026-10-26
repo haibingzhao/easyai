@@ -18,6 +18,11 @@ export interface ChatRequest {
   attachments?: ChatAttachment[];
   /** Composer overrides for this run; an empty object clears what the session recorded. */
   modelOverrides?: ModelOverrides;
+  /**
+   * Browser's IANA time zone. Background work created from this turn (watches) resolves "tomorrow
+   * 9am" against it instead of the server's zone.
+   */
+  timezone?: string;
 }
 
 export interface SessionResponse {

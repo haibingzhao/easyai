@@ -1,7 +1,25 @@
-import { Layers, ListChecks } from 'lucide-react';
+import { BellRing, Layers, ListChecks } from 'lucide-react';
 import type { AsyncTask, TaskTypeDescriptor } from '@/types/task';
 import { categoryLabelKey, type ConsolidationPlanItem } from '@/types/memory';
 import { i18n } from '@/utils/i18n';
+
+const VERDICT_LABEL: Record<string, string> = {
+  met: 'Met',
+  not_met: 'Not met',
+  unknown: 'Unknown',
+  note: 'Note',
+};
+
+function findingTagLabels(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (item == null || typeof item !== 'object' || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    const label = typeof record.label === 'string' ? record.label : undefined;
+    const key = typeof record.key === 'string' ? record.key : undefined;
+    return label ? [label] : key ? [key] : [];
+  });
+}
 
 /**
  * Presentation registry for async task types — the single place to teach the UI about a new backend
@@ -63,6 +81,49 @@ export const TASK_TYPE_REGISTRY: Record<string, TaskTypeDescriptor> = {
       if (count(r.uncoveredDocIds) > 0) {
         parts.push(`${i18n('Unaccounted entries')} ${count(r.uncoveredDocIds)}`);
       }
+      return parts.join(' · ');
+    },
+  },
+  watch: {
+    labelKey: 'Watch',
+    icon: BellRing,
+    title: (task) => {
+      const title = task.payload?.title;
+      if (typeof title === 'string' && title !== '') return `${i18n('Watch')} · ${title}`;
+      // Older rows carry only the backend-generated stored title.
+      const stored = task.title;
+      if (stored && stored !== i18n('Watch')) return stored;
+      return i18n('Watch');
+    },
+    summarize: (outcome) => {
+      const r = outcome.result;
+      if (!r) return outcome.error ?? '';
+      const conclusion = typeof r.conclusion === 'string' ? r.conclusion : '';
+      // A firing that arrived after the user paused/cancelled/renewed the watch: nothing was judged,
+      // and saying "Unknown" would read like a model failure.
+      if (r.kind === 'skipped') {
+        const reason = typeof r.reason === 'string' ? r.reason : '';
+        return reason ? `${i18n('Skipped')} · ${reason}` : i18n('Skipped');
+      }
+      // An expiry review is a different shape: its decision is the outcome, and its conclusion is
+      // the sentence the user saw in the notification.
+      if (r.kind === 'expiry_review') {
+        const decision = typeof r.decision === 'string' ? r.decision : '';
+        const decisionLabel = decision === 'renew'
+          ? i18n('Renewed')
+          : decision === 'complete'
+            ? i18n('Completed')
+            : decision === 'expire'
+              ? i18n('Expired')
+              : i18n('Expiry review');
+        return conclusion ? `${decisionLabel} · ${conclusion}` : decisionLabel;
+      }
+      const verdict = typeof r.verdict === 'string' ? VERDICT_LABEL[r.verdict] : undefined;
+      const parts = [
+        verdict ? i18n(verdict) : i18n('Unknown'),
+        ...findingTagLabels(r.tags).map((label) => `#${label}`),
+      ];
+      if (conclusion) parts.push(conclusion);
       return parts.join(' · ');
     },
   },

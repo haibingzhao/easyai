@@ -697,7 +697,8 @@ internal class AgentLoop(
                 parentAgentId = context.parentAgentId,
                 userId = context.userId,
                 projectKind = context.projectKind,
-                owners = context.effectiveOwners
+                owners = context.effectiveOwners,
+                unattended = context.unattended
             ))
             when (beforeResult) {
                 is BeforeToolCallResult.Block -> {

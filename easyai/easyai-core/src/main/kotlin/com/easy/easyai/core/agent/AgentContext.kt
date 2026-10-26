@@ -10,6 +10,7 @@ import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.prompt.InstructionInfo
 import com.easy.easyai.core.tool.ToolDefinition
 import java.nio.file.Path
+import java.time.ZoneId
 
 /**
  * Unified agent context containing identity, behavior configuration, and runtime information.
@@ -185,7 +186,18 @@ data class AgentContext(
      * Called when a background task completes and the session is idle.
      * Only populated when executing in a session context.
      */
-    val backgroundAutoResume: (suspend (sessionId: String, userId: String) -> Unit)? = null
+    val backgroundAutoResume: (suspend (sessionId: String, userId: String) -> Unit)? = null,
+    /**
+     * The end user's time zone, resolved at the request boundary. Background work that has to talk
+     * about "today" or "09:00" (watch schedules) reads it instead of the server's default.
+     */
+    val timeZone: ZoneId? = null,
+    /**
+     * True for a run no human is attending (a watch firing, a scheduled pass). A tool that would
+     * otherwise pause for permission is blocked with a reason instead: a permission prompt on a
+     * background run would hang the loop forever, and nobody would ever see it.
+     */
+    val unattended: Boolean = false
 ) {
     /** Model ID derived from modelConfig, or empty string if not configured. */
     val modelId: String get() = modelConfig?.modelId ?: ""

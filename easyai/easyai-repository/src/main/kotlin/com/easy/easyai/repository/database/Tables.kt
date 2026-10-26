@@ -646,6 +646,68 @@ object Tables {
         }
     }
 
+    /**
+     * A standing intent created from a chat: "check this later and tell me what you found".
+     *
+     * `next_due_at` is the scheduler's only due key and is advanced by a guarded claim before the
+     * task row exists, so two ticks cannot enqueue the same firing. `version` is bumped by every
+     * edit; a run records the version it started with and refuses to apply a finding over a newer
+     * definition. `pending_action=EXPIRY_REVIEW` marks a lifetime that ran out and is waiting for a
+     * review rather than a normal check — the row stays ACTIVE, so its own claim keeps it first in
+     * line. Timestamps are epoch millis; `tags_json`, `notify_tags_json`, `owners_json`,
+     * `allowed_tools_json` and `last_finding_json` are JSON text. Ownership is `user_id` strict.
+     */
+    object WatchTable : Table("watch") {
+        val id = varchar("id", 255)
+        val userId = varchar("user_id", 255)
+        val title = varchar("title", 200)
+        val conditionText = text("condition_text")
+        val mode = varchar("mode", 16)
+        val reminderText = text("reminder_text").nullable()
+        val scheduleKind = varchar("schedule_kind", 16)
+        val timezone = varchar("timezone", 64)
+        val localTime = varchar("local_time", 8).nullable()
+        val weekday = varchar("weekday", 16).nullable()
+        val dayOfMonth = integer("day_of_month").nullable()
+        val anchorAt = long("anchor_at").nullable()
+        val untilAt = long("until_at").nullable()
+        val nextDueAt = long("next_due_at")
+        val status = varchar("status", 16)
+        val pendingAction = varchar("pending_action", 16)
+        val version = integer("version")
+        val extensionCount = integer("extension_count").default(0)
+        val tags = text("tags_json")
+        val completeOnMet = bool("complete_on_met").default(true)
+        val notifyPolicy = varchar("notify_policy", 16)
+        val notifyTags = text("notify_tags_json").nullable()
+        val sourceAgentId = varchar("source_agent_id", 128)
+        val modelConfigId = varchar("model_config_id", 255).nullable()
+        val projectId = varchar("project_id", 255).nullable()
+        val projectPath = text("project_path").nullable()
+        val projectKind = varchar("project_kind", 16)
+        val owners = text("owners_json")
+        val originSessionId = varchar("origin_session_id", 255).nullable()
+        val runSessionId = varchar("run_session_id", 255)
+        val allowedTools = text("allowed_tools_json")
+        val sourceHints = text("source_hints").nullable()
+        val lastTaskId = varchar("last_task_id", 255).nullable()
+        val lastRunAt = long("last_run_at").nullable()
+        val lastFinding = text("last_finding_json").nullable()
+        val consecutiveFailures = integer("consecutive_failures").default(0)
+        val lastError = text("last_error").nullable()
+        val statusReason = text("status_reason").nullable()
+        val createdAt = long("created_at")
+        val updatedAt = long("updated_at")
+
+        override val primaryKey = PrimaryKey(id)
+
+        init {
+            index(false, userId, status, nextDueAt)
+            index(false, userId, createdAt)
+            index(false, runSessionId)
+        }
+    }
+
     // ---- Swarm tables ----
 
     /**

@@ -41,7 +41,8 @@ import {
   Play,
   CircleDot,
   ListChecks,
-  Shapes
+  Shapes,
+  BellRing
 } from 'lucide-react';
 
 export const TOOL_ICONS: Record<string, LucideIcon> = {
@@ -79,6 +80,7 @@ export const TOOL_ICONS: Record<string, LucideIcon> = {
   transcribe_audio: AudioLines,
   fetch_media: Download,
   render_visual: Shapes,
+  watch: BellRing,
 };
 
 /** MCP 工具（serverName__toolName）按工具名片段匹配图标，未命中回退 Plug */
@@ -152,6 +154,7 @@ export function getToolDisplayName(toolName: string): string {
     run_background: 'Run Background',
     task_status: 'Task Status',
     task_list: 'Task List',
+    watch: 'Watch',
   };
   return displayNames[toolName] || toolName;
 }

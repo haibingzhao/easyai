@@ -59,7 +59,14 @@ data class ChatRequest(
      * recorded on the session. Recorded overrides are replayed when a session is resumed, not by this
      * request path. The stored model config is never modified.
      */
-    val modelOverrides: ModelOverrides? = null
+    val modelOverrides: ModelOverrides? = null,
+
+    /**
+     * IANA time zone of the browser (e.g. `Asia/Shanghai`). Background work created from this turn —
+     * watches — resolves "tomorrow 9am" against it instead of the server's default. Null falls back
+     * to the agent's previous value or the server zone, and the watch result warns when that happens.
+     */
+    val timezone: String? = null
 )
 
 /**

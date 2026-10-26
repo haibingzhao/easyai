@@ -118,6 +118,38 @@ export type {
 // its own tasks surface or drive task control directly.
 export { taskService } from './services/task-service';
 
+// Watch (关注) plane: definitions created from chat, their findings, and the page surfaces.
+// A host that mounts its own router must add `/watches` and `/watches/:id` itself.
+export { watchService } from './services/watch-service';
+export { useWatchStore } from './services/stores/watch-store';
+export { WatchesPage } from './pages/WatchesPage';
+export { WatchDetailPage } from './pages/WatchDetailPage';
+export {
+  isWatchActive,
+  isWatchTerminal,
+  parseWatchRunResult,
+} from './types/watch';
+export type {
+  Watch,
+  WatchCheckResult,
+  WatchExpiryDecision,
+  WatchFinding,
+  WatchFindingTask,
+  WatchMode,
+  WatchNotifyPolicy,
+  WatchPendingAction,
+  WatchReviewResult,
+  WatchRunResult,
+  WatchSchedule,
+  WatchScheduleDraft,
+  WatchScheduleKind,
+  WatchSource,
+  WatchStatus,
+  WatchTag,
+  WatchUpdatePayload,
+  WatchVerdict,
+} from './types/watch';
+
 // Group-sharing capability probe (`GET /api/capabilities`): warmed by auth-store on every auth
 // transition, read by host apps to gate their group-configuration screens.
 export { capabilityService } from './services/capability-service';

@@ -34,6 +34,15 @@
             <groupId>com.easy</groupId>
             <artifactId>easyai-r2dbc-autoconfigure</artifactId>
         </dependency>
+        <!-- Shared notification inbox + Web Push; watches deliver their findings through them. -->
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-notification-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-push-autoconfigure</artifactId>
+        </dependency>
         <!-- Ensure WebFlux is used instead of Spring MVC -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

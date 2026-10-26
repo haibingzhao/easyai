@@ -59,6 +59,8 @@ import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import java.time.DateTimeException
+import java.time.ZoneId
 
 /**
  * Coroutine-based service that bridges EasyAI Agent with SSE streaming.
@@ -357,6 +359,17 @@ class ChatStreamService(
             ?: return flowOf(errorSse("No ChatModelFactory for protocol: ${config.protocol}"))
 
         val agentId = request.agentId
+        // A bad zone is a client bug, not a reason to guess: a watch scheduled in the wrong zone
+        // would fire at a time the user never asked for.
+        val requestTimeZone = try {
+            request.timezone?.trim()?.takeIf { it.isNotEmpty() }?.let { ZoneId.of(it) }
+        } catch (e: DateTimeException) {
+            return flowOf(
+                errorSse(
+                    "Invalid timezone '${request.timezone}'; use an IANA zone such as Asia/Shanghai"
+                )
+            )
+        }
 
         return try {
             // Reject an agentId nobody owns before any session state is minted: the session manager takes
@@ -373,7 +386,9 @@ class ChatStreamService(
             // Resolve the request identity before anything per-session exists: a rejected
             // contributor must not leave a workspace directory and temp project row behind.
             val contributed = resolveContributions(turn?.copy(sessionId = sessionId))
-            val agentContext = createAgentContext(agentId, config, sessionId, request.projectId, userId, readOwners).let { ctx ->
+            val agentContext = createAgentContext(
+                agentId, config, sessionId, request.projectId, userId, readOwners, requestTimeZone
+            ).let { ctx ->
                 if (request.inputData != null) ctx.copy(inputVariables = request.inputData) else ctx
             }
             // Trusted values survive the manager's restoreSessionVariables() later in this call.
@@ -840,7 +855,8 @@ class ChatStreamService(
         sessionId: String? = null,
         projectId: String? = null,
         userId: String = "system",
-        owners: Set<String> = emptySet()
+        owners: Set<String> = emptySet(),
+        timeZone: ZoneId? = null
     ): AgentContext {
         if (sessionId != null && sessionStore?.isSessionOwnedByUser(sessionId, userId) == false) {
             throw IllegalArgumentException("Session is not available to this user")
@@ -884,6 +900,7 @@ class ChatStreamService(
             projectId = verifiedProjectId,
             projectPath = projectPath,
             projectKind = project?.kind ?: ProjectKind.USER,
+            timeZone = timeZone,
             memoryAutoGeneration = project?.memoryAutoGeneration ?: true,
             modelContextLength = config.options?.contextToken ?: 204_800,
             scriptEnv = scriptEnv,

@@ -22,6 +22,7 @@ import com.easy.easyai.core.skill.AsyncSkillCatalogStore
 import com.easy.easyai.core.storage.StorageSettingsStore
 import com.easy.easyai.core.task.AsyncTaskStore
 import com.easy.easyai.core.task.ScheduledTaskSettingStore
+import com.easy.easyai.core.watch.WatchStore
 import com.easy.easyai.core.team.TeamExecutionStore
 import com.easy.easyai.core.team.TeamMemberHistoryLoader
 import com.easy.easyai.core.tool.ToolDefinition
@@ -51,6 +52,7 @@ import com.easy.easyai.repository.swarm.R2dbcSwarmPresetStore
 import com.easy.easyai.repository.swarm.R2dbcSwarmRunStore
 import com.easy.easyai.repository.task.R2dbcAsyncTaskStore
 import com.easy.easyai.repository.task.R2dbcScheduledTaskSettingStore
+import com.easy.easyai.repository.watch.R2dbcWatchStore
 import com.easy.easyai.repository.todo.AsyncTodoStore
 import com.easy.easyai.repository.todo.R2dbcAsyncTodoStore
 import com.easy.easyai.repository.todo.TodoCompletionCheck
@@ -364,6 +366,13 @@ class R2dbcRepositoryAutoConfiguration(
         return R2dbcAsyncTaskStore(
             db = initializer.getDatabase()
         )
+    }
+
+    /** Durable watch definitions; the planner claims them and the handler writes their findings. */
+    @Bean
+    @ConditionalOnMissingBean(WatchStore::class)
+    fun watchStore(initializer: R2dbcDatabaseInitializer): WatchStore {
+        return R2dbcWatchStore(db = initializer.getDatabase())
     }
 
     @Bean

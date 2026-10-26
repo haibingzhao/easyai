@@ -4,6 +4,7 @@ import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.memory.MemoryContentLimits
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.memory.MemoryType
+import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import org.springframework.stereotype.Component
@@ -73,7 +74,8 @@ class MemorySearchToolBuilder : AbstractMemoryToolBuilder() {
             "hit additionally reports its 'level' and the 'sources' docIds it absorbed.",
         permissionCategory = "memory",
         systemPromptSegment = MEMORY_GUIDANCE_SEGMENT.trimIndent(),
-        promptSegmentOrder = 20
+        promptSegmentOrder = 20,
+        capabilities = setOf(ToolCapability.READ_ONLY)
     )
 
     override fun createTool(store: MemoryStore): ToolDefinition = MemorySearchTool(metadata, store)
@@ -86,7 +88,8 @@ class MemoryReadToolBuilder : AbstractMemoryToolBuilder() {
         description = "Read a memory entry in full. Pass 'path' for an active entry (e.g., " +
             "'feedback/testing.md'), or 'docIds' — a JSON array of at most ten docIds taken from a merged " +
             "hit's 'sources' — to read back the archived entries it absorbed.",
-        permissionCategory = "memory"
+        permissionCategory = "memory",
+        capabilities = setOf(ToolCapability.READ_ONLY)
     )
 
     override fun createTool(store: MemoryStore): ToolDefinition = MemoryReadTool(metadata, store)
@@ -123,7 +126,8 @@ class MemoryListToolBuilder : AbstractMemoryToolBuilder() {
         name = "memory_list",
         description = "List all memory entries. Optionally filter by type (user/feedback/project/reference). " +
             "Shows docId, name, type, description, path, level, dates, maturity and staleness hints for governance review.",
-        permissionCategory = "memory"
+        permissionCategory = "memory",
+        capabilities = setOf(ToolCapability.READ_ONLY)
     )
 
     override fun createTool(store: MemoryStore): ToolDefinition = MemoryListTool(metadata, store)

@@ -4,6 +4,19 @@ import { authFetch, JSON_HEADERS, readErrorBody, readErrorMessage } from '@/serv
 import { parseSSEStream, SSEConnectionError } from '@/services/sse-parser';
 import type { RawSSEEvent } from '@/services/sse-parser';
 
+/**
+ * The browser's IANA zone, sent with each turn so a watch created from it schedules in the user's
+ * calendar rather than the server's. A runtime without ICU still answers something usable; the
+ * backend warns when the value is missing or unknown, so this never blocks a send.
+ */
+export function browserTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const API_BASE = '/api/chat';
 
 // Store active resume abort controllers for cleanup
@@ -200,6 +213,7 @@ export function sendMessageToBackend(params: SendMessageParams): ChatService {
     modelProviderConfigId: modelId,
     attachments: attachments && attachments.length > 0 ? attachments : undefined,
     modelOverrides,
+    timezone: browserTimeZone(),
   });
 
   return chatService;

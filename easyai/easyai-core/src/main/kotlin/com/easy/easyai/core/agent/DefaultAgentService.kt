@@ -99,7 +99,15 @@ class DefaultAgentService(
                     reason = "Permission denied for ${context.toolName}: ${result.pattern}"
                 )
                 PermissionAction.ASK -> {
-                    if (context.parentAgentId != null) {
+                    if (context.unattended) {
+                        // A background run has nobody to answer the prompt. Blocking hands the model
+                        // an observable failure it can report, instead of a loop that waits forever.
+                        BeforeToolCallResult.Block(
+                            "Unattended run: ${context.toolName} is not pre-authorized " +
+                                "(${result.permission}:${result.pattern}). No user is available to approve it; " +
+                                "report this source as unavailable instead of retrying."
+                        )
+                    } else if (context.parentAgentId != null) {
                         // Sub-agents cannot request user permissions — block the tool call
                         BeforeToolCallResult.Block(
                             "Sub-agent cannot request permission for ${context.toolName} (${result.permission}:${result.pattern}). " +

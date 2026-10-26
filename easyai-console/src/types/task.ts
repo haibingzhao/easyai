@@ -55,10 +55,10 @@ export interface TaskTypeDescriptor {
   labelKey: string;
   icon: ComponentType<{ className?: string }>;
   /**
-   * Localized title built from the row's `payload`. Preferred over the persisted `title`, which is
-   * stored locale-free so a row written under one language still reads correctly under another.
+   * Localized title built from the row's `payload`, falling back to the persisted `title` for rows
+   * written before a field was added to the payload.
    */
-  title?: (task: Pick<AsyncTask, 'payload'>) => string;
+  title?: (task: Pick<AsyncTask, 'payload' | 'title'>) => string;
   /** Renders a one-line outcome from the task's `result`/`error`, the fields every row carries. */
   summarize?: (outcome: Pick<AsyncTask, 'result' | 'error'>) => string;
 }

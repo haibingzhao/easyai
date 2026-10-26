@@ -26,5 +26,13 @@ enum class ToolCapability {
     TEAM_COORDINATION,
 
     /** Tool loads skill content at runtime (e.g. `load_skill`). Unavailable in swarm worker context. */
-    SKILL_LOADING
+    SKILL_LOADING,
+
+    /**
+     * Tool only reads (web fetch/search, memory search/read/list, file read/grep/glob/ls) and never
+     * changes local or remote state. This is the allowlist for unattended watch runs: a tool without
+     * it could write files, run commands or pause for input, none of which a background run may do.
+     * MCP tools never declare it — a remote tool's side effects are not knowable here.
+     */
+    READ_ONLY
 }

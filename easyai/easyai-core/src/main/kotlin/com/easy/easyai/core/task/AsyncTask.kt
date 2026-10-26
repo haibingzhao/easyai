@@ -13,6 +13,9 @@ data class AsyncTaskType(val key: String) {
     companion object {
         /** Near-duplicate merge + stale decay over a memory slice (see MemoryConsolidationAgent). */
         val MEMORY_CONSOLIDATION = AsyncTaskType("memory_consolidation")
+
+        /** One firing of a watch definition (see WatchTaskHandler). */
+        val WATCH = AsyncTaskType("watch")
     }
 }
 

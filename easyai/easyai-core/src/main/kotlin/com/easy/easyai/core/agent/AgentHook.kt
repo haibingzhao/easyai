@@ -18,7 +18,9 @@ data class BeforeToolCallContext(
     /** Kind of the bound project; [ProjectKind.TEMP] reads the default permission bucket. */
     val projectKind: ProjectKind = ProjectKind.USER,
     /** Read-visibility owner set; the group bucket in it scopes project-less permission defaults. */
-    val owners: Set<String> = emptySet()
+    val owners: Set<String> = emptySet(),
+    /** True when no human is attending this run, so an ASK decision must block instead of prompt. */
+    val unattended: Boolean = false
 )
 
 sealed interface BeforeToolCallResult {

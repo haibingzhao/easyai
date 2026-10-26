@@ -167,6 +167,16 @@
                 <artifactId>easyai-r2dbc-autoconfigure</artifactId>
                 <version>${revision}</version>
             </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-notification-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-push-autoconfigure</artifactId>
+                <version>${revision}</version>
+            </dependency>
             <!-- easyai-observability-autoconfigure -->
             <dependency>
                 <groupId>com.easy</groupId>

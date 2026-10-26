@@ -114,8 +114,11 @@ class AgentSeedInitializer(
 
         logger.info("Initializing Ask agent...")
 
+        // "Read-only" here means: it does not write files and is not reserved to the main agent.
+        // File writes were the only proxy this filter had; a main-agent-only tool such as `watch`
+        // creates side effects without touching disk, and Ask must not offer it.
         val readOnlyToolNames = toolFactory.getBuilders()
-            .filter { !it.tracksFileChanges && it.isDefaultTool }
+            .filter { !it.tracksFileChanges && it.isDefaultTool && !it.mainAgentOnly }
             .map { it.name }
 
         val askAgent = AgentDefinition.create(

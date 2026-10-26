@@ -1,5 +1,6 @@
 package com.easy.easyai.tools.search
 
+import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.tools.file.AbstractFileReadToolBuilder
@@ -22,7 +23,8 @@ class GrepToolBuilder : AbstractFileReadToolBuilder() {
 - Do NOT use bash tool for content search, use this tool instead.""",
         permissionCategory = "file",
         uiRenderer = "grep",
-        patternKeys = listOf("path", "file", "filepath")
+        patternKeys = listOf("path", "file", "filepath"),
+        capabilities = setOf(ToolCapability.READ_ONLY)
     )
 
     override fun createTool(workDir: Path): ToolDefinition = GrepTool(metadata, workDir)
@@ -42,7 +44,8 @@ class GlobToolBuilder : AbstractFileReadToolBuilder() {
 - Do NOT use bash tool for file name matching, use this tool instead.""",
         permissionCategory = "file",
         uiRenderer = "file_search",
-        patternKeys = listOf("path", "file", "filepath")
+        patternKeys = listOf("path", "file", "filepath"),
+        capabilities = setOf(ToolCapability.READ_ONLY)
     )
 
     override fun createTool(workDir: Path): ToolDefinition = GlobTool(metadata, workDir)
@@ -58,7 +61,8 @@ class LsToolBuilder : AbstractFileReadToolBuilder() {
         description = "List directory contents",
         permissionCategory = "file",
         uiRenderer = "file_search",
-        patternKeys = listOf("path", "file", "filepath")
+        patternKeys = listOf("path", "file", "filepath"),
+        capabilities = setOf(ToolCapability.READ_ONLY)
     )
 
     override fun createTool(workDir: Path): ToolDefinition = LsTool(metadata, workDir)

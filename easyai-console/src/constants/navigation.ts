@@ -8,6 +8,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'skills', label: 'Skills', labelKey: 'Skills', icon: 'Sparkles', path: '/skills' },
   { id: 'commands', label: 'Commands', labelKey: 'Commands', icon: 'Terminal', path: '/commands' },
   { id: 'tasks', label: 'Tasks', labelKey: 'Tasks', icon: 'ListChecks', path: '/tasks' },
+  { id: 'watches', label: 'Watches', labelKey: 'Watches', icon: 'BellRing', path: '/watches' },
   { id: 'knowledge', label: 'Knowledge', labelKey: 'Knowledge', icon: 'BookOpen', path: '/knowledge' },
   { id: 'mcp', label: 'MCP', labelKey: 'MCP', icon: 'Blocks', path: '/mcp' },
   { id: 'models', label: 'Models', labelKey: 'Models', icon: 'Cpu', path: '/models' },

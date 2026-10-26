@@ -1,5 +1,6 @@
 package com.easy.easyai.tools.file
 
+import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import org.springframework.stereotype.Component
@@ -15,7 +16,8 @@ class ReadToolBuilder : AbstractFileReadToolBuilder() {
         description = "Read file contents with optional line range",
         permissionCategory = "file",
         uiRenderer = "read",
-        patternKeys = listOf("path", "file", "filepath")
+        patternKeys = listOf("path", "file", "filepath"),
+        capabilities = setOf(ToolCapability.READ_ONLY)
     )
 
     override fun createTool(workDir: Path): ToolDefinition = ReadTool(metadata, workDir)

@@ -5,8 +5,9 @@ import { MessageList } from '@/components/chat/MessageList';
 import { useChatStore } from '@/services/stores/chat-store';
 import { useTaskStore } from '@/services/stores/task-store';
 import { loadTranscriptSession } from '@/services/session-switch';
+import { taskService } from '@/services/task-service';
 import { getTaskDescriptor, taskTitle, taskTypeLabel } from '@/constants/task-types';
-import type { AsyncTaskStatus } from '@/types/task';
+import type { AsyncTask, AsyncTaskStatus } from '@/types/task';
 import { i18n } from '@/utils/i18n';
 
 const STATUS_STYLE: Record<AsyncTaskStatus, string> = {
@@ -65,13 +66,39 @@ function formatDuration(ms?: number | null): string {
  */
 export const TaskTranscriptPage: React.FC = () => {
   const navigate = useNavigate();
-  const { taskId } = useParams<{ taskId: string }>();
+  const { taskId = '' } = useParams<{ taskId: string }>();
   const tasks = useTaskStore((s) => s.tasks);
+  const tasksLoading = useTaskStore((s) => s.loading);
   const messages = useChatStore((s) => s.messages);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [fetchedTask, setFetchedTask] = useState<AsyncTask | null>(null);
 
-  const task = tasks.find((t) => t.id === taskId) ?? null;
+  const task = tasks.find((t) => t.id === taskId) ?? fetchedTask;
+
+  /**
+   * The task list is populated by the Tasks page. This view is also reachable from a watch
+   * finding or a notification deep link, where the store can be empty, so the row is fetched
+   * by id when the list does not carry it.
+   */
+  useEffect(() => {
+    if (task || tasksLoading) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const fetched = await taskService.getTask(taskId);
+        if (!cancelled) setFetchedTask(fetched);
+      } catch {
+        if (!cancelled) {
+          setError(i18n('Task not found or has no session'));
+          setLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [task, taskId, tasksLoading]);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,17 +126,12 @@ export const TaskTranscriptPage: React.FC = () => {
 
     if (task) {
       void load();
-    } else if (tasks.length > 0) {
-      // Tasks have loaded but this id is not among them — the row may have been deleted.
-      setError(i18n('Task not found or has no session'));
-      setLoading(false);
     }
-    // If tasks are still loading (length === 0), wait for the next render.
 
     return () => {
       cancelled = true;
     };
-  }, [task, tasks.length]);
+  }, [task]);
 
   // Clear chat store state when leaving the transcript so a subsequent navigation
   // to `/` does not show the task's messages in the regular chat view.

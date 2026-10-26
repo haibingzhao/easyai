@@ -24,6 +24,7 @@ import { TeamToolMessage } from './TeamToolMessage';
 import { SwarmToolMessage } from './SwarmToolMessage';
 import { BackgroundTaskToolMessage } from './BackgroundTaskToolMessage';
 import { RenderVisualToolMessage } from './RenderVisualToolMessage';
+import { WatchToolMessage } from './WatchToolMessage';
 import { MediaResultCard } from './MediaResultCard';
 import { GenericToolMessage } from './GenericToolMessage';
 import { McpToolCard } from './McpToolCard';
@@ -63,6 +64,7 @@ const TOOL_RENDERERS: Record<string, React.ComponentType<ToolMessageProps>> = {
   generate_music: MediaResultCard,
   fetch_media: MediaResultCard,
   render_visual: RenderVisualToolMessage,
+  watch: WatchToolMessage,
 };
 
 export function ToolMessageRouter(props: ToolMessageProps) {

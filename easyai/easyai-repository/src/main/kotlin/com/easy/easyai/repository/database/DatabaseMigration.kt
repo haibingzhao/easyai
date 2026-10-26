@@ -59,6 +59,7 @@ class DatabaseMigration(
                 Tables.ScheduledTaskSettingTable,
                 Tables.UserCommandTable,
                 Tables.AsyncTaskTable,
+                Tables.WatchTable,
                 Tables.SwarmRunTable,
                 Tables.SwarmTaskTable,
                 Tables.SwarmDeliberationHistoryTable,

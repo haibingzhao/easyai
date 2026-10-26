@@ -5,6 +5,7 @@ import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.permission.PermissionAction
 import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.tool.ToolBuilder
+import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import org.slf4j.LoggerFactory
@@ -28,7 +29,8 @@ class WebFetchToolBuilder : ToolBuilder {
 - IMPORTANT: if another tool is present that offers better web fetching capabilities, prefer using that tool instead""",
         permissionCategory = "web",
         uiRenderer = "webfetch",
-        patternKeys = listOf("url")
+        patternKeys = listOf("url"),
+        capabilities = setOf(ToolCapability.READ_ONLY)
     )
     override val defaultPermissionRules = listOf(
         PermissionRule("tool.execute.web", "*", PermissionAction.ALLOW)
@@ -62,7 +64,8 @@ class WebSearchToolBuilder : ToolBuilder {
 - The current year is ${Year.now()}. You MUST use this year when searching for recent information or current events""",
         permissionCategory = "web",
         uiRenderer = "websearch",
-        patternKeys = listOf("query")
+        patternKeys = listOf("query"),
+        capabilities = setOf(ToolCapability.READ_ONLY)
     )
     override val defaultPermissionRules = listOf(
         PermissionRule("tool.execute.web", "*", PermissionAction.ALLOW)
