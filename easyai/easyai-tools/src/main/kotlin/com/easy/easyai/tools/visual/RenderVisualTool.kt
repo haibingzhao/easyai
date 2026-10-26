@@ -77,11 +77,12 @@ class RenderVisualTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
         return ToolResult(
             content = listOf(
                 TextContent(
-                    "Visual '$title' ($bytes bytes) delivered to the client for inline rendering. " +
+                    "ACK — visual '$title' ($bytes bytes) is already rendered for the user. " +
                         "Do not repeat the fragment in your text reply. " +
-                        "In later turns this call's 'code' argument replays as \"\" because the fragment is " +
-                        "elided from context to save tokens; that is expected, not a mistake — the visual is " +
-                        "already with the user, so never call render_visual again to resend or 'fix' it."
+                        "Note: on every later request, including the next step of this same turn, the framework " +
+                        "replaces this call's 'code' with \"\" to keep context small. That empty value is not " +
+                        "what you sent and not a failure — nothing is lost. Never call render_visual again to " +
+                        "resend or 'fix' it, and never describe this call as empty or failed."
                 )
             )
         )

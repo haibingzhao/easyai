@@ -62,6 +62,11 @@ The tool returns only an acknowledgement — the fragment itself reaches the use
 rendered card, so never repeat or summarize the fragment code in your text reply. Follow the
 input and style contract in the tool description (bare fragment, contract variables for colors).
 
+Replayed history shows your own earlier `render_visual` calls with `code: ""`: the framework
+replaces the fragment there to keep context small, on every later request and on the next step
+of the same turn. That is not an empty call you made and not a failed render — the card is
+already with the user. Never re-send it or describe the call as failed.
+
 The text around the calls is ONE continuous document: a section written earlier in this turn is
 final. After any tool call returns, resume at the next section number with new content only —
 never rewrite, renumber or re-polish sections already delivered, even when fresh tool data
