@@ -182,6 +182,11 @@ export { MessageList } from './components/chat/MessageList';
 export { ModelSelector } from './components/chat/ModelSelector';
 export type { ModelSelectorProps } from './components/chat/ModelSelector';
 export { RenderVisualToolMessage } from './components/chat/tools/RenderVisualToolMessage';
+// Tool-renderer extension point: hosts register a component by tool name (overriding built-ins)
+// instead of forking the router. Register at startup, before the first transcript render.
+export { registerToolRenderers } from './components/chat/tools/ToolMessageRouter';
+export type { ToolRenderer } from './components/chat/tools/ToolMessageRouter';
+export type { ToolMessageProps } from './components/chat/tools/types';
 // Streaming-safe markdown renderer used by chat text segments; hosts reuse it for
 // any LLM-authored text so rendering stays identical to the chat bubbles.
 export { TextMarkdown } from './components/chat/segments/TextMarkdown';

@@ -39,6 +39,7 @@ tools/
 |------|----------|-------|
 | Add new tool renderer | Create `*ToolMessage.tsx`, register in `ToolMessageRouter` | Follow `ReadToolMessage.tsx` pattern |
 | Route registration | `ToolMessageRouter.tsx` | Maps tool names to components |
+| Host-specific renderer | `registerToolRenderers` (exported from `@easyai/console`) | Hosts register by tool name at startup; entries override built-ins and are matched before MCP routing |
 | Icon mapping | `icons.tsx` | Tool name → Lucide icon |
 | Parsing logic | `parsers.ts` | Raw args → typed display data |
 

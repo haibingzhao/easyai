@@ -2,9 +2,9 @@
  * Type definitions for tool rendering components.
  */
 
-import type { ToolCall, ToolResult } from '@/types/message';
-import type { ToolCallStatus } from '@/types/socket-event';
-import type { ToolBlockData } from '@/services/stores/chat/types';
+import type { ToolCall, ToolResult } from '../../../types/message';
+import type { ToolCallStatus } from '../../../types/socket-event';
+import type { ToolBlockData } from '../../../services/stores/chat/types';
 
 /** Parsed read tool result */
 export interface ParsedReadResult {
