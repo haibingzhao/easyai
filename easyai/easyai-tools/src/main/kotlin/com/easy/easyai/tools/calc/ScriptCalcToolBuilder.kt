@@ -5,43 +5,46 @@ import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.permission.PermissionAction
 import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.tool.ToolBuilder
+import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import org.springframework.stereotype.Component
 
-private const val CALC_TOOL_DESCRIPTION = """Execute Groovy scripts in-memory for SMALL, SELF-CONTAINED numerical and date/time calculations.
+private const val CALC_TOOL_DESCRIPTION = """Execute Groovy scripts in-memory for exact numerical, date/time and data-analysis work.
 
-Use this tool for one-off computations where the data fits directly inside the script
-(a few dozen values at most), instead of mental arithmetic:
+Use this tool for one-off computations instead of mental arithmetic:
 - Mathematical / arithmetic formulas (e.g., percentages, weighted scores, ratios)
 - Date and time calculations (e.g., date differences, adding/subtracting days, timezone conversions)
 - Unit conversions
 - Any computation where accuracy matters
-- Calculations on a SINGLE file ≤ 512KB (use filePath parameter for files too large for context)
+- Analyzing a SINGLE data file up to 4MB — including a large tool result that was spilled to the
+  temp dir (pass its path as filePath). This works in background runs where no shell is available.
 
 Available inside the script:
 - Standard operators: +, -, *, /, %, ** (power)
 - java.lang.Math: Math.sqrt(), Math.pow(), Math.round(), Math.PI, Math.E, etc.
 - java.time API: LocalDate, LocalDateTime, LocalTime, ZonedDateTime, Duration, Period, ChronoUnit
+- groovy.json.JsonSlurper / JsonSlurperClassic for JSON text
 - Groovy features: closures, ranges, list/map operations, string interpolation
-- __data__: List<String> of file lines (only when filePath is provided)
+- __data__: List<String> of file lines (only when filePath is provided); join it before parsing a
+  single-line file
 
 Parameters:
 - script (required): Groovy script to execute
-- filePath (optional): Absolute path to a data file. The host reads it and injects content as `__data__` variable.
-  File must be a regular file (no symlinks), max 512KB. Only ONE file supported. For multiple files or larger files, use bash tool with Python/JavaScript instead.
+- filePath (optional): Absolute path to a data file. The host reads it and injects its lines as
+  `__data__`. Regular file only (no symlinks), max 4MB, one file per call. An unattended run may
+  only read tool-output spill files or files inside the bound project.
 
 Examples:
 - script: "Math.sqrt(144) + Math.pow(2, 10)"
-- script: "LocalDate.of(2024, 1, 1).plusDays(30)"
 - script: "ChronoUnit.DAYS.between(LocalDate.parse('2024-01-01'), LocalDate.parse('2024-12-31'))"
-- script: "def total = (1..100).sum(); total * 0.15"
 - script: "BigDecimal.valueOf(1234.56) * BigDecimal.valueOf(0.0825)"
-- script: "__data__.drop(1).size()", filePath: "/path/to/data.csv"  // count rows excluding header
+- script: "def rows = new groovy.json.JsonSlurper().parseText(__data__.join('\n')); rows.sum { it.close }",
+  filePath: "/tmp/easyai-tool-output/call_1_ab12cd34.txt"
+- script: "__data__.drop(1).size()", filePath: "/path/to/data.csv"
 
-The script executes purely in memory; the sandbox rejects file, network, and process
-operations at compile time.
-Output is the value of the last expression evaluated."""
+The script executes purely in memory; the sandbox rejects file, network, process, reflection and
+thread operations. Output is println text when present, otherwise the last expression value."""
 
 /** Static guidance for on-demand time access via the calc tool (cache-stable). */
 private const val TIME_ACCESS_SEGMENT = """
@@ -69,6 +72,7 @@ class ScriptCalcToolBuilder : ToolBuilder {
         isDefaultTool = true,
         tracksFileChanges = false,
         patternKeys = emptyList(),
+        capabilities = setOf(ToolCapability.READ_ONLY),
         systemPromptSegment = TIME_ACCESS_SEGMENT.trimIndent(),
         promptSegmentOrder = 10
     )

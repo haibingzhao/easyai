@@ -1,6 +1,6 @@
 package com.easy.easyai.core.watch
 
-import com.easy.easyai.api.config.ModelConfigService
+import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.AgentCompletionCheck
 import com.easy.easyai.core.agent.AgentContext
@@ -51,7 +51,7 @@ class WatchTaskHandler(
     private val properties: WatchProperties = WatchProperties(),
     private val sessionManager: SessionManager? = null,
     private val agentService: AgentService? = null,
-    private val modelConfigService: ModelConfigService? = null,
+    private val modelConfigStore: ModelProviderConfigStore? = null,
     private val toolsetResolver: WatchToolsetResolver? = null,
     private val notifier: WatchNotifier? = null,
     private val taskStore: AsyncTaskStore? = null,
@@ -358,7 +358,7 @@ class WatchTaskHandler(
         schema: String,
         prompt: String,
         maxIterations: Int,
-        tools: List<ToolDefinition>? = null
+        tools: List<ToolDefinition>
     ): String {
         val sessionManager = sessionManager ?: throw WatchUnavailableException(
             "Watch runs need a SessionManager, which this deployment does not provide"
@@ -366,14 +366,16 @@ class WatchTaskHandler(
         val agentService = agentService ?: throw WatchUnavailableException(
             "Watch runs need an AgentService, which this deployment does not provide"
         )
-        val modelConfigService = modelConfigService ?: throw WatchUnavailableException(
-            "Watch runs need a ModelConfigService, which this deployment does not provide"
+        val configStore = modelConfigStore ?: throw WatchUnavailableException(
+            "Watch runs need a model configuration store, which this deployment does not provide"
         )
         val modelConfigId = watch.modelConfigId ?: throw WatchException(
             "This watch has no model configuration; edit it from a chat with a model selected"
         )
         val owners = watch.owners.ifEmpty { setOf(watch.userId) }
-        val modelConfig = modelConfigService.getUserConfiguration(modelConfigId, owners)
+        // Read through the same store the chat path uses, so a model the user can select there is
+        // also one a watch can run with (the service facade filters some custom rows out).
+        val modelConfig = configStore.getConfig(modelConfigId, owners)
             ?: throw WatchException(
                 "The model configuration this watch was created with has been deleted; " +
                     "edit the watch from a chat to pick a current model"
@@ -382,7 +384,6 @@ class WatchTaskHandler(
             ?: throw WatchUnavailableException(
                 "No chat model factory supports the watch's protocol '${modelConfig.protocol}'"
             )
-        val resolvedTools = tools ?: toolsetResolver?.resolve(watch, watch.runSessionId).orEmpty()
         val baseContext = AgentContext(
             agentId = AGENT_ID,
             modelConfig = modelConfig,
@@ -394,7 +395,7 @@ class WatchTaskHandler(
             projectId = watch.projectId,
             projectPath = watch.projectPath?.let { Path.of(it) },
             projectKind = watch.projectKind,
-            tools = resolvedTools,
+            tools = tools,
             maxIterations = maxIterations,
             customInstructions = instructions,
             outputSchema = schema,
@@ -795,6 +796,9 @@ class WatchTaskHandler(
     )
 
     private companion object {
+        // Reserved: an agent row with this id would be looked up by the session manager and replace
+        // the tools, instructions and output schema this handler builds. AgentController refuses to
+        // create user agents with this id.
         const val AGENT_ID = "watch-runner"
         const val END_REASON_LLM_ERROR = "error"
         const val REVIEW_HISTORY_LIMIT = 5

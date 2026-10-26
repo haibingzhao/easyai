@@ -18,6 +18,7 @@ const FILTERS: Array<{ id: WatchStatus | 'all'; label: string }> = [
   { id: 'paused', label: 'Paused' },
   { id: 'completed', label: 'Completed' },
   { id: 'expired', label: 'Expired' },
+  { id: 'cancelled', label: 'Cancelled' },
 ];
 
 const POLL_INTERVAL_MS = 30_000;

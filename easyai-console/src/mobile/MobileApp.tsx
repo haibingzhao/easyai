@@ -9,6 +9,8 @@ import { MobileNotificationsPage } from './pages/MobileNotificationsPage';
 import { MobileProfilePage } from './pages/MobileProfilePage';
 import { MobileToolDetailPage } from './pages/MobileToolDetailPage';
 import { MobileArtifactPage } from './pages/MobileArtifactPage';
+import { WatchesPage } from '@/pages/WatchesPage';
+import { WatchDetailPage } from '@/pages/WatchDetailPage';
 
 /**
  * easyai-console's own mobile host — the first consumer of the mobile shell, and the reference
@@ -31,6 +33,10 @@ export const MobileApp: React.FC = () => (
           <Route path="/me" element={<MobileProfilePage />} />
           <Route path="/tool/:toolCallId" element={<MobileToolDetailPage />} />
           <Route path="/artifact" element={<MobileArtifactPage />} />
+          {/* A push deep link may point at a watch; keep it inside the shell instead of bouncing
+              the user back to chat. */}
+          <Route path="/watches" element={<WatchesPage />} />
+          <Route path="/watches/:id" element={<WatchDetailPage />} />
           <Route path="*" element={<Navigate to="/chat" replace />} />
         </Route>
       </Route>

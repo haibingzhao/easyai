@@ -1,5 +1,7 @@
 package com.easy.easyai.autoconfigure.notification
 
+import com.easy.easyai.core.watch.WatchNotice
+import com.easy.easyai.core.watch.WatchNotifier
 import com.easy.easyai.notification.NotificationActionHandler
 import com.easy.easyai.notification.NotificationConflictException
 import com.easy.easyai.notification.NotificationDecision
@@ -111,11 +113,54 @@ class NotificationAutoConfigurationTest {
         }
     }
 
+    @Test
+    fun `a watch notice stores the console deep link and replaces the id placeholder`() {
+        watchRunner().run { context ->
+            val url = publishWatchNotice(
+                context.getBean(WatchNotifier::class.java),
+                context.getBean(NotificationStore::class.java)
+            )
+            assertThat(url).isEqualTo("/#/watches/w-1")
+        }
+        watchRunner("easyai.watch.notification-url-template=/mobile.html#/watches/{watchId}").run { context ->
+            val url = publishWatchNotice(
+                context.getBean(WatchNotifier::class.java),
+                context.getBean(NotificationStore::class.java)
+            )
+            assertThat(url).isEqualTo("/mobile.html#/watches/w-1")
+        }
+        // An absolute link would be refused by the notification store on every firing; fail loudly
+        // at wiring time instead.
+        watchRunner("easyai.watch.notification-url-template=https://example.com/watches").run { context ->
+            assertThat(context).hasFailed()
+        }
+    }
+
+    private fun publishWatchNotice(notifier: WatchNotifier, store: NotificationStore): String? {
+        runBlocking {
+            notifier.publish(
+                WatchNotice(
+                    userId = "a",
+                    watchId = "w-1",
+                    title = "Price",
+                    body = "Crossed 100",
+                    kind = "finding",
+                    dedupeKey = "watch:w-1:task-1"
+                )
+            )
+        }
+        return runBlocking { store.findByUser("a", "easyai", null, 10).single().url }
+    }
+
     private fun runner(vararg properties: String): ReactiveWebApplicationContextRunner =
         ReactiveWebApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(NotificationAutoConfiguration::class.java))
             .withUserConfiguration(StoreConfig::class.java)
             .withPropertyValues(*properties)
+
+    private fun watchRunner(vararg properties: String): ReactiveWebApplicationContextRunner =
+        runner(*properties)
+            .withConfiguration(AutoConfigurations.of(WatchNotificationAutoConfiguration::class.java))
 
     @Configuration(proxyBeanMethods = false)
     private class StoreConfig {

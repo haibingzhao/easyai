@@ -32,7 +32,7 @@ class WatchExpiryReviewTest {
         properties = properties,
         sessionManager = model?.sessionManager,
         agentService = model?.agentService,
-        modelConfigService = model?.modelConfigService,
+        modelConfigStore = model?.modelConfigStore,
         notifier = notifier,
         clock = { now }
     )
@@ -180,7 +180,7 @@ class WatchExpiryReviewTest {
         fun `a failed review backs off while remaining a review`() = runTest {
             val store = reviewStore()
             val model = WatchModelStub(reviewAnswer())
-            coEvery { model.modelConfigService.getUserConfiguration(any<String>(), any<Collection<String>>()) } returns null
+            coEvery { model.modelConfigStore.getConfig(any<String>(), any<Collection<String>>()) } returns null
             val outcome = handler(store, model = model).execute(watchTask(store.current, WatchRunKind.EXPIRY_REVIEW))
 
             assertIs<TaskOutcome.Failure>(outcome)

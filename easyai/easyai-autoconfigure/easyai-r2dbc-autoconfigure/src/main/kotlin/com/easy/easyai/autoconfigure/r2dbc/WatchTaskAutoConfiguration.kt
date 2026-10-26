@@ -1,6 +1,6 @@
 package com.easy.easyai.autoconfigure.r2dbc
 
-import com.easy.easyai.api.config.ModelConfigService
+import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.agent.AsyncAgentStore
@@ -79,7 +79,7 @@ class WatchTaskAutoConfiguration {
         properties: WatchProperties,
         sessionManager: ObjectProvider<SessionManager>,
         agentService: ObjectProvider<AgentService>,
-        modelConfigService: ObjectProvider<ModelConfigService>,
+        modelConfigStore: ObjectProvider<ModelProviderConfigStore>,
         toolsetResolver: ObjectProvider<WatchToolsetResolver>,
         notifier: ObjectProvider<WatchNotifier>,
         taskStore: ObjectProvider<AsyncTaskStore>
@@ -88,7 +88,7 @@ class WatchTaskAutoConfiguration {
         properties = properties,
         sessionManager = sessionManager.ifAvailable,
         agentService = agentService.ifAvailable,
-        modelConfigService = modelConfigService.ifAvailable,
+        modelConfigStore = modelConfigStore.ifAvailable,
         toolsetResolver = toolsetResolver.ifAvailable,
         notifier = notifier.ifAvailable,
         taskStore = taskStore.ifAvailable
@@ -153,7 +153,11 @@ internal class AgentWatchToolsetResolver(
         return tools
     }
 
-    /** A static tool must still declare READ_ONLY; an MCP tool was explicitly approved by name. */
+    /**
+     * A static tool must still declare READ_ONLY. MCP tools skip that check because they cannot
+     * declare capabilities: approving one by name is the user's statement that its side effects are
+     * acceptable on a schedule.
+     */
     private fun ToolDefinition.isSafeForUnattended(): Boolean {
         if (tracksFileChanges) return false
         val blocked = setOf(

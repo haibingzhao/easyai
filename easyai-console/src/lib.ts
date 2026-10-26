@@ -119,7 +119,9 @@ export type {
 export { taskService } from './services/task-service';
 
 // Watch (关注) plane: definitions created from chat, their findings, and the page surfaces.
-// A host that mounts its own router must add `/watches` and `/watches/:id` itself.
+// A host that mounts its own router must add `/watches` and `/watches/:id` itself, then call
+// `enableWatchesNav()` so the sidebar entry is shown.
+export { enableWatchesNav } from './constants/navigation';
 export { watchService } from './services/watch-service';
 export { useWatchStore } from './services/stores/watch-store';
 export { WatchesPage } from './pages/WatchesPage';

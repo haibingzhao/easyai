@@ -2,6 +2,7 @@ package com.easy.easyai.web.controller
 
 import com.easy.easyai.core.agent.AgentToolConfig
 import com.easy.easyai.core.agent.AsyncAgentStore
+import com.easy.easyai.core.agent.McpBindingSpec
 import com.easy.easyai.core.command.AsyncUserCommandStore
 import com.easy.easyai.core.command.UserCommandDefinition
 import com.easy.easyai.skills.command.CommandCategory
@@ -20,8 +21,6 @@ import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Mono
-import tools.jackson.databind.ObjectMapper
-import com.easy.easyai.common.util.SharedObjectMapper
 
 /**
  * REST controller for slash command queries.
@@ -43,8 +42,6 @@ class CommandController(
     @param:Autowired(required = false)
     private val commandService: CommandService? = null,
 ) {
-
-    private val objectMapper: ObjectMapper = SharedObjectMapper.instance
 
     @GetMapping
     fun listCommands(
@@ -90,29 +87,8 @@ class CommandController(
     private fun filterByMcpConfig(cmd: CommandInfo, mcpConfigs: List<AgentToolConfig>): Boolean {
         if (mcpConfigs.isEmpty()) return false // No bindings = none allowed
         val serverConfig = mcpConfigs.find { it.targetName == cmd.mcpServer } ?: return false
-        val allowedPrompts = parsePromptNames(serverConfig.metadata)
+        val allowedPrompts = McpBindingSpec.parse(serverConfig.metadata).promptNames
         return allowedPrompts.isEmpty() || cmd.mcpPromptName in allowedPrompts
-    }
-
-    private fun parsePromptNames(metadata: String?): List<String> {
-        if (metadata.isNullOrBlank()) return emptyList()
-        return try {
-            val node = objectMapper.readTree(metadata)
-            if (node.isArray) {
-                emptyList()
-            } else {
-                val promptNode = node.get("promptNames")
-                if (promptNode != null && promptNode.isArray) {
-                    val result = mutableListOf<String>()
-                    for (el in promptNode) { result.add(el.asString()) }
-                    result
-                } else {
-                    emptyList()
-                }
-            }
-        } catch (_: Exception) {
-            emptyList()
-        }
     }
 
     private fun UserCommandDefinition.toCommandInfo() = CommandInfo(

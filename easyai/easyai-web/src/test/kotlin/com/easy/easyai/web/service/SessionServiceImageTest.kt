@@ -60,7 +60,7 @@ class SessionServiceImageTest {
         coEvery { store.loadMessagesWithTimestampsAfter("session-1", 0L) } returns messages
         coEvery { store.findContentUpdatedAt("session-1", "alice") } returns 200L
         coEvery { store.getLastMessageConfig("session-1") } returns null
-        coEvery { files.resolveImageUrl(reference, "alice") } returnsMany listOf(
+        coEvery { files.resolveImageUrl(reference, "alice", aliceOwners) } returnsMany listOf(
             "https://example.test/image?signature=one", "https://example.test/image?signature=two"
         )
     }
@@ -68,7 +68,7 @@ class SessionServiceImageTest {
     @Test
     fun `full and incremental responses refresh deduplicated URLs without changing content`() = runTest {
         val detail = assertNotNull(service.getSessionDetail("session-1", "alice", aliceOwners))
-        val incremental = assertNotNull(service.getSessionMessagesAfter("session-1", 0L, "alice"))
+        val incremental = assertNotNull(service.getSessionMessagesAfter("session-1", 0L, "alice", aliceOwners))
         detail.messages.forEach {
             assertEquals(mapOf(reference to "https://example.test/image?signature=one"), it.fileUrls)
         }
@@ -77,17 +77,17 @@ class SessionServiceImageTest {
         }
         assertSame(message.content, detail.messages.first().content)
         assertEquals(reference, (message.content[1] as FileRefContent).filePath)
-        coVerify(exactly = 2) { files.resolveImageUrl(reference, "alice") }
+        coVerify(exactly = 2) { files.resolveImageUrl(reference, "alice", aliceOwners) }
     }
 
     @Test
     fun `single image failure leaves text history available and is deduplicated`() = runTest {
-        coEvery { files.resolveImageUrl(reference, "alice") } throws IllegalStateException("storage unavailable")
+        coEvery { files.resolveImageUrl(reference, "alice", aliceOwners) } throws IllegalStateException("storage unavailable")
         val detail = assertNotNull(service.getSessionDetail("session-1", "alice", aliceOwners))
         assertEquals(2, detail.messages.size)
         assertEquals(TextContent("Look at this"), detail.messages.first().content.first())
         assertNull(detail.messages.first().fileUrls)
-        coVerify(exactly = 1) { files.resolveImageUrl(reference, "alice") }
+        coVerify(exactly = 1) { files.resolveImageUrl(reference, "alice", aliceOwners) }
     }
 
     @Test
@@ -95,13 +95,13 @@ class SessionServiceImageTest {
         coEvery { manager.getSessionDetail("session-1", "bob") } returns null
         coEvery { store.findContentUpdatedAt("session-1", "bob") } returns null
         assertNull(service.getSessionDetail("session-1", "bob", bobOwners))
-        assertNull(service.getSessionMessagesAfter("session-1", 0L, "bob"))
-        coVerify(exactly = 0) { files.resolveImageUrl(any(), any()) }
+        assertNull(service.getSessionMessagesAfter("session-1", 0L, "bob", bobOwners))
+        coVerify(exactly = 0) { files.resolveImageUrl(any(), any(), any()) }
     }
 
     @Test
     fun `does not swallow request cancellation`() = runTest {
-        coEvery { files.resolveImageUrl(reference, "alice") } throws CancellationException("cancelled")
+        coEvery { files.resolveImageUrl(reference, "alice", aliceOwners) } throws CancellationException("cancelled")
         assertFailsWith<CancellationException> { service.getSessionDetail("session-1", "alice", aliceOwners) }
     }
 

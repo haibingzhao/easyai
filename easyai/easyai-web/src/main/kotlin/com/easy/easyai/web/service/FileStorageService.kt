@@ -1,5 +1,7 @@
 package com.easy.easyai.web.service
 
+import com.easy.easyai.core.storage.ObjectMeta
+import com.easy.easyai.core.storage.ObjectStorage
 import com.easy.easyai.core.storage.ObjectStorageException
 import com.easy.easyai.core.storage.ObjectStorageResolver
 import com.easy.easyai.core.storage.StoredFileReference
@@ -39,6 +41,7 @@ class FileStorageService(
         bytes: ByteArray,
         extension: String,
         userId: String = "system",
+        owners: Collection<String>,
         mimeType: String = resolveMimeType(Path.of("upload.$extension"))
     ): String {
         require(sessionId.matches(Regex("[A-Za-z0-9_-]+"))) { "Invalid session ID" }
@@ -54,7 +57,7 @@ class FileStorageService(
             }
         } else extension.lowercase()
         if (isImage) {
-            val storage = objectStorageResolver?.resolve(userId)
+            val storage = objectStorageResolver?.resolve(owners)
             if (storage != null) {
                 val reference = StoredFileReference.create(userId, sessionId, safeExtension)
                 storage.put(StoredFileReference.parse(reference, userId).key, bytes, mimeType)
@@ -85,14 +88,14 @@ class FileStorageService(
     fun proxyUrl(filePath: String): String =
         "/api/files/serve?path=${URLEncoder.encode(filePath, StandardCharsets.UTF_8)}"
 
-    suspend fun resolveImageUrl(filePath: String, userId: String): String? {
+    suspend fun resolveImageUrl(filePath: String, userId: String, owners: Collection<String>): String? {
         if (!StoredFileReference.isStored(filePath)) return proxyUrl(filePath)
         val reference = StoredFileReference.parse(filePath, userId)
-        val storage = objectStorageResolver?.resolve(userId) ?: return null
-        val metadata = storage.head(reference.key) ?: return null
+        val storage = objectStorageResolver?.resolve(owners) ?: return null
+        val (holdingStorage, metadata) = locate(storage, reference, userId) ?: return null
         require(metadata.size in 1..StoredFileReference.MAX_IMAGE_BYTES.toLong()) { "Invalid image size" }
         val signedUri = try {
-            storage.presignedGetUrl(reference.key, StoredFileReference.URL_TTL_SECONDS)?.let { URI(it) }
+            holdingStorage.presignedGetUrl(reference.key, StoredFileReference.URL_TTL_SECONDS)?.let { URI(it) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -105,15 +108,39 @@ class FileStorageService(
         return proxyUrl(filePath)
     }
 
-    suspend fun readStoredImage(filePath: String, userId: String): ByteArray? {
+    suspend fun readStoredImage(filePath: String, userId: String, owners: Collection<String>): ByteArray? {
         val reference = StoredFileReference.parse(filePath, userId)
-        val storage = objectStorageResolver?.resolve(userId)
+        val storage = objectStorageResolver?.resolve(owners)
             ?: throw ObjectStorageException("Object storage is not configured")
-        val metadata = storage.head(reference.key) ?: return null
+        val (holdingStorage, metadata) = locate(storage, reference, userId) ?: return null
         require(metadata.size in 1..StoredFileReference.MAX_IMAGE_BYTES.toLong()) { "Invalid image size" }
-        val content = storage.get(reference.key) ?: return null
+        val content = holdingStorage.get(reference.key) ?: return null
         require(content.bytes.size in 1..StoredFileReference.MAX_IMAGE_BYTES) { "Invalid image size" }
         return content.bytes
+    }
+
+    /**
+     * The storage that actually holds [reference], preferring the owner-scoped chain.
+     *
+     * A stored reference carries only a key, not its bucket. Images uploaded before chat uploads
+     * honoured the chat boundary's owners can therefore sit in the storage the author alone
+     * resolves to (self -> system) while the owner-scoped storage now resolves to a group bucket;
+     * probing the author's resolution keeps those references readable.
+     */
+    private suspend fun locate(
+        primary: ObjectStorage,
+        reference: StoredFileReference,
+        userId: String
+    ): Pair<ObjectStorage, ObjectMeta>? {
+        primary.head(reference.key)?.let { return primary to it }
+        val legacy = objectStorageResolver?.resolve(listOf(userId)) ?: return null
+        if (legacy === primary) return null
+        val metadata = legacy.head(reference.key) ?: return null
+        logger.warn(
+            "Stored image {} is missing from the owner-scoped storage; reading it from the author's chain (legacy upload)",
+            reference.key
+        )
+        return legacy to metadata
     }
 
     /**

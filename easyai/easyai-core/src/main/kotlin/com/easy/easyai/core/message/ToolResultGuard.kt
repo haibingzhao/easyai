@@ -71,6 +71,13 @@ object ToolResultGuard {
         get() = spillDirOverride ?: tmpDir.resolve(SPILL_DIR_NAME)
 
     /**
+     * Directory holding spilled tool results. Exposed so read-only analysis tools can accept these
+     * files as input in unattended runs, where no user is present to approve an arbitrary path.
+     */
+    @JvmStatic
+    fun spillDirectory(): Path = spillDir
+
+    /**
      * Result of [guard]: the possibly truncated text plus whether truncation occurred.
      */
     data class GuardedResult(val text: String, val truncated: Boolean)
@@ -195,11 +202,13 @@ The file may be removed by the system later. If it no longer exists or reading f
 RE-RUN the tool to regenerate the data.
 
 Access patterns:
+- calc tool: pass this path as filePath to compute over the WHOLE file in a sandboxed script
+  (aggregation, CSV/JSON parsing — no shell needed, works in background runs)
 - read tool: offset=0&limit=500 for LINE-based slicing (1-based line numbers in output).
   NOTE: offset/limit are line-based; for few-line files (e.g., a single-line JSON/CSV) line
-  slicing cannot narrow the data down — use grep -o or python instead
+  slicing cannot narrow the data down — use grep -o or calc instead
 - grep '<pattern>' $file for targeted lookup
-- bash + python for full computation (calc cannot read files)
+- bash + python for full computation when a shell is available
 
 Sample (first ~$SAMPLE_CHARS chars / last ~$SAMPLE_CHARS chars of ${originalText.length} total):
 --- head ---

@@ -331,7 +331,7 @@ class ChatController(
     ): Mono<SessionMessagesAfterResponse> {
         return mono {
             val userId = verifyOwnership(sessionId)
-            sessionService.getSessionMessagesAfter(sessionId, after, userId)
+            sessionService.getSessionMessagesAfter(sessionId, after, userId, currentOwners())
                 ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found: $sessionId")
         }
     }

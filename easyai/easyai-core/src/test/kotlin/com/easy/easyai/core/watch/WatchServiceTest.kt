@@ -228,6 +228,22 @@ class WatchServiceTest {
         }
 
         @Test
+        fun `a reminder needs no saved model because it never calls one`() = runTest {
+            val result = service().create(
+                origin(modelConfigId = null),
+                input(mode = WatchMode.REMIND, condition = "", reminder = "Take the pill")
+            )
+            assertEquals(WatchMode.REMIND, result.watch.mode)
+        }
+
+        @Test
+        fun `a temporary workspace is dropped with a warning`() = runTest {
+            val result = service().create(origin().copy(projectKind = ProjectKind.TEMP), input())
+            assertNull(result.watch.projectPath)
+            assertTrue(result.warnings.any { it.contains("temporary") })
+        }
+
+        @Test
         fun `creating a watch enables the scan row without touching its schedule`() = runTest {
             val settings = mockk<ScheduledTaskSettingStore>(relaxed = true)
             coEvery { settings.get("alice", any()) } returns null
@@ -359,6 +375,59 @@ class WatchServiceTest {
         }
 
         @Test
+        fun `clearing a review on a recurring watch restores the scheduled next run`() = runTest {
+            val store = FakeWatchStore()
+            val watch = service(store).create(
+                origin(),
+                input(schedule = WatchScheduleInput.Every(WatchScheduleKind.DAILY, LocalTime.of(9, 0)))
+            ).watch
+            store.setStatus(watch.id, WatchStatus.ACTIVE, null, WatchPendingAction.EXPIRY_REVIEW)
+            // The review claimed the row and left its own short guard behind.
+            store.forceNextDue(watch.id, now.plus(Duration.ofMinutes(10)))
+
+            val result = service(store).update(
+                "alice",
+                watch.id,
+                WatchUpdateInput(until = LocalDate.parse("2026-12-31"))
+            )
+
+            assertEquals(WatchPendingAction.CHECK, result.watch.pendingAction)
+            assertEquals(Instant.parse("2026-10-25T01:00:00Z"), result.watch.nextDueAt)
+        }
+
+        @Test
+        fun `renewing with the old until date clears it instead of refusing the save`() = runTest {
+            val store = FakeWatchStore()
+            val watch = service(store)
+                .create(origin(), input(until = LocalDate.parse("2026-10-25")))
+                .watch
+            store.forceStatus(watch.id, WatchStatus.COMPLETED)
+            val result = service(store).update(
+                "alice",
+                watch.id,
+                WatchUpdateInput(
+                    schedule = WatchScheduleInput.In(Duration.ofDays(2)),
+                    until = LocalDate.parse("2026-10-25")
+                )
+            )
+            assertEquals(WatchStatus.ACTIVE, result.watch.status)
+            assertNull(result.watch.untilAt)
+            assertTrue(result.warnings.any { it.contains("until") })
+        }
+
+        @Test
+        fun `a save that changes nothing keeps the version so it cannot invalidate a run`() = runTest {
+            val store = FakeWatchStore()
+            val before = created(store)
+            val result = service(store).update(
+                "alice",
+                before.id,
+                WatchUpdateInput(title = before.title, condition = before.condition)
+            )
+            assertEquals(before, result.watch)
+        }
+
+        @Test
         fun `a stale version loses the edit instead of overwriting`() = runTest {
             val store = FakeWatchStore()
             val watch = created(store)
@@ -393,6 +462,21 @@ class WatchServiceTest {
             assertEquals(WatchStatus.PAUSED, svc.pause("alice", watch.id).status)
             assertEquals(WatchStatus.ACTIVE, svc.resume("alice", watch.id).status)
             assertThrows<WatchException> { svc.resume("alice", watch.id) }
+        }
+
+        @Test
+        fun `an explicit resume clears the failure streak that paused the watch`() = runTest {
+            val store = FakeWatchStore()
+            val svc = service(store)
+            val watch = svc.create(origin(), input()).watch
+            store.forceStatus(watch.id, WatchStatus.PAUSED)
+            store.forceFailures(watch.id, count = 3, error = "model unavailable")
+
+            val resumed = svc.resume("alice", watch.id)
+
+            assertEquals(WatchStatus.ACTIVE, resumed.status)
+            assertEquals(0, resumed.consecutiveFailures)
+            assertNull(resumed.lastError)
         }
 
         @Test
@@ -642,7 +726,8 @@ private class FakeWatchStore : WatchStore {
         statusReason: String?,
         pendingAction: WatchPendingAction?,
         nextDueAt: Long?,
-        expectedStatus: WatchStatus?
+        expectedStatus: WatchStatus?,
+        clearFailures: Boolean
     ): Watch? {
         beforeSetStatus?.invoke()
         beforeSetStatus = null
@@ -652,7 +737,9 @@ private class FakeWatchStore : WatchStore {
             status = status,
             statusReason = statusReason,
             pendingAction = pendingAction ?: row.pendingAction,
-            nextDueAt = nextDueAt?.let(Instant::ofEpochMilli) ?: row.nextDueAt
+            nextDueAt = nextDueAt?.let(Instant::ofEpochMilli) ?: row.nextDueAt,
+            consecutiveFailures = if (clearFailures) 0 else row.consecutiveFailures,
+            lastError = if (clearFailures) null else row.lastError
         )
         rows[id] = updated
         return updated
@@ -666,5 +753,13 @@ private class FakeWatchStore : WatchStore {
 
     fun forceStatus(id: String, status: WatchStatus) {
         rows[id] = rows.getValue(id).copy(status = status)
+    }
+
+    fun forceFailures(id: String, count: Int, error: String?) {
+        rows[id] = rows.getValue(id).copy(consecutiveFailures = count, lastError = error)
+    }
+
+    fun forceNextDue(id: String, nextDueAt: Instant) {
+        rows[id] = rows.getValue(id).copy(nextDueAt = nextDueAt)
     }
 }

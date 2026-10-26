@@ -543,27 +543,12 @@ class SubAgentTool(
                 val result = mutableListOf<AgentToolConfig>()
                 for (mcpEl in mcpNode) {
                     val serverName = mcpEl.get("serverName")?.asString() ?: ""
-                    val toolNamesNode = mcpEl.get("toolNames")
-                    val promptNamesNode = mcpEl.get("promptNames")
-                    val toolNames = mutableListOf<String>()
-                    val promptNames = mutableListOf<String>()
-                    if (toolNamesNode != null && toolNamesNode.isArray) {
-                        for (el in toolNamesNode) { toolNames.add(el.asString()) }
-                    }
-                    if (promptNamesNode != null && promptNamesNode.isArray) {
-                        for (el in promptNamesNode) { promptNames.add(el.asString()) }
-                    }
-                    val metadataObj = mutableMapOf<String, List<String>>()
-                    if (toolNames.isNotEmpty()) metadataObj["toolNames"] = toolNames
-                    if (promptNames.isNotEmpty()) metadataObj["promptNames"] = promptNames
-                    val metadata = metadataObj.takeIf { it.isNotEmpty() }
-                        ?.let { SharedObjectMapper.instance.writeValueAsString(it) }
                     result.add(AgentToolConfig(
                         id = "inline_mcp_$serverName",
                         agentId = "inline",
                         targetType = TargetType.MCP,
                         targetName = serverName,
-                        metadata = metadata
+                        metadata = McpBindingSpec.fromNode(mcpEl).toMetadata()
                     ))
                 }
                 result

@@ -1,6 +1,8 @@
 package com.easy.easyai.web.controller
 
 import com.easy.easyai.common.util.SharedObjectMapper
+import com.easy.easyai.core.agent.AgentToolConfig
+import com.easy.easyai.core.agent.McpBindingSpec
 import com.easy.easyai.core.team.TeamMemberExecution
 import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.swarm.event.SwarmEvent
@@ -856,7 +858,7 @@ class SwarmController(
                 ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Swarm run not found: $runId")
             val sessionId = sessionStore?.findSessionIdBySwarmTask(runId, taskId)
                 ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found for task: $taskId")
-            sessionService?.getSessionMessagesAfter(sessionId, after, userId)
+            sessionService?.getSessionMessagesAfter(sessionId, after, userId, currentOwners())
                 ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Session messages not available")
         }
     }
@@ -1171,27 +1173,8 @@ class SwarmController(
     )
 
     /** Convert an [AgentToolConfig] (targetType=MCP) to a [SwarmMcpBinding] for export. */
-    private fun com.easy.easyai.core.agent.AgentToolConfig.toSwarmMcpBinding(): SwarmMcpBinding {
-        val (toolNames, promptNames) = metadata?.let { meta ->
-            try {
-                val node = SharedObjectMapper.instance.readTree(meta)
-                if (node.isArray) {
-                    val names = mutableListOf<String>()
-                    for (el in node) { names.add(el.asText()) }
-                    names to emptyList()
-                } else {
-                    val tools = mutableListOf<String>()
-                    val toolNode = node.get("toolNames")
-                    if (toolNode != null && toolNode.isArray) { for (el in toolNode) { tools.add(el.asText()) } }
-                    val prompts = mutableListOf<String>()
-                    val promptNode = node.get("promptNames")
-                    if (promptNode != null && promptNode.isArray) { for (el in promptNode) { prompts.add(el.asText()) } }
-                    tools to prompts
-                }
-            } catch (_: Exception) {
-                emptyList<String>() to emptyList<String>()
-            }
-        } ?: (emptyList<String>() to emptyList<String>())
-        return SwarmMcpBinding(serverName = targetName, toolNames = toolNames, promptNames = promptNames)
+    private fun AgentToolConfig.toSwarmMcpBinding(): SwarmMcpBinding {
+        val spec = McpBindingSpec.parse(metadata)
+        return SwarmMcpBinding(serverName = targetName, toolNames = spec.toolNames, promptNames = spec.promptNames)
     }
 }

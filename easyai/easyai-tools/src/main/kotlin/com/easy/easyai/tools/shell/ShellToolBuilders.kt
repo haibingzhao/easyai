@@ -31,10 +31,10 @@ Do NOT use this tool for:
 - Directory listing (ls): use ls instead
 - Reading files (cat/head/tail): use read instead
 - One-off numeric/date/time formulas (no data files involved): use calc instead
-- Single file ≤ 512KB calculations: use calc with filePath parameter instead
+- Single file ≤ 4MB calculations: use calc with filePath parameter instead
 DO use this tool for:
 - Multiple files: write a Python or JavaScript script to process them
-- Single file > 512KB: write a Python or JavaScript script and run it
+- Single file > 4MB: write a Python or JavaScript script and run it
 - Calculations requiring third-party libraries (pandas, numpy, etc.)
 Error handling:
 - NEVER redirect stderr to /dev/null (2>/dev/null). stderr contains critical diagnostic info (e.g. "command not found"). Suppressing it makes failures invisible.

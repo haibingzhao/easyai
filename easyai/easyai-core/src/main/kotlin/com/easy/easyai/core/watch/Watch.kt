@@ -181,6 +181,7 @@ data class WatchUpdateInput(
     val condition: String? = null,
     val mode: WatchMode? = null,
     val reminder: String? = null,
+    val clearReminder: Boolean = false,
     val schedule: WatchScheduleInput? = null,
     val timezone: ZoneId? = null,
     val until: LocalDate? = null,
@@ -314,7 +315,9 @@ interface WatchStore {
         statusReason: String?,
         pendingAction: WatchPendingAction? = null,
         nextDueAt: Long? = null,
-        expectedStatus: WatchStatus? = null
+        expectedStatus: WatchStatus? = null,
+        /** An explicit resume is a fresh start: clear the failure streak the pause was based on. */
+        clearFailures: Boolean = false
     ): Watch?
 
     suspend fun delete(id: String): Boolean
@@ -328,6 +331,12 @@ object WatchTaskPayload {
     const val KEY_WATCH_ID = "watchId"
     const val KEY_KIND = "kind"
     const val KEY_SCHEDULED_FOR = "scheduledFor"
+
+    /**
+     * Diagnostic only: the version the planner saw when it claimed the row. The handler re-reads the
+     * watch at execution time and guards on that version instead, because a task can be retried long
+     * after the definition moved.
+     */
     const val KEY_DEFINITION_VERSION = "definitionVersion"
     /** The watch title, so the Tasks page can localize its own label around it. */
     const val KEY_TITLE = "title"

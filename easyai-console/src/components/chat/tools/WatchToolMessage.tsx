@@ -111,6 +111,19 @@ function parseAction(args: string): string {
   }
 }
 
+const ACTION_LABEL: Record<string, string> = {
+  create: 'Create',
+  list: 'List',
+  update: 'Update',
+  pause: 'Pause',
+  resume: 'Resume',
+  cancel: 'Cancel',
+};
+
+function actionLabel(raw: string): string {
+  return i18n(ACTION_LABEL[raw] ?? 'Watch');
+}
+
 const STATUS_STYLE: Record<string, string> = {
   active: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
   paused: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
@@ -126,7 +139,7 @@ const STATUS_STYLE: Record<string, string> = {
  */
 export function WatchToolMessage({ toolCall, result, status, compact }: ToolMessageProps) {
   const view = parseDetails(result?.details);
-  const action = parseAction(toolCall.args);
+  const action = actionLabel(parseAction(toolCall.args));
   const isStreaming = (status === 'RUNNING' || status === 'PENDING') && !result;
   const [expanded, setExpanded] = useState(isStreaming);
   const markTouched = useStreamingRowExpand(status, setExpanded, !!result);

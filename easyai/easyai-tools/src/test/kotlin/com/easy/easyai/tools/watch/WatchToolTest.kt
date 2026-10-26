@@ -100,6 +100,7 @@ class WatchToolTest {
     private val shellTool = toolDef("bash", setOf(ToolCapability.SHELL_EXECUTION))
     private val mediaTool = toolDef("fetch_media", setOf(ToolCapability.READ_ONLY), tracksFiles = true)
     private val mcpTool = toolDef("market__quote")
+    private val calcTool = toolDef("calc", setOf(ToolCapability.READ_ONLY))
 
     private val modelConfig = ModelProviderConfig(
         id = "model-1",
@@ -114,7 +115,7 @@ class WatchToolTest {
         sessionId = "session-1",
         userId = "alice",
         modelConfig = modelConfig,
-        tools = listOf(readTool, searchTool, shellTool, mediaTool, mcpTool),
+        tools = listOf(readTool, searchTool, shellTool, mediaTool, mcpTool, calcTool),
         timeZone = shanghai,
         unattended = unattended
     )
@@ -164,7 +165,7 @@ class WatchToolTest {
             assertEquals(WatchScheduleInput.In(Duration.ofHours(2)), input.schedule)
             assertEquals(shanghai, originSlot.captured.timeZone)
             assertEquals(listOf(WatchTag("crossed", "已突破")), input.tags)
-            assertEquals(listOf("webfetch", "memory_search"), input.allowedTools)
+            assertEquals(listOf("webfetch", "memory_search", "calc"), input.allowedTools)
             assertEquals(watch.nextDueAt.toEpochMilli(), result.details["nextRunAt"])
             assertEquals("2026-11-01 09:00 CST", result.details["nextRunLocal"])
             assertTrue(text(result).contains("Next run:"))
@@ -185,7 +186,7 @@ class WatchToolTest {
             )
 
             assertFalse(result.isError)
-            assertEquals(listOf("webfetch", "market__quote"), createInput.captured.allowedTools)
+            assertEquals(listOf("webfetch", "market__quote", "calc"), createInput.captured.allowedTools)
         }
 
         @Test

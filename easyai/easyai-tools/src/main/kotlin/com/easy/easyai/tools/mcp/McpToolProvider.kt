@@ -1,8 +1,8 @@
 package com.easy.easyai.tools.mcp
 
-import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.AgentToolConfig
+import com.easy.easyai.core.agent.McpBindingSpec
 import com.easy.easyai.core.tool.ToolDefinition
 import org.slf4j.LoggerFactory
 
@@ -18,10 +18,6 @@ class McpToolProvider(
     private val manager: McpClientManager
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
-
-    companion object {
-        private val objectMapper = SharedObjectMapper.instance
-    }
 
     /**
      * Returns all available MCP tools across all connected servers visible to the user.
@@ -72,26 +68,13 @@ class McpToolProvider(
      * Returns empty set on null/blank/parse-error (= allow all tools).
      */
     private fun parseToolNames(metadata: String?): Set<String> {
-        if (metadata.isNullOrBlank()) return emptySet()
-        return try {
-            val node = objectMapper.readTree(metadata)
-            if (node.isArray) {
-                val result = mutableSetOf<String>()
-                for (element in node) { result.add(element.asString()) }
-                result
-            } else {
-                val toolNamesNode = node.get("toolNames")
-                if (toolNamesNode != null && toolNamesNode.isArray) {
-                    val result = mutableSetOf<String>()
-                    for (element in toolNamesNode) { result.add(element.asString()) }
-                    result
-                } else {
-                    emptySet()
-                }
+        val spec = McpBindingSpec.parseOrNull(metadata)
+        if (spec == null) {
+            if (!metadata.isNullOrBlank()) {
+                logger.warn("Failed to parse MCP tool whitelist metadata, allowing all tools: {}", metadata)
             }
-        } catch (e: Exception) {
-            logger.warn("Failed to parse MCP tool whitelist metadata, allowing all tools: {}", metadata, e)
-            emptySet()
+            return emptySet()
         }
+        return spec.toolNames.toSet()
     }
 }

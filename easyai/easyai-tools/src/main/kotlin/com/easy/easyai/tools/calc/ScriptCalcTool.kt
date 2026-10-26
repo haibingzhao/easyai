@@ -1,6 +1,7 @@
 package com.easy.easyai.tools.calc
 
 import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.message.ToolResultGuard
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.tool.*
 import groovy.lang.GroovyShell
@@ -28,7 +29,10 @@ data class ScriptCalcParams(
      * is one line (header included). The script can parse it as needed.
      *
      * Security: path is validated by the host — no symlinks, no path traversal,
-     * size capped at [MAX_FILE_BYTES]. The Groovy sandbox itself still has no file I/O.
+     * size capped at [MAX_FILE_BYTES]. In an unattended run the path is additionally
+     * confined to [ToolResultGuard.spillDirectory] and the bound project, because no
+     * user is present to approve an arbitrary file read. The Groovy sandbox itself
+     * still has no file I/O.
      */
     val filePath: String? = null
 )
@@ -68,12 +72,16 @@ class ScriptCalcTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
             if (validationError != null) {
                 return@withContext errorResult(validationError)
             }
+            val boundaryError = validateUnattendedPath(filePath, agentContext)
+            if (boundaryError != null) {
+                return@withContext errorResult(boundaryError)
+            }
             try {
                 val file = File(filePath)
                 if (file.length() > MAX_FILE_BYTES) {
                     return@withContext errorResult(
                         "Error: file '${file.name}' is ${file.length()} bytes, exceeds the ${MAX_FILE_BYTES / 1024}KB limit. " +
-                        "For large files, use the bash tool to run a Python or JavaScript script instead."
+                        "Request a smaller slice from the data source, or split the file."
                     )
                 }
                 fileData = file.readLines()
@@ -159,7 +167,7 @@ class ScriptCalcTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
         if (worker.isAlive) {
             worker.interrupt()
             logger.warn("Calc script exceeded {}ms timeout, worker interrupted", timeout.inWholeMilliseconds)
-            throw ScriptTimeoutException
+            throw ScriptTimeoutException()
         }
         // ScriptStepLimitException and other Exceptions propagate as-is; JVM Errors
         // (e.g. StackOverflowError from unbounded recursion) are wrapped so the
@@ -171,15 +179,23 @@ class ScriptCalcTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
         return result
     }
 
-    /** Signals that the script exceeded its wall-clock timeout. */
-    internal object ScriptTimeoutException : RuntimeException("script timeout")
+    /**
+     * Signals that the script exceeded its wall-clock timeout.
+     *
+     * A class rather than an `object`: [RuntimeException] is `Serializable`, and a
+     * Kotlin `object` that is serializable requires `readResolve` to keep its
+     * identity — throwing a fresh instance is simpler and matches
+     * [ScriptStepLimitException].
+     */
+    internal class ScriptTimeoutException : RuntimeException("script timeout")
 
     /**
      * Validates [path] for safe file access. Returns an error message if invalid, or null if OK.
      *
      * Checks:
      * 1. Must be an absolute path
-     * 2. No path traversal (no ".." segments after normalization)
+     * 2. No `..` segments (rejected explicitly: comparing canonical and absolute paths would also
+     *    reject legitimate paths under a symlinked system temp dir, e.g. `/var` on macOS)
      * 3. Must not be a symlink (prevents symlink-to-sensitive-file attacks)
      * 4. Must be a regular file that exists
      */
@@ -187,13 +203,11 @@ class ScriptCalcTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
         if (!path.startsWith("/")) {
             return "Error: 'filePath' must be an absolute path, got: $path"
         }
-        // Normalize to resolve any ".." or "." segments
-        val normalized = File(path).canonicalPath
-        if (normalized != File(path).absolutePath) {
-            // canonicalPath differs → path contained ".." or "." segments
-            return "Error: 'filePath' contains path traversal sequences, use the canonical path: $normalized"
+        if (File(path).toPath().any { it.toString() == ".." }) {
+            return "Error: 'filePath' must not contain '..' segments, use the canonical path: " +
+                File(path).canonicalPath
         }
-        val file = File(normalized)
+        val file = File(path)
         if (java.nio.file.Files.isSymbolicLink(file.toPath())) {
             return "Error: 'filePath' must not be a symbolic link: $path"
         }
@@ -206,15 +220,34 @@ class ScriptCalcTool(metadata: ToolMetadata) : BaseToolDefinition(metadata) {
         return null
     }
 
+    /**
+     * An unattended run has no user to approve a read, so its host-side file access is confined to
+     * the places it legitimately needs: tool results spilled by [ToolResultGuard] and files inside
+     * the bound project (which the `read` tool could already open in the same run). Without this,
+     * model output driven by untrusted watched content could pull arbitrary local files into a
+     * finding that is then pushed to the user.
+     */
+    private fun validateUnattendedPath(path: String, agentContext: AgentContext): String? {
+        if (!agentContext.unattended) return null
+        val target = File(path).canonicalFile.toPath()
+        val roots = buildList {
+            add(ToolResultGuard.spillDirectory().toFile().canonicalFile.toPath())
+            agentContext.projectPath?.toFile()?.canonicalFile?.toPath()?.let { add(it) }
+        }
+        if (roots.any { target.startsWith(it) }) return null
+        return "Error: an unattended run may only read tool-output spill files or files inside the " +
+            "project; '$path' is outside those locations. Narrow the upstream query instead."
+    }
+
     companion object {
         private const val TIMEOUT_SECONDS = 10
         /**
          * Step budget for loop/closure iterations. Tight enough to stop runaway loops
          * within milliseconds, generous enough for real data-processing scripts
-         * (a 512KB file is a few tens of thousands of lines).
+         * (a 4MB CSV is a few hundred thousand lines).
          */
         private const val MAX_STEPS = 1_000_000L
-        /** Max file size: 512KB — enough for CSV/TSV data, prevents memory exhaustion. */
-        private const val MAX_FILE_BYTES = 512L * 1024L
+        /** Max file size: 4MB — covers spilled MCP output while preventing memory exhaustion. */
+        private const val MAX_FILE_BYTES = 4L * 1024L * 1024L
     }
 }

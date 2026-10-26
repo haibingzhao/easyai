@@ -88,6 +88,36 @@ internal class DatabaseSessionManagerEmptyToolsTest {
     }
 
     @Nested
+    inner class RuntimeOwnedSession {
+        @Test
+        fun `a background run ignores an agent row that shares its internal id`() = runTest {
+            val manager = DatabaseSessionManager(
+                sessionStore = sessionStore,
+                agentFactory = agentFactory,
+                toolResolver = toolResolver,
+                agentLookup = { _, _ -> agentDef },
+                agentStore = agentStore
+            )
+            val stub = mockk<ToolDefinition>(relaxed = true)
+
+            manager.getOrCreateSession(
+                context.copy(
+                    agentId = agentDef.id,
+                    systemKind = AgentContext.SYSTEM_KIND_ASYNC_TASK,
+                    tools = listOf(stub)
+                ),
+                config,
+                mockk()
+            )
+
+            assertEquals(listOf(stub), capturedTools.captured)
+            coVerify(exactly = 0) {
+                agentFactory.createAgentWithAgentDef(any(), any(), any(), any(), any())
+            }
+        }
+    }
+
+    @Nested
     inner class WithAgentRow {
         @Test
         fun `sub-agents the caller left empty are still resolved from the whitelist`() = runTest {

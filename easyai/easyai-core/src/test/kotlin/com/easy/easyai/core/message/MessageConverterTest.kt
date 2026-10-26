@@ -791,6 +791,39 @@ class MessageConverterTest {
             assertEquals("https://objects.example/system.png", (result.media.single().source as MediaSource.Url).uri.toString())
             coVerify(exactly = 1) { resolver.resolve(listOf("system")) }
         }
+
+        @Test
+        fun `reads a legacy image from the author chain when the owner-scoped storage lacks it`() = runTest {
+            val groupStorage = mockk<ObjectStorage>()
+            val groupOwners = listOf(userId, "g_family", "system")
+            coEvery { resolver.resolve(groupOwners) } returns groupStorage
+            coEvery { groupStorage.head(key) } returns null
+            coEvery { storage.presignedGetUrl(key, 3600L) } returns "https://objects.example/legacy.png"
+
+            val result = storedConverter.toLlmMessages(messages, userId, groupOwners).single() as SpringAiUserMsg
+
+            assertEquals(
+                "https://objects.example/legacy.png",
+                (result.media.single().source as MediaSource.Url).uri.toString()
+            )
+            coVerify(exactly = 1) { storage.presignedGetUrl(key, 3600L) }
+            coVerify(exactly = 0) { groupStorage.presignedGetUrl(any(), any()) }
+        }
+
+        @Test
+        fun `fails when neither the owner-scoped nor the author storage holds the image`() = runTest {
+            val groupStorage = mockk<ObjectStorage>()
+            val groupOwners = listOf(userId, "g_family", "system")
+            coEvery { resolver.resolve(groupOwners) } returns groupStorage
+            coEvery { groupStorage.head(key) } returns null
+            coEvery { storage.head(key) } returns null
+
+            assertFailsWith<ObjectStorageException> {
+                storedConverter.toLlmMessages(messages, userId, groupOwners)
+            }
+            coVerify(exactly = 0) { groupStorage.presignedGetUrl(any(), any()) }
+            coVerify(exactly = 0) { storage.presignedGetUrl(any(), any()) }
+        }
     }
 
     @Nested
