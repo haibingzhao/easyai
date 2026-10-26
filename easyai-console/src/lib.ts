@@ -394,6 +394,8 @@ export { useVisibilityReconnect } from './hooks/useVisibilityReconnect';
 // Dictation for a contenteditable composer: live draft slots + sentence correction + polish.
 export { useVoiceInput } from './hooks/useVoiceInput';
 export type { VoicePhase, UseVoiceInputOptions } from './hooks/useVoiceInput';
+export { createContentEditableSink } from './hooks/dictation-sink';
+export type { DictationSink, DictationSlotHandle, EditableDivRef } from './hooks/dictation-sink';
 
 // Deploy freshness. `AppLayout` and `MobileAppLayout` mount the prompt themselves, so a host only
 // reaches for these when it builds its own root instead of using either layout.
