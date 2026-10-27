@@ -15,7 +15,7 @@ const MORE_TAB: MobileTabItem = {
 };
 
 /**
- * Bottom tab bar: host tabs (plus the framework's Chat / History) and a fixed "More" slot.
+ * Bottom tab bar: the framework's Chat slot, host tabs, and a fixed "More" slot.
  *
  * The host registry alone decides what appears, so a section a host hides with
  * `visible: () => false` disappears from the bar without the framework knowing its name.

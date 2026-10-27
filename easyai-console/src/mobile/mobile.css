@@ -297,6 +297,14 @@
   padding-bottom: calc(12px + env(safe-area-inset-bottom));
 }
 
+/* A full-height list inside a sheet owns its own header and scrolling. */
+.mobile-sheet-body--flush {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
 /* ===== Rows ===== */
 
 .mobile-row {

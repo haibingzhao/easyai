@@ -12,8 +12,8 @@ import type { SessionListItem } from '@/services/session-service';
  * - a brand-new session is not in the list yet, so it is synthesized at the top from its first
  *   user message and pinned there while it streams.
  *
- * Extracted from `SessionsTab` because the mobile shell needs the same view in two places
- * (history page and the header's quick-switch sheet), and two copies of this rule would drift.
+ * Extracted from `SessionsTab` because the mobile shell's history sheet, the desktop panel and
+ * `NewSessionDialog` all need the same rule, and several copies would drift.
  */
 export function useDisplaySessions(): SessionListItem[] {
   const remoteSessions = useSessionStore((state) => state.remoteSessions);

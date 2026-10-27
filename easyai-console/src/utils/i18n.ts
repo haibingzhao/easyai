@@ -83,6 +83,7 @@ const translations: Record<string, Record<string, string>> = {
     'Save': 'Save',
     'Delete': 'Delete',
     'No sessions yet': 'No sessions yet',
+    'No matching sessions': 'No matching sessions',
     'Create a branch task from here': 'Create a branch task from here',
     'Create a new branch session from this message?': 'Create a new branch session from this message?',
     'Branches': 'Branches',
@@ -1291,6 +1292,7 @@ const translations: Record<string, Record<string, string>> = {
     'Save': '保存',
     'Delete': '删除',
     'No sessions yet': '暂无会话',
+    'No matching sessions': '没有匹配的会话',
     'Create a branch task from here': '从此处创建新的分支任务',
     'Create a new branch session from this message?': '确定要从此消息创建新的分支会话吗？',
     'Branches': '分支',
@@ -2221,6 +2223,7 @@ const translations: Record<string, Record<string, string>> = {
     // Host-registered mobile entries (easyai-trading). English hosts render the key itself.
     'Market': '行情看板',
     'Orders': '指令',
+    'Accounts': '账户',
     'Quote pending orders': '引用待确认指令',
     // Connection plugin。
     'Network diagnostics': '网络诊断',

@@ -3,7 +3,6 @@ import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { MobileGate } from './MobileGate';
 import { MobileAppLayout } from './MobileAppLayout';
 import { MobileChatPage } from './pages/MobileChatPage';
-import { MobileHistoryPage } from './pages/MobileHistoryPage';
 import { MobileMorePage } from './pages/MobileMorePage';
 import { MobileNotificationsPage } from './pages/MobileNotificationsPage';
 import { MobileProfilePage } from './pages/MobileProfilePage';
@@ -27,7 +26,6 @@ export const MobileApp: React.FC = () => (
         <Route element={<MobileAppLayout />}>
           <Route index element={<Navigate to="/chat" replace />} />
           <Route path="/chat" element={<MobileChatPage />} />
-          <Route path="/history" element={<MobileHistoryPage />} />
           <Route path="/more" element={<MobileMorePage />} />
           <Route path="/notifications" element={<MobileNotificationsPage />} />
           <Route path="/me" element={<MobileProfilePage />} />
