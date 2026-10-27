@@ -12,14 +12,11 @@ import { useChatStore } from '@/services/stores/chat-store';
 import { useAgentStore } from '@/services/stores/agent-store';
 import { useTeamStore } from '@/services/stores/team-store';
 import { useNavStore } from '@/services/stores/nav-store';
-import { useProjectStore } from '@/services/stores/project-store';
-import { useSessionStore } from '@/services/stores/session-store';
 import { useDisplaySessions } from '@/hooks/useDisplaySessions';
 import { useChatBootstrap } from '@/hooks/useChatBootstrap';
 import { useMessageAutoScroll } from '@/hooks/useMessageAutoScroll';
 import { useSessionRecovery } from '@/hooks/useSessionRecovery';
 import { useVisibilityReconnect } from '@/hooks/useVisibilityReconnect';
-import { switchToSession } from '@/services/session-switch';
 import { unrevert } from '@/services/checkpoint-service';
 import { i18n } from '@/utils/i18n';
 import { ConnectionChip } from '@/plugins/connection/ConnectionChip';
@@ -27,6 +24,7 @@ import { CONNECTION_CONFIG } from '@/plugins/connection/config';
 import { MobileHeader } from '../components/MobileHeader';
 import { MobileQuestionRail } from '../components/MobileQuestionRail';
 import { MobileSheet } from '../components/MobileSheet';
+import { SessionHistoryList } from '../components/SessionHistoryList';
 import { TasksSheet } from '../components/TasksSheet';
 import { MessageActionSheet } from '../components/MessageActionSheet';
 import { useKeyboardInset } from '../hooks/useKeyboardInset';
@@ -76,27 +74,6 @@ export const MobileChatPage: React.FC = () => {
 
   const displaySessions = useDisplaySessions();
   const currentTitle = displaySessions.find((s) => s.id === sessionId)?.title ?? null;
-
-  /**
-   * The switcher reads `remoteSessions`, which starts empty and is only filled by whichever
-   * surface requests it (`SessionsTab`, `MobileHistoryPage`, `NewSessionDialog`). Chat is the
-   * landing tab, so opening the sheet without loading first shows an empty list — load on open,
-   * scoped exactly like History: a project's sessions, or project-less ones in "No Project" mode.
-   */
-  const loadRemoteSessions = useSessionStore((s) => s.loadRemoteSessions);
-  const loadMoreRemoteSessions = useSessionStore((s) => s.loadMoreRemoteSessions);
-  const remoteSessionLoading = useSessionStore((s) => s.remoteSessionLoading);
-  const remoteSessionHasMore = useSessionStore((s) => s.remoteSessionHasMore);
-  const currentProject = useProjectStore((s) => s.currentProject);
-  const listProjectId = currentProject && currentProject.kind !== 'temp' ? currentProject.id : undefined;
-  const tempWorkspaceOnly = listProjectId === undefined;
-
-  useEffect(() => {
-    if (!switcherOpen) return;
-    // Re-fetch on every open so a session started on the laptop shows up here as well. The `[]`
-    // deliberately ignores History's tag chip row: this sheet has no filter UI to clear.
-    void loadRemoteSessions(20, false, listProjectId, tempWorkspaceOnly, []);
-  }, [switcherOpen, loadRemoteSessions, listProjectId, tempWorkspaceOnly]);
 
   // Member transcript takes over the message area, same as on desktop
   useEffect(() => {
@@ -257,46 +234,14 @@ export const MobileChatPage: React.FC = () => {
         <MessageEditor variant="mobile" />
       </div>
 
-      <MobileSheet open={switcherOpen} onClose={() => setSwitcherOpen(false)} title="Sessions" detent="half">
-        {remoteSessionLoading && displaySessions.length === 0 && (
-          <p className="py-10 text-center text-sm text-muted-foreground">{i18n('Loading...')}</p>
-        )}
-        {!remoteSessionLoading && displaySessions.length === 0 && (
-          <p className="py-10 text-center text-sm text-muted-foreground">{i18n('No sessions yet')}</p>
-        )}
-        {displaySessions.map((session) => (
-          <button
-            key={session.id}
-            className="mobile-row w-full text-left border-b border-border"
-            onClick={() => {
-              setSwitcherOpen(false);
-              void switchToSession(session.id).catch((e) => console.error('Failed to load session:', e));
-            }}
-          >
-            <span className="flex-1 min-w-0 text-sm truncate">{session.title ?? i18n('Untitled')}</span>
-            {session.streaming && <span className="w-2 h-2 rounded-full bg-primary shrink-0" />}
-          </button>
-        ))}
-        {/* The sheet pages through the same list History shows; History adds search and tags. */}
-        {remoteSessionHasMore && (
-          <button
-            className="mobile-row w-full justify-center text-sm text-muted-foreground disabled:opacity-40"
-            onClick={() => void loadMoreRemoteSessions(20, listProjectId, tempWorkspaceOnly, [])}
-            disabled={remoteSessionLoading}
-          >
-            {remoteSessionLoading ? i18n('Loading...') : i18n('Load More')}
-          </button>
-        )}
-        {/* Always reachable, including when the list is empty or still loading. */}
-        <button
-          className="mobile-row w-full text-left text-sm text-primary"
-          onClick={() => {
-            setSwitcherOpen(false);
-            navigate('/history');
-          }}
-        >
-          {i18n('Session History')}
-        </button>
+      <MobileSheet
+        open={switcherOpen}
+        onClose={() => setSwitcherOpen(false)}
+        title="Session History"
+        detent="full"
+        bodyClassName="mobile-sheet-body--flush"
+      >
+        <SessionHistoryList open={switcherOpen} onPicked={() => setSwitcherOpen(false)} />
       </MobileSheet>
 
       <TasksSheet />

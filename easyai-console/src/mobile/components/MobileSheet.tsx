@@ -16,6 +16,8 @@ interface MobileSheetProps {
    */
   detent?: MobileSheetDetent;
   headerRight?: React.ReactNode;
+  /** Extra classes on the body, e.g. `mobile-sheet-body--flush` when the child owns scrolling. */
+  bodyClassName?: string;
   children: React.ReactNode;
 }
 
@@ -38,6 +40,7 @@ export const MobileSheet: React.FC<MobileSheetProps> = ({
   title,
   detent = 'auto',
   headerRight,
+  bodyClassName,
   children,
 }) => {
   const [rendered, setRendered] = useState(open);
@@ -125,7 +128,7 @@ export const MobileSheet: React.FC<MobileSheetProps> = ({
             </div>
           </div>
         )}
-        <div className="mobile-sheet-body">{children}</div>
+        <div className={`mobile-sheet-body ${bodyClassName ?? ''}`}>{children}</div>
       </div>
     </>,
     document.body

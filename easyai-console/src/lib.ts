@@ -309,7 +309,6 @@ export { MobileAppLayout } from './mobile/MobileAppLayout';
 export { MobileGate } from './mobile/MobileGate';
 export { MobileApp } from './mobile/MobileApp';
 export { MobileChatPage } from './mobile/pages/MobileChatPage';
-export { MobileHistoryPage } from './mobile/pages/MobileHistoryPage';
 export { MobileProfilePage } from './mobile/pages/MobileProfilePage';
 export { MobileMorePage } from './mobile/pages/MobileMorePage';
 export { MobileNotificationsPage } from './mobile/pages/MobileNotificationsPage';

@@ -92,14 +92,13 @@ export const MOBILE_TAB_MAX = 4;
 export const MOBILE_MORE_TAB_ID = 'mobile-more';
 
 /**
- * Framework-owned tabs, always first: the conversation is the product on a phone, and
- * history needs to stay reachable no matter what a host registers. Mutable like
- * `MOBILE_TAB_ITEMS` — a host that wants its own sections to own the four slots splices these out
- * before render.
+ * Framework-owned tabs, always first: the conversation is the product on a phone. History has no
+ * tab of its own — the chat header's sheet is the single history surface (search, tags, paging).
+ * Mutable like `MOBILE_TAB_ITEMS` — a host that wants its own sections to own the four slots
+ * splices these out before render.
  */
 export const MOBILE_BUILT_IN_TAB_ITEMS: MobileTabItem[] = [
   { id: 'mobile-chat', label: 'Chat', labelKey: 'Chat', icon: 'MessageSquare', path: '/chat', order: -2 },
-  { id: 'mobile-history', label: 'History', labelKey: 'History', icon: 'Clock', path: '/history', order: -1 },
 ];
 
 /**
