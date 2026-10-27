@@ -8,6 +8,7 @@ import com.easy.easyai.core.tool.ToolBuilder
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.core.watch.WatchService
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.stereotype.Component
 
 private const val WATCH_TOOL_DESCRIPTION = """Create and manage watches: standing intents that are checked
@@ -56,7 +57,10 @@ creating another, and state the next run time the tool returned."""
 class WatchToolBuilder(
     // Optional on purpose: easyai-tools is shared by hosts that wire no watch service (no R2DBC),
     // and a hard dependency would fail their context instead of leaving the tool unavailable.
-    private val watchService: WatchService? = null
+    // A provider rather than a nullable parameter with a default: the default generates a no-arg
+    // constructor Spring can fall back to, leaving the field null even when the bean exists — the
+    // tool then vanishes while still being offered in the agent editor.
+    private val watchService: ObjectProvider<WatchService>
 ) : ToolBuilder {
 
     override val metadata = ToolMetadata(
@@ -76,7 +80,7 @@ class WatchToolBuilder(
     )
 
     override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {
-        val service = watchService ?: return null
+        val service = watchService.ifAvailable ?: return null
         if (context.unattended) return null
         if (context.parentAgentId != null || context.swarmRunId != null) return null
         if (context.sessionId.isNullOrBlank() || context.userId.isNullOrBlank()) return null

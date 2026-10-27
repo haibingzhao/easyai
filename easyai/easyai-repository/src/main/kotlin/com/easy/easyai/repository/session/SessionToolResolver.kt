@@ -12,6 +12,7 @@ import com.easy.easyai.tools.mcp.McpToolProvider
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Resolves project paths and tools for sessions.
@@ -28,6 +29,12 @@ class SessionToolResolver(
     private val agentStore: AsyncAgentStore? = null
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
+
+    /** `(agentId, tool)` pairs already reported; one warning per pair per process. */
+    private val reportedUnbuiltTools = ConcurrentHashMap.newKeySet<String>()
+
+    /** Builder names are fixed once the context is up, so the catalog side is read once. */
+    private val catalogToolNames by lazy { toolFactory.getBuilders().mapTo(HashSet()) { it.name } }
 
     /**
      * Resolve the project row for [projectId].
@@ -86,9 +93,31 @@ class SessionToolResolver(
             staticTools.filter { it.alwaysInclude }
         else
             staticTools.filter { it.name in agentDef.toolNames || it.alwaysInclude }
+        if (agentDef.toolNames.isNotEmpty()) {
+            warnOnConfiguredButUnbuilt(agentDef, staticTools)
+        }
         // MCP tools have their own filtering via getAgentMcpConfigs, not subject to toolNames
         val mcpTools = resolveMcpTools(agentContext, agentDef.userId)
         return filteredStatic + mcpTools
+    }
+
+    /**
+     * A name the catalog offers and the agent selected can still yield no instance when its builder
+     * requires something this host does not wire — the model then simply never sees the tool, and
+     * the agent editor keeps offering it. Report that pair once per process so it stays actionable.
+     */
+    private fun warnOnConfiguredButUnbuilt(agentDef: AgentDefinition, staticTools: List<ToolDefinition>) {
+        val builtNames = staticTools.mapTo(HashSet()) { it.name }
+        agentDef.toolNames.forEach { name ->
+            if (name in catalogToolNames && name !in builtNames &&
+                reportedUnbuiltTools.add("${agentDef.id}|$name")
+            ) {
+                logger.warn(
+                    "Agent {} configures tool '{}' but its builder produced no tool for this session; the model will not see it",
+                    agentDef.id, name
+                )
+            }
+        }
     }
 
     /**

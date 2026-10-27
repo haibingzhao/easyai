@@ -3,6 +3,7 @@ package com.easy.easyai.repository.session
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.AgentDefinition
 import com.easy.easyai.core.agent.AgentService
+import com.easy.easyai.core.tool.ToolBuilder
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolFactory
 import io.mockk.coEvery
@@ -39,6 +40,31 @@ internal class SessionToolResolverDispatcherTest {
     private val agentDef = AgentDefinition.create(
         id = "agent-1", name = "Agent", toolNames = listOf(tool.name), instructionsEnabled = false
     )
+
+    init {
+        // Catalog lookup behind the configured-but-unbuilt warning; empty keeps the path quiet.
+        every { toolFactory.getBuilders() } returns emptyList()
+    }
+
+    @Nested
+    inner class `Configured but unbuilt tools` {
+        @Test
+        fun `a whitelisted name the catalog offers but no builder produces is not returned`() = runTest {
+            val factory = mockk<ToolFactory>()
+            val builder = mockk<ToolBuilder> { every { name } returns "watch" }
+            every { factory.getBuilders() } returns listOf(builder)
+            coEvery { factory.createTools(any(), any(), any()) } returns emptyList()
+            val isolated = SessionToolResolver(
+                projectStore = null,
+                toolFactory = factory,
+                agentService = mockk<AgentService>(relaxed = true)
+            )
+
+            assertTrue(
+                isolated.resolveToolsForAgent(agentDef.copy(toolNames = listOf("watch")), context).isEmpty()
+            )
+        }
+    }
 
     @Nested
     inner class Suspension {
