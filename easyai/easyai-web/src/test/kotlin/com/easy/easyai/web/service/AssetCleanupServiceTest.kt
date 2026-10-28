@@ -3,7 +3,9 @@ package com.easy.easyai.web.service
 import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelType
-import com.easy.easyai.core.knowledge.KnowledgeEntry
+import com.easy.easyai.core.knowledge.ArticleStatus
+import com.easy.easyai.core.knowledge.KnowledgeArticle
+import com.easy.easyai.core.knowledge.KnowledgeArticleStore
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.skill.AsyncSkillCatalogStore
 import com.easy.easyai.core.skill.SkillCatalogEntry
@@ -11,9 +13,10 @@ import com.easy.easyai.core.storage.StorageSettingsStore
 import com.easy.easyai.tools.mcp.AsyncMcpServerStore
 import com.easy.easyai.tools.mcp.McpServerConfig
 import io.mockk.coEvery
-import io.mockk.every
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -21,6 +24,23 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class AssetCleanupServiceTest {
+
+    private fun article(id: String, ragEnabled: Boolean = true) = KnowledgeArticle(
+        id = id,
+        userId = "grp-1",
+        createdBy = "alice",
+        folderId = "folder-1",
+        fileName = null,
+        title = "A",
+        description = null,
+        category = "other",
+        ext = "md",
+        origin = "manual",
+        status = ArticleStatus.PUBLISHED,
+        ragEnabled = ragEnabled,
+        createdAt = 1L,
+        updatedAt = 1L,
+    )
 
     @Test
     fun `refuses to retire the shared system bucket or a blank id`() = runTest {
@@ -50,9 +70,10 @@ class AssetCleanupServiceTest {
         coEvery { storageStore.delete("grp-1") } returns true
 
         val knowledgeStore = mockk<KnowledgeStore>()
-        val entry = mockk<KnowledgeEntry>(); every { entry.key } returns "docs/a.md"
-        coEvery { knowledgeStore.list("grp-1") } returns listOf(entry)
-        coEvery { knowledgeStore.delete("grp-1", "docs/a.md") } returns true
+        coEvery { knowledgeStore.delete("grp-1", "a1") } returns true
+
+        val articleStore = mockk<KnowledgeArticleStore>(relaxed = true)
+        coEvery { articleStore.findAllInBuckets(listOf("grp-1")) } returns flowOf(article("a1"))
 
         val skillCatalog = mockk<AsyncSkillCatalogStore>()
         val skill = mockk<SkillCatalogEntry>(); every { skill.id } returns "s1"; every { skill.name } returns "review"
@@ -64,6 +85,7 @@ class AssetCleanupServiceTest {
             mcpServerStore = mcpStore,
             storageSettingsStore = storageStore,
             knowledgeStore = knowledgeStore,
+            knowledgeArticleStore = articleStore,
             skillCatalogStore = skillCatalog
         )
 
@@ -77,12 +99,14 @@ class AssetCleanupServiceTest {
         assertEquals(5, report.totalRemoved)
         assertTrue(report.failures.isEmpty())
         coVerify(exactly = 1) { mcpStore.delete("fs", "grp-1") }
+        coVerify(exactly = 1) { knowledgeStore.delete("grp-1", "a1") }
+        coVerify(exactly = 1) { articleStore.delete("a1") }
     }
 
     @Test
     fun `a failure in one kind is recorded and does not abort the rest`() = runTest {
         val modelStore = mockk<ModelProviderConfigStore>()
-        coEvery { modelStore.getAllConfigs("grp-1") } throws IllegalStateException("db down")
+        coEvery { modelStore.getModelConfigs(any(), "grp-1") } throws IllegalStateException("db down")
 
         val storageStore = mockk<StorageSettingsStore>()
         coEvery { storageStore.delete("grp-1") } returns true

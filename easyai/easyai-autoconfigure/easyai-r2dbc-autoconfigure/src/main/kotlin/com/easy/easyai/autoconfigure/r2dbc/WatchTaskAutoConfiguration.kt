@@ -5,6 +5,7 @@ import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.agent.AsyncAgentStore
 import com.easy.easyai.core.agent.SessionManager
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.task.AsyncTask
 import com.easy.easyai.core.task.AsyncTaskRunner
 import com.easy.easyai.core.task.AsyncTaskStore
@@ -31,8 +32,8 @@ import org.springframework.context.annotation.Bean
 import java.nio.file.Path
 
 /**
- * Host wiring for the watch subsystem: the definition service, the planner that claims due rows,
- * the handler that runs one firing, and the adapters that connect them to the agent runtime.
+ * Host wiring for the watch subsystem: the definition service, the per-watch timer scheduler, the
+ * handler that runs one firing, and the adapters that connect them to the agent runtime.
  *
  * Both adapters re-derive their answer at run time rather than trusting creation-time data: the
  * toolset resolver re-reads the creating agent's bindings (a watch must not keep a tool the user
@@ -55,27 +56,49 @@ class WatchTaskAutoConfiguration {
     @ConditionalOnMissingBean
     fun watchService(
         store: WatchStore,
+        host: HostIdentity,
         properties: WatchProperties,
         settingStore: ObjectProvider<ScheduledTaskSettingStore>,
         taskStore: ObjectProvider<AsyncTaskStore>,
         runner: ObjectProvider<AsyncTaskRunner>
     ): WatchService = WatchService(
         store = store,
+        host = host,
         settingStore = settingStore.ifAvailable,
         taskStore = taskStore.ifAvailable,
         runGateway = runner.ifAvailable?.let { asyncRunner -> AsyncTaskRunnerGateway(asyncRunner) },
         properties = properties
     )
 
+    /**
+     * Per-watch timers over each row's own `next_due_at`. Gated by the global scheduled-task switch
+     * as well, so turning automatic firing off keeps definitions and manual runs working.
+     */
     @Bean
-    @ConditionalOnMissingBean(WatchTaskPlanner::class)
-    fun watchTaskPlanner(store: WatchStore, properties: WatchProperties): WatchTaskPlanner =
-        WatchTaskPlanner(store = store, properties = properties)
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(
+        prefix = "easyai.tasks.scheduled",
+        name = ["enabled"],
+        havingValue = "true",
+        matchIfMissing = true
+    )
+    fun watchTaskScheduler(
+        store: WatchStore,
+        runner: AsyncTaskRunner,
+        host: HostIdentity,
+        properties: WatchProperties
+    ): WatchTaskScheduler = WatchTaskScheduler(
+        store = store,
+        runner = runner,
+        host = host,
+        properties = properties
+    )
 
     @Bean
     @ConditionalOnMissingBean
     fun watchTaskHandler(
         store: WatchStore,
+        host: HostIdentity,
         properties: WatchProperties,
         sessionManager: ObjectProvider<SessionManager>,
         agentService: ObjectProvider<AgentService>,
@@ -85,6 +108,7 @@ class WatchTaskAutoConfiguration {
         taskStore: ObjectProvider<AsyncTaskStore>
     ): WatchTaskHandler = WatchTaskHandler(
         store = store,
+        host = host,
         properties = properties,
         sessionManager = sessionManager.ifAvailable,
         agentService = agentService.ifAvailable,
@@ -175,12 +199,15 @@ internal class AgentWatchToolsetResolver(
     }
 }
 
-/** [WatchRunGateway] over the shared runner. */
+/** [WatchRunGateway] over the shared runner: dispatch persisted rows, never create them again. */
 internal class AsyncTaskRunnerGateway(
     private val runner: AsyncTaskRunner
 ) : WatchRunGateway {
 
-    override suspend fun launch(task: AsyncTask): AsyncTask? = runner.submit(task)
+    override fun dispatch(task: AsyncTask) = runner.dispatch(task)
 
-    override suspend fun cancel(taskId: String): Boolean = runner.cancel(taskId)
+    override suspend fun awaitIdle(taskId: String) = runner.awaitIdle(taskId)
+
+    /** Await exit: the row that admitted the run must not disappear under a live worker. */
+    override suspend fun cancel(taskId: String): Boolean = runner.cancelAndAwait(taskId)
 }

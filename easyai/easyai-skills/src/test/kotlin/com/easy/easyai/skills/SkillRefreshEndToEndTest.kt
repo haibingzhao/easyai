@@ -385,6 +385,14 @@ internal class TestSkillCatalog : AsyncSkillCatalogStore {
         true
     }
 
+    override suspend fun claimForSync(id: String, expectedNextAttemptAt: Long?, leaseUntil: Long): Boolean =
+        synchronized(rows) {
+            val row = rows[id] ?: return@synchronized false
+            if (row.nextAttemptAt != expectedNextAttemptAt) return@synchronized false
+            rows[id] = row.copy(nextAttemptAt = leaseUntil)
+            true
+        }
+
     override suspend fun delete(id: String): Boolean = synchronized(rows) { rows.remove(id) != null }
 }
 

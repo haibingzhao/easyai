@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useEditor, EditorContent } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import StarterKit from '@tiptap/starter-kit';
@@ -43,11 +43,14 @@ function getMarkdown(editor: Editor | null): string | null {
 }
 
 export const ArticleEditorPage: React.FC = () => {
-  const { articleKey } = useParams<{ articleKey: string }>();
+  const params = useParams<{ articleId?: string; articleKey?: string }>();
   const navigate = useNavigate();
-  // React Router already decodes path params once — decoding again would corrupt keys containing %xx.
-  const routeKey = articleKey ?? '';
-  const routeIsNew = routeKey === NEW_ARTICLE_KEY;
+  // Hosts still mount /knowledge/editor/:articleKey; the param value is the article id either way.
+  const routeId = params.articleId ?? params.articleKey ?? '';
+  const routeIsNew = routeId === NEW_ARTICLE_KEY;
+  const [searchParams] = useSearchParams();
+  // A new draft created from inside a folder keeps that placement instead of falling to the default.
+  const draftFolderId = routeIsNew ? searchParams.get('folderId') ?? undefined : undefined;
 
   const loadArticleContent = useKnowledgeStore((s) => s.loadArticleContent);
   const updateArticle = useKnowledgeStore((s) => s.updateArticle);
@@ -60,13 +63,13 @@ export const ArticleEditorPage: React.FC = () => {
   const { models, selectedModelId, setSelectedModelId, error: modelsError } = useEnabledModels();
 
   // Set once the first save of a new draft succeeds, so later saves update instead of creating.
-  const [createdKey, setCreatedKey] = useState<string | null>(null);
-  const activeKey = createdKey ?? routeKey;
-  const isNewDraft = createdKey === null && routeIsNew;
+  const [createdId, setCreatedId] = useState<string | null>(null);
+  const activeId = createdId ?? routeId;
+  const isNewDraft = createdId === null && routeIsNew;
 
   const [title, setTitle] = useState('');
   const [initialContent, setInitialContent] = useState<string | null>(routeIsNew ? '' : null);
-  const [contentRequestKey, setContentRequestKey] = useState<string | null>(routeIsNew ? NEW_ARTICLE_KEY : null);
+  const [contentRequestId, setContentRequestId] = useState<string | null>(routeIsNew ? NEW_ARTICLE_KEY : null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -91,31 +94,33 @@ export const ArticleEditorPage: React.FC = () => {
   const [unpublishOpen, setUnpublishOpen] = useState(false);
   const [unpublishing, setUnpublishing] = useState(false);
   const initializedRef = useRef(false);
-  const appliedContentKeyRef = useRef<string | null>(null);
-  const titleKeyRef = useRef<string | null>(null);
+  const appliedContentIdRef = useRef<string | null>(null);
+  const titleIdRef = useRef<string | null>(null);
   const titleTouchedRef = useRef(false);
   const docVersionRef = useRef(0);
   // The route key whose content has already been loaded (or created in place).
-  const loadedKeyRef = useRef<string | null>(routeIsNew ? NEW_ARTICLE_KEY : null);
+  const loadedIdRef = useRef<string | null>(routeIsNew ? NEW_ARTICLE_KEY : null);
 
   const currentArticle = useMemo(
-    () => (activeKey && !isNewDraft ? articles.find((a) => a.knowledgeKey === activeKey) ?? null : null),
-    [articles, activeKey, isNewDraft],
+    () => (activeId && !isNewDraft ? articles.find((a) => a.id === activeId) ?? null : null),
+    [articles, activeId, isNewDraft],
   );
   const readOnly = !!currentArticle && !currentArticle.canWrite;
+  // Publishing needs write access, but unpublishing is a lifecycle decision the backend gates on canManage.
+  const canManageArticle = !!currentArticle && currentArticle.canManage;
   // Unknown status means an older backend: treat an existing row as published, a new one as draft.
   const articleStatus = currentArticle ? (currentArticle.status ?? 'published') : 'draft';
   const isPublished = articleStatus === 'published';
 
-  const load = useCallback(async (key: string) => {
+  const load = useCallback(async (id: string) => {
     setLoadError(null);
     setInitialContent(null);
     try {
       const [content] = await Promise.all([
-        loadArticleContent(key),
+        loadArticleContent(id),
         loadArticles(),
       ]);
-      setContentRequestKey(key);
+      setContentRequestId(id);
       setInitialContent(content);
     } catch (e) {
       setLoadError(readErrorMessage(e, i18n('Failed to load article')));
@@ -125,23 +130,23 @@ export const ArticleEditorPage: React.FC = () => {
   useEffect(() => {
     if (routeIsNew) return;
     // A save of a new draft navigates to its fresh key; the editor already holds that content.
-    if (loadedKeyRef.current === routeKey) return;
-    loadedKeyRef.current = routeKey;
+    if (loadedIdRef.current === routeId) return;
+    loadedIdRef.current = routeId;
     // A new route means a new document: allow its title to be prefilled from the list.
     titleTouchedRef.current = false;
-    titleKeyRef.current = null;
-    void load(routeKey);
-  }, [routeIsNew, routeKey, load]);
+    titleIdRef.current = null;
+    void load(routeId);
+  }, [routeIsNew, routeId, load]);
 
   useEffect(() => {
     if (isNewDraft || titleTouchedRef.current) return;
-    if (titleKeyRef.current === activeKey) return;
-    const match = articles.find((a) => a.knowledgeKey === activeKey);
+    if (titleIdRef.current === activeId) return;
+    const match = articles.find((a) => a.id === activeId);
     if (match) {
       setTitle(match.title);
-      titleKeyRef.current = activeKey;
+      titleIdRef.current = activeId;
     }
-  }, [articles, activeKey, isNewDraft]);
+  }, [articles, activeId, isNewDraft]);
 
   const editor = useEditor({
     extensions: [
@@ -190,9 +195,9 @@ export const ArticleEditorPage: React.FC = () => {
   });
 
   useEffect(() => {
-    if (!editor || initialContent === null || contentRequestKey === null) return;
-    if (appliedContentKeyRef.current === contentRequestKey) return;
-    appliedContentKeyRef.current = contentRequestKey;
+    if (!editor || initialContent === null || contentRequestId === null) return;
+    if (appliedContentIdRef.current === contentRequestId) return;
+    appliedContentIdRef.current = contentRequestId;
     const firstLoad = !initializedRef.current;
     initializedRef.current = true;
     // setContent with emitUpdate=false keeps programmatic loads out of the dirty/version tracking.
@@ -202,7 +207,7 @@ export const ArticleEditorPage: React.FC = () => {
       docVersionRef.current = 0;
       setDirty(false);
     }
-  }, [editor, initialContent, contentRequestKey]);
+  }, [editor, initialContent, contentRequestId]);
 
   useEffect(() => {
     editor?.setEditable(!readOnly);
@@ -240,35 +245,35 @@ export const ArticleEditorPage: React.FC = () => {
     setSaving(true);
     setSaveError(null);
     try {
-      let targetKey = activeKey;
+      let targetId = activeId;
       let savedTitle = title.trim() || i18n('Untitled');
 
       if (isNewDraft) {
         const article = await saveToKnowledge({
           title: savedTitle,
           content: markdown,
-          source: 'manual',
+          folderId: draftFolderId,
           origin,
         });
-        targetKey = article.knowledgeKey;
+        targetId = article.id;
         savedTitle = article.title;
-        setCreatedKey(targetKey);
+        setCreatedId(targetId);
         if (docVersionRef.current !== versionAtSave) {
           // The document kept changing while the create request was in flight —
           // push the latest snapshot before leaving the draft route.
           const latest = getMarkdown(editor);
           if (latest !== null) {
-            const updated = await updateArticle({ key: targetKey, content: latest, title: title.trim() || undefined });
+            const updated = await updateArticle({ id: targetId, content: latest, title: title.trim() || undefined });
             savedTitle = updated.title;
           }
         }
-        loadedKeyRef.current = targetKey;
+        loadedIdRef.current = targetId;
         if (options.navigateAfterCreate !== false) {
-          navigate(`/knowledge/editor/${encodeURIComponent(targetKey)}`, { replace: true });
+          navigate(`/knowledge/editor/${encodeURIComponent(targetId)}`, { replace: true });
         }
       } else {
         const article = await updateArticle({
-          key: targetKey,
+          id: targetId,
           content: markdown,
           title: title.trim() || undefined,
         });
@@ -291,7 +296,7 @@ export const ArticleEditorPage: React.FC = () => {
     } finally {
       setSaving(false);
     }
-  }, [editor, saving, readOnly, activeKey, isNewDraft, title, saveToKnowledge, updateArticle, navigate]);
+  }, [editor, saving, readOnly, activeId, isNewDraft, title, draftFolderId, saveToKnowledge, updateArticle, navigate]);
 
   const stopVoice = voice.stopAndFinish;
   const handleVoiceStop = useCallback(async () => {
@@ -315,7 +320,7 @@ export const ArticleEditorPage: React.FC = () => {
   }, [currentArticle, title]);
 
   const handlePublish = useCallback(async () => {
-    if (!activeKey || isNewDraft || publishing) return;
+    if (!activeId || isNewDraft || publishing) return;
     setPublishing(true);
     setPublishError(null);
     try {
@@ -328,11 +333,11 @@ export const ArticleEditorPage: React.FC = () => {
           return;
         }
         // publishArticle reloads the list; skip the duplicate fetch inside updateArticle.
-        await updateArticle({ key: activeKey, content: markdown }, { reload: false });
+        await updateArticle({ id: activeId, content: markdown }, { reload: false });
         setDirty(false);
       }
       const article = await publishArticle({
-        key: activeKey,
+        id: activeId,
         category: publishCategory,
         title: publishTitle.trim() || undefined,
       });
@@ -345,10 +350,10 @@ export const ArticleEditorPage: React.FC = () => {
     } finally {
       setPublishing(false);
     }
-  }, [activeKey, editor, dirty, isNewDraft, publishing, updateArticle, publishArticle, publishCategory, publishTitle]);
+  }, [activeId, editor, dirty, isNewDraft, publishing, updateArticle, publishArticle, publishCategory, publishTitle]);
 
   const handleReindex = useCallback(async () => {
-    if (!activeKey || isNewDraft || publishing) return;
+    if (!activeId || isNewDraft || publishing) return;
     setPublishing(true);
     try {
       // Reindex reads the stored body too; flush first or the notice would claim a rebuild that
@@ -360,10 +365,10 @@ export const ArticleEditorPage: React.FC = () => {
           setNotice(i18n('Failed to read editor content'));
           return;
         }
-        await updateArticle({ key: activeKey, content: markdown }, { reload: false });
+        await updateArticle({ id: activeId, content: markdown }, { reload: false });
         setDirty(false);
       }
-      await publishArticle({ key: activeKey });
+      await publishArticle({ id: activeId });
       setNoticeWarn(false);
       setNotice(i18n('Reindex submitted'));
     } catch (e) {
@@ -372,13 +377,13 @@ export const ArticleEditorPage: React.FC = () => {
     } finally {
       setPublishing(false);
     }
-  }, [activeKey, editor, dirty, isNewDraft, publishing, updateArticle, publishArticle]);
+  }, [activeId, editor, dirty, isNewDraft, publishing, updateArticle, publishArticle]);
 
   const handleUnpublish = useCallback(async () => {
-    if (!activeKey || unpublishing) return;
+    if (!activeId || unpublishing) return;
     setUnpublishing(true);
     try {
-      await unpublishArticle(activeKey);
+      await unpublishArticle(activeId);
       setUnpublishOpen(false);
       setNoticeWarn(false);
       setNotice(i18n('Unpublished — removed from the search index'));
@@ -388,10 +393,11 @@ export const ArticleEditorPage: React.FC = () => {
     } finally {
       setUnpublishing(false);
     }
-  }, [activeKey, unpublishing, unpublishArticle]);
+  }, [activeId, unpublishing, unpublishArticle]);
 
   const handleAiApply = useCallback(async () => {
-    if (!editor || !selectedModelId || !aiInstruction.trim() || aiRunning || readOnly) return;
+    // AI rewrite resolves the stored article; an unsaved draft has no id yet.
+    if (!editor || !selectedModelId || !aiInstruction.trim() || aiRunning || readOnly || isNewDraft) return;
     const markdown = getMarkdown(editor);
     if (markdown === null) {
       setAiError(i18n('Failed to read editor content'));
@@ -409,13 +415,13 @@ export const ArticleEditorPage: React.FC = () => {
     try {
       const result = aiMode === 'rewrite'
         ? (await knowledgeService.aiRewrite({
-            key: activeKey || NEW_ARTICLE_KEY,
+            id: activeId,
             content: markdown,
             instruction: aiInstruction,
             modelConfigId: selectedModelId,
           })).content
         : (await knowledgeService.aiModifySelection({
-            key: activeKey || NEW_ARTICLE_KEY,
+            id: activeId,
             content: markdown,
             selectedText,
             instruction: aiInstruction,
@@ -451,7 +457,7 @@ export const ArticleEditorPage: React.FC = () => {
     } finally {
       setAiRunning(false);
     }
-  }, [editor, selectedModelId, aiInstruction, aiRunning, readOnly, aiMode, activeKey, selectedText]);
+  }, [editor, selectedModelId, aiInstruction, aiRunning, readOnly, isNewDraft, aiMode, activeId, selectedText]);
 
   const openLinkPanel = useCallback(() => {
     setLinkUrl(editor?.getAttributes('link').href ?? '');
@@ -481,7 +487,7 @@ export const ArticleEditorPage: React.FC = () => {
         <p className="text-sm text-destructive">{loadError}</p>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => void load(routeKey)}
+            onClick={() => void load(routeId)}
             className="px-3 py-1.5 rounded-md text-xs bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
           >
             {i18n('Retry')}
@@ -557,21 +563,26 @@ export const ArticleEditorPage: React.FC = () => {
         )}
         {currentArticle !== null && !readOnly && !isNewDraft && isPublished && (
           <>
-            <button
-              onClick={handleReindex}
-              disabled={publishing || voice.phase !== 'idle'}
-              title={i18n('Rebuild index')}
-              className="p-1.5 rounded-md border border-border text-muted-foreground hover:bg-muted transition-colors shrink-0 disabled:opacity-50"
-            >
-              {publishing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-            </button>
-            <button
-              onClick={() => setUnpublishOpen(true)}
-              title={i18n('Unpublish')}
-              className="p-1.5 rounded-md border border-border text-muted-foreground hover:bg-muted transition-colors shrink-0"
-            >
-              <Undo2 className="size-3.5" />
-            </button>
+            {/* Publish always re-enables retrieval, so a re-index only makes sense while RAG is on. */}
+            {currentArticle.ragEnabled && (
+              <button
+                onClick={handleReindex}
+                disabled={publishing || voice.phase !== 'idle'}
+                title={i18n('Rebuild index')}
+                className="p-1.5 rounded-md border border-border text-muted-foreground hover:bg-muted transition-colors shrink-0 disabled:opacity-50"
+              >
+                {publishing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+              </button>
+            )}
+            {canManageArticle && (
+              <button
+                onClick={() => setUnpublishOpen(true)}
+                title={i18n('Unpublish')}
+                className="p-1.5 rounded-md border border-border text-muted-foreground hover:bg-muted transition-colors shrink-0"
+              >
+                <Undo2 className="size-3.5" />
+              </button>
+            )}
           </>
         )}
       </div>
@@ -664,8 +675,9 @@ export const ArticleEditorPage: React.FC = () => {
           <div className="w-px h-5 bg-border mx-1" />
           <button
             onClick={() => { setAiMode('rewrite'); setAiError(null); setAiPanelOpen(!aiPanelOpen); }}
-            className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${aiPanelOpen && aiMode === 'rewrite' ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-muted-foreground'}`}
-            title={i18n('AI Rewrite')}
+            disabled={isNewDraft}
+            className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${aiPanelOpen && aiMode === 'rewrite' ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-muted-foreground'}`}
+            title={isNewDraft ? i18n('Save the article first to use AI') : i18n('AI Rewrite')}
           >
             <Sparkles className="size-3.5" />
             {i18n('AI Rewrite')}
@@ -819,8 +831,9 @@ export const ArticleEditorPage: React.FC = () => {
                 setAiError(null);
                 setAiPanelOpen(true);
               }}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs hover:bg-muted transition-colors text-muted-foreground hover:text-primary"
-              title={i18n('AI modify selection')}
+              disabled={isNewDraft}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs hover:bg-muted transition-colors text-muted-foreground hover:text-primary disabled:opacity-40 disabled:cursor-not-allowed"
+              title={isNewDraft ? i18n('Save the article first to use AI') : i18n('AI modify selection')}
             >
               <Sparkles className="size-3" />
               AI

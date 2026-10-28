@@ -54,11 +54,8 @@ class WatchPropertiesBinding {
     /** Consecutive failures after which a watch is paused and the user is notified once. */
     var maxFailuresBeforePause: Int = coreDefaults.maxFailuresBeforePause
 
-    /** Scan cron for the per-user `scheduled_task_setting` row (six-field Spring syntax). */
-    var scanCron: String = coreDefaults.scanCron
-
-    /** Max watch firings one scan tick may queue for a single user. */
-    var perUserPerTickLimit: Int = coreDefaults.perUserPerTickLimit
+    /** Max automatic watch admissions a single user may have per minute on this host. */
+    var perUserPerMinuteLimit: Int = coreDefaults.perUserPerMinuteLimit
 
     fun toProperties(): WatchProperties = WatchProperties(
         enabled = enabled,
@@ -74,7 +71,6 @@ class WatchPropertiesBinding {
         failureBackoffBaseMs = failureBackoffBaseMs,
         failureBackoffMaxMs = failureBackoffMaxMs,
         maxFailuresBeforePause = maxFailuresBeforePause,
-        scanCron = scanCron,
-        perUserPerTickLimit = perUserPerTickLimit
+        perUserPerMinuteLimit = perUserPerMinuteLimit
     )
 }

@@ -1,5 +1,6 @@
 package com.easy.easyai.repository.database
 
+import org.jetbrains.exposed.v1.core.ReferenceOption
 import org.jetbrains.exposed.v1.core.Table
 
 /**
@@ -226,6 +227,14 @@ object Tables {
         val memoryAutoGeneration = bool("memory_auto_generation").default(true)
         /** 'user' = user-registered project, 'temp' = system-managed per-session scratch workspace. */
         val kind = varchar("kind", 32).default("user")
+
+        /**
+         * The application that created the row (`spring.application.name`). Only its orphan sweep may
+         * release a temp workspace and delete the directory: hosts sharing one data directory would
+         * otherwise delete each other's in-flight scratch space. User projects are shared content, so
+         * no read path filters on this.
+         */
+        val ownerApp = varchar("owner_app", 64).nullable()
         val createdAt = long("created_at")
         val updatedAt = long("updated_at")
 
@@ -600,11 +609,15 @@ object Tables {
         val params = text("params").nullable()  // JSON: type-specific configuration
         val timeoutMs = long("timeout_ms").nullable()
         val updatedAt = long("updated_at")
+        val nextFireAt = long("next_fire_at").nullable()
+        val scheduleRevision = varchar("schedule_revision", 64).nullable()
+        val scheduleZone = varchar("schedule_zone", 64).nullable()
 
         override val primaryKey = PrimaryKey(userId, taskType)
 
         init {
             index(false, taskType, enabled)  // the scan reads every enabled row of one type
+            index("idx_scheduled_task_setting_due", false, enabled, taskType, nextFireAt)
         }
     }
 
@@ -625,6 +638,13 @@ object Tables {
         val status = varchar("status", 32)
         val triggerSource = varchar("trigger_source", 32)
         val sessionId = varchar("session_id", 255).nullable()
+
+        /**
+         * The application that runs this row (`spring.application.name`). The orphan sweep parks only
+         * rows it owns, so a second host on the same database cannot interrupt the first one's live
+         * workers; ordinary reads ignore it. Null is unclaimed legacy data, which no host sweeps.
+         */
+        val ownerApp = varchar("owner_app", 64).nullable()
         val title = varchar("title", 255)
         val payload = text("payload").nullable()   // JSON: type-specific inputs
         val result = text("result").nullable()      // JSON: type-specific outputs
@@ -643,6 +663,8 @@ object Tables {
             index(false, userId, createdAt)
             index(false, userId, type, status)
             index(false, sessionId)
+            index("idx_async_task_session_status", false, sessionId, status)
+            index(false, ownerApp, status)  // the startup orphan sweep reads one host's non-terminal rows
         }
     }
 
@@ -696,6 +718,14 @@ object Tables {
         val consecutiveFailures = integer("consecutive_failures").default(0)
         val lastError = text("last_error").nullable()
         val statusReason = text("status_reason").nullable()
+
+        /**
+         * The application that fires this row (`spring.application.name`). Due-scanning and listing
+         * read only its own rows: a watch runs with the creating agent's tools, which another host on
+         * the same database may not have. Null means no host owns the row — nothing fires or edits it
+         * until the startup adopter or the documented psql backfill claims it.
+         */
+        val ownerApp = varchar("owner_app", 64).nullable()
         val createdAt = long("created_at")
         val updatedAt = long("updated_at")
 
@@ -705,6 +735,7 @@ object Tables {
             index(false, userId, status, nextDueAt)
             index(false, userId, createdAt)
             index(false, runSessionId)
+            index(false, ownerApp, status, nextDueAt)  // the scheduler's due scan is host-scoped
         }
     }
 
@@ -962,43 +993,63 @@ object Tables {
         }
     }
 
-    // ---- Knowledge article tables ----
+    // ---- Knowledge tables ----
 
     /**
-     * Knowledge article metadata. OSS holds the content (source of truth), EasyRAG the derived
-     * vector index.
-     *
-     * `user_id` is the storage/RAG bucket (personal or group), while `created_by` is the login
-     * user used by the host [com.easy.easyai.core.knowledge.KnowledgeAccessPolicy].
+     * Knowledge folder tree. Adjacency list: `parent_id = ''` marks a tree root.
+     * Display paths are derived (`KnowledgeTree.pathOf`), never stored.
      */
-    object KnowledgeArticleTable : Table("knowledge_article") {
+    object KnowledgeFolderTable : Table("knowledge_folder") {
         val id = varchar("id", 255)
-        val userId = varchar("user_id", 255).default("system")
+        val userId = varchar("user_id", 255)
+        val parentId = varchar("parent_id", 255).default("")
+        val name = varchar("name", 255)
+        val isDefault = bool("is_default").default(false)
         val createdBy = varchar("created_by", 255).nullable()
-        val knowledgeKey = varchar("knowledge_key", 512)
-        val ossKey = varchar("oss_key", 1024).default("")
-        val title = varchar("title", 255).default("")
-        val description = text("description").nullable()
-        val category = varchar("category", 64).default("other")
-        val articleSource = varchar("source", 255)
-        val relativePath = varchar("relative_path", 512)
-        val ext = varchar("ext", 16).default("md")
-        val contentHash = varchar("content_hash", 64).nullable()
-        val origin = varchar("origin", 32).default("upload")
-        val originSessionId = varchar("origin_session_id", 255).nullable()
-        val originMessageId = varchar("origin_message_id", 255).nullable()
-        val composedFrom = text("composed_from").nullable()
-        val status = varchar("status", 16).default("published")
         val createdAt = long("created_at")
         val updatedAt = long("updated_at")
 
         override val primaryKey = PrimaryKey(id)
 
         init {
-            uniqueIndex(userId, knowledgeKey)
-            index(false, userId, articleSource)
-            index(false, userId, origin)
+            uniqueIndex(userId, parentId, name)
+            index(false, userId, parentId)
+        }
+    }
+
+    /**
+     * Knowledge article metadata. Content lives in object storage at
+     * `knowledge-articles/{id}` (source of truth); EasyRAG indexes the same id.
+     *
+     * `user_id` is the storage/RAG bucket (personal or group), while `created_by` is the login
+     * user used by the host [com.easy.easyai.core.knowledge.KnowledgeAccessPolicy].
+     */
+    object KnowledgeArticleTable : Table("knowledge_article") {
+        val id = varchar("id", 255)
+        val userId = varchar("user_id", 255)
+        val createdBy = varchar("created_by", 255).nullable()
+        val folderId = varchar("folder_id", 255)
+        val fileName = varchar("file_name", 255).nullable()
+        val title = varchar("title", 255).default("")
+        val description = text("description").nullable()
+        val category = varchar("category", 64).default("other")
+        val ext = varchar("ext", 16).default("md")
+        val origin = varchar("origin", 32).default("upload")
+        val originSessionId = varchar("origin_session_id", 255).nullable()
+        val originMessageId = varchar("origin_message_id", 255).nullable()
+        val composedFrom = text("composed_from").nullable()
+        val status = varchar("status", 16).default("draft")
+        val ragEnabled = bool("rag_enabled").default(false)
+        val createdAt = long("created_at")
+        val updatedAt = long("updated_at")
+
+        override val primaryKey = PrimaryKey(id)
+
+        init {
+            uniqueIndex(userId, folderId, fileName)
+            index(false, userId, folderId)
             index(false, userId, status)
+            index(false, userId, ragEnabled)
         }
     }
 

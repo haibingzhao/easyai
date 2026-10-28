@@ -24,7 +24,7 @@ function findingTagLabels(value: unknown): string[] {
 /**
  * Presentation registry for async task types — the single place to teach the UI about a new backend
  * task type. The Tasks page reads from here, so adding a type is one entry (label + icon + optional
- * title/summarizer); no page or handler changes needed.
+ * title/summarizer/link); no page or handler changes needed.
  *
  * Backend rows carry no localized display text: `title` builds it from `payload`, `summarize` from
  * the numeric `result`, so a row written under one language still reads correctly under another.

@@ -5,13 +5,17 @@ import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.api.model.ModelType
 import com.easy.easyai.auth.AuthConstants
 import com.easy.easyai.core.agent.AsyncAgentStore
+import com.easy.easyai.core.knowledge.KnowledgeArticleStore
+import com.easy.easyai.core.knowledge.KnowledgeFolderStore
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.model.aux.AuxModelSettingsStore
 import com.easy.easyai.core.model.aux.AuxModelTask
 import com.easy.easyai.core.skill.AsyncSkillCatalogStore
+import com.easy.easyai.core.storage.ObjectStorageResolver
 import com.easy.easyai.core.storage.StorageSettingsStore
 import com.easy.easyai.skills.SkillRefreshService
 import com.easy.easyai.tools.mcp.AsyncMcpServerStore
+import kotlinx.coroutines.flow.toList
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
@@ -55,6 +59,9 @@ class AssetCleanupService(
     @param:Autowired(required = false) private val skillCatalogStore: AsyncSkillCatalogStore? = null,
     @param:Autowired(required = false) private val storageSettingsStore: StorageSettingsStore? = null,
     @param:Autowired(required = false) private val knowledgeStore: KnowledgeStore? = null,
+    @param:Autowired(required = false) private val knowledgeArticleStore: KnowledgeArticleStore? = null,
+    @param:Autowired(required = false) private val knowledgeFolderStore: KnowledgeFolderStore? = null,
+    @param:Autowired(required = false) private val objectStorageResolver: ObjectStorageResolver? = null,
     @param:Autowired(required = false) private val skillRefreshService: SkillRefreshService? = null
 ) {
 
@@ -135,12 +142,27 @@ class AssetCleanupService(
             if (storageSettingsStore?.delete(owner) == true) 1 else 0
         }
         cleanup("knowledge") {
-            val store = knowledgeStore ?: return@cleanup 0
-            val entries = store.list(owner)
-            entries.count { store.delete(owner, it.key) }
+            val articles = knowledgeArticleStore ?: return@cleanup 0
+            val rows = articles.findAllInBuckets(listOf(owner)).toList()
+            val storage = objectStorageResolver?.resolve(owner)
+            var count = 0
+            for (article in rows) {
+                if (article.ragEnabled) {
+                    knowledgeStore?.let { runCatching { it.delete(owner, article.id) } }
+                }
+                runCatching { storage?.delete("$KNOWLEDGE_STORAGE_PREFIX/${article.id}") }
+                articles.delete(article.id)
+                count++
+            }
+            knowledgeFolderStore?.listByBuckets(listOf(owner))?.forEach { knowledgeFolderStore.delete(it.id) }
+            count
         }
 
         logger.info("asset_cleanup done owner={} totalRemoved={} failures={}", owner, removed.values.sum(), failures.size)
         return AssetCleanupReport(owner, removed, failures)
+    }
+
+    private companion object {
+        const val KNOWLEDGE_STORAGE_PREFIX = "knowledge-articles"
     }
 }

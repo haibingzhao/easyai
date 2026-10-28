@@ -1,32 +1,67 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Dialog } from '@/components/ui/Dialog';
 import { Upload, FolderOpen, CheckCircle, XCircle } from 'lucide-react';
 import { useCategoryStore } from '@/services/stores/category-store';
 import { useKnowledgeStore } from '@/services/stores/knowledge-store';
+import { readErrorMessage } from '@/services/api-client';
+import { folderDisplayPath, folderLabel, foldersById } from '@/utils/knowledge-tree';
 import { i18n } from '@/utils/i18n';
 import type { UploadResponseDto } from '@/services/knowledge-service';
 
 interface UploadKnowledgeDialogProps {
   open: boolean;
+  /** Folder selected in the tree; used as the destination when it accepts writes. */
+  initialFolderId?: string | null;
   onClose: () => void;
 }
 
 const ACCEPTED_EXTENSIONS = '.md,.txt,.kt,.java,.py,.ts,.tsx,.js,.json,.yml,.yaml,.sql,.properties,.html,.csv,.sh';
 
-export const UploadKnowledgeDialog: React.FC<UploadKnowledgeDialogProps> = ({ open, onClose }) => {
+export const UploadKnowledgeDialog: React.FC<UploadKnowledgeDialogProps> = ({
+  open,
+  initialFolderId,
+  onClose,
+}) => {
   const knowledgeCategories = useCategoryStore((s) => s.knowledgeCategories);
   const upload = useKnowledgeStore((s) => s.upload);
   const uploadResult = useKnowledgeStore((s) => s.uploadResult);
   const clearUploadResult = useKnowledgeStore((s) => s.clearUploadResult);
+  const folders = useKnowledgeStore((s) => s.folders);
+  const loadFolders = useKnowledgeStore((s) => s.loadFolders);
 
   const [files, setFiles] = useState<File[]>([]);
   const [paths, setPaths] = useState<string[]>([]);
-  const [source, setSource] = useState('');
+  const [folderId, setFolderId] = useState('');
   const [category, setCategory] = useState('');
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<UploadResponseDto | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    void loadFolders().catch(() => undefined);
+    // Seed once per open from the tree selection. Only a writable, non-default folder is a valid
+    // explicit target; anything else falls back to the implicit default.
+    const selected = useKnowledgeStore.getState().folders.find((f) => f.id === initialFolderId);
+    setFolderId(selected && selected.writable && !selected.isDefault ? selected.id : '');
+  }, [open, initialFolderId, loadFolders]);
+
+  const byId = useMemo(() => foldersById(folders), [folders]);
+  const folderOptions = useMemo(
+    () =>
+      folders
+        // The empty option already targets the default folder, and the other visible bucket is
+        // read-only for writes — offering either here only produces a 400.
+        .filter((folder) => folder.writable && !folder.isDefault)
+        .map((folder) => ({
+          id: folder.id,
+          path: folderDisplayPath(folder.id, byId, (f) => folderLabel(f, i18n)),
+        }))
+        .sort((a, b) => a.path.localeCompare(b.path)),
+    [folders, byId],
+  );
 
   const handleFileSelect = (fileList: FileList | null, useRelativePath: boolean) => {
     if (!fileList) return;
@@ -36,36 +71,27 @@ export const UploadKnowledgeDialog: React.FC<UploadKnowledgeDialogProps> = ({ op
       const file = fileList[i];
       arr.push(file);
       if (useRelativePath && 'webkitRelativePath' in file && file.webkitRelativePath) {
-        // Strip the leading segment (folder name): it is already used as source,
-        // keeping it would produce duplicated keys like docs/docs/README.md.
-        const segments = file.webkitRelativePath.split('/');
-        pathArr.push(segments.length > 1 ? segments.slice(1).join('/') : file.name);
+        // Keep the full relative path: every directory segment becomes a subfolder under the
+        // chosen destination, preserving the uploaded folder's structure.
+        pathArr.push(file.webkitRelativePath);
       } else {
         pathArr.push(file.name);
       }
     }
     setFiles(arr);
     setPaths(pathArr);
-    // Auto-detect source from folder name only when user hasn't entered one manually
-    if (useRelativePath && arr.length > 0 && !source.trim()) {
-      const firstPath = fileList[0].webkitRelativePath;
-      const folderName = firstPath ? firstPath.split('/')[0] : undefined;
-      if (folderName && folderName !== arr[0].name) {
-        setSource(folderName);
-      }
-    }
   };
 
   const handleUpload = async () => {
     if (files.length === 0) return;
     setUploading(true);
     setResult(null);
+    setUploadError(null);
     try {
-      const resolvedSource = source.trim() || 'default';
-      const res = await upload(files, paths, resolvedSource, category || undefined);
+      const res = await upload(files, paths, folderId || undefined, category || undefined);
       setResult(res);
-    } catch {
-      // error already in store
+    } catch (e) {
+      setUploadError(readErrorMessage(e, i18n('Upload failed')));
     } finally {
       setUploading(false);
     }
@@ -74,9 +100,10 @@ export const UploadKnowledgeDialog: React.FC<UploadKnowledgeDialogProps> = ({ op
   const handleClose = () => {
     setFiles([]);
     setPaths([]);
-    setSource('');
+    setFolderId('');
     setCategory('');
     setResult(null);
+    setUploadError(null);
     clearUploadResult();
     onClose();
   };
@@ -86,16 +113,21 @@ export const UploadKnowledgeDialog: React.FC<UploadKnowledgeDialogProps> = ({ op
   return (
     <Dialog open={open} onClose={handleClose} title={i18n('Upload Knowledge')}>
       <div className="space-y-4">
-        {/* Source input */}
+        {/* Destination folder */}
         <div>
-          <label className="block text-sm font-medium mb-1">{i18n('Source')}</label>
-          <input
-            type="text"
-            value={source}
-            onChange={(e) => setSource(e.target.value)}
-            placeholder="default"
+          <label className="block text-sm font-medium mb-1">{i18n('Folder')}</label>
+          <select
+            value={folderId}
+            onChange={(e) => setFolderId(e.target.value)}
             className="w-full px-3 py-2 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-          />
+          >
+            <option value="">{i18n('Default folder')}</option>
+            {folderOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.path}
+              </option>
+            ))}
+          </select>
         </div>
 
         {/* Category select */}
@@ -193,6 +225,11 @@ export const UploadKnowledgeDialog: React.FC<UploadKnowledgeDialogProps> = ({ op
                     <XCircle className="size-3.5 text-destructive shrink-0" />
                   )}
                   <span className="truncate flex-1">{r.relativePath}</span>
+                  {r.success && r.indexPending && (
+                    <span className="text-amber-600 dark:text-amber-400 truncate max-w-40">
+                      {i18n('Indexing pending')}
+                    </span>
+                  )}
                   {!r.success && r.reason && (
                     <span className="text-destructive truncate max-w-40">{r.reason}</span>
                   )}
@@ -200,6 +237,10 @@ export const UploadKnowledgeDialog: React.FC<UploadKnowledgeDialogProps> = ({ op
               ))}
             </div>
           </div>
+        )}
+
+        {uploadError && !displayResult && (
+          <div className="text-sm text-destructive">{uploadError}</div>
         )}
 
         {/* Actions */}

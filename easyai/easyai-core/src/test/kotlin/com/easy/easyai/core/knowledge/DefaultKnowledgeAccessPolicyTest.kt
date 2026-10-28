@@ -14,19 +14,12 @@ class DefaultKnowledgeAccessPolicyTest {
         id = "a1",
         userId = userId,
         createdBy = createdBy,
-        knowledgeKey = "manual/a.md",
-        ossKey = "oss/a.md",
+        folderId = "folder-1",
         title = "A",
         description = null,
         category = "other",
-        source = "manual",
-        relativePath = "a.md",
         ext = "md",
-        contentHash = null,
         origin = "manual",
-        originSessionId = null,
-        originMessageId = null,
-        composedFrom = null,
         createdAt = 1L,
         updatedAt = 1L,
     )
@@ -35,7 +28,7 @@ class DefaultKnowledgeAccessPolicyTest {
         KnowledgeAccessContext(userId = userId, groupUserId = groupUserId)
 
     @Test
-    fun `legacy personal rows follow the owner bucket`() = runBlocking {
+    fun `personal rows follow the owner bucket`() = runBlocking {
         val policy = DefaultKnowledgeAccessPolicy()
 
         assertTrue(policy.canRead(context("alice"), article(userId = "alice")))
@@ -43,7 +36,7 @@ class DefaultKnowledgeAccessPolicyTest {
     }
 
     @Test
-    fun `legacy group rows are shared only when sharing is on`() = runBlocking {
+    fun `group rows are shared only when sharing is on`() = runBlocking {
         val row = article(userId = "grp-1")
 
         assertFalse(DefaultKnowledgeAccessPolicy().canRead(context("alice", "grp-1"), row))
@@ -60,9 +53,23 @@ class DefaultKnowledgeAccessPolicyTest {
     }
 
     @Test
-    fun `entries without metadata stay readable under the default policy`() = runBlocking {
-        assertTrue(
-            DefaultKnowledgeAccessPolicy().canReadEntry(context("alice"), "grp-1", "manual/a.md", null)
-        )
+    fun `folder management defaults to the create right`() = runBlocking {
+        val policy = DefaultKnowledgeAccessPolicy()
+
+        assertTrue(policy.canManageFolders(context("alice")))
+    }
+
+    @Test
+    fun `a host can narrow folder management independently of creation`() = runBlocking {
+        val readOnlyCreator = object : KnowledgeAccessPolicy {
+            override suspend fun canView(context: KnowledgeAccessContext) = true
+            override suspend fun canCreate(context: KnowledgeAccessContext) = true
+            override suspend fun canManageFolders(context: KnowledgeAccessContext) = false
+            override suspend fun canRead(context: KnowledgeAccessContext, article: KnowledgeArticle) = true
+            override suspend fun canWrite(context: KnowledgeAccessContext, article: KnowledgeArticle) = true
+        }
+
+        assertTrue(readOnlyCreator.canCreate(context("alice")))
+        assertFalse(readOnlyCreator.canManageFolders(context("alice")))
     }
 }

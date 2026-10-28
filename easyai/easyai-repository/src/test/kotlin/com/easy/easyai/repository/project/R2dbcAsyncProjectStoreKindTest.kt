@@ -1,5 +1,6 @@
 package com.easy.easyai.repository.project
 
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.model.ProjectInfo
 import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.repository.database.DatabaseMigration
@@ -23,6 +24,8 @@ import kotlin.test.assertNull
  * ChatStreamService resolves it through findById/findByPath.
  * Uses an in-memory H2 R2DBC database.
  */
+private const val SELF = "agent-api"
+
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class R2dbcAsyncProjectStoreKindTest {
 
@@ -37,7 +40,7 @@ class R2dbcAsyncProjectStoreKindTest {
         DatabaseMigration.defaultTables().execute(db)
     }
 
-    private fun createStore() = R2dbcAsyncProjectStore(db)
+    private fun createStore() = R2dbcAsyncProjectStore(db, HostIdentity(SELF))
 
     private fun project(
         path: String,

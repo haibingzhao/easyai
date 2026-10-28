@@ -260,6 +260,7 @@ export type {
   AsyncTaskStatus,
   TaskTrigger,
   TaskFilters,
+  TaskLink,
   TaskTypeDescriptor,
 } from './types/task';
 

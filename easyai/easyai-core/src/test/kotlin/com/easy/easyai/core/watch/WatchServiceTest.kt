@@ -1,14 +1,20 @@
 package com.easy.easyai.core.watch
 
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.task.AsyncTask
+import com.easy.easyai.core.task.AsyncTaskStatus
 import com.easy.easyai.core.task.AsyncTaskStore
 import com.easy.easyai.core.task.AsyncTaskType
 import com.easy.easyai.core.task.ScheduledTaskSettingStore
 import com.easy.easyai.core.task.TaskTrigger
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -77,6 +83,7 @@ class WatchServiceTest {
         gateway: WatchRunGateway? = null
     ) = WatchService(
         store = store,
+        host = HostIdentity(TEST_APP),
         settingStore = settingStore,
         taskStore = taskStore,
         runGateway = gateway,
@@ -499,37 +506,27 @@ class WatchServiceTest {
         @Test
         fun `run now is refused while a review or another run is pending`() = runTest {
             val store = FakeWatchStore()
-            val taskStore = mockk<AsyncTaskStore>(relaxed = true)
             val gateway = mockk<WatchRunGateway>(relaxed = true)
-            coEvery { taskStore.listNonTerminal(any(), any()) } returns emptyList()
-            val svc = service(store, taskStore = taskStore, gateway = gateway)
+            val svc = service(store, gateway = gateway)
             val watch = svc.create(origin(), input()).watch
-
             store.setStatus(watch.id, WatchStatus.ACTIVE, null, WatchPendingAction.EXPIRY_REVIEW)
             assertThrows<WatchException> { svc.runNow("alice", watch.id) }
             store.setStatus(watch.id, WatchStatus.ACTIVE, null, WatchPendingAction.CHECK)
-
-            coEvery { taskStore.listNonTerminal(any(), any()) } returns listOf(
-                AsyncTask(
-                    id = "task-1",
-                    userId = "alice",
-                    type = AsyncTaskType.WATCH,
-                    trigger = TaskTrigger.FRONTEND,
-                    title = "Watch",
-                    sessionId = watch.runSessionId,
-                    payload = mapOf(WatchTaskPayload.KEY_WATCH_ID to watch.id)
-                )
-            )
+            store.tasks["task-1"] = watchTask(watch)
             assertThrows<WatchException> { svc.runNow("alice", watch.id) }
+            assertTrue(store.admissions.isEmpty())
+            verify(exactly = 0) { gateway.dispatch(any()) }
         }
 
         @Test
-        fun `run now creates a check task without moving the schedule`() = runTest {
+        fun `run now dispatches the committed check task once without moving the schedule`() = runTest {
             val store = FakeWatchStore()
-            val taskStore = mockk<AsyncTaskStore>(relaxed = true)
+            val taskStore = mockk<AsyncTaskStore>()
             val gateway = mockk<WatchRunGateway>(relaxed = true)
-            coEvery { taskStore.listNonTerminal(any(), any()) } returns emptyList()
-            coEvery { gateway.launch(any()) } answers { firstArg() }
+            every { gateway.dispatch(any()) } answers {
+                val task = firstArg<AsyncTask>()
+                assertEquals(task, store.tasks[task.id])
+            }
             val svc = service(store, taskStore = taskStore, gateway = gateway)
             val watch = svc.create(origin(), input()).watch
             val task = svc.runNow("alice", watch.id)
@@ -537,29 +534,344 @@ class WatchServiceTest {
             assertEquals(watch.id, task.payload[WatchTaskPayload.KEY_WATCH_ID])
             assertEquals(watch.runSessionId, task.sessionId)
             assertEquals(watch.nextDueAt, store.findById(watch.id)!!.nextDueAt)
+            assertEquals(listOf(task), store.admissions)
+            assertThrows<WatchException> { svc.runNow("alice", watch.id) }
+            verify(exactly = 1) { gateway.dispatch(task) }
+            coVerify(exactly = 0) { taskStore.create(any()) }
+            coVerify(exactly = 0) { taskStore.listNonTerminal(any(), any()) }
         }
 
         @Test
-        fun `cancel stops the in-flight task before flipping the status`() = runTest {
+        fun `automatic manual admission preserves its trigger and rejects a competing run`() = runTest {
             val store = FakeWatchStore()
-            val taskStore = mockk<AsyncTaskStore>(relaxed = true)
+            val gateway = mockk<WatchRunGateway>(relaxed = true)
+            val svc = service(store, gateway = gateway)
+            val watch = svc.create(origin(), input()).watch
+            val task = svc.runNow("alice", watch.id, TaskTrigger.AUTO)
+            assertEquals(TaskTrigger.AUTO, task.trigger)
+            assertThrows<WatchException> { svc.runNow("alice", watch.id, TaskTrigger.FRONTEND) }
+            assertEquals(1, store.admissions.size)
+            verify(exactly = 1) { gateway.dispatch(task) }
+        }
+
+        @Test
+        fun `a stale manual admission conflicts without dispatching`() = runTest {
+            val store = mockk<WatchStore>()
+            val watch = testWatch()
+            coEvery { store.findById(watch.id) } returns watch
+            coEvery { store.enqueueManual("alice", watch.id, now, any(), TaskTrigger.FRONTEND) } returns
+                WatchEnqueueResult.Stale
+            val gateway = mockk<WatchRunGateway>(relaxed = true)
+            assertThrows<WatchConflictException> { service(store, gateway = gateway).runNow("alice", watch.id) }
+            verify(exactly = 0) { gateway.dispatch(any()) }
+        }
+
+        @Test
+        fun `run now cannot admit without a gateway or with an inactive watch`() = runTest {
+            val store = FakeWatchStore()
+            val watch = service(store).create(origin(), input()).watch
+            assertThrows<WatchUnavailableException> { service(store).runNow("alice", watch.id) }
+            store.forceStatus(watch.id, WatchStatus.PAUSED)
+            assertThrows<WatchException> {
+                service(store, gateway = mockk(relaxed = true)).runNow("alice", watch.id)
+            }
+            assertTrue(store.admissions.isEmpty())
+        }
+
+        @Test
+        fun `caller cancellation cannot strand a committed manual task`() = runTest {
+            val store = FakeWatchStore()
+            val committed = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val delayedStore = object : WatchStore by store {
+                override suspend fun enqueueManual(
+                    userId: String, watchId: String, now: Instant, properties: WatchProperties, trigger: TaskTrigger
+                ): WatchEnqueueResult {
+                    val result = store.enqueueManual(userId, watchId, now, properties, trigger)
+                    committed.complete(Unit)
+                    release.await()
+                    return result
+                }
+            }
+            val gateway = mockk<WatchRunGateway>(relaxed = true)
+            val svc = service(delayedStore, gateway = gateway)
+            val watch = svc.create(origin(), input()).watch
+            val request = launch { svc.runNow("alice", watch.id) }
+            committed.await()
+            request.cancel()
+            release.complete(Unit)
+            request.join()
+            verify(exactly = 1) { gateway.dispatch(store.admissions.single()) }
+        }
+
+        @Test
+        fun `cancel closes admission before cancelling only the exact watch tasks`() = runTest {
+            val store = FakeWatchStore()
+            val taskStore = mockk<AsyncTaskStore>()
             val gateway = mockk<WatchRunGateway>(relaxed = true)
             val svc = service(store, taskStore = taskStore, gateway = gateway)
             val watch = svc.create(origin(), input()).watch
-            coEvery { taskStore.listNonTerminal(any(), any()) } returns listOf(
-                AsyncTask(
-                    id = "task-1",
-                    userId = "alice",
-                    type = AsyncTaskType.WATCH,
-                    trigger = TaskTrigger.FRONTEND,
-                    title = "Watch",
-                    payload = mapOf(WatchTaskPayload.KEY_WATCH_ID to watch.id)
+            store.tasks["task-1"] = watchTask(watch)
+            store.tasks["other"] = watchTask(watch.copy(id = "other-watch"), id = "other")
+            coEvery { gateway.cancel("task-1") } coAnswers {
+                assertEquals(WatchStatus.CANCELLED, store.findById(watch.id)!!.status)
+                assertEquals(
+                    WatchEnqueueResult.Stale,
+                    store.enqueueManual("alice", watch.id, now, WatchProperties(), TaskTrigger.FRONTEND)
                 )
-            )
-            coEvery { gateway.cancel("task-1") } returns true
+                true
+            }
             val cancelled = svc.cancel("alice", watch.id)
             assertEquals(WatchStatus.CANCELLED, cancelled.status)
-            coVerify { gateway.cancel("task-1") }
+            coVerify(exactly = 1) { gateway.cancel("task-1") }
+            coVerify(exactly = 0) { gateway.cancel("other") }
+            coVerify(exactly = 0) { taskStore.listNonTerminal(any(), any()) }
+        }
+
+        @Test
+        fun `delete waits for cancellation after closing admission`() = runTest {
+            val store = FakeWatchStore()
+            val gateway = mockk<WatchRunGateway>(relaxed = true)
+            val stopping = CompletableDeferred<Unit>()
+            val stopped = CompletableDeferred<Unit>()
+            val svc = service(store, gateway = gateway)
+            val watch = svc.create(origin(), input()).watch
+            store.tasks["task-1"] = watchTask(watch)
+            coEvery { gateway.cancel("task-1") } coAnswers {
+                stopping.complete(Unit)
+                stopped.await()
+                true
+            }
+            val deletion = launch { svc.delete("alice", watch.id) }
+            stopping.await()
+            assertEquals(WatchStatus.CANCELLED, store.findById(watch.id)!!.status)
+            assertFalse(deletion.isCompleted)
+            stopped.complete(Unit)
+            deletion.join()
+            assertNull(store.findById(watch.id))
+        }
+
+        @Test
+        fun `cancel and delete never overwrite a concurrent status transition`() = runTest {
+            for (delete in listOf(false, true)) {
+                val store = FakeWatchStore()
+                val gateway = mockk<WatchRunGateway>(relaxed = true)
+                val svc = service(store, gateway = gateway)
+                val watch = svc.create(origin(), input()).watch
+                store.tasks["task-1"] = watchTask(watch)
+                store.beforeSetStatus = { store.forceStatus(watch.id, WatchStatus.COMPLETED) }
+                assertThrows<WatchConflictException> {
+                    if (delete) svc.delete("alice", watch.id) else svc.cancel("alice", watch.id)
+                }
+                assertEquals(WatchStatus.COMPLETED, store.findById(watch.id)!!.status)
+                coVerify(exactly = 0) { gateway.cancel(any()) }
+            }
+        }
+
+        @Test
+        fun `pause does not cancel a running task`() = runTest {
+            val store = FakeWatchStore()
+            val gateway = mockk<WatchRunGateway>(relaxed = true)
+            val svc = service(store, gateway = gateway)
+            val watch = svc.create(origin(), input()).watch
+            store.tasks["task-1"] = watchTask(watch)
+            svc.pause("alice", watch.id)
+            coVerify(exactly = 0) { gateway.cancel(any()) }
+        }
+    }
+
+    @Nested
+    inner class `retry admission` {
+
+        @Test
+        fun `retry waits for the old worker before resetting the snapshot retry count`() = runTest {
+            val store = FakeWatchStore()
+            val watch = testWatch()
+            store.seed(watch)
+            val original = watchTask(watch, scheduledFor = now.minusSeconds(86_400)).copy(
+                status = AsyncTaskStatus.FAILED, retryCount = 4, createdAt = 123,
+                error = "failed", result = mapOf("old" to true)
+            )
+            store.tasks[original.id] = original
+            val gateway = mockk<WatchRunGateway>(relaxed = true)
+            val order = mutableListOf<String>()
+            coEvery { gateway.awaitIdle(original.id) } coAnswers {
+                assertEquals(original, store.tasks[original.id])
+                assertTrue(store.expectedRetryCounts.isEmpty())
+                order += "idle"
+            }
+            every { gateway.dispatch(any()) } answers {
+                val reset = firstArg<AsyncTask>()
+                assertEquals(reset, store.tasks[original.id])
+                assertEquals(listOf(4), store.expectedRetryCounts)
+                order += "dispatch"
+            }
+            val taskStore = mockk<AsyncTaskStore>()
+            val reset = service(store, taskStore = taskStore, gateway = gateway).retryRun("alice", original)
+            assertEquals(listOf("idle", "dispatch"), order)
+            assertEquals(original.id, reset.id)
+            assertEquals(original.payload, reset.payload)
+            assertEquals(original.trigger, reset.trigger)
+            assertEquals(original.createdAt, reset.createdAt)
+            assertEquals(5, reset.retryCount)
+            assertEquals(now.toEpochMilli(), reset.retriedAt)
+            assertEquals(AsyncTaskStatus.PENDING, reset.status)
+            assertNull(reset.error)
+            assertNull(reset.result)
+            assertEquals(watch.nextDueAt, store.findById(watch.id)!!.nextDueAt)
+            coVerify(exactly = 0) { taskStore.retry(any()) }
+        }
+
+        @Test
+        fun `retry conflicts with another active run and with an already consumed snapshot`() = runTest {
+            val store = FakeWatchStore()
+            val watch = testWatch()
+            store.seed(watch)
+            val original = watchTask(watch).copy(status = AsyncTaskStatus.FAILED, retryCount = 2)
+            store.tasks[original.id] = original
+            store.tasks["other"] = watchTask(watch, id = "other")
+            val gateway = mockk<WatchRunGateway>(relaxed = true)
+            val svc = service(store, gateway = gateway)
+            assertThrows<WatchConflictException> { svc.retryRun("alice", original) }
+            store.tasks.remove("other")
+            store.tasks[original.id] = original.copy(retryCount = 3)
+            assertThrows<WatchConflictException> { svc.retryRun("alice", original) }
+            assertEquals(listOf(2, 2), store.expectedRetryCounts)
+            assertTrue(store.admissions.isEmpty())
+            verify(exactly = 0) { gateway.dispatch(any()) }
+        }
+
+        @Test
+        fun `retry revalidates watch status after the old worker finishes`() = runTest {
+            val store = FakeWatchStore()
+            val watch = testWatch()
+            store.seed(watch)
+            val original = watchTask(watch).copy(status = AsyncTaskStatus.FAILED)
+            store.tasks[original.id] = original
+            val gateway = mockk<WatchRunGateway>(relaxed = true)
+            coEvery { gateway.awaitIdle(original.id) } coAnswers {
+                store.forceStatus(watch.id, WatchStatus.CANCELLED)
+            }
+            assertThrows<WatchConflictException> { service(store, gateway = gateway).retryRun("alice", original) }
+            assertEquals(original, store.tasks[original.id])
+            verify(exactly = 0) { gateway.dispatch(any()) }
+        }
+
+        @Test
+        fun `retry validates task and watch ownership before waiting or admission`() = runTest {
+            val store = FakeWatchStore()
+            val watch = testWatch()
+            store.seed(watch)
+            val task = watchTask(watch).copy(status = AsyncTaskStatus.FAILED)
+            val gateway = mockk<WatchRunGateway>(relaxed = true)
+            val svc = service(store, gateway = gateway)
+            assertThrows<WatchException> { svc.retryRun("alice", task.copy(type = AsyncTaskType("other"))) }
+            assertThrows<WatchNotFoundException> { svc.retryRun("bob", task) }
+            assertThrows<WatchForeignHostException> { svc.retryRun("alice", task.copy(ownerApp = "other-app")) }
+            assertThrows<WatchForeignHostException> { svc.retryRun("alice", task.copy(ownerApp = null)) }
+            assertThrows<WatchException> { svc.retryRun("alice", task.copy(payload = emptyMap())) }
+            assertThrows<WatchConflictException> { svc.retryRun("alice", task.copy(status = AsyncTaskStatus.RUNNING)) }
+            store.seed(watch.copy(ownerApp = "other-app"))
+            assertThrows<WatchForeignHostException> { svc.retryRun("alice", task) }
+            store.seed(watch.copy(userId = "bob"))
+            assertThrows<WatchNotFoundException> { svc.retryRun("alice", task) }
+            assertTrue(store.admissions.isEmpty())
+            coVerify(exactly = 0) { gateway.awaitIdle(any()) }
+        }
+
+        @Test
+        fun `retry requires a gateway before touching the task`() = runTest {
+            val store = FakeWatchStore()
+            val watch = testWatch()
+            store.seed(watch)
+            assertThrows<WatchUnavailableException> {
+                service(store).retryRun("alice", watchTask(watch).copy(status = AsyncTaskStatus.FAILED))
+            }
+            assertTrue(store.expectedRetryCounts.isEmpty())
+        }
+
+        @Test
+        fun `retry wait is cancellable and cannot reset the task before idle`() = runTest {
+            val store = FakeWatchStore()
+            val watch = testWatch()
+            store.seed(watch)
+            val task = watchTask(watch).copy(status = AsyncTaskStatus.FAILED)
+            store.tasks[task.id] = task
+            val waiting = CompletableDeferred<Unit>()
+            val idle = CompletableDeferred<Unit>()
+            val gateway = mockk<WatchRunGateway>(relaxed = true)
+            coEvery { gateway.awaitIdle(task.id) } coAnswers {
+                waiting.complete(Unit)
+                idle.await()
+            }
+            val request = launch { service(store, gateway = gateway).retryRun("alice", task) }
+            waiting.await()
+            request.cancel()
+            request.join()
+            assertTrue(store.expectedRetryCounts.isEmpty())
+            assertEquals(task, store.tasks[task.id])
+            verify(exactly = 0) { gateway.dispatch(any()) }
+        }
+
+        @Test
+        fun `caller cancellation cannot strand a committed retry`() = runTest {
+            val store = FakeWatchStore()
+            val watch = testWatch()
+            store.seed(watch)
+            val task = watchTask(watch).copy(status = AsyncTaskStatus.FAILED)
+            store.tasks[task.id] = task
+            val committed = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val delayedStore = object : WatchStore by store {
+                override suspend fun retryRun(
+                    userId: String, watchId: String, taskId: String, expectedRetryCount: Int, now: Instant
+                ): WatchEnqueueResult {
+                    val result = store.retryRun(userId, watchId, taskId, expectedRetryCount, now)
+                    committed.complete(Unit)
+                    release.await()
+                    return result
+                }
+            }
+            val gateway = mockk<WatchRunGateway>(relaxed = true)
+            val request = launch { service(delayedStore, gateway = gateway).retryRun("alice", task) }
+            committed.await()
+            request.cancel()
+            release.complete(Unit)
+            request.join()
+            verify(exactly = 1) { gateway.dispatch(store.admissions.single()) }
+        }
+    }
+
+    @Nested
+    inner class `host ownership` {
+
+        @Test
+        fun `a watch owned by another application is refused, naming its owner`() = runTest {
+            val store = FakeWatchStore()
+            store.seed(testWatch(ownerApp = "trading-api"))
+
+            val error = assertThrows<WatchForeignHostException> { service(store).get("alice", "watch-1") }
+
+            assertTrue(error.message!!.contains("trading-api"))
+        }
+
+        @Test
+        fun `an unclaimed watch is refused until an owner is assigned`() = runTest {
+            val store = FakeWatchStore()
+            store.seed(testWatch(ownerApp = null))
+
+            val error = assertThrows<WatchForeignHostException> { service(store).runNow("alice", "watch-1") }
+
+            assertTrue(error.message!!.contains("does not belong to an application"))
+        }
+
+        @Test
+        fun `own watches keep working`() = runTest {
+            val store = FakeWatchStore()
+            val created = service(store).create(origin(), input()).watch
+
+            assertEquals(TEST_APP, created.ownerApp)
+            assertEquals(created.id, service(store).get("alice", created.id).id)
         }
     }
 
@@ -569,6 +881,9 @@ class WatchServiceTest {
 private class FakeWatchStore : WatchStore {
 
     private val rows = linkedMapOf<String, Watch>()
+    val tasks = linkedMapOf<String, AsyncTask>()
+    val admissions = mutableListOf<AsyncTask>()
+    val expectedRetryCounts = mutableListOf<Int>()
 
     /** Runs immediately before a guarded definition write, so a test can simulate a lost race. */
     var beforeUpdateDefinition: (() -> Unit)? = null
@@ -577,8 +892,15 @@ private class FakeWatchStore : WatchStore {
     var beforeSetStatus: (() -> Unit)? = null
 
     override suspend fun create(watch: Watch): Watch {
+        // Mirrors the R2DBC store: ownership is stamped by whoever persists the row.
+        val stamped = watch.copy(ownerApp = TEST_APP)
+        rows[stamped.id] = stamped
+        return stamped
+    }
+
+    /** Insert a row exactly as given — another application's row, or an unclaimed legacy one. */
+    fun seed(watch: Watch) {
         rows[watch.id] = watch
-        return watch
     }
 
     override suspend fun findById(id: String): Watch? = rows[id]
@@ -591,33 +913,91 @@ private class FakeWatchStore : WatchStore {
     override suspend fun countActive(userId: String): Int =
         rows.values.count { it.userId == userId && it.status == WatchStatus.ACTIVE }
 
-    override suspend fun listDue(userId: String, now: Long, limit: Int): List<Watch> =
-        rows.values.filter { it.userId == userId && it.status == WatchStatus.ACTIVE && it.nextDueAt.toEpochMilli() <= now }
-            .sortedBy { it.nextDueAt }
-            .take(limit)
+    override suspend fun listUpcoming(
+        horizon: Instant,
+        cursor: WatchScheduleCursor?,
+        limit: Int,
+        userId: String?
+    ): List<WatchScheduleEntry> = rows.values.mapNotNull { findSchedule(it.id) }
+        .filter {
+            it.nextDueAt <= horizon && (userId == null || it.userId == userId) &&
+                (cursor == null || it.nextDueAt > cursor.nextDueAt ||
+                    (it.nextDueAt == cursor.nextDueAt && it.watchId > cursor.watchId))
+        }.sortedWith(compareBy({ it.nextDueAt }, { it.watchId })).take(limit)
 
-    override suspend fun claim(
-        id: String,
-        expectedNextDueAt: Long,
-        newNextDueAt: Long,
-        pendingAction: WatchPendingAction,
-        newStatus: WatchStatus?,
-        statusReason: String?
-    ): Boolean {
-        val row = rows[id] ?: return false
-        if (row.nextDueAt.toEpochMilli() != expectedNextDueAt) return false
-        rows[id] = row.copy(
-            nextDueAt = Instant.ofEpochMilli(newNextDueAt),
-            pendingAction = pendingAction,
-            status = newStatus ?: row.status,
-            statusReason = statusReason ?: row.statusReason
-        )
-        return true
+    override suspend fun findSchedule(watchId: String): WatchScheduleEntry? = rows[watchId]
+        ?.takeIf { it.status == WatchStatus.ACTIVE && it.ownerApp == TEST_APP }
+        ?.let { WatchScheduleEntry(it.id, it.userId, TEST_APP, it.version, it.nextDueAt, it.pendingAction) }
+
+    override suspend fun enqueueScheduled(
+        expected: WatchScheduleEntry,
+        now: Instant,
+        properties: WatchProperties
+    ): WatchEnqueueResult {
+        if (findSchedule(expected.watchId) != expected || expected.nextDueAt > now) return WatchEnqueueResult.Stale
+        listInFlight(expected.userId, expected.watchId).firstOrNull()?.let { return WatchEnqueueResult.Busy(it.id) }
+        val watch = rows.getValue(expected.watchId)
+        val decision = WatchClaimPolicy.decide(watch, now, properties) ?: return WatchEnqueueResult.Stale
+        val task = watchTask(watch, decision.kind, watch.nextDueAt, "task-${tasks.size + 1}")
+            .copy(timeoutMs = properties.runTimeoutMs)
+        rows[watch.id] = watch.copy(nextDueAt = decision.newNextDueAt, pendingAction = decision.pendingAction)
+        tasks[task.id] = task
+        admissions += task
+        return WatchEnqueueResult.Enqueued(task)
     }
 
-    override suspend fun markRunStarted(id: String, taskId: String, at: Long): Boolean {
-        val row = rows[id] ?: return false
-        rows[id] = row.copy(lastTaskId = taskId, lastRunAt = at)
+    override suspend fun enqueueManual(
+        userId: String,
+        watchId: String,
+        now: Instant,
+        properties: WatchProperties,
+        trigger: TaskTrigger
+    ): WatchEnqueueResult {
+        val watch = rows[watchId] ?: return WatchEnqueueResult.Stale
+        if (watch.userId != userId || findSchedule(watchId) == null ||
+            watch.pendingAction != WatchPendingAction.CHECK
+        ) return WatchEnqueueResult.Stale
+        listInFlight(userId, watchId).firstOrNull()?.let { return WatchEnqueueResult.Busy(it.id) }
+        val task = watchTask(watch, scheduledFor = now, id = "task-${tasks.size + 1}")
+            .copy(trigger = trigger, timeoutMs = properties.runTimeoutMs)
+        tasks[task.id] = task
+        admissions += task
+        return WatchEnqueueResult.Enqueued(task)
+    }
+
+    override suspend fun retryRun(
+        userId: String,
+        watchId: String,
+        taskId: String,
+        expectedRetryCount: Int,
+        now: Instant
+    ): WatchEnqueueResult {
+        expectedRetryCounts += expectedRetryCount
+        val watch = rows[watchId] ?: return WatchEnqueueResult.Stale
+        val task = tasks[taskId] ?: return WatchEnqueueResult.Stale
+        if (watch.userId != userId || findSchedule(watchId) == null ||
+            task.userId != userId || WatchTaskPayload.watchIdOf(task) != watchId ||
+            task.ownerApp != TEST_APP || !task.status.isTerminal || task.retryCount != expectedRetryCount ||
+            (WatchTaskPayload.kindOf(task) == WatchRunKind.EXPIRY_REVIEW &&
+                watch.pendingAction != WatchPendingAction.EXPIRY_REVIEW)
+        ) return WatchEnqueueResult.Stale
+        listInFlight(userId, watchId).firstOrNull()?.let { return WatchEnqueueResult.Busy(it.id) }
+        val reset = task.copy(
+            status = AsyncTaskStatus.PENDING, retryCount = expectedRetryCount + 1,
+            retriedAt = now.toEpochMilli(), error = null, result = null, startedAt = null, completedAt = null
+        )
+        tasks[task.id] = reset
+        admissions += reset
+        return WatchEnqueueResult.Enqueued(reset)
+    }
+
+    override suspend fun listInFlight(userId: String, watchId: String): List<AsyncTask> =
+        tasks.values.filter { it.userId == userId && WatchTaskPayload.watchIdOf(it) == watchId && !it.status.isTerminal }
+
+    override suspend fun claimRunSlot(task: AsyncTask, expectedVersion: Int, at: Instant): Boolean {
+        val row = rows[WatchTaskPayload.watchIdOf(task)] ?: return false
+        if (row.version != expectedVersion || row.status != WatchStatus.ACTIVE) return false
+        rows[row.id] = row.copy(lastTaskId = task.id, lastRunAt = at.toEpochMilli())
         return true
     }
 

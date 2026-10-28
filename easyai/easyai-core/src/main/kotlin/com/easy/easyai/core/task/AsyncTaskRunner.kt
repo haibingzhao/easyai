@@ -4,6 +4,8 @@ import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 
 /**
  * App-scoped executor for [AsyncTask]s. Owns a single [CoroutineScope] (SupervisorJob +
@@ -38,7 +40,16 @@ class AsyncTaskRunner(
                     )
                 }
         }
-    private val jobs = ConcurrentHashMap<String, Job>()
+    private class LocalTask(val job: Job, val settled: CompletableDeferred<Unit> = CompletableDeferred())
+
+    private class WorkerContext(val runner: AsyncTaskRunner, val taskId: String) : AbstractCoroutineContextElement(Key) {
+        companion object Key : CoroutineContext.Key<WorkerContext>
+    }
+
+    private val jobs = ConcurrentHashMap<String, LocalTask>()
+    private val startupRecovery = CompletableDeferred<Unit>().also {
+        if (store == null) it.complete(Unit)
+    }
 
     /**
      * Set once [shutdown] begins. A cancellation observed while this is true is the process going
@@ -77,99 +88,99 @@ class AsyncTaskRunner(
      */
     fun dispatch(task: AsyncTask) {
         val taskStore = store ?: return
-        val handler = handlersByType[task.type]
-        if (handler == null) {
-            logger.warn("No TaskHandler for type {}; marking task {} FAILED", task.type, task.id)
-            scope.launch {
-                runCatching {
-                    taskStore.fail(task.id, "No handler registered for task type '${task.type.key}'")
-                }.onFailure {
-                    logger.warn("Failed to park handler-less async task {}: {}", task.id, it.message)
-                }
-            }
-            return
-        }
-
+        if (shuttingDown) return
         val bodyStarted = AtomicBoolean(false)
-        val job = scope.launch {
+        val job = scope.launch(WorkerContext(this, task.id), start = CoroutineStart.LAZY) {
             bodyStarted.set(true)
+            var claimedTask: AsyncTask? = null
             try {
-                // The guarded PENDING→RUNNING write returns the row as it now stands, so a row another
-                // path already settled (cancelled from the Tasks page, interrupted by a shutdown that
-                // has since restarted) comes back non-RUNNING. Running the handler anyway would do work
-                // nobody asked for and then have every terminal write guarded out — the row would read
-                // "cancelled" forever while its side effects, such as consolidated memories, are live.
-                val running = taskStore.markRunning(task.id)
-                if (running == null || running.status != AsyncTaskStatus.RUNNING) {
-                    logger.info(
-                        "Async task {} not started: row is {}, not PENDING",
-                        task.id, running?.status ?: "missing"
-                    )
+                // Finish the claim even when cancellation races it, retaining ownership before the
+                // cancellation handler runs. A losing dispatch must never settle the winner's row.
+                withContext(NonCancellable) {
+                    claimedTask = taskStore.markRunning(task.id)
+                }
+                val running = claimedTask
+                if (running == null) {
+                    logger.info("Async task {} not started: PENDING claim was not won", task.id)
                     return@launch
                 }
-                when (val outcome = executeWithTimeout(task, handler)) {
+                ensureActive()
+                val handler = handlersByType[running.type]
+                if (handler == null) {
+                    settleFailure(taskStore, running, "No handler registered for task type '${running.type.key}'")
+                    return@launch
+                }
+                when (val outcome = executeWithTimeout(running, handler)) {
                     is TaskOutcome.Success -> {
-                        taskStore.complete(task.id, outcome.result)
-                        logger.info("Async task completed: id={}, type={}", task.id, task.type)
+                        taskStore.complete(running.id, outcome.result)
+                        logger.info("Async task completed: id={}, type={}", running.id, running.type)
                     }
                     is TaskOutcome.Failure -> {
-                        settleFailure(taskStore, task, outcome.error)
+                        settleFailure(taskStore, running, outcome.error)
                     }
                 }
             } catch (e: TimeoutCancellationException) {
-                // TimeoutCancellationException is a CancellationException, so it must be caught first:
-                // otherwise a timeout would be parked as CANCELLED, indistinguishable from a user
-                // cancel. The outer job is still active (only withTimeout's child was cancelled), but
-                // NonCancellable keeps the terminal write safe if shutdown races the timeout.
-                val message = task.timeoutMs?.let { "Timed out after ${it}ms" } ?: "Timed out"
+                // Only a claimed row belongs to this worker; a timeout in the store is not a claim.
+                val running = claimedTask ?: throw e
+                val message = running.timeoutMs?.let { "Timed out after ${it}ms" } ?: "Timed out"
                 withContext(NonCancellable) {
                     runCatching {
-                        taskStore.markTimedOut(task.id, message)
+                        taskStore.markTimedOut(running.id, message)
                     }.onFailure {
-                        logger.warn("Failed to record timeout for async task {}: {}", task.id, it.message)
+                        logger.warn("Failed to record timeout for async task {}: {}", running.id, it.message)
                     }
                 }
-                logger.warn("Async task timed out: id={}, type={}, {}", task.id, task.type, message)
+                logger.warn("Async task timed out: id={}, type={}, {}", running.id, running.type, message)
             } catch (e: CancellationException) {
-                // The coroutine is already cancelled, so a plain suspend call would throw before the
-                // UPDATE runs and the row would be stuck RUNNING. NonCancellable lets the terminal
-                // write land before we propagate the cancellation.
+                val running = claimedTask ?: throw e
                 val shutdown = shuttingDown
+                // The coroutine is cancelled; allow its owned row's terminal write to land.
                 withContext(NonCancellable) {
                     runCatching {
                         if (shutdown) {
-                            // Process is going away: park as INTERRUPTED so the next start (or a manual
-                            // retry) can pick it up. CANCELLED would be terminal and lose the run.
-                            taskStore.markInterrupted(task.id)
+                            taskStore.markInterrupted(running.id)
                         } else {
-                            taskStore.cancel(task.id)
+                            taskStore.cancel(running.id)
                         }
                     }.onFailure {
-                        // The store can already be gone during shutdown. A failed terminal write must not
-                        // replace the cancellation this coroutine is propagating.
                         logger.warn(
                             "Failed to record {} for async task {}: {}",
-                            if (shutdown) "interruption" else "cancellation", task.id, it.message
+                            if (shutdown) "interruption" else "cancellation", running.id, it.message
                         )
                     }
                 }
                 logger.info(
                     "Async task {}: id={}, type={}",
-                    if (shutdown) "interrupted by shutdown" else "cancelled", task.id, task.type
+                    if (shutdown) "interrupted by shutdown" else "cancelled", running.id, running.type
                 )
                 throw e
             } catch (e: Exception) {
-                settleFailure(taskStore, task, e.message ?: "Unknown error", e)
+                val running = claimedTask
+                if (running != null) {
+                    settleFailure(taskStore, running, e.message ?: "Unknown error", e)
+                } else {
+                    logger.warn("Failed to claim async task {}: {}", task.id, e.message, e)
+                }
             }
         }
-        // Track after launch, but clean up via invokeOnCompletion: it fires immediately if the job
-        // already finished (racing the assignment above), so no stale entry is ever left behind. The
-        // two-arg remove never drops a newer job that reused the same id.
-        jobs[task.id] = job
-        job.invokeOnCompletion {
-            jobs.remove(task.id, job)
-            if (!bodyStarted.get()) settleUnstartedTask(taskStore, task.id)
+        // Register before starting, including with an unconfined dispatcher. A duplicate must neither
+        // overwrite the live worker nor install an unstarted-job callback that could cancel it.
+        val local = LocalTask(job)
+        if (jobs.putIfAbsent(task.id, local) != null) {
+            job.cancel()
+            return
         }
+        job.invokeOnCompletion {
+            val cleanup = if (bodyStarted.get()) null else settleUnstartedTask(taskStore, task.id)
+            if (cleanup == null) finishLocalTask(task.id, local)
+            else cleanup.invokeOnCompletion { finishLocalTask(task.id, local) }
+        }
+        job.start()
+    }
+
+    private fun finishLocalTask(id: String, local: LocalTask) {
+        jobs.remove(id, local)
+        local.settled.complete(Unit)
     }
 
     /**
@@ -207,15 +218,20 @@ class AsyncTaskRunner(
      * its insert and its first dispatch reaches none of the in-coroutine terminal writes, so without
      * this it would stay PENDING after the caller was told it was cancelled.
      */
-    private fun settleUnstartedTask(taskStore: AsyncTaskStore, id: String) {
+    private fun settleUnstartedTask(taskStore: AsyncTaskStore, id: String): Job? {
         if (shuttingDown) {
-            // The scope is gone; [reconcileOrphans] parks the row as INTERRUPTED on the next start.
+            // Scheduled PENDING rows can be dispatched on restart; no handler has run yet.
             logger.info("Async task {} never started before shutdown; left for orphan reconciliation", id)
-            return
+            return null
         }
-        scope.launch {
-            runCatching { taskStore.cancel(id) }
-                .onFailure { logger.warn("Failed to park never-started async task {}: {}", id, it.message) }
+        return scope.launch(NonCancellable + WorkerContext(this, id)) {
+            runCatching {
+                // Another runner may already own RUNNING. Never cancel it just because this
+                // local dispatch was cancelled before its body could attempt the claim.
+                if (taskStore.markRunning(id) != null) {
+                    if (shuttingDown) taskStore.markInterrupted(id) else taskStore.cancel(id)
+                }
+            }.onFailure { logger.warn("Failed to park never-started async task {}: {}", id, it.message) }
         }
     }
 
@@ -225,38 +241,90 @@ class AsyncTaskRunner(
      * @return true when a live job was cancelled or a row was transitioned.
      */
     suspend fun cancel(id: String): Boolean {
-        val job = jobs[id]
-        if (job != null) {
-            job.cancel()
+        val local = jobs[id]
+        if (local != null) {
+            local.job.cancel()
             return true
         }
-        if (store == null) return false
-        val current = store.findById(id) ?: return false
-        if (current.status.isTerminal) return false
-        store.cancel(id)
+        return cancelStoredTask(id)
+    }
+
+    /** Wait for the current local worker and its terminal cleanup. External callers only. */
+    suspend fun awaitIdle(id: String) {
+        checkExternalCaller(id)
+        val local = jobs[id] ?: return
+        local.job.join()
+        local.settled.await()
+    }
+
+    /** Cancel the captured worker and await its cleanup, or settle a store-only row. External callers only. */
+    suspend fun cancelAndAwait(id: String): Boolean {
+        checkExternalCaller(id)
+        val local = jobs[id] ?: return cancelStoredTask(id)
+        local.job.cancel()
+        local.job.join()
+        local.settled.await()
         return true
     }
 
+    private suspend fun checkExternalCaller(id: String) {
+        val worker = currentCoroutineContext()[WorkerContext]
+        check(worker == null || worker.runner !== this || worker.taskId != id) {
+            "A task worker cannot await its own completion"
+        }
+    }
+
+    private suspend fun cancelStoredTask(id: String): Boolean {
+        if (store == null) return false
+        val current = store.findById(id) ?: return false
+        if (current.status.isTerminal) return false
+        return store.cancel(id)?.status == AsyncTaskStatus.CANCELLED
+    }
+
     /**
-     * Park tasks a previous process left non-terminal (RUNNING, or PENDING when it died between
-     * [AsyncTaskStore.create] and dispatch) as INTERRUPTED, so they can be retried manually.
+     * Wait until the startup recovery attempt ends, not until recovered handlers finish. A missing
+     * store is immediately ready; a failed recovery is logged and releases waiters as well.
+     */
+    suspend fun awaitStartupRecovery() {
+        startupRecovery.await()
+    }
+
+    /**
+     * Recover this application's initial orphan snapshot. First park all RUNNING and non-SCHEDULE
+     * PENDING rows as INTERRUPTED; then dispatch only SCHEDULE PENDING rows. Their enqueue committed
+     * before the crash but no handler claimed them, whereas replaying RUNNING could repeat effects.
      *
-     * SINGLE-INSTANCE ASSUMPTION: this treats every non-terminal row as an orphan, which is only
-     * correct when one process owns the database (the desktop backend, or a single web-server). In a
-     * multi-instance deployment sharing a DB it would wrongly park tasks another live instance is
-     * still running. Scaling out therefore needs an ownership/instance-id column to filter on before
-     * this runs — until then, do not enable the async-task subsystem on a shared-DB multi-instance
-     * topology.
+     * Called once by the startup lifecycle, after legacy ownership adoption. [AsyncTaskStore.findOrphans]
+     * excludes other applications' rows and unclaimed legacy rows. Scheduler preload must wait for
+     * [awaitStartupRecovery] so newly enqueued work cannot be mistaken for an orphan.
      */
     suspend fun reconcileOrphans() {
-        val taskStore = store ?: return
-        val orphans = runCatching { taskStore.findOrphans() }.getOrElse {
-            logger.warn("Orphan task reconciliation failed: {}", it.message)
-            return
-        }
-        for (task in orphans) {
-            runCatching { taskStore.markInterrupted(task.id) }
-                .onSuccess { logger.info("Marked orphaned async task INTERRUPTED: id={}, type={}", task.id, task.type) }
+        try {
+            val taskStore = store ?: return
+            val orphans = taskStore.findOrphans()
+            val resumable = orphans.filter {
+                it.status == AsyncTaskStatus.PENDING && it.trigger == TaskTrigger.SCHEDULE
+            }
+            for (task in orphans) {
+                if (task.status != AsyncTaskStatus.RUNNING &&
+                    !(task.status == AsyncTaskStatus.PENDING && task.trigger != TaskTrigger.SCHEDULE)
+                ) continue
+                try {
+                    taskStore.markInterrupted(task.id)
+                    logger.info("Marked orphaned async task INTERRUPTED: id={}, type={}", task.id, task.type)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logger.warn("Failed to park orphaned async task {}: {}", task.id, e.message)
+                }
+            }
+            resumable.forEach { dispatch(it) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("Orphan task reconciliation failed: {}", e.message)
+        } finally {
+            startupRecovery.complete(Unit)
         }
     }
 
@@ -269,6 +337,5 @@ class AsyncTaskRunner(
         logger.info("Shutting down AsyncTaskRunner ({} in-flight task(s))", jobs.size)
         shuttingDown = true
         scope.coroutineContext[Job]?.cancel(CancellationException("application context is closing"))
-        jobs.clear()
     }
 }

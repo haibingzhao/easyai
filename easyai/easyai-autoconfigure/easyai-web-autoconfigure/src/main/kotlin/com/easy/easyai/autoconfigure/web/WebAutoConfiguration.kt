@@ -12,6 +12,7 @@ import com.easy.easyai.common.textio.template.TemplateRenderer
 import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.goal.GoalStatusNotifier
 import com.easy.easyai.core.goal.GoalStore
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.message.DefaultMessageConverter
 import com.easy.easyai.core.message.MessageConverter
 import com.easy.easyai.core.permission.PermissionRuleStore
@@ -104,9 +105,10 @@ open class WebAutoConfiguration {
         permissionRuleStore: PermissionRuleStore? = null,
         @Autowired(required = false)
         snapshotService: SnapshotService? = null,
-        @Value("\${easyai.data-dir:\${user.home}/.easyai}") dataDir: String
+        @Value("\${easyai.data-dir:\${user.home}/.easyai}") dataDir: String,
+        host: HostIdentity
     ): DefaultWorkspaceService =
-        DefaultWorkspaceService(projectStore, sessionStore, permissionRuleStore, snapshotService, dataDir)
+        DefaultWorkspaceService(projectStore, sessionStore, permissionRuleStore, snapshotService, dataDir, host)
 
     @Bean
     @ConditionalOnMissingBean

@@ -1,6 +1,7 @@
 package com.easy.easyai.repository.session
 
 import com.easy.easyai.core.agent.PersistedSession
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.model.ProjectInfo
 import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.repository.database.DatabaseMigration
@@ -19,6 +20,8 @@ import kotlin.test.assertTrue
  * `tempWorkspaceOnly` keeps only sessions that run in a temporary workspace (kind = temp)
  * or carry no project at all, for both the History list and its tag aggregation.
  */
+private const val SELF = "agent-api"
+
 class R2dbcAsyncSessionStoreTempWorkspaceTest {
 
     companion object {
@@ -36,7 +39,7 @@ class R2dbcAsyncSessionStoreTempWorkspaceTest {
     }
 
     private val store = R2dbcAsyncSessionStore(db)
-    private val projectStore = R2dbcAsyncProjectStore(db)
+    private val projectStore = R2dbcAsyncProjectStore(db, HostIdentity(SELF))
 
     private suspend fun createProject(kind: ProjectKind): String {
         val id = "p-${UUID.randomUUID()}"

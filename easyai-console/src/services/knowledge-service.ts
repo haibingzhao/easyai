@@ -1,32 +1,52 @@
 import { authFetch, fetchJson } from './api-client';
 
-export interface KnowledgeEntryDto {
-  key: string;
-  source: string;
-  relativePath: string;
+export type ArticleStatus = 'draft' | 'published';
+
+/**
+ * A knowledge article. `id` is the stable identity used for every operation; `folderPath` is a
+ * derived display string only — renaming or moving folders never changes the id.
+ */
+export interface KnowledgeArticleDto {
+  id: string;
+  folderId: string;
+  folderPath: string;
+  ownerId: string;
+  fileName: string | null;
   title: string;
-  description: string;
+  description: string | null;
   category: string;
   ext: string;
-  contentPreview: string;
-  updatedAt: number | null;
-  chunksCount: number | null;
+  origin: string;
+  status: ArticleStatus;
+  /** Whether the assistant may retrieve this article. */
+  ragEnabled: boolean;
+  /** Published content saved but the index write failed; publish again to repair. */
+  indexPending: boolean;
+  canWrite: boolean;
+  canManage: boolean;
+  createdAt: number;
+  updatedAt: number;
 }
 
-export interface KnowledgeDetailDto {
-  entry: KnowledgeEntryDto;
-  fullContent: string;
-  toc: string[];
-  parent: string | null;
-  children: string[];
-  related: string[];
+/** A node of the folder tree; `parentId === null` marks a root. */
+export interface KnowledgeFolderDto {
+  id: string;
+  parentId: string | null;
+  name: string;
+  ownerId: string;
+  isDefault: boolean;
+  /** True for the bucket new content lands in; the other visible bucket is read-only for writes. */
+  writable: boolean;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface UploadResultDto {
   relativePath: string;
   success: boolean;
-  key: string | null;
+  id: string | null;
   reason: string | null;
+  indexPending: boolean;
 }
 
 export interface UploadResponseDto {
@@ -36,32 +56,10 @@ export interface UploadResponseDto {
   failedCount: number;
 }
 
-export type ArticleStatus = 'draft' | 'published';
-
-export interface KnowledgeArticleDto {
-  id: string;
-  knowledgeKey: string;
-  title: string;
-  description: string | null;
-  category: string;
-  source: string;
-  relativePath: string;
-  ext: string;
-  origin: string;
-  status: ArticleStatus;
-  /** Published content saved but the index write failed; publish again to repair. */
-  indexPending: boolean;
-  canWrite: boolean;
-  canManage: boolean;
-  createdAt: number;
-  updatedAt: number;
-}
-
 export interface SaveArticleRequest {
   title: string;
   content: string;
-  source?: string;
-  relativePath?: string;
+  folderId?: string;
   category?: string;
   origin?: string;
   originSessionId?: string;
@@ -70,30 +68,52 @@ export interface SaveArticleRequest {
 }
 
 export interface UpdateArticleRequest {
-  key: string;
+  id: string;
   content: string;
   title?: string;
   category?: string;
 }
 
 export interface PublishArticleRequest {
-  key: string;
+  id: string;
   category?: string;
   title?: string;
 }
 
+export interface SetArticleRagRequest {
+  id: string;
+  enabled: boolean;
+}
+
+export interface MoveArticleRequest {
+  id: string;
+  folderId: string;
+}
+
+export interface CreateFolderRequest {
+  parentId?: string | null;
+  name: string;
+}
+
 export interface AiRewriteRequest {
-  key: string;
+  id: string;
   content?: string;
   instruction: string;
   modelConfigId: string;
 }
 
 export interface AiModifySelectionRequest {
-  key: string;
+  id: string;
   content?: string;
   selectedText: string;
   instruction: string;
+  modelConfigId: string;
+}
+
+export interface AiComposeRequest {
+  sourceIds: string[];
+  guidance: string;
+  style: string;
   modelConfigId: string;
 }
 
@@ -101,47 +121,21 @@ export interface AiResultDto {
   content: string;
 }
 
-export interface AiComposeRequest {
-  sourceKeys: string[];
-  guidance: string;
-  style: string;
-  modelConfigId: string;
+export interface IndexStatusDto {
+  counts: Record<string, number>;
 }
 
 class KnowledgeService {
   private baseUrl = '/api/knowledge';
 
-  async list(
-    source?: string,
-    category?: string,
-    q?: string
-  ): Promise<KnowledgeEntryDto[]> {
+  // ── Articles ──────────────────────────────────────────────────────
+
+  async listArticles(category?: string, status?: ArticleStatus): Promise<KnowledgeArticleDto[]> {
     const params = new URLSearchParams();
-    if (source) params.set('source', source);
     if (category) params.set('category', category);
-    if (q) params.set('q', q);
+    if (status) params.set('status', status);
     const qs = params.toString();
-    return fetchJson<KnowledgeEntryDto[]>(`${this.baseUrl}${qs ? `?${qs}` : ''}`);
-  }
-
-  async sources(): Promise<string[]> {
-    return fetchJson<string[]>(`${this.baseUrl}/sources`);
-  }
-
-  async detail(key: string): Promise<KnowledgeDetailDto> {
-    return fetchJson<KnowledgeDetailDto>(`${this.baseUrl}/detail?key=${encodeURIComponent(key)}`);
-  }
-
-  async deleteEntry(key: string): Promise<{ deleted: boolean }> {
-    return fetchJson<{ deleted: boolean }>(`${this.baseUrl}?key=${encodeURIComponent(key)}`, {
-      method: 'DELETE',
-    });
-  }
-
-  async deleteSource(source: string): Promise<{ deleted: number }> {
-    return fetchJson<{ deleted: number }>(`${this.baseUrl}/source/${encodeURIComponent(source)}`, {
-      method: 'DELETE',
-    });
+    return fetchJson<KnowledgeArticleDto[]>(`${this.baseUrl}/articles${qs ? `?${qs}` : ''}`);
   }
 
   async saveToKnowledge(request: SaveArticleRequest): Promise<KnowledgeArticleDto> {
@@ -152,33 +146,9 @@ class KnowledgeService {
     });
   }
 
-  async listArticles(source?: string, category?: string, status?: ArticleStatus): Promise<KnowledgeArticleDto[]> {
-    const params = new URLSearchParams();
-    if (source) params.set('source', source);
-    if (category) params.set('category', category);
-    if (status) params.set('status', status);
-    const qs = params.toString();
-    return fetchJson<KnowledgeArticleDto[]>(`${this.baseUrl}/articles${qs ? `?${qs}` : ''}`);
-  }
-
-  async publishArticle(request: PublishArticleRequest): Promise<KnowledgeArticleDto> {
-    return fetchJson<KnowledgeArticleDto>(`${this.baseUrl}/article/publish`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    });
-  }
-
-  async unpublishArticle(key: string): Promise<KnowledgeArticleDto> {
-    return fetchJson<KnowledgeArticleDto>(
-      `${this.baseUrl}/article/unpublish?key=${encodeURIComponent(key)}`,
-      { method: 'POST' }
-    );
-  }
-
-  async getArticleContent(key: string): Promise<string> {
+  async getArticleContent(id: string): Promise<string> {
     const result = await fetchJson<{ content: string }>(
-      `${this.baseUrl}/article/content?key=${encodeURIComponent(key)}`
+      `${this.baseUrl}/article/content?id=${encodeURIComponent(id)}`
     );
     return result.content;
   }
@@ -191,12 +161,80 @@ class KnowledgeService {
     });
   }
 
-  async deleteArticle(key: string): Promise<{ deleted: boolean }> {
+  async publishArticle(request: PublishArticleRequest): Promise<KnowledgeArticleDto> {
+    return fetchJson<KnowledgeArticleDto>(`${this.baseUrl}/article/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async unpublishArticle(id: string): Promise<KnowledgeArticleDto> {
+    return fetchJson<KnowledgeArticleDto>(
+      `${this.baseUrl}/article/unpublish?id=${encodeURIComponent(id)}`,
+      { method: 'POST' }
+    );
+  }
+
+  async setArticleRag(request: SetArticleRagRequest): Promise<KnowledgeArticleDto> {
+    return fetchJson<KnowledgeArticleDto>(`${this.baseUrl}/article/rag`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async moveArticle(request: MoveArticleRequest): Promise<KnowledgeArticleDto> {
+    return fetchJson<KnowledgeArticleDto>(`${this.baseUrl}/article/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async deleteArticle(id: string): Promise<{ deleted: boolean }> {
     return fetchJson<{ deleted: boolean }>(
-      `${this.baseUrl}/article?key=${encodeURIComponent(key)}`,
+      `${this.baseUrl}/article?id=${encodeURIComponent(id)}`,
       { method: 'DELETE' }
     );
   }
+
+  async indexStatus(ids: string[]): Promise<IndexStatusDto> {
+    const params = new URLSearchParams();
+    for (const id of ids) params.append('ids', id);
+    return fetchJson<IndexStatusDto>(`${this.baseUrl}/index-status?${params.toString()}`);
+  }
+
+  // ── Folders ───────────────────────────────────────────────────────
+
+  async listFolders(): Promise<KnowledgeFolderDto[]> {
+    return fetchJson<KnowledgeFolderDto[]>(`${this.baseUrl}/folders`);
+  }
+
+  async createFolder(request: CreateFolderRequest): Promise<KnowledgeFolderDto> {
+    return fetchJson<KnowledgeFolderDto>(`${this.baseUrl}/folders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async renameFolder(id: string, name: string): Promise<KnowledgeFolderDto> {
+    return fetchJson<KnowledgeFolderDto>(`${this.baseUrl}/folders/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  async deleteFolder(id: string): Promise<{ deleted: boolean }> {
+    return fetchJson<{ deleted: boolean }>(
+      `${this.baseUrl}/folders/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
+    );
+  }
+
+  // ── AI ────────────────────────────────────────────────────────────
 
   async aiRewrite(request: AiRewriteRequest): Promise<AiResultDto> {
     return fetchJson<AiResultDto>(`${this.baseUrl}/ai-rewrite`, {
@@ -222,10 +260,12 @@ class KnowledgeService {
     });
   }
 
+  // ── Upload ────────────────────────────────────────────────────────
+
   async upload(
     files: File[],
     paths: string[],
-    source: string,
+    folderId?: string,
     category?: string
   ): Promise<UploadResponseDto> {
     const formData = new FormData();
@@ -233,16 +273,22 @@ class KnowledgeService {
       formData.append('files', file);
     }
     formData.append('paths', JSON.stringify(paths));
-    formData.append('source', source);
-    if (category) {
-      formData.append('category', category);
-    }
+    if (folderId) formData.append('folderId', folderId);
+    if (category) formData.append('category', category);
     const response = await authFetch(`${this.baseUrl}/upload`, {
       method: 'POST',
       body: formData,
     });
     if (!response.ok) {
-      throw new Error(`Upload failed: ${response.statusText}`);
+      // The backend's reason (e.g. "Folder belongs to another space") is far more actionable than
+      // the status text; keep it when it is a plain message rather than the JSON error envelope.
+      const body = await response.text().catch(() => '');
+      const detail = body.trim();
+      throw new Error(
+        detail && !detail.startsWith('{')
+          ? detail
+          : `Upload failed: ${response.status} ${response.statusText}`
+      );
     }
     return response.json() as Promise<UploadResponseDto>;
   }

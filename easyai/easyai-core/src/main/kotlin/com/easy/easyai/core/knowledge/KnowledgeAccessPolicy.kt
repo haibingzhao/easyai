@@ -13,19 +13,21 @@ data class KnowledgeAccessContext(
 )
 
 /**
- * Product-owned access policy for knowledge articles and their RAG entries.
+ * Product-owned access policy for knowledge articles and folders.
  *
- * The framework still owns authentication, owner-bucket resolution and RAG slicing; this SPI
- * only answers "may this caller see/edit this article". [DefaultKnowledgeAccessPolicy] keeps
- * the pre-policy behaviour for personal buckets and narrows creator-stamped rows to their
- * creator; a host (e.g. Easy Home) overrides the bean to plug its own authorization matrix,
- * which is also what enables group-wide sharing.
+ * The framework owns authentication, owner-bucket resolution and RAG slicing; this SPI only
+ * answers "may this caller see/create/edit this article or rearrange this folder". A host
+ * (e.g. Easy Home) overrides the bean to plug its own authorization matrix, which is also what
+ * enables group-wide sharing.
  */
 interface KnowledgeAccessPolicy {
 
     suspend fun canView(context: KnowledgeAccessContext): Boolean = true
 
     suspend fun canCreate(context: KnowledgeAccessContext): Boolean = true
+
+    /** Folder create/rename/delete. Defaults to the article-create right. */
+    suspend fun canManageFolders(context: KnowledgeAccessContext): Boolean = canCreate(context)
 
     suspend fun canRead(context: KnowledgeAccessContext, article: KnowledgeArticle): Boolean
 
@@ -35,35 +37,6 @@ interface KnowledgeAccessPolicy {
         context: KnowledgeAccessContext,
         article: KnowledgeArticle,
     ): Boolean = canWrite(context, article)
-
-    /**
-     * Default batch helper for host call sites. Framework list paths use
-     * [KnowledgeAccessGuard.filterReadableEntries], which resolves article metadata first.
-     */
-    suspend fun filterReadable(
-        context: KnowledgeAccessContext,
-        articles: List<KnowledgeArticle>,
-    ): List<KnowledgeArticle> = articles.filter { canRead(context, it) }
-
-    /**
-     * Access check for a RAG entry that may not have an article metadata row.
-     * Default is permissive (legacy rows without metadata stay reachable). Hosts that require
-     * metadata for access override this to deny — which is also what makes
-     * [KnowledgeArticleStore.deleteByCreatedBy] revoke access to the content and RAG entry.
-     */
-    suspend fun canReadEntry(
-        context: KnowledgeAccessContext,
-        ownerId: String,
-        key: String,
-        article: KnowledgeArticle?,
-    ): Boolean = article?.let { canRead(context, it) } ?: true
-
-    suspend fun canManageEntry(
-        context: KnowledgeAccessContext,
-        ownerId: String,
-        key: String,
-        article: KnowledgeArticle?,
-    ): Boolean = article?.let { canManage(context, it) } ?: true
 }
 
 /**
@@ -72,9 +45,9 @@ interface KnowledgeAccessPolicy {
  * - legacy rows without a creator fall back to owner-bucket membership, and in a shared group
  *   bucket to every member carrying that group.
  *
- * This preserves the pre-policy behaviour for personal buckets. It deliberately does NOT widen
- * stamped rows to the group, so `easyai.knowledge.shared-within-group=true` only changes the
- * storage bucket; hosts that want group-wide read/write must override this bean.
+ * This preserves personal-bucket behaviour. It deliberately does NOT widen stamped rows to the
+ * group, so `easyai.knowledge.shared-within-group=true` only changes the storage bucket; hosts
+ * that want group-wide read/write must override this bean.
  */
 class DefaultKnowledgeAccessPolicy(
     private val sharedWithinGroup: Boolean = false,

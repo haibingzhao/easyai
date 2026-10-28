@@ -1,5 +1,6 @@
 package com.easy.easyai.web.controller
 
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.memory.MemoryEntry
 import com.easy.easyai.core.memory.MemoryMaturity
 import com.easy.easyai.core.memory.MemoryOwnerContext
@@ -340,7 +341,9 @@ class MemoryControllerTest {
     ) = runTest {
         val store = mockk<MemoryStore>(relaxed = true)
         val projectStore = mockk<AsyncProjectStore>(relaxed = true)
-        val workspaceService = DefaultWorkspaceService(projectStore, dataDir = tempDir.toString())
+        val workspaceService = DefaultWorkspaceService(
+            projectStore, dataDir = tempDir.toString(), host = HostIdentity("agent-api")
+        )
         val controller = MemoryController(store, projectStore, workspaceService)
         val scratch = tempDir.resolve(".temp-workspaces").resolve("system").resolve("session-1").toString()
         coEvery { projectStore.findByPath(scratch, any()) } returns null

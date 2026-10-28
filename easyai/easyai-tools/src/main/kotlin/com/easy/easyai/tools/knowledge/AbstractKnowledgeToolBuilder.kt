@@ -4,6 +4,8 @@ import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.knowledge.KnowledgeAccessContext
 import com.easy.easyai.core.knowledge.KnowledgeAccessGuard
+import com.easy.easyai.core.knowledge.KnowledgeArticleStore
+import com.easy.easyai.core.knowledge.KnowledgeFolderStore
 import com.easy.easyai.core.knowledge.KnowledgeOwnership
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.permission.PermissionAction
@@ -14,16 +16,20 @@ import org.springframework.beans.factory.ObjectProvider
 
 /**
  * Base builder for knowledge tools (search, read).
- * Provides shared permission rules and build logic that depends on [KnowledgeStore].
  *
  * The knowledge slice owner is resolved once at build time from the agent context: the group bucket
  * when `easyai.knowledge.shared-within-group` is on and the context carries one, otherwise the user.
  * Access is enforced by the host [KnowledgeAccessGuard]; without a policy/guard or a login user the
  * tools stay unavailable instead of running unguarded.
+ *
+ * Article/folder stores are optional enrichment: when present, search results carry titles, folder
+ * paths and category filters; when absent, retrieval still works with the index metadata alone.
  */
 abstract class AbstractKnowledgeToolBuilder(
     protected val sharedWithinGroup: Boolean,
     private val accessGuardProvider: ObjectProvider<KnowledgeAccessGuard>,
+    private val articleStoreProvider: ObjectProvider<KnowledgeArticleStore>,
+    private val folderStoreProvider: ObjectProvider<KnowledgeFolderStore>,
 ) : ToolBuilder {
     override val defaultPermissionRules = listOf(
         PermissionRule("tool.execute.knowledge", "*", PermissionAction.ALLOW)
@@ -40,7 +46,14 @@ abstract class AbstractKnowledgeToolBuilder(
             groupUserId = groupUserId,
             owners = context.owners,
         )
-        return createTool(store, knowledgeOwnerId, guard, accessContext)
+        return createTool(
+            store = store,
+            knowledgeOwnerId = knowledgeOwnerId,
+            accessGuard = guard,
+            accessContext = accessContext,
+            articleStore = articleStoreProvider.getIfAvailable(),
+            folderStore = folderStoreProvider.getIfAvailable(),
+        )
     }
 
     protected abstract fun createTool(
@@ -48,5 +61,7 @@ abstract class AbstractKnowledgeToolBuilder(
         knowledgeOwnerId: String,
         accessGuard: KnowledgeAccessGuard,
         accessContext: KnowledgeAccessContext,
+        articleStore: KnowledgeArticleStore?,
+        folderStore: KnowledgeFolderStore?,
     ): ToolDefinition
 }

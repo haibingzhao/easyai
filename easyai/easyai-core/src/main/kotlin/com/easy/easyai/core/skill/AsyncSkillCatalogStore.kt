@@ -27,6 +27,20 @@ interface AsyncSkillCatalogStore {
     /** CAS completion; never writes owner, enabled, observed checksum or install path. */
     suspend fun updateSync(id: String, expectedRevision: Long, update: SkillSyncUpdate): Boolean
 
+    /**
+     * Take a short lease on one row before a background pass touches its directory or its index
+     * document, so two processes serving one database do not both do that work.
+     *
+     * `next_attempt_at` carries the lease because it already means "the earliest instant this row may
+     * be worked on again". [updateSync]'s `revision` is deliberately left alone: it is the content CAS
+     * every writer relies on, and bumping it here would invalidate the CAS the lease holder is about
+     * to perform.
+     *
+     * @param expectedNextAttemptAt the value read with the row; null when the column was null
+     * @return true when this caller holds the lease, false when someone else took it first
+     */
+    suspend fun claimForSync(id: String, expectedNextAttemptAt: Long?, leaseUntil: Long): Boolean
+
     /** The single row of [userId] carrying this [name]; null when the owner has no such skill. */
     suspend fun findByName(userId: String, name: String): SkillCatalogEntry?
 

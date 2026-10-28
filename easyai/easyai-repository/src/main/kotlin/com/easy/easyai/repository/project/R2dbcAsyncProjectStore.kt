@@ -1,5 +1,6 @@
 package com.easy.easyai.repository.project
 
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.model.ProjectInfo
 import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.repository.database.SqlErrorClassifier
@@ -30,9 +31,14 @@ import java.time.Instant
 /**
  * R2DBC-based implementation of AsyncProjectStore.
  * Uses Exposed R2DBC for pure async database operations.
+ *
+ * [host] is stamped on insert and read back, but no query filters on it: projects are shared content
+ * that every application on the database must see. The one consumer is the temp-workspace orphan
+ * sweep, which releases only the rows its own host created.
  */
 class R2dbcAsyncProjectStore(
-    private val db: R2dbcDatabase
+    private val db: R2dbcDatabase,
+    private val host: HostIdentity
 ) : AsyncProjectStore {
     private val logger = LoggerFactory.getLogger(javaClass)
 
@@ -87,6 +93,7 @@ class R2dbcAsyncProjectStore(
             it[Tables.Project.userId] = userId
             it[Tables.Project.memoryAutoGeneration] = project.memoryAutoGeneration
             it[Tables.Project.kind] = project.kind.value
+            it[Tables.Project.ownerApp] = host.appName
             it[Tables.Project.createdAt] = project.createdAt.toEpochMilli()
             it[Tables.Project.updatedAt] = project.updatedAt.toEpochMilli()
         }
@@ -177,6 +184,7 @@ class R2dbcAsyncProjectStore(
             description = row[Tables.Project.description],
             memoryAutoGeneration = row[Tables.Project.memoryAutoGeneration] ?: true,
             kind = ProjectKind.from(row[Tables.Project.kind]),
+            ownerApp = row[Tables.Project.ownerApp],
             createdAt = Instant.ofEpochMilli(row[Tables.Project.createdAt]),
             updatedAt = Instant.ofEpochMilli(row[Tables.Project.updatedAt])
         )

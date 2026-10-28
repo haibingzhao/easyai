@@ -1,6 +1,8 @@
 package com.easy.easyai.tools
 
 import com.easy.easyai.core.knowledge.KnowledgeAccessGuard
+import com.easy.easyai.core.knowledge.KnowledgeArticleStore
+import com.easy.easyai.core.knowledge.KnowledgeFolderStore
 import com.easy.easyai.tools.background.BackgroundTaskManagerRegistry
 import com.easy.easyai.tools.background.RunBackgroundToolBuilder
 import com.easy.easyai.tools.calc.ScriptCalcToolBuilder
@@ -31,6 +33,8 @@ class ToolPromptSegmentsTest {
         KnowledgeSearchToolBuilder(
             sharedWithinGroup,
             mockk<ObjectProvider<KnowledgeAccessGuard>>(relaxed = true),
+            mockk<ObjectProvider<KnowledgeArticleStore>>(relaxed = true),
+            mockk<ObjectProvider<KnowledgeFolderStore>>(relaxed = true),
         )
 
     @Test

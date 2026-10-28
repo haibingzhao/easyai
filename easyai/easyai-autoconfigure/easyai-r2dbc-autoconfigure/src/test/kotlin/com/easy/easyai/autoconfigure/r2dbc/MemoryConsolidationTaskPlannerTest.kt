@@ -12,19 +12,25 @@ import com.easy.easyai.core.task.AsyncTask
 import com.easy.easyai.core.task.AsyncTaskStatus
 import com.easy.easyai.core.task.AsyncTaskType
 import com.easy.easyai.core.task.ScheduledTaskPlanContext
-import com.easy.easyai.core.task.TaskDraft
 import com.easy.easyai.core.task.TaskTrigger
 import com.easy.easyai.repository.project.AsyncProjectStore
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -66,7 +72,7 @@ class MemoryConsolidationTaskPlannerTest {
         return ScheduledTaskPlanContext(
             userId = user.userId,
             setting = MemoryConsolidationUserSettings.toScheduled(user),
-            now = now,
+            now = Instant.ofEpochMilli(epoch(now)),
             pendingTasks = pending
         )
     }
@@ -115,7 +121,6 @@ class MemoryConsolidationTaskPlannerTest {
         coEvery { memoryStore.listActiveIndex(MemoryScope.PROJECT, any(), null) } returns emptyList()
     }
 
-    /** The planner resolves a LocalDateTime through the system zone; the test must not invent its own. */
     private fun epoch(at: LocalDateTime): Long = at.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
     private fun pendingTask(scope: String, type: String, projectPath: String? = null) = AsyncTask(
@@ -280,13 +285,10 @@ class MemoryConsolidationTaskPlannerTest {
     @Test
     fun `a row saved without owners still resolves for its own user`() = runBlocking {
         givenOverThreshold()
-        val legacyRow = MemoryConsolidationUserSettings.toScheduled(
-            MemoryConsolidationUserSettings(userId = "alice", enabled = true)
-        ).copy(params = emptyMap())
+        val input = context()
+        val legacyRow = input.setting.copy(params = emptyMap())
 
-        val drafts = planner().plan(
-            ScheduledTaskPlanContext(userId = "alice", setting = legacyRow, now = now, pendingTasks = emptyList())
-        )
+        val drafts = planner().plan(input.copy(setting = legacyRow))
 
         assertEquals(listOf("alice"), drafts.single().payload["owners"])
     }
@@ -299,10 +301,10 @@ class MemoryConsolidationTaskPlannerTest {
     }
 
     @Test
-    fun `no memory store means nothing to measure`() = runBlocking {
+    fun `an unavailable memory store must not consume a scheduled firing`() = runTest {
         val storeless = MemoryConsolidationTaskPlanner(MemoryConsolidationSettings(defaultThreshold = 2), null, projectStore)
 
-        assertEquals(emptyList<TaskDraft>(), storeless.plan(context()))
+        assertFailsWith<IllegalStateException> { storeless.plan(context()) }
     }
 
     @Test
@@ -369,5 +371,92 @@ class MemoryConsolidationTaskPlannerTest {
         )
 
         assertEquals(1, planner().plan(context(user = user)).size)
+    }
+
+    @Nested
+    inner class FailureAndTimezoneRegressions {
+
+        @Test
+        fun `project lookup errors propagate rather than returning a global only plan`() = runTest {
+            givenOverThreshold()
+            val input = context()
+            val failure = IllegalStateException("project lookup unavailable")
+            coEvery { projectStore.findAll(limit = null, userId = "alice", includeTemp = false) } throws failure
+
+            assertSame(failure, assertFailsWith<IllegalStateException> { planner().plan(input) })
+            coVerify(exactly = 0) { memoryStore.listActiveIndex(any(), any(), any()) }
+        }
+
+        @Test
+        fun `an error after a partial project listing aborts the whole plan`() = runTest {
+            givenOverThreshold()
+            val input = context()
+            val failure = IllegalStateException("project stream interrupted")
+            coEvery { projectStore.findAll(limit = null, userId = "alice", includeTemp = false) } returns flow {
+                emit(ProjectInfo(id = "p1", name = "demo", path = "/tmp/demo"))
+                throw failure
+            }
+
+            assertSame(failure, assertFailsWith<IllegalStateException> { planner().plan(input) })
+            coVerify(exactly = 0) { memoryStore.listActiveIndex(any(), any(), any()) }
+        }
+
+        @Test
+        fun `project collection cancellation propagates unchanged`() = runTest {
+            givenOverThreshold()
+            val input = context()
+            val cancelled = CancellationException("shutdown")
+            coEvery { projectStore.findAll(limit = null, userId = "alice", includeTemp = false) } returns flow {
+                throw cancelled
+            }
+
+            assertSame(cancelled, assertFailsWith<CancellationException> { planner().plan(input) })
+            coVerify(exactly = 0) { memoryStore.listActiveIndex(any(), any(), any()) }
+        }
+
+        @Test
+        fun `a project memory read error does not return already planned global drafts`() = runTest {
+            givenOverThreshold()
+            val input = context(projects = listOf(ProjectInfo(id = "p1", name = "demo", path = "/tmp/demo")))
+            val failure = IllegalStateException("memory index unavailable")
+            coEvery { memoryStore.listActiveIndex(MemoryScope.PROJECT, any(), null) } throws failure
+
+            assertSame(failure, assertFailsWith<IllegalStateException> { planner().plan(input) })
+            coVerify(exactly = 1) { memoryStore.listActiveIndex(MemoryScope.GLOBAL, any(), null) }
+        }
+
+        @Test
+        fun `backoff uses the persisted zone and expires exactly at its epoch deadline`() = runTest {
+            givenGlobalRows(indexRows(2))
+            for (zone in listOf(ZoneId.of("Pacific/Kiritimati"), ZoneId.of("Etc/GMT+12"))) {
+                val deadline = now.atZone(zone).toInstant().toEpochMilli()
+                val states = MemoryType.entriesFor("coding").associate {
+                    "global||${it.dirName}" to MemoryConsolidationSliceState(zeroGainStreak = 1, nextEligibleAt = deadline)
+                }
+                val input = context(user = MemoryConsolidationUserSettings(userId = "alice", enabled = true, sliceStates = states))
+                val zoned = input.copy(
+                    setting = input.setting.copy(scheduleZone = zone.id),
+                    now = Instant.ofEpochMilli(deadline)
+                )
+
+                assertEquals(emptyList(), planner().plan(zoned.copy(now = zoned.now.minusSeconds(1))), zone.id)
+                assertEquals(1, planner().plan(zoned).size, zone.id)
+            }
+            coVerify(exactly = 2) { memoryStore.listActiveIndex(MemoryScope.GLOBAL, any(), null) }
+        }
+
+        @Test
+        fun `fall back overlap does not extend an expired backoff`() = runTest {
+            givenGlobalRows(indexRows(2))
+            val deadline = Instant.parse("2026-11-01T06:00:00Z")
+            val states = MemoryType.entriesFor("coding").associate {
+                "global||${it.dirName}" to MemoryConsolidationSliceState(nextEligibleAt = deadline.toEpochMilli())
+            }
+            val input = context(user = MemoryConsolidationUserSettings(userId = "alice", enabled = true, sliceStates = states))
+            val zoned = input.copy(setting = input.setting.copy(scheduleZone = "America/New_York"))
+
+            assertTrue(planner().plan(zoned.copy(now = Instant.parse("2026-11-01T05:30:00Z"))).isEmpty())
+            assertEquals(1, planner().plan(zoned.copy(now = Instant.parse("2026-11-01T06:30:00Z"))).size)
+        }
     }
 }

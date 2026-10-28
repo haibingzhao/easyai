@@ -7,6 +7,8 @@ import com.easy.easyai.common.textio.template.TemplateRenderer
 import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.command.AsyncUserCommandStore
 import com.easy.easyai.core.domain.DomainCatalog
+import com.easy.easyai.core.host.HostIdentity
+import com.easy.easyai.core.host.HostStartupGate
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.model.aux.AuxModelResolver
@@ -57,6 +59,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.ComponentScan
 import org.springframework.context.annotation.Lazy
+import org.springframework.core.env.Environment
 import org.slf4j.LoggerFactory
 
 @AutoConfiguration
@@ -83,6 +86,25 @@ open class EasyAiCoreAutoConfiguration(
      * request or tool build reads it. A no-op when nothing is pinned, which leaves the file /
      * environment-variable resolution in charge (desktop / single-tenant).
      */
+    /**
+     * Which application this process is, for the rows several applications share a database through.
+     *
+     * `spring.application.name` is the only source. Boot's default for it is the literal
+     * `application`, which is precisely the failure this guards against — two hosts would agree on
+     * one identity and isolate nothing — so that value is refused along with a blank one. A single-app
+     * deployment loses nothing: it just has to name itself.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    open fun hostIdentity(environment: Environment): HostIdentity {
+        val name = environment.getProperty("spring.application.name")?.trim().orEmpty()
+        check(name.isNotEmpty() && name != DEFAULT_APP_NAME) {
+            "spring.application.name must be a host-specific value (got '$name'): watches, async tasks and " +
+                "temporary workspaces are isolated per application sharing this database"
+        }
+        return HostIdentity(name)
+    }
+
     @Bean
     open fun integrationStaticOverrideInitializer(
         integrationProperties: IntegrationProperties
@@ -153,7 +175,10 @@ open class EasyAiCoreAutoConfiguration(
 
     @Bean
     @ConditionalOnMissingBean
-    open fun asyncTaskLifecycle(runner: AsyncTaskRunner): AsyncTaskLifecycle = AsyncTaskLifecycle(runner)
+    open fun asyncTaskLifecycle(
+        runner: AsyncTaskRunner,
+        startupGate: ObjectProvider<HostStartupGate>
+    ): AsyncTaskLifecycle = AsyncTaskLifecycle(runner, startupGate.ifAvailable)
 
     // ========== Agent System Prompt Beans ==========
     @Bean
@@ -475,5 +500,8 @@ open class EasyAiCoreAutoConfiguration(
 
         /** Directory under the skill root holding packages when no object storage is configured. */
         private const val PACKAGE_FALLBACK_DIR = ".packages"
+
+        /** Boot's default application name; sharing it across hosts would silently disable isolation. */
+        private const val DEFAULT_APP_NAME = "application"
     }
 }

@@ -1,13 +1,15 @@
 package com.easy.easyai.core.watch
 
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.task.AsyncTask
-import com.easy.easyai.core.task.AsyncTaskStatus
 import com.easy.easyai.core.task.AsyncTaskStore
 import com.easy.easyai.core.task.AsyncTaskType
 import com.easy.easyai.core.task.ScheduledTaskSetting
 import com.easy.easyai.core.task.ScheduledTaskSettingStore
 import com.easy.easyai.core.task.TaskTrigger
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.time.Instant
@@ -26,6 +28,12 @@ class WatchNotFoundException(message: String) : WatchException(message)
 /** The row changed underneath the caller (concurrent edit); reload and retry. */
 class WatchConflictException(message: String) : WatchException(message)
 
+/**
+ * The definition belongs to another application sharing this database, so this process could neither
+ * run it (its agent's tools resolve on the owner) nor honestly report on it.
+ */
+class WatchForeignHostException(message: String) : WatchException(message)
+
 /** A host dependency is missing, e.g. no task runner is wired. */
 class WatchUnavailableException(message: String) : WatchException(message)
 
@@ -33,11 +41,12 @@ class WatchUnavailableException(message: String) : WatchException(message)
  * Creates, edits and administers watch definitions — the one place that validates a schedule and
  * turns a trigger form into an absolute due instant.
  *
- * Nothing here runs the model: the planner claims due rows and the handler executes them. This class
- * is the write side of the definition, plus the manual operations a page or the tool can request.
+ * Nothing here runs the model: the scheduler admits due rows and the handler executes them. This
+ * class is the write side of the definition, plus the manual operations a page or the tool can request.
  */
 class WatchService(
     private val store: WatchStore,
+    private val host: HostIdentity,
     private val settingStore: ScheduledTaskSettingStore? = null,
     private val taskStore: AsyncTaskStore? = null,
     private val runGateway: WatchRunGateway? = null,
@@ -345,16 +354,23 @@ class WatchService(
 
     suspend fun cancel(userId: String, watchId: String): Watch {
         val watch = requireOwned(userId, watchId)
-        if (watch.status == WatchStatus.CANCELLED) return watch
-        cancelInFlight(watch)
-        return store.setStatus(watchId, WatchStatus.CANCELLED, "Cancelled by the user", expectedStatus = watch.status)
-            ?: throw WatchConflictException("This watch changed while it was being cancelled; reload and try again")
+        val cancelled = closeAdmission(watch)
+        cancelInFlight(cancelled)
+        return cancelled
     }
 
     suspend fun delete(userId: String, watchId: String): Boolean {
         val watch = requireOwned(userId, watchId)
-        cancelInFlight(watch)
+        val cancelled = closeAdmission(watch)
+        cancelInFlight(cancelled)
         return store.delete(watchId)
+    }
+
+    private suspend fun closeAdmission(watch: Watch): Watch {
+        if (watch.status == WatchStatus.CANCELLED) return watch
+        return store.setStatus(
+            watch.id, WatchStatus.CANCELLED, "Cancelled by the user", expectedStatus = watch.status
+        ) ?: throw WatchConflictException("This watch changed while it was being cancelled; reload and try again")
     }
 
     /** Start a check now without moving the schedule; the same one-run-at-a-time rule applies. */
@@ -366,32 +382,46 @@ class WatchService(
         if (watch.pendingAction != WatchPendingAction.CHECK) {
             throw WatchException("An expiry review is pending for this watch; wait for it or edit the schedule")
         }
-        if (inFlightTasks(watch).isNotEmpty()) {
-            throw WatchException("A run is already in progress for this watch")
-        }
         val gateway = runGateway ?: throw WatchUnavailableException(
             "The background task runner is not available, so the watch cannot be started now"
         )
-        val now = clock()
-        val task = AsyncTask(
-            id = UUID.randomUUID().toString(),
-            userId = watch.userId,
-            type = AsyncTaskType.WATCH,
-            trigger = trigger,
-            title = taskTitle(watch),
-            status = AsyncTaskStatus.PENDING,
-            sessionId = watch.runSessionId,
-            timeoutMs = properties.runTimeoutMs,
-            payload = mapOf(
-                WatchTaskPayload.KEY_WATCH_ID to watch.id,
-                WatchTaskPayload.KEY_KIND to WatchRunKind.CHECK.name,
-                WatchTaskPayload.KEY_SCHEDULED_FOR to now.toEpochMilli(),
-                WatchTaskPayload.KEY_DEFINITION_VERSION to watch.version,
-                WatchTaskPayload.KEY_TITLE to watch.title
-            )
+        // Manual rows are not recovered at startup: cancellation must not split commit from dispatch.
+        return withContext(NonCancellable) {
+            when (val result = store.enqueueManual(userId, watchId, clock(), properties, trigger)) {
+                is WatchEnqueueResult.Enqueued -> result.task.also { gateway.dispatch(it) }
+                is WatchEnqueueResult.Busy -> throw WatchException("A run is already in progress for this watch")
+                WatchEnqueueResult.Stale -> throw WatchConflictException(
+                    "This watch changed before the run was queued; reload and try again"
+                )
+            }
+        }
+    }
+
+    /** Retry an authorized task snapshot without changing its original firing payload or schedule. */
+    suspend fun retryRun(userId: String, task: AsyncTask): AsyncTask {
+        if (task.type != AsyncTaskType.WATCH) throw WatchException("Only a watch task can be retried here")
+        if (task.userId != userId) throw WatchNotFoundException("Watch task ${task.id} was not found")
+        if (!host.owns(task.ownerApp)) {
+            throw WatchForeignHostException("Watch task ${task.id} does not belong to application '${host.appName}'")
+        }
+        val watchId = WatchTaskPayload.watchIdOf(task)
+            ?: throw WatchException("Watch task ${task.id} has no watch id in its payload")
+        requireOwned(userId, watchId)
+        if (!task.status.isTerminal) throw WatchConflictException("Only a finished task can be retried")
+        val gateway = runGateway ?: throw WatchUnavailableException(
+            "The background task runner is not available, so the watch cannot be retried"
         )
-        return gateway.launch(task)
-            ?: throw WatchUnavailableException("The run could not be started; the task store is unavailable")
+        // The old worker can still be unwinding after its terminal write; never wait under a DB lock.
+        gateway.awaitIdle(task.id)
+        return withContext(NonCancellable) {
+            when (val result = store.retryRun(userId, watchId, task.id, task.retryCount, clock())) {
+                is WatchEnqueueResult.Enqueued -> result.task.also { gateway.dispatch(it) }
+                is WatchEnqueueResult.Busy -> throw WatchConflictException("A run is already in progress for this watch")
+                WatchEnqueueResult.Stale -> throw WatchConflictException(
+                    "This watch or task changed before it could be retried; reload and try again"
+                )
+            }
+        }
     }
 
     /** Ensure a scan row exists for this user and is on, without touching an existing schedule. */
@@ -417,17 +447,38 @@ class WatchService(
         }
     }
 
-    private suspend fun requireOwned(userId: String, watchId: String): Watch =
-        store.findById(watchId)?.takeIf { it.userId == userId }
+    /**
+     * The caller's watch, or the reason it is not theirs.
+     *
+     * Two different refusals: another user's row is not found (it must not be distinguishable from a
+     * deleted one), while a row this application cannot run is reported as such — the page needs to
+     * say why instead of pretending the watch never existed.
+     *
+     * An unowned row is refused too, not treated as fair game. Ownership is stamped on insert, so a
+     * null owner means the row predates the column; letting both applications edit or fire it would
+     * recreate exactly the double-run this column exists to prevent. Adoption or the documented
+     * backfill claims it once, and then it is ordinary again.
+     */
+    private suspend fun requireOwned(userId: String, watchId: String): Watch {
+        val watch = store.findById(watchId)?.takeIf { it.userId == userId }
             ?: throw WatchNotFoundException("Watch $watchId was not found")
-
-    private suspend fun inFlightTasks(watch: Watch): List<AsyncTask> =
-        taskStore?.listNonTerminal(watch.userId, AsyncTaskType.WATCH)?.filter {
-            WatchTaskPayload.watchIdOf(it) == watch.id
-        }.orEmpty()
+        val owner = watch.ownerApp
+        if (!host.owns(owner)) {
+            throw WatchForeignHostException(
+                if (owner == null) {
+                    "Watch '${watch.title}' does not belong to an application yet; it must be claimed " +
+                        "(owner_app backfill or startup adoption) before it can be viewed, edited or run"
+                } else {
+                    "Watch '${watch.title}' belongs to application '$owner' and cannot be viewed, " +
+                        "edited or run from '${host.appName}'"
+                }
+            )
+        }
+        return watch
+    }
 
     private suspend fun cancelInFlight(watch: Watch) {
-        inFlightTasks(watch).forEach { task ->
+        store.listInFlight(watch.userId, watch.id).forEach { task ->
             var cancelled = false
             val gateway = runGateway
             if (gateway != null) {

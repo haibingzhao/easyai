@@ -53,6 +53,10 @@ enum class TaskTrigger {
  * @property payload type-specific inputs, the minimal set needed to re-run after a restart
  * @property result type-specific outputs (the "enrichment" landing spot), JSON-serialized
  * @property retryCount how many times [AsyncTaskStore.retry] reset this task for another run
+ * @property ownerApp the application that runs this task, stamped by the store on insert. Only that
+ *   host may park it as an orphan, retry it or cancel it; other hosts sharing the database can still
+ *   see it. Null on rows written before the column existed. Read-only: whatever a caller passes here
+ *   is replaced by the persisting host's own identity.
  */
 data class AsyncTask(
     val id: String,
@@ -62,6 +66,7 @@ data class AsyncTask(
     val title: String,
     val status: AsyncTaskStatus = AsyncTaskStatus.PENDING,
     val sessionId: String? = null,
+    val ownerApp: String? = null,
     /** Wall-clock bound enforced by [AsyncTaskRunner]; null means unbounded. */
     val timeoutMs: Long? = null,
     val payload: Map<String, Any?> = emptyMap(),
@@ -76,6 +81,8 @@ data class AsyncTask(
 ) {
     val durationMs: Long? get() = if (startedAt != null && completedAt != null) completedAt - startedAt else null
 }
+
+data class AsyncTaskStateChanged(val task: AsyncTask, val removed: Boolean = false)
 
 /** Result of a [TaskHandler.execute]: either a success payload or a failure reason. */
 sealed interface TaskOutcome {

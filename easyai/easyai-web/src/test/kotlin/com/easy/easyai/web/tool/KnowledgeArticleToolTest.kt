@@ -29,29 +29,33 @@ class KnowledgeArticleToolTest {
 
     private fun article(
         id: String = "article-1",
-        knowledgeKey: String = "assistant/a.md",
+        title: String = "A",
         status: ArticleStatus = ArticleStatus.PUBLISHED,
+        ragEnabled: Boolean = false,
+        folderId: String = "folder-1",
     ) = KnowledgeArticle(
         id = id,
         userId = "g_1",
         createdBy = "alice",
-        knowledgeKey = knowledgeKey,
-        ossKey = "oss/a.md",
-        title = "A",
+        folderId = folderId,
+        fileName = null,
+        title = title,
         description = null,
         category = "other",
-        source = "assistant",
-        relativePath = knowledgeKey.substringAfter('/'),
         ext = "md",
-        contentHash = null,
         origin = "assistant",
-        originSessionId = null,
-        originMessageId = null,
-        composedFrom = null,
         status = status,
+        ragEnabled = ragEnabled,
         createdAt = 1L,
         updatedAt = 2L,
     )
+
+    private fun accessible(
+        article: KnowledgeArticle,
+        folderPath: String = "",
+        canWrite: Boolean = true,
+        canManage: Boolean = true,
+    ) = AccessibleKnowledgeArticle(article, folderPath, canWrite, canManage)
 
     private suspend fun CoroutineScope.run(args: Map<String, Any?>): Pair<Boolean, String> {
         val result = KnowledgeArticleTool(
@@ -77,29 +81,24 @@ class KnowledgeArticleToolTest {
     }
 
     @Test
-    fun `list returns readable articles with permission flags`() = runTest {
-        coEvery { service.listAccessible(accessContext, null, null, null) } returns listOf(
-            AccessibleKnowledgeArticle(article(), canWrite = true, canManage = false)
+    fun `list returns readable articles with id, path and permission flags`() = runTest {
+        coEvery { service.listAccessible(accessContext, null, null) } returns listOf(
+            accessible(article(), folderPath = "Family/Recipes", canWrite = true, canManage = false)
         )
 
         val (isError, output) = run(mapOf("action" to "list"))
 
         assertEquals(false, isError)
-        assertContains(output, "\"key\":\"assistant/a.md\"")
+        assertContains(output, "\"id\":\"article-1\"")
+        assertContains(output, "\"path\":\"Family/Recipes\"")
         assertContains(output, "\"canWrite\":true")
         assertContains(output, "\"canManage\":false")
     }
 
     @Test
     fun `list applies limit and offset and reports totals`() = runTest {
-        val articles = (1..5).map { index ->
-            AccessibleKnowledgeArticle(
-                article(id = "article-$index", knowledgeKey = "assistant/$index.md"),
-                canWrite = true,
-                canManage = true,
-            )
-        }
-        coEvery { service.listAccessible(accessContext, null, null, null) } returns articles
+        val articles = (1..5).map { index -> accessible(article(id = "article-$index")) }
+        coEvery { service.listAccessible(accessContext, null, null) } returns articles
 
         val (isError, output) = run(mapOf("action" to "list", "limit" to 2, "offset" to 1))
 
@@ -107,41 +106,67 @@ class KnowledgeArticleToolTest {
         assertContains(output, "\"total\":5")
         assertContains(output, "\"offset\":1")
         assertContains(output, "\"limit\":2")
-        assertContains(output, "assistant/2.md")
-        assertContains(output, "assistant/3.md")
-        assertFalse(output.contains("assistant/1.md"))
-        assertFalse(output.contains("assistant/4.md"))
+        assertContains(output, "article-2")
+        assertContains(output, "article-3")
+        assertFalse(output.contains("article-1"))
+        assertFalse(output.contains("article-4"))
     }
 
     @Test
-    fun `read delegates to the access-checked service`() = runTest {
-        coEvery { service.readContent(accessContext, "assistant/a.md") } returns "body"
+    fun `list narrows to a folder path subtree`() = runTest {
+        coEvery { service.listAccessible(accessContext, null, null) } returns listOf(
+            accessible(article(id = "in"), folderPath = "Family/Recipes"),
+            accessible(article(id = "out"), folderPath = "Work"),
+        )
 
-        val (isError, output) = run(mapOf("action" to "read", "key" to "assistant/a.md"))
+        val (isError, output) = run(mapOf("action" to "list", "folderPath" to "Family"))
+
+        assertEquals(false, isError)
+        assertContains(output, "\"total\":1")
+        assertContains(output, "in")
+        assertFalse(output.contains("\"id\":\"out\""))
+    }
+
+    @Test
+    fun `read delegates to the access-checked service by id`() = runTest {
+        coEvery { service.readContent(accessContext, "article-1") } returns "body"
+
+        val (isError, output) = run(mapOf("action" to "read", "id" to "article-1"))
 
         assertEquals(false, isError)
         assertContains(output, "\"content\":\"body\"")
     }
 
     @Test
-    fun `create stamps assistant origin and defaults`() = runTest {
+    fun `create stamps assistant origin and defaults to a draft`() = runTest {
         coEvery {
-            service.saveArticle(
-                accessContext, "A", "body", "assistant", null, "other", "assistant", null, null, null,
-                ArticleStatus.DRAFT,
-            )
+            service.saveArticle(accessContext, "A", "body", null, "other", "assistant", any(), any(), any(), any(), any(), any(), any())
         } returns article()
+        coEvery { service.folderPathOf(any()) } returns "Family/Recipes"
 
         val (isError, output) = run(mapOf("action" to "create", "title" to "A", "content" to "body"))
 
         assertEquals(false, isError)
         assertContains(output, "\"created\":true")
+        assertContains(output, "\"path\":\"Family/Recipes\"")
+    }
+
+    @Test
+    fun `create rejects an unknown folder path`() = runTest {
+        coEvery { service.resolveFolderIdByPath(accessContext, "Nope") } returns null
+
+        val (isError, output) = run(
+            mapOf("action" to "create", "title" to "A", "content" to "body", "folderPath" to "Nope")
+        )
+
+        assertTrue(isError)
+        assertContains(output, "Folder not found")
     }
 
     @Test
     fun `list reports each article status`() = runTest {
-        coEvery { service.listAccessible(accessContext, null, null, null) } returns listOf(
-            AccessibleKnowledgeArticle(article(status = ArticleStatus.DRAFT), canWrite = true, canManage = true)
+        coEvery { service.listAccessible(accessContext, null, null) } returns listOf(
+            accessible(article(status = ArticleStatus.DRAFT))
         )
 
         val (isError, output) = run(mapOf("action" to "list"))
@@ -161,11 +186,12 @@ class KnowledgeArticleToolTest {
     @Test
     fun `update reports a pending index write`() = runTest {
         coEvery {
-            service.updateArticle(accessContext, "assistant/a.md", "body", null, null)
+            service.updateArticle(accessContext, "article-1", "body", null, null)
         } returns ArticleWriteResult(article(), indexPending = true)
+        coEvery { service.folderPathOf(any()) } returns ""
 
         val (isError, output) = run(
-            mapOf("action" to "update", "key" to "assistant/a.md", "content" to "body")
+            mapOf("action" to "update", "id" to "article-1", "content" to "body")
         )
 
         assertEquals(false, isError)
@@ -174,20 +200,20 @@ class KnowledgeArticleToolTest {
 
     @Test
     fun `delete reports the policy outcome`() = runTest {
-        coEvery { service.deleteArticle(accessContext, "assistant/a.md") } returns false
+        coEvery { service.deleteArticle(accessContext, "article-1") } returns false
 
-        val (isError, output) = run(mapOf("action" to "delete", "key" to "assistant/a.md"))
+        val (isError, output) = run(mapOf("action" to "delete", "id" to "article-1"))
 
         assertEquals(false, isError)
         assertContains(output, "\"deleted\":false")
     }
 
     @Test
-    fun `missing action-specific key returns an error result`() = runTest {
+    fun `missing action-specific id returns an error result`() = runTest {
         val (isError, output) = run(mapOf("action" to "read"))
 
         assertTrue(isError)
-        assertContains(output, "read requires 'key'")
+        assertContains(output, "read requires 'id'")
     }
 
     @Test
@@ -200,10 +226,10 @@ class KnowledgeArticleToolTest {
 
     @Test
     fun `service denial becomes an error result instead of a crash`() = runTest {
-        coEvery { service.readContent(accessContext, "assistant/a.md") } throws
+        coEvery { service.readContent(accessContext, "article-1") } throws
             ResponseStatusException(HttpStatus.FORBIDDEN, "No read permission")
 
-        val (isError, output) = run(mapOf("action" to "read", "key" to "assistant/a.md"))
+        val (isError, output) = run(mapOf("action" to "read", "id" to "article-1"))
 
         assertTrue(isError)
         assertContains(output, "Operation failed")

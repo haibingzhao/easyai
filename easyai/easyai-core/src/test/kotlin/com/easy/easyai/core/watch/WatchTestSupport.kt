@@ -14,6 +14,7 @@ import com.easy.easyai.core.model.AssistantMessage
 import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.task.AsyncTask
+import com.easy.easyai.core.task.AsyncTaskStatus
 import com.easy.easyai.core.task.AsyncTaskType
 import com.easy.easyai.core.task.TaskTrigger
 import io.mockk.coEvery
@@ -24,10 +25,13 @@ import java.time.LocalTime
 import java.time.ZoneId
 
 /** Shared fixtures for the watch run tests: a mutable watch row, a recording store, and a model stub. */
+internal const val TEST_APP = "agent-api"
+
 internal fun testWatch(
     id: String = "watch-1",
     userId: String = "alice",
     status: WatchStatus = WatchStatus.ACTIVE,
+    ownerApp: String? = TEST_APP,
     mode: WatchMode = WatchMode.CHECK,
     schedule: WatchSchedule = WatchSchedule(
         kind = WatchScheduleKind.DAILY,
@@ -58,6 +62,7 @@ internal fun testWatch(
     untilAt = untilAt,
     nextDueAt = nextDueAt,
     status = status,
+    ownerApp = ownerApp,
     pendingAction = pendingAction,
     version = version,
     extensionCount = extensionCount,
@@ -97,6 +102,7 @@ internal fun watchTask(
     trigger = TaskTrigger.SCHEDULE,
     title = "Watch · ${watch.title}",
     sessionId = watch.runSessionId,
+    ownerApp = watch.ownerApp,
     payload = mapOf(
         WatchTaskPayload.KEY_WATCH_ID to watch.id,
         WatchTaskPayload.KEY_KIND to kind.name,
@@ -136,6 +142,10 @@ internal class RecordingWatchStore(var current: Watch) : WatchStore {
     var loseReviewGuard = false
 
     val runStartedTaskIds = mutableListOf<String>()
+    val slotClaims = mutableListOf<Pair<AsyncTask, Int>>()
+    var loseRunSlotGuard = false
+    var runSlotFailure: Throwable? = null
+    val tasks = linkedMapOf<String, AsyncTask>()
     private var lastTaskId: String? = null
 
     override suspend fun create(watch: Watch): Watch {
@@ -153,20 +163,84 @@ internal class RecordingWatchStore(var current: Watch) : WatchStore {
 
     override suspend fun countActive(userId: String): Int = 1
 
-    override suspend fun listDue(userId: String, now: Long, limit: Int): List<Watch> = listOf(current)
+    override suspend fun listUpcoming(
+        horizon: Instant,
+        cursor: WatchScheduleCursor?,
+        limit: Int,
+        userId: String?
+    ): List<WatchScheduleEntry> = listOfNotNull(findSchedule(current.id)).filter {
+        it.nextDueAt <= horizon && (userId == null || it.userId == userId) &&
+            (cursor == null || it.nextDueAt > cursor.nextDueAt ||
+                (it.nextDueAt == cursor.nextDueAt && it.watchId > cursor.watchId))
+    }.take(limit)
 
-    override suspend fun claim(
-        id: String,
-        expectedNextDueAt: Long,
-        newNextDueAt: Long,
-        pendingAction: WatchPendingAction,
-        newStatus: WatchStatus?,
-        statusReason: String?
-    ): Boolean = false
+    override suspend fun findSchedule(watchId: String): WatchScheduleEntry? =
+        current.takeIf { it.id == watchId && it.status == WatchStatus.ACTIVE && it.ownerApp == TEST_APP }?.let {
+            WatchScheduleEntry(it.id, it.userId, TEST_APP, it.version, it.nextDueAt, it.pendingAction)
+        }
 
-    override suspend fun markRunStarted(id: String, taskId: String, at: Long): Boolean {
-        runStartedTaskIds += taskId
-        lastTaskId = taskId
+    override suspend fun enqueueScheduled(
+        expected: WatchScheduleEntry,
+        now: Instant,
+        properties: WatchProperties
+    ): WatchEnqueueResult {
+        if (findSchedule(expected.watchId) != expected || expected.nextDueAt > now) return WatchEnqueueResult.Stale
+        listInFlight(expected.userId, expected.watchId).firstOrNull()?.let { return WatchEnqueueResult.Busy(it.id) }
+        val decision = WatchClaimPolicy.decide(current, now, properties) ?: return WatchEnqueueResult.Stale
+        val task = watchTask(current, decision.kind, current.nextDueAt, "task-${tasks.size + 1}")
+            .copy(timeoutMs = properties.runTimeoutMs)
+        tasks[task.id] = task
+        current = current.copy(nextDueAt = decision.newNextDueAt, pendingAction = decision.pendingAction)
+        return WatchEnqueueResult.Enqueued(task)
+    }
+
+    override suspend fun enqueueManual(
+        userId: String,
+        watchId: String,
+        now: Instant,
+        properties: WatchProperties,
+        trigger: TaskTrigger
+    ): WatchEnqueueResult {
+        if (current.userId != userId || findSchedule(watchId) == null ||
+            current.pendingAction != WatchPendingAction.CHECK
+        ) return WatchEnqueueResult.Stale
+        listInFlight(userId, watchId).firstOrNull()?.let { return WatchEnqueueResult.Busy(it.id) }
+        val task = watchTask(current, scheduledFor = now, id = "task-${tasks.size + 1}")
+            .copy(trigger = trigger, timeoutMs = properties.runTimeoutMs)
+        tasks[task.id] = task
+        return WatchEnqueueResult.Enqueued(task)
+    }
+
+    override suspend fun retryRun(
+        userId: String,
+        watchId: String,
+        taskId: String,
+        expectedRetryCount: Int,
+        now: Instant
+    ): WatchEnqueueResult {
+        val task = tasks[taskId] ?: return WatchEnqueueResult.Stale
+        if (current.userId != userId || findSchedule(watchId) == null ||
+            task.userId != userId || WatchTaskPayload.watchIdOf(task) != watchId ||
+            !task.status.isTerminal || task.retryCount != expectedRetryCount
+        ) return WatchEnqueueResult.Stale
+        listInFlight(userId, watchId).firstOrNull()?.let { return WatchEnqueueResult.Busy(it.id) }
+        val reset = task.copy(
+            status = AsyncTaskStatus.PENDING, retryCount = expectedRetryCount + 1,
+            retriedAt = now.toEpochMilli(), error = null, result = null, startedAt = null, completedAt = null
+        )
+        tasks[taskId] = reset
+        return WatchEnqueueResult.Enqueued(reset)
+    }
+
+    override suspend fun listInFlight(userId: String, watchId: String): List<AsyncTask> =
+        tasks.values.filter { it.userId == userId && WatchTaskPayload.watchIdOf(it) == watchId && !it.status.isTerminal }
+
+    override suspend fun claimRunSlot(task: AsyncTask, expectedVersion: Int, at: Instant): Boolean {
+        slotClaims += task to expectedVersion
+        runSlotFailure?.let { throw it }
+        if (loseRunSlotGuard || current.version != expectedVersion || current.status != WatchStatus.ACTIVE) return false
+        runStartedTaskIds += task.id
+        lastTaskId = task.id
         return true
     }
 

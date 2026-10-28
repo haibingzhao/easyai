@@ -1,5 +1,6 @@
 package com.easy.easyai.core.watch
 
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.task.TaskOutcome
 import com.easy.easyai.core.task.TaskTrigger
 import io.mockk.coEvery
@@ -31,6 +32,7 @@ class WatchTaskHandlerTest {
         properties: WatchProperties = WatchProperties()
     ) = WatchTaskHandler(
         store = store,
+        host = HostIdentity(TEST_APP),
         properties = properties,
         sessionManager = model?.sessionManager,
         agentService = model?.agentService,
@@ -56,6 +58,29 @@ class WatchTaskHandlerTest {
             val outcome = handler(store).execute(task)
             assertIs<TaskOutcome.Failure>(outcome)
             assertTrue(outcome.error.contains("no watch id"))
+        }
+
+        @Test
+        fun `a watch owned by another application is refused before any run is booked`() = runTest {
+            val watch = testWatch(ownerApp = "trading-api")
+            val store = RecordingWatchStore(watch)
+
+            val outcome = handler(store).execute(watchTask(watch))
+
+            assertIs<TaskOutcome.Failure>(outcome)
+            assertTrue(outcome.error.contains("trading-api"))
+            assertTrue(store.runStartedTaskIds.isEmpty(), "a foreign watch must not get a run-start write")
+        }
+
+        @Test
+        fun `an unclaimed watch is refused too`() = runTest {
+            val watch = testWatch(ownerApp = null)
+            val store = RecordingWatchStore(watch)
+
+            val outcome = handler(store).execute(watchTask(watch))
+
+            assertIs<TaskOutcome.Failure>(outcome)
+            assertTrue(outcome.error.contains("no owning application"))
         }
 
         @Test

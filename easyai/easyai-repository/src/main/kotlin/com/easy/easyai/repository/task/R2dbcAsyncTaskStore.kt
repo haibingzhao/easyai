@@ -1,12 +1,15 @@
 package com.easy.easyai.repository.task
 
 import com.easy.easyai.common.util.SharedObjectMapper
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.task.AsyncTask
+import com.easy.easyai.core.task.AsyncTaskStateChanged
 import com.easy.easyai.core.task.AsyncTaskStatus
 import com.easy.easyai.core.task.AsyncTaskStore
 import com.easy.easyai.core.task.AsyncTaskType
 import com.easy.easyai.core.task.TaskTrigger
 import com.easy.easyai.repository.database.Tables.AsyncTaskTable
+import com.easy.easyai.repository.database.TransactionEvents
 import com.easy.easyai.repository.database.UserScope
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.toList
@@ -16,7 +19,11 @@ import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.inList
+import org.jetbrains.exposed.v1.core.isNull
+import org.jetbrains.exposed.v1.core.neq
+import org.jetbrains.exposed.v1.core.or
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
+import org.jetbrains.exposed.v1.r2dbc.R2dbcTransaction
 import org.jetbrains.exposed.v1.r2dbc.deleteWhere
 import org.jetbrains.exposed.v1.r2dbc.insert
 import org.jetbrains.exposed.v1.r2dbc.selectAll
@@ -33,49 +40,66 @@ import tools.jackson.databind.ObjectMapper
  * scoped list/delete methods never leak another user's tasks. `payload`/`result` are stored as JSON
  * text. Mutators re-read the row inside the same transaction so callers get the authoritative
  * post-transition [AsyncTask] (used for `durationMs` and event payloads).
+ *
+ * A second axis is the host: [host] stamps every inserted row; [markRunning] and [findOrphans]
+ * enforce that ownership for execution and recovery. Reads remain host-agnostic so a global task
+ * list and cross-host duplicate suppression still work.
  */
 class R2dbcAsyncTaskStore(
     private val db: R2dbcDatabase,
-    private val objectMapper: ObjectMapper = SharedObjectMapper.instance
+    private val host: HostIdentity,
+    private val objectMapper: ObjectMapper = SharedObjectMapper.instance,
+    private val onChanged: (AsyncTaskStateChanged) -> Unit = {}
 ) : AsyncTaskStore {
 
     private val logger = LoggerFactory.getLogger(javaClass)
 
-    private companion object {
+    companion object {
         /** Statuses a task can still transition out of; every guarded mutator requires one of these. */
-        val NON_TERMINAL_STATUSES = listOf(AsyncTaskStatus.PENDING.name, AsyncTaskStatus.RUNNING.name)
+        private val NON_TERMINAL_STATUSES = listOf(AsyncTaskStatus.PENDING.name, AsyncTaskStatus.RUNNING.name)
+
+        /** Insert in the caller's transaction, including an atomic schedule advance and batch enqueue. */
+        internal suspend fun insertRow(task: AsyncTask, ownerApp: String, objectMapper: ObjectMapper): AsyncTask {
+            AsyncTaskTable.insert {
+                it[id] = task.id
+                it[userId] = task.userId
+                it[type] = task.type.key
+                it[status] = task.status.name
+                it[triggerSource] = task.trigger.name
+                it[sessionId] = task.sessionId
+                // Stamped by the persisting host, never copied from caller-supplied task ownership.
+                it[AsyncTaskTable.ownerApp] = ownerApp
+                it[title] = task.title
+                it[payload] = task.payload.takeIf { p -> p.isNotEmpty() }?.let { p -> objectMapper.writeValueAsString(p) }
+                it[result] = task.result?.let { r -> objectMapper.writeValueAsString(r) }
+                it[error] = task.error
+                it[timeoutMs] = task.timeoutMs
+                it[retryCount] = task.retryCount
+                it[retriedAt] = task.retriedAt
+                it[createdAt] = task.createdAt
+                it[startedAt] = task.startedAt
+                it[completedAt] = task.completedAt
+                it[updatedAt] = task.updatedAt
+            }
+            return task.copy(ownerApp = ownerApp)
+        }
     }
 
     override suspend fun create(task: AsyncTask): AsyncTask = suspendTransaction(db) {
-        AsyncTaskTable.insert {
-            it[id] = task.id
-            it[userId] = task.userId
-            it[type] = task.type.key
-            it[status] = task.status.name
-            it[triggerSource] = task.trigger.name
-            it[sessionId] = task.sessionId
-            it[title] = task.title
-            it[payload] = task.payload.takeIf { p -> p.isNotEmpty() }?.let { p -> objectMapper.writeValueAsString(p) }
-            it[result] = task.result?.let { r -> objectMapper.writeValueAsString(r) }
-            it[error] = task.error
-            it[timeoutMs] = task.timeoutMs
-            it[retryCount] = task.retryCount
-            it[retriedAt] = task.retriedAt
-            it[createdAt] = task.createdAt
-            it[startedAt] = task.startedAt
-            it[completedAt] = task.completedAt
-            it[updatedAt] = task.updatedAt
-        }
-        task
+        insertRow(task, host.appName, objectMapper)
     }
 
-    override suspend fun markRunning(id: String): AsyncTask? = transition(id) { now ->
-        // Only PENDING may start; guards against a late dispatch reviving an already-settled row.
-        AsyncTaskTable.update(where = { (AsyncTaskTable.id eq id) and (AsyncTaskTable.status eq AsyncTaskStatus.PENDING.name) }) {
+    override suspend fun markRunning(id: String): AsyncTask? = suspendTransaction(db) {
+        val now = System.currentTimeMillis()
+        val claimed = AsyncTaskTable.update(where = {
+            (AsyncTaskTable.id eq id) and (AsyncTaskTable.ownerApp eq host.appName) and
+                (AsyncTaskTable.status eq AsyncTaskStatus.PENDING.name)
+        }) {
             it[status] = AsyncTaskStatus.RUNNING.name
             it[startedAt] = now
             it[updatedAt] = now
         }
+        if (claimed == 1) readRow(id) else null
     }
 
     override suspend fun complete(id: String, result: Map<String, Any?>?): AsyncTask? = transition(id) { now ->
@@ -179,22 +203,58 @@ class R2dbcAsyncTaskStore(
         }
 
     override suspend fun delete(id: String): Boolean = suspendTransaction(db) {
-        AsyncTaskTable.deleteWhere { AsyncTaskTable.id eq id } > 0
+        deleteRows(this, AsyncTaskTable.id eq id) > 0
     }
 
-    override suspend fun deleteByUser(userId: String, status: AsyncTaskStatus?): Int = suspendTransaction(db) {
-        AsyncTaskTable.deleteWhere {
-            if (status == null) {
-                UserScope.filterStrict(AsyncTaskTable.userId, userId)
-            } else {
-                UserScope.filterStrict(AsyncTaskTable.userId, userId) and (AsyncTaskTable.status eq status.name)
+    override suspend fun deleteByUser(userId: String, ownerApp: String, status: AsyncTaskStatus?): Int =
+        suspendTransaction(db) {
+            var condition = UserScope.filterStrict(AsyncTaskTable.userId, userId) and
+                (AsyncTaskTable.ownerApp eq ownerApp)
+            status?.let { wanted -> condition = condition and (AsyncTaskTable.status eq wanted.name) }
+            deleteRows(this, condition)
+        }
+
+    private suspend fun deleteRows(transaction: R2dbcTransaction, condition: Op<Boolean>): Int {
+        val deletable = condition and ((AsyncTaskTable.type neq AsyncTaskType.WATCH.key) or
+            (AsyncTaskTable.status inList AsyncTaskStatus.entries.filter { it.isTerminal }.map { it.name }))
+        // Keep the routing payload locked until deletion; never infer removals from a bounded list.
+        val rows = AsyncTaskTable.selectAll().where { deletable }
+            .orderBy(AsyncTaskTable.id to SortOrder.ASC)
+            .forUpdate()
+            .toList()
+        var deleted = 0
+        for (row in rows) {
+            val count = AsyncTaskTable.deleteWhere { (AsyncTaskTable.id eq row[AsyncTaskTable.id]) and deletable }
+            deleted += count
+            if (count > 0) {
+                mapRow(row)?.let { task ->
+                    TransactionEvents.afterCommit(transaction) { onChanged(AsyncTaskStateChanged(task, removed = true)) }
+                }
             }
         }
+        return deleted
     }
 
+    /**
+     * Non-terminal rows this host is responsible for. Another host sharing the database has live
+     * workers behind its own rows, so the query never even loads them; rows with no owner at all are
+     * counted separately and reported, because "nobody will ever park these" is the one part of the
+     * result a human has to act on.
+     */
     override suspend fun findOrphans(): List<AsyncTask> = suspendTransaction(db) {
+        val unclaimed = AsyncTaskTable.selectAll()
+            .where { nonTerminal() and AsyncTaskTable.ownerApp.isNull() }
+            .count()
+            .toInt()
+        if (unclaimed > 0) {
+            logger.warn(
+                "{} non-terminal task(s) have no owner_app; no host will reconcile them. " +
+                    "Assign them with: UPDATE async_task SET owner_app = '<app>' WHERE status IN ('PENDING','RUNNING') AND owner_app IS NULL",
+                unclaimed
+            )
+        }
         AsyncTaskTable.selectAll()
-            .where { nonTerminal() }
+            .where { nonTerminal() and (AsyncTaskTable.ownerApp eq host.appName) }
             .mapNotNull { mapRow(it) }
             .toList()
     }
@@ -203,13 +263,17 @@ class R2dbcAsyncTaskStore(
     private fun nonTerminal(): Op<Boolean> = AsyncTaskTable.status inList NON_TERMINAL_STATUSES
 
     /** Shared update-then-reread so every mutator returns the authoritative post-transition row. */
-    private suspend fun transition(id: String, body: suspend (now: Long) -> Unit): AsyncTask? =
+    private suspend fun transition(id: String, body: suspend (now: Long) -> Int): AsyncTask? =
         suspendTransaction(db) {
-            body(System.currentTimeMillis())
-            readRow(id)
+            val changed = body(System.currentTimeMillis())
+            val task = readRow(id)
+            if (changed > 0 && task != null && task.status.isTerminal) {
+                TransactionEvents.afterCommit(this) { onChanged(AsyncTaskStateChanged(task)) }
+            }
+            task
         }
 
-    private suspend fun readRow(id: String): AsyncTask? =
+    internal suspend fun readRow(id: String): AsyncTask? =
         AsyncTaskTable.selectAll()
             .where { AsyncTaskTable.id eq id }
             .limit(1)
@@ -223,7 +287,7 @@ class R2dbcAsyncTaskStore(
      * the frontend). Status and trigger stay closed: this build cannot transition a row whose status
      * it cannot name, and hiding one row beats failing the list for every other row.
      */
-    private fun mapRow(row: ResultRow): AsyncTask? {
+    internal fun mapRow(row: ResultRow): AsyncTask? {
         val taskId = row[AsyncTaskTable.id]
         val type = AsyncTaskType(row[AsyncTaskTable.type])
         val statusName = row[AsyncTaskTable.status]
@@ -238,6 +302,7 @@ class R2dbcAsyncTaskStore(
             title = row[AsyncTaskTable.title],
             status = status,
             sessionId = row[AsyncTaskTable.sessionId],
+            ownerApp = row[AsyncTaskTable.ownerApp],
             payload = row[AsyncTaskTable.payload]?.let { json -> parseJsonObject(taskId, "payload", json) }
                 ?: emptyMap(),
             result = row[AsyncTaskTable.result]?.let { json -> parseJsonObject(taskId, "result", json) },

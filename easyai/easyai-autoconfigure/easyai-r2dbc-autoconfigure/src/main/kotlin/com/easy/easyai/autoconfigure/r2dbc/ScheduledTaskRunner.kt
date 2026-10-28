@@ -1,259 +1,314 @@
 package com.easy.easyai.autoconfigure.r2dbc
 
-import com.easy.easyai.core.task.*
-import kotlinx.coroutines.*
+import com.easy.easyai.core.task.AsyncTask
+import com.easy.easyai.core.task.AsyncTaskRunner
+import com.easy.easyai.core.task.AsyncTaskStore
+import com.easy.easyai.core.task.AsyncTaskType
+import com.easy.easyai.core.task.ScheduledTaskPlanContext
+import com.easy.easyai.core.task.ScheduledTaskPlanner
+import com.easy.easyai.core.task.ScheduledTaskSetting
+import com.easy.easyai.core.task.ScheduledTaskSettingChanged
+import com.easy.easyai.core.task.ScheduledTaskSettingStore
+import com.easy.easyai.core.task.TaskDraft
+import com.easy.easyai.core.task.TaskTrigger
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.DisposableBean
+import org.springframework.boot.context.event.ApplicationReadyEvent
+import org.springframework.context.event.EventListener
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.scheduling.support.CronExpression
+import java.time.Instant
 import java.time.LocalDateTime
-import java.util.*
+import java.time.ZoneId
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 
-/**
- * Drives every schedulable [AsyncTaskType] off the `scheduled_task_setting` rows: each tick reads the
- * opted-in users, resolves that row's cron, and hands due rows to the type's [ScheduledTaskPlanner],
- * then submits whatever the planner proposed.
- *
- * All scheduling mechanics live here — tick timing, cron resolution, the pending-task input planners
- * need for duplicate suppression, and the per-user batch cap — so a new schedulable type contributes
- * only a planner that decides which work is due. Planners never touch a clock or a cron expression.
- *
- * A row whose type has no registered planner is skipped: preferences outlive the code that reads them
- * (a feature switched off, a rolled-back build), and one unusable row must not stall the scan.
- *
- * The single-instance assumption that governs [AsyncTaskRunner.reconcileOrphans] applies here too:
- * concurrent schedulers sharing one database would both enqueue the same due work.
- */
 class ScheduledTaskRunner(
     private val settingStore: ScheduledTaskSettingStore?,
     private val taskStore: AsyncTaskStore?,
     private val taskRunner: AsyncTaskRunner?,
     planners: List<ScheduledTaskPlanner>,
-    private val clock: () -> LocalDateTime = { LocalDateTime.now() }
+    private val clock: () -> Instant = { Instant.now() },
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 ) : DisposableBean {
 
     private val logger = LoggerFactory.getLogger(javaClass)
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val plannersByType: Map<AsyncTaskType, ScheduledTaskPlanner> =
-        planners.associateBy { it.type }.also { byType ->
-            // One planner per type is the whole registration contract, so a collision is a wiring
-            // mistake, not a routing choice: say so instead of silently keeping the last bean.
-            planners.groupBy { it.type }
-                .filterValues { it.size > 1 }
-                .forEach { (type, duplicates) ->
-                    logger.warn(
-                        "{} planners registered for type {} ({}); '{}' serves it, the rest are dead beans",
-                        duplicates.size, type.key,
-                        duplicates.joinToString(", ") { it.javaClass.simpleName },
-                        byType[type]?.javaClass?.simpleName
-                    )
-                }
+    private val plannersByType = planners.associateBy { it.type }
+    private val timers = ConcurrentHashMap<ScheduleKey, Timer>()
+    private val refreshLocks = Array(64) { Mutex() }
+    private val planningPermits = Semaphore(4)
+    private val preloading = AtomicBoolean(false)
+    private val polling = AtomicBoolean(false)
+    private val started = AtomicBoolean(false)
+    private var lastPollAt: LocalDateTime? = null
+
+    @EventListener(ApplicationReadyEvent::class)
+    fun onApplicationReady() {
+        scope.launch {
+            taskRunner?.awaitStartupRecovery()
+            start()
         }
-
-    /** Re-entrancy guard: a slow scan must not overlap the next tick. */
-    private val scanning = AtomicBoolean(false)
-
-    /** Instant the previous scan started, which is where this scan's due-window begins. */
-    private val lastScanAt = AtomicReference<LocalDateTime?>(null)
-
-    init {
-        logger.info(
-            "Scheduled task runner wired for {} type(s): {}",
-            plannersByType.size,
-            plannersByType.keys.map { it.key }
-        )
     }
 
-    @Scheduled(cron = $$"${easyai.tasks.scheduled.scan-cron:0 * * * * *}")
+    suspend fun start() {
+        if (settingStore == null || taskRunner == null || !started.compareAndSet(false, true)) return
+        preload()
+    }
+
+    @Scheduled(fixedDelay = 1_800_000)
+    fun preloadTick() {
+        if (!started.get()) return
+        scope.launch { preload() }
+    }
+
+    @Scheduled(cron = "\${easyai.tasks.scheduled.scan-cron:0 * * * * *}")
     fun tick() {
+        if (!started.get() || !polling.compareAndSet(false, true)) return
         scope.launch {
-            if (!scanning.compareAndSet(false, true)) {
-                logger.debug("Scheduled task scan still running; skipping this tick")
-                return@launch
-            }
             try {
-                scanOnce()
+                pollOnce()
             } catch (e: CancellationException) {
-                // Preserve structured-concurrency cancellation (e.g. destroy()); never log it as a failure.
                 throw e
             } catch (e: Exception) {
-                logger.error("Scheduled task scan failed: {}", e.message, e)
+                logger.error("Scheduled polling failed: {}", e.message, e)
             } finally {
-                scanning.set(false)
+                polling.set(false)
             }
         }
     }
 
-    /** Visible for tests: one full pass at [now]. */
-    suspend fun scanOnce(now: LocalDateTime = clock()) {
-        // Each scan owns the window since the previous one: a longer tick period widens the window
-        // instead of silently dropping the fires inside it. Advancing before the pass means a scan
-        // that fails mid-loop loses that window rather than firing the same work twice.
-        val windowStart = lastScanAt.getAndSet(now) ?: now.minusSeconds(FIRST_SCAN_LOOKBACK_SECONDS)
+    @EventListener
+    fun onSettingChanged(event: ScheduledTaskSettingChanged) {
+        if (!started.get() || plannersByType[event.taskType]?.usesPersistentSchedule != true) return
+        scope.launch { refresh(ScheduleKey(event.userId, event.taskType)) }
+    }
+
+    suspend fun preload() {
         val store = settingStore ?: return
-        val settings = runCatching { store.listEnabled() }
-            .onFailure { logger.warn("Failed to list scheduled task settings: {}", it.message) }
-            .getOrDefault(emptyList())
-        for (setting in settings) {
-            val planner = plannersByType[setting.taskType]
-            if (planner == null) {
-                logger.debug(
-                    "No planner registered for scheduled type {}; skipping user {}",
-                    setting.taskType.key, setting.userId
-                )
-                continue
+        if (!preloading.compareAndSet(false, true)) return
+        try {
+            val horizon = clock().toEpochMilli() + LOOKAHEAD_MS
+            for (planner in plannersByType.values.filter { it.usesPersistentSchedule }) {
+                var afterUserId: String? = null
+                do {
+                    val rows = store.listForScheduling(planner.type, horizon, afterUserId, PAGE_SIZE)
+                    for (setting in rows) {
+                        try {
+                            refreshOnce(ScheduleKey(setting.userId, setting.taskType))
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            logger.warn("Failed to load schedule for {} {}: {}", setting.userId, planner.type.key, e.message)
+                        }
+                    }
+                    afterUserId = rows.lastOrNull()?.userId
+                } while (rows.size == PAGE_SIZE)
             }
-            if (!isDue(setting, planner, windowStart, now)) continue
-            submitFor(setting, planner, now)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.error("Scheduled preload failed: {}", e.message, e)
+        } finally {
+            preloading.set(false)
         }
     }
 
-    override fun destroy() {
-        scope.cancel()
+    private suspend fun refresh(key: ScheduleKey) {
+        while (started.get()) {
+            try {
+                refreshOnce(key)
+                return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger.warn("Failed to refresh schedule for {} {}: {}", key.userId, key.type.key, e.message)
+                delay(RETRY_MS)
+            }
+        }
     }
 
-    /**
-     * Plan and submit one user's due work. A planner that throws costs only its own user this tick, so
-     * one bad slice query cannot drop the whole scan.
-     */
-    private suspend fun submitFor(setting: ScheduledTaskSetting, planner: ScheduledTaskPlanner, now: LocalDateTime) {
-        val context = ScheduledTaskPlanContext(
-            userId = setting.userId,
-            setting = setting,
-            now = now,
-            pendingTasks = nonTerminalTasks(setting.userId, planner.type)
-        )
-        val drafts = runCatching { planner.plan(context) }.getOrElse {
-            logger.error(
-                "Scheduled plan failed for user {} type {}: {}",
-                setting.userId, planner.type.key, it.message, it
-            )
+    private suspend fun refreshOnce(key: ScheduleKey) {
+        val store = settingStore ?: return
+        refreshLocks[(key.hashCode() ushr 1) % refreshLocks.size].withLock {
+            val setting = store.get(key.userId, key.type)
+            val planner = plannersByType[key.type] ?: return@withLock
+            val current = setting?.takeIf { it.enabled }?.let { initialize(it, planner) }
+            if (current == null) timers.remove(key)?.job?.cancel() else schedule(current)
+        }
+    }
+
+    private suspend fun initialize(setting: ScheduledTaskSetting, planner: ScheduledTaskPlanner): ScheduledTaskSetting? {
+        if (!setting.enabled || setting.scheduleZone != null) return setting
+        val store = settingStore ?: return null
+        val zone = ZoneId.systemDefault()
+        val cron = resolveCron(setting, planner)
+        val next = if (cron == null) null else if (setting.scheduleRevision == null) {
+            clock().toEpochMilli()
+        } else {
+            nextFire(cron, Instant.ofEpochMilli(setting.updatedAt), zone)
+        }
+        store.initializeSchedule(setting, next, zone.id)
+        return store.get(setting.userId, setting.taskType)
+    }
+
+    private fun schedule(setting: ScheduledTaskSetting) {
+        val key = ScheduleKey(setting.userId, setting.taskType)
+        val due = setting.nextFireAt
+        if (!setting.enabled || due == null || due > clock().toEpochMilli() + LOOKAHEAD_MS) {
+            timers.remove(key)?.job?.cancel()
             return
         }
-        if (drafts.isEmpty()) return
-        val runner = taskRunner
-        if (runner == null) {
-            logger.warn(
-                "Scheduled drafts dropped, no task runner available: user={} type={} drafts={}",
-                setting.userId, planner.type.key, drafts.size
-            )
-            return
-        }
-        val accepted = drafts.take(planner.perUserPerTickLimit)
-        if (accepted.size < drafts.size) {
-            logger.warn(
-                "Capped scheduled drafts for user {} type {} at {} (planner proposed {})",
-                setting.userId, planner.type.key, accepted.size, drafts.size
-            )
-        }
-        for (draft in accepted) {
-            val task = toTask(draft, setting.timeoutMs)
-            val submitted = runCatching { runner.submit(task) }
-                .onFailure { logger.error("Failed to submit scheduled task: {}", it.message, it) }
-                .getOrNull()
-            if (submitted == null) {
-                // submit() returns null both when no store is wired and when the insert failed.
-                logger.warn(
-                    "Scheduled task not submitted (no store, or persist failed): user={} type={}",
-                    draft.userId, draft.type.key
-                )
-                continue
+        val previous = timers[key]
+        if (previous != null && previous.revision == setting.scheduleRevision && previous.due == due) return
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            while (true) {
+                waitUntil(due)
+                try {
+                    planningPermits.withPermit { fire(setting) }
+                    break
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logger.error("Scheduled firing failed for {} {}: {}", key.userId, key.type.key, e.message, e)
+                    delay(RETRY_MS)
+                }
             }
-            logger.info(
-                "Scheduled task created: user={}, type={}, task={}, session={}",
-                draft.userId, draft.type.key, submitted.id, submitted.sessionId
-            )
+        }
+        val timer = Timer(setting.scheduleRevision, due, job)
+        timers[key] = timer
+        previous?.job?.cancel()
+        job.invokeOnCompletion { cause ->
+            if (timers.remove(key, timer) && started.get()) scope.launch {
+                if (cause is CancellationException) delay(RETRY_MS)
+                refresh(key)
+            }
+        }
+        job.start()
+    }
+
+    private suspend fun waitUntil(due: Long) {
+        while (true) {
+            val remaining = due - clock().toEpochMilli()
+            if (remaining <= 0) return
+            // Recheck wall time after sleeps or clock changes without querying the database.
+            delay(minOf(remaining, CLOCK_CHECK_MS))
         }
     }
 
-    /**
-     * The driver owns identity and provenance: a planner only proposes what should run. A bound on the
-     * settings row overrides the planner's default so a host can retune one user without a new planner.
-     */
-    private fun toTask(draft: TaskDraft, settingTimeoutMs: Long?): AsyncTask = AsyncTask(
+    private suspend fun fire(expected: ScheduledTaskSetting) {
+        val store = settingStore ?: return
+        val runner = taskRunner ?: return
+        val current = store.get(expected.userId, expected.taskType) ?: return
+        if (!current.enabled || current.scheduleRevision != expected.scheduleRevision ||
+            current.nextFireAt != expected.nextFireAt || current.scheduleZone != expected.scheduleZone
+        ) return
+        val planner = plannersByType[current.taskType] ?: return
+        val zone = ZoneId.of(requireNotNull(current.scheduleZone))
+        val now = clock()
+        val context = context(current, planner, now)
+        val drafts = planner.plan(context).take(planner.perUserPerTickLimit)
+        val tasks = drafts.map { draft ->
+            toTask(draft, current.timeoutMs).copy(
+                payload = draft.payload + ("scheduledFor" to requireNotNull(current.nextFireAt))
+            )
+        }
+        val next = resolveCron(current, planner)?.let { nextFire(it, clock(), zone) }
+        val accepted = store.submitScheduled(current, next, tasks) ?: return
+        accepted.forEach { runner.dispatch(it) }
+    }
+
+    suspend fun pollOnce(now: Instant = clock()) {
+        val store = settingStore ?: return
+        val localNow = LocalDateTime.ofInstant(now, ZoneId.systemDefault())
+        val windowStart = lastPollAt ?: localNow.minusSeconds(60)
+        lastPollAt = localNow
+        for (planner in plannersByType.values.filterNot { it.usesPersistentSchedule }) {
+            for (setting in store.listEnabled(planner.type)) {
+                try {
+                    val next = resolveCron(setting, planner)?.next(windowStart) ?: continue
+                    if (next.isAfter(localNow)) continue
+                    val drafts = planner.plan(context(setting, planner, now)).take(planner.perUserPerTickLimit)
+                    for (draft in drafts) {
+                        try {
+                            taskRunner?.submit(toTask(draft, setting.timeoutMs))
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            logger.error("Failed to submit polled task for {} {}: {}", setting.userId, planner.type.key, e.message, e)
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logger.error("Scheduled polling failed for {} {}: {}", setting.userId, planner.type.key, e.message, e)
+                }
+            }
+        }
+    }
+
+    private suspend fun context(
+        setting: ScheduledTaskSetting,
+        planner: ScheduledTaskPlanner,
+        now: Instant
+    ): ScheduledTaskPlanContext = ScheduledTaskPlanContext(
+        userId = setting.userId,
+        setting = setting,
+        now = now,
+        pendingTasks = taskStore?.listNonTerminal(setting.userId, planner.type, 200).orEmpty()
+    )
+
+    private fun toTask(draft: TaskDraft, timeoutMs: Long?): AsyncTask = AsyncTask(
         id = UUID.randomUUID().toString(),
         userId = draft.userId,
         type = draft.type,
         trigger = TaskTrigger.SCHEDULE,
         title = draft.title,
         sessionId = draft.sessionId,
-        timeoutMs = settingTimeoutMs ?: draft.timeoutMs,
+        timeoutMs = timeoutMs ?: draft.timeoutMs,
         payload = draft.payload
     )
 
-    /**
-     * Due when the row's cron fired somewhere in `(windowStart, now]`. `CronExpression.next` is
-     * exclusive of its reference, so consecutive windows tile the timeline: one fire makes exactly
-     * one scan due.
-     */
-    private fun isDue(
-        setting: ScheduledTaskSetting,
-        planner: ScheduledTaskPlanner,
-        windowStart: LocalDateTime,
-        now: LocalDateTime
-    ): Boolean {
+    private fun resolveCron(setting: ScheduledTaskSetting, planner: ScheduledTaskPlanner): CronExpression? {
         val userCron = setting.cron?.takeIf { it.isNotBlank() }
-        val expression = userCron ?: planner.defaultCron ?: return false
-        val cron = parseCron(expression) ?: unusableCron(expression, userCron, setting, planner) ?: return false
-        val next = cron.next(windowStart) ?: return false
-        return !next.isAfter(now)
-    }
-
-    /**
-     * Resolves what to do when [isDue] could not parse the cron in play. A bad per-user override falls
-     * back to the planner default; a bad default leaves nothing to fall back to, and the row is not due.
-     */
-    private fun unusableCron(
-        expression: String,
-        userCron: String?,
-        setting: ScheduledTaskSetting,
-        planner: ScheduledTaskPlanner
-    ): CronExpression? {
-        if (userCron == null) {
-            logger.warn("Invalid deployment scan cron '{}' for task type {}", expression, planner.type.key)
-            return null
+        val expression = userCron ?: planner.defaultCron ?: return null
+        return runCatching { CronExpression.parse(expression) }.getOrElse {
+            logger.warn("Invalid cron '{}' for {} {}", expression, setting.userId, setting.taskType.key)
+            if (userCron == null) null else planner.defaultCron?.let { fallback ->
+                runCatching { CronExpression.parse(fallback) }.getOrNull()
+            }
         }
-        val default = planner.defaultCron?.let { parseCron(it) }
-        if (default == null) {
-            logger.warn(
-                "Invalid scan cron '{}' for user {} type {}, no usable default",
-                userCron, setting.userId, planner.type.key
-            )
-            return null
-        }
-        logger.warn(
-            "Invalid scan cron '{}' for user {} type {}; using '{}'",
-            userCron, setting.userId, planner.type.key, planner.defaultCron
-        )
-        return default
     }
 
-    private fun parseCron(expression: String): CronExpression? =
-        runCatching { CronExpression.parse(expression) }.getOrNull()
+    private fun nextFire(cron: CronExpression, after: Instant, zone: ZoneId): Long? =
+        cron.next(after.atZone(zone))?.toInstant()?.toEpochMilli()
 
-    /**
-     * This user's non-terminal tasks of [type], handed to the planner so it can suppress a duplicate
-     * for work it already queued. An unavailable or failing store yields an empty list rather than
-     * skipping the user: worst case a duplicate is proposed, which the runner's own guards then face.
-     *
-     * The store filters on status: taking a newest-first page and dropping terminal rows in memory
-     * would hide a task queued before that page, i.e. exactly the duplicate to suppress.
-     */
-    private suspend fun nonTerminalTasks(userId: String, type: AsyncTaskType): List<AsyncTask> {
-        val store = taskStore ?: return emptyList()
-        return runCatching {
-            store.listNonTerminal(userId = userId, type = type, limit = PENDING_TASK_SCAN_LIMIT)
-        }.onFailure { logger.warn("Failed to list pending {} tasks for {}: {}", type.key, userId, it.message) }
-            .getOrDefault(emptyList())
+    override fun destroy() {
+        started.set(false)
+        scope.cancel()
+        timers.clear()
     }
+
+    private data class ScheduleKey(val userId: String, val type: AsyncTaskType)
+    private data class Timer(val revision: String?, val due: Long, val job: Job)
 
     private companion object {
-        /** Same bound the per-type scans used before generalizing; enough for one user's backlog. */
-        const val PENDING_TASK_SCAN_LIMIT = 200
-
-        /** Window of the very first scan after start; later scans measure their own elapsed time. */
-        const val FIRST_SCAN_LOOKBACK_SECONDS = 60L
+        const val PAGE_SIZE = 200
+        const val LOOKAHEAD_MS = 3_600_000L
+        const val RETRY_MS = 60_000L
+        const val CLOCK_CHECK_MS = 60_000L
     }
 }

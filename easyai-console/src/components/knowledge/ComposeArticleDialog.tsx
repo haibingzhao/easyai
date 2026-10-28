@@ -10,6 +10,8 @@ import type { KnowledgeArticleDto } from '@/services/knowledge-service';
 
 interface ComposeArticleDialogProps {
   open: boolean;
+  /** Folder the composed article is saved into; omitted means the bucket default. */
+  folderId?: string;
   onClose: () => void;
 }
 
@@ -25,6 +27,7 @@ const STYLE_OPTIONS = [
 
 export const ComposeArticleDialog: React.FC<ComposeArticleDialogProps> = ({
   open,
+  folderId,
   onClose,
 }) => {
   const navigate = useNavigate();
@@ -36,7 +39,7 @@ export const ComposeArticleDialog: React.FC<ComposeArticleDialogProps> = ({
   const clearComposeResult = useKnowledgeStore((s) => s.clearComposeResult);
   const saveToKnowledge = useKnowledgeStore((s) => s.saveToKnowledge);
 
-  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [guidance, setGuidance] = useState('');
   const [style, setStyle] = useState('');
   const { models, selectedModelId, setSelectedModelId, error: modelsError } = useEnabledModels(open);
@@ -49,7 +52,7 @@ export const ComposeArticleDialog: React.FC<ComposeArticleDialogProps> = ({
 
   useEffect(() => {
     if (open) {
-      setSelectedKeys(new Set());
+      setSelectedIds(new Set());
       setGuidance('');
       setStyle('');
       setSearchQuery('');
@@ -74,27 +77,27 @@ export const ComposeArticleDialog: React.FC<ComposeArticleDialogProps> = ({
     const q = searchQuery.trim().toLowerCase();
     if (!q) return articles;
     return articles.filter((a) =>
-      [a.title, a.description ?? '', a.relativePath].join('\n').toLowerCase().includes(q)
+      [a.title, a.description ?? '', a.folderPath].join('\n').toLowerCase().includes(q)
     );
   }, [articles, searchQuery]);
 
-  const toggleArticle = (key: string) => {
-    setSelectedKeys((prev) => {
+  const toggleArticle = (id: string) => {
+    setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
+      if (next.has(id)) {
+        next.delete(id);
       } else {
-        next.add(key);
+        next.add(id);
       }
       return next;
     });
   };
 
   const handleCompose = async () => {
-    if (selectedKeys.size === 0 || !guidance.trim() || !selectedModelId || composing) return;
+    if (selectedIds.size === 0 || !guidance.trim() || !selectedModelId || composing) return;
     try {
       await aiCompose({
-        sourceKeys: Array.from(selectedKeys),
+        sourceIds: Array.from(selectedIds),
         guidance: guidance.trim(),
         style,
         modelConfigId: selectedModelId,
@@ -113,14 +116,14 @@ export const ComposeArticleDialog: React.FC<ComposeArticleDialogProps> = ({
       const article = await saveToKnowledge({
         title,
         content: composeResult,
-        source: 'manual',
+        folderId,
         origin: 'compose',
-        composedFrom: Array.from(selectedKeys).join(','),
+        composedFrom: Array.from(selectedIds).join(','),
       });
       setSaved(true);
       redirectTimerRef.current = setTimeout(() => {
         onClose();
-        navigate(`/knowledge/editor/${encodeURIComponent(article.knowledgeKey)}`);
+        navigate(`/knowledge/editor/${encodeURIComponent(article.id)}`);
       }, 800);
     } catch (e) {
       setSaveError(readErrorMessage(e, i18n('Save failed')));
@@ -129,7 +132,7 @@ export const ComposeArticleDialog: React.FC<ComposeArticleDialogProps> = ({
     }
   };
 
-  const canCompose = selectedKeys.size >= 1
+  const canCompose = selectedIds.size >= 1
     && guidance.trim().length > 0
     && !!selectedModelId
     && models.length > 0
@@ -143,7 +146,7 @@ export const ComposeArticleDialog: React.FC<ComposeArticleDialogProps> = ({
             {/* Step 1: Select source articles */}
             <div>
               <label className="block text-sm font-medium mb-1">
-                {i18n('Source Articles')} ({selectedKeys.size})
+                {i18n('Source Articles')} ({selectedIds.size})
               </label>
               <input
                 type="text"
@@ -164,8 +167,8 @@ export const ComposeArticleDialog: React.FC<ComposeArticleDialogProps> = ({
                   <ArticleCheckbox
                     key={article.id}
                     article={article}
-                    checked={selectedKeys.has(article.knowledgeKey)}
-                    onToggle={() => toggleArticle(article.knowledgeKey)}
+                    checked={selectedIds.has(article.id)}
+                    onToggle={() => toggleArticle(article.id)}
                   />
                 ))}
               </div>
@@ -328,12 +331,12 @@ const ArticleCheckbox: React.FC<{
       {checked && <Check className="size-3 text-primary-foreground" />}
     </div>
     <FileText className="size-3.5 text-muted-foreground shrink-0" />
-    <span className="text-xs truncate flex-1">{article.title || article.relativePath}</span>
+    <span className="text-xs truncate flex-1">{article.title || article.folderPath}</span>
     {article.status === 'draft' && (
       <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
         {i18n('Draft')}
       </span>
     )}
-    <span className="text-[10px] text-muted-foreground shrink-0">{article.source}</span>
+    <span className="text-[10px] text-muted-foreground shrink-0">{article.origin}</span>
   </button>
 );

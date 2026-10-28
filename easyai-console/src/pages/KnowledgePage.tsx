@@ -1,28 +1,26 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { BookOpen, Brain, FileText, X } from 'lucide-react';
-import { KnowledgeSidebar } from '@/components/knowledge/KnowledgeSidebar';
-import { KnowledgeViewer } from '@/components/knowledge/KnowledgeViewer';
-import { UploadKnowledgeDialog } from '@/components/knowledge/UploadKnowledgeDialog';
+import { Brain, FileText } from 'lucide-react';
+import { KnowledgeTree } from '@/components/knowledge/KnowledgeTree';
 import { ArticleListPanel } from '@/components/knowledge/ArticleListPanel';
 import { MemoryPanel } from '@/components/knowledge/MemoryPanel';
 import { useKnowledgeStore } from '@/services/stores/knowledge-store';
 import { useResizable } from '@/hooks/useResizable';
 import { i18n } from '@/utils/i18n';
 
-type TabId = 'knowledge' | 'articles' | 'memory';
+type TabId = 'articles' | 'memory';
 
-const SIDEBAR_MIN = 240;
-const SIDEBAR_MAX = 480;
+const SIDEBAR_MIN = 220;
+const SIDEBAR_MAX = 420;
 
 function isTabId(value: string | null): value is TabId {
-  return value === 'knowledge' || value === 'articles' || value === 'memory';
+  return value === 'articles' || value === 'memory';
 }
 
 export const KnowledgePage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
-  const activeTab: TabId = isTabId(tabParam) ? tabParam : 'knowledge';
+  const activeTab: TabId = isTabId(tabParam) ? tabParam : 'articles';
 
   const setActiveTab = (tab: TabId) => {
     const next = new URLSearchParams(searchParams);
@@ -34,12 +32,6 @@ export const KnowledgePage: React.FC = () => {
     <div className="h-full flex flex-col bg-background min-h-0">
       {/* Tab bar */}
       <div className="flex items-center gap-0 px-4 border-b border-border shrink-0">
-        <TabButton
-          active={activeTab === 'knowledge'}
-          icon={<BookOpen className="size-3.5" />}
-          label={i18n('Documents')}
-          onClick={() => setActiveTab('knowledge')}
-        />
         <TabButton
           active={activeTab === 'articles'}
           icon={<FileText className="size-3.5" />}
@@ -56,13 +48,7 @@ export const KnowledgePage: React.FC = () => {
 
       {/* Tab content */}
       <div className="flex-1 min-h-0">
-        {activeTab === 'knowledge' ? (
-          <KnowledgePanel />
-        ) : activeTab === 'articles' ? (
-          <ArticleListPanel />
-        ) : (
-          <MemoryPanel />
-        )}
+        {activeTab === 'articles' ? <ArticlesPanel /> : <MemoryPanel />}
       </div>
     </div>
   );
@@ -88,24 +74,11 @@ const TabButton: React.FC<{
   </button>
 );
 
-/** Knowledge panel with sidebar + viewer */
-const KnowledgePanel: React.FC = () => {
-  const entries = useKnowledgeStore((s) => s.entries);
-  const sources = useKnowledgeStore((s) => s.sources);
-  const detail = useKnowledgeStore((s) => s.detail);
-  const loading = useKnowledgeStore((s) => s.loading);
-  const error = useKnowledgeStore((s) => s.error);
-  const loadEntries = useKnowledgeStore((s) => s.loadEntries);
-  const loadSources = useKnowledgeStore((s) => s.loadSources);
-  const loadDetail = useKnowledgeStore((s) => s.loadDetail);
-  const deleteEntry = useKnowledgeStore((s) => s.deleteEntry);
-  const clearError = useKnowledgeStore((s) => s.clearError);
-  const clearDetail = useKnowledgeStore((s) => s.clearDetail);
+/** Folder tree (left) + article list (right). */
+const ArticlesPanel: React.FC = () => {
   const stopIndexingPoll = useKnowledgeStore((s) => s.stopIndexingPoll);
-
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [uploadOpen, setUploadOpen] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(288);
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(260);
 
   const resizable = useResizable({
     minWidth: SIDEBAR_MIN,
@@ -115,54 +88,14 @@ const KnowledgePanel: React.FC = () => {
   });
 
   useEffect(() => {
-    loadEntries();
-    loadSources();
-  }, [loadEntries, loadSources]);
-
-  // Stop indexing polling when unmounting the knowledge panel
-  useEffect(() => {
     return () => stopIndexingPoll();
   }, [stopIndexingPoll]);
 
-  const handleSelect = useCallback(
-    (key: string) => {
-      setSelectedKey(key);
-      loadDetail(key);
-    },
-    [loadDetail]
-  );
-
-  const handleDelete = useCallback(
-    async (key: string) => {
-      await deleteEntry(key);
-      setSelectedKey(null);
-      clearDetail();
-    },
-    [deleteEntry, clearDetail]
-  );
-
-  const handleSelectKey = useCallback(
-    (key: string) => {
-      setSelectedKey(key);
-      loadDetail(key);
-    },
-    [loadDetail]
-  );
-
   return (
     <div className="h-full flex min-h-0">
-      {/* Left sidebar */}
       <div style={{ width: sidebarWidth }} className="flex flex-col min-h-0 border-r border-border shrink-0">
-        <KnowledgeSidebar
-          entries={entries}
-          sources={sources}
-          selectedKey={selectedKey}
-          onSelect={handleSelect}
-          onUploadClick={() => setUploadOpen(true)}
-        />
+        <KnowledgeTree selectedFolderId={selectedFolderId} onSelect={setSelectedFolderId} />
       </div>
-
-      {/* Resize handle */}
       <div
         onMouseDown={(e) => {
           resizable.setCurrentWidth(sidebarWidth);
@@ -175,32 +108,9 @@ const KnowledgePanel: React.FC = () => {
         className="w-1 cursor-col-resize bg-border hover:bg-primary/60 transition-colors shrink-0"
         title={i18n('Collapse')}
       />
-
-      {/* Right: viewer */}
       <div className="flex-1 min-w-0 flex flex-col min-h-0">
-        {/* Error banner */}
-        {error && (
-          <div className="flex items-center justify-between px-4 py-2 border-b border-destructive/50 bg-destructive/5 text-xs text-destructive shrink-0">
-            <span className="truncate">{error}</span>
-            <button onClick={clearError} className="text-destructive hover:opacity-70 shrink-0">
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-
-        {/* Viewer */}
-        <div className="flex-1 min-h-0">
-          <KnowledgeViewer
-            detail={detail}
-            loading={loading}
-            onDelete={handleDelete}
-            onSelectKey={handleSelectKey}
-          />
-        </div>
+        <ArticleListPanel folderId={selectedFolderId} />
       </div>
-
-      {/* Upload dialog */}
-      <UploadKnowledgeDialog open={uploadOpen} onClose={() => setUploadOpen(false)} />
     </div>
   );
 };
