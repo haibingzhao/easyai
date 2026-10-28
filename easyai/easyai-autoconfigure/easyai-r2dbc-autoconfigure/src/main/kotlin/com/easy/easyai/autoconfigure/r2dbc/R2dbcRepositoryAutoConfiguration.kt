@@ -541,8 +541,11 @@ class R2dbcRepositoryAutoConfiguration(
      */
     @Bean
     @ConditionalOnMissingBean(AsyncSkillCatalogStore::class)
-    fun asyncSkillCatalogStore(initializer: R2dbcDatabaseInitializer): AsyncSkillCatalogStore {
-        return R2dbcAsyncSkillCatalogStore(initializer.getDatabase())
+    fun asyncSkillCatalogStore(
+        initializer: R2dbcDatabaseInitializer,
+        host: HostIdentity
+    ): AsyncSkillCatalogStore {
+        return R2dbcAsyncSkillCatalogStore(initializer.getDatabase(), host)
     }
 
     /**

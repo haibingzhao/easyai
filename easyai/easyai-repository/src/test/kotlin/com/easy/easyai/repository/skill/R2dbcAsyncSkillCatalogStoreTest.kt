@@ -1,15 +1,22 @@
 package com.easy.easyai.repository.skill
 
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.skill.SkillCatalogEntry
 import com.easy.easyai.core.skill.SkillSyncState
 import com.easy.easyai.core.skill.SkillSyncUpdate
 import com.easy.easyai.repository.database.DatabaseMigration
+import com.easy.easyai.repository.database.Tables.UserTable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.test.runTest
+import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
+import org.jetbrains.exposed.v1.r2dbc.deleteWhere
+import org.jetbrains.exposed.v1.r2dbc.insert
+import org.jetbrains.exposed.v1.r2dbc.selectAll
 import org.jetbrains.exposed.v1.r2dbc.transactions.TransactionManager
+import org.jetbrains.exposed.v1.r2dbc.transactions.suspendTransaction
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Nested
@@ -44,7 +51,7 @@ class R2dbcAsyncSkillCatalogStoreTest {
         DatabaseMigration.defaultTables().execute(db)
     }
 
-    private fun createStore() = R2dbcAsyncSkillCatalogStore(db)
+    private fun createStore(appName: String = "test-app") = R2dbcAsyncSkillCatalogStore(db, HostIdentity(appName))
 
     private fun entry(
         name: String,
@@ -65,6 +72,26 @@ class R2dbcAsyncSkillCatalogStoreTest {
     )
 
     private fun uniqueUser(prefix: String) = "$prefix-${UUID.randomUUID().toString().take(8)}"
+
+    private suspend fun ensureUser(
+        userId: String,
+        ownerApp: String = "test-app",
+        database: R2dbcDatabase = db
+    ) = suspendTransaction(database) {
+        val existing = UserTable.selectAll().where { UserTable.id eq userId }.count()
+        if (existing == 0L) {
+            val now = System.currentTimeMillis()
+            UserTable.insert {
+                it[id] = userId
+                it[UserTable.ownerApp] = ownerApp
+                it[username] = userId
+                it[displayName] = userId
+                it[passwordHash] = "hash"
+                it[createdAt] = now
+                it[updatedAt] = now
+            }
+        }
+    }
 
     @Nested
     inner class `claim and content update semantics` {
@@ -235,7 +262,7 @@ class R2dbcAsyncSkillCatalogStoreTest {
             assumeTrue(!url.isNullOrBlank(), "Requires a dedicated external PostgreSQL test database")
             val postgres = R2dbcDatabase.connect(requireNotNull(url), manager = { TransactionManager(it) })
             DatabaseMigration.defaultTables().execute(postgres)
-            val store = R2dbcAsyncSkillCatalogStore(postgres)
+            val store = R2dbcAsyncSkillCatalogStore(postgres, HostIdentity("test-app"))
             val user = uniqueUser("pg-claim")
             try {
                 val results = coroutineScope {
@@ -249,6 +276,46 @@ class R2dbcAsyncSkillCatalogStoreTest {
                 store.listByUser(user).forEach { store.delete(it.id) }
             }
         }
+
+        @Test
+        fun `PostgreSQL background owners are limited to the current application and system`() = runTest {
+            val url = System.getenv("EASYAI_TEST_POSTGRES_R2DBC_URL")
+            assumeTrue(!url.isNullOrBlank(), "Requires a dedicated external PostgreSQL test database")
+            val postgres = R2dbcDatabase.connect(requireNotNull(url), manager = { TransactionManager(it) })
+            DatabaseMigration.defaultTables().execute(postgres)
+            val store = R2dbcAsyncSkillCatalogStore(postgres, HostIdentity("test-app"))
+            val mine = uniqueUser("pg-mine")
+            val theirs = uniqueUser("pg-theirs")
+            val group = "g_family_${UUID.randomUUID().toString().take(8)}"
+            val sharedSkill = "shared-${UUID.randomUUID().toString().take(8)}"
+            val created = mutableListOf<SkillCatalogEntry>()
+            try {
+                ensureUser(mine, database = postgres)
+                ensureUser(theirs, ownerApp = "other-app", database = postgres)
+                created += store.claim(entry("mine", mine))
+                created += store.claim(entry("theirs", theirs))
+                created += store.claim(entry("group", group))
+                created += store.claim(entry(sharedSkill, SkillCatalogEntry.DEFAULT_USER_ID))
+
+                val myOwners = store.listDistinctUserIds()
+                val otherOwners = R2dbcAsyncSkillCatalogStore(postgres, HostIdentity("other-app"))
+                    .listDistinctUserIds()
+                assertTrue(mine in myOwners)
+                assertTrue(SkillCatalogEntry.DEFAULT_USER_ID in myOwners)
+                assertFalse(theirs in myOwners)
+                assertFalse(group in myOwners)
+                assertTrue(theirs in otherOwners)
+                assertTrue(SkillCatalogEntry.DEFAULT_USER_ID in otherOwners)
+                assertFalse(mine in otherOwners)
+                assertFalse(group in otherOwners)
+            } finally {
+                created.forEach { store.delete(it.id) }
+                suspendTransaction(postgres) {
+                    UserTable.deleteWhere { UserTable.id eq mine }
+                    UserTable.deleteWhere { UserTable.id eq theirs }
+                }
+            }
+        }
     }
 
     @Nested
@@ -258,6 +325,7 @@ class R2dbcAsyncSkillCatalogStoreTest {
         fun `listDistinctUserIds collapses rows of the same owner`() = runTest {
             val store = createStore()
             val user = uniqueUser("multi")
+            ensureUser(user)
 
             store.claim(entry("one", user))
             store.claim(entry("two", user))
@@ -265,6 +333,38 @@ class R2dbcAsyncSkillCatalogStoreTest {
             val owners = store.listDistinctUserIds()
             assertEquals(owners.distinct().size, owners.size, "owners must be deduplicated")
             assertTrue(user in owners)
+        }
+
+        @Test
+        fun `background owners are limited to the current application and system`() = runTest {
+            val store = createStore()
+            val mine = uniqueUser("mine")
+            val theirs = uniqueUser("theirs")
+            val group = "g_family_${UUID.randomUUID().toString().take(8)}"
+            val groupSkill = "group-${UUID.randomUUID().toString().take(8)}"
+            val sharedSkill = "shared-${UUID.randomUUID().toString().take(8)}"
+            val system = SkillCatalogEntry.DEFAULT_USER_ID
+            ensureUser(mine)
+            ensureUser(theirs, "other-app")
+            store.claim(entry("mine", mine))
+            store.claim(entry("theirs", theirs))
+            store.claim(entry(groupSkill, group))
+            store.claim(entry(sharedSkill, system))
+
+            val myOwners = store.listDistinctUserIds()
+            val otherOwners = createStore("other-app").listDistinctUserIds()
+            assertTrue(mine in myOwners)
+            assertTrue(system in myOwners)
+            assertFalse(theirs in myOwners)
+            assertFalse(group in myOwners, "a group bucket has no app_user row and is synchronized by requests")
+            assertTrue(theirs in otherOwners)
+            assertTrue(system in otherOwners)
+            assertFalse(mine in otherOwners)
+            assertFalse(group in otherOwners)
+
+            val requested = store.listByOwners(listOf(group, system))
+            assertTrue(requested.any { it.userId == group && it.name == groupSkill })
+            assertTrue(requested.any { it.userId == system && it.name == sharedSkill })
         }
 
         @Test

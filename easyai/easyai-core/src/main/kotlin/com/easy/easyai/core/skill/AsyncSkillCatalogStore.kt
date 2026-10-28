@@ -51,10 +51,11 @@ interface AsyncSkillCatalogStore {
     suspend fun listByOwners(userIds: List<String>): List<SkillCatalogEntry>
 
     /**
-     * Distinct owners present in the catalog.
+     * Distinct owners this application is responsible for synchronizing, plus the shared `system` layer.
      *
-     * This is what lets startup reconciliation enumerate owner roots without a request
-     * context: owners come from persisted rows instead of being guessed from "the current user".
+     * Startup reconciliation and background index retries use this without a request context. Account
+     * ownership is derived from `app_user.owner_app`; request-scoped owner sets, including product-defined
+     * group buckets, continue to use [listByOwners] directly.
      */
     suspend fun listDistinctUserIds(): List<String>
 

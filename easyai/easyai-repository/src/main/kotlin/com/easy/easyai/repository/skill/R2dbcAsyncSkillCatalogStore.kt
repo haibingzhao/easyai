@@ -1,11 +1,13 @@
 package com.easy.easyai.repository.skill
 
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.skill.AsyncSkillCatalogStore
 import com.easy.easyai.core.skill.SkillCatalogEntry
 import com.easy.easyai.core.skill.SkillSyncState
 import com.easy.easyai.core.skill.SkillSyncUpdate
 import com.easy.easyai.repository.database.SqlErrorClassifier
 import com.easy.easyai.repository.database.Tables
+import com.easy.easyai.repository.database.UserScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
@@ -16,6 +18,7 @@ import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.isNull
 import org.jetbrains.exposed.v1.core.inList
+import org.jetbrains.exposed.v1.core.or
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
 import org.jetbrains.exposed.v1.r2dbc.deleteWhere
 import org.jetbrains.exposed.v1.r2dbc.insert
@@ -25,7 +28,10 @@ import org.jetbrains.exposed.v1.r2dbc.transactions.suspendTransaction
 import org.jetbrains.exposed.v1.r2dbc.update
 import java.util.UUID
 
-class R2dbcAsyncSkillCatalogStore(private val db: R2dbcDatabase) : AsyncSkillCatalogStore {
+class R2dbcAsyncSkillCatalogStore(
+    private val db: R2dbcDatabase,
+    private val host: HostIdentity
+) : AsyncSkillCatalogStore {
     private val table = Tables.SkillTable
 
     override suspend fun claim(entry: SkillCatalogEntry): SkillCatalogEntry {
@@ -94,7 +100,10 @@ class R2dbcAsyncSkillCatalogStore(private val db: R2dbcDatabase) : AsyncSkillCat
     }
 
     override suspend fun listDistinctUserIds(): List<String> = suspendTransaction(db) {
-        table.select(table.userId).withDistinct().map { it[table.userId] }.toList()
+        table.select(table.userId).withDistinct().where {
+            UserScope.ownedByApp(table.userId, host.appName) or
+                (table.userId eq SkillCatalogEntry.DEFAULT_USER_ID)
+        }.map { it[table.userId] }.toList()
     }
 
     override suspend fun setEnabled(id: String, enabled: Boolean): Boolean {
