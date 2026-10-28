@@ -4,12 +4,17 @@ import com.easy.easyai.core.skill.AsyncSkillCatalogStore
 import com.easy.easyai.core.skill.SkillCatalogEntry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
+import java.nio.channels.FileChannel
+import java.nio.channels.FileLock
+import java.nio.channels.OverlappingFileLockException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -84,8 +89,71 @@ class SkillSyncService(
     private val logger = LoggerFactory.getLogger(javaClass)
     private val ownerLocks = ConcurrentHashMap<String, Mutex>()
 
+    /**
+     * Serialize every mutation of one owner root.
+     *
+     * Three layers, because one is not enough: an in-process [Mutex] per owner for this instance's
+     * threads, a JVM-wide [Mutex] per lock file for a second [SkillSyncService] in the same process
+     * (tests, host-defined beans), and an OS file lock under `{rootDir}/.locks` for a second process
+     * sharing the same data directory. The file lock is what makes the startup sweep and the periodic
+     * reconcile safe when two applications serve one database — without it both unpack packages into
+     * the same directories, and one host's directory digest reads the other's half-written tree.
+     *
+     * When the processes have *separate* data directories the file locks are naturally independent,
+     * which is also correct: each host has to materialize its own copy.
+     *
+     * A lock that cannot be taken within [LOCK_WAIT_MS] throws [SkillOwnerBusyException] rather than
+     * proceeding on the in-process lock alone. Busy is transient — the callers' retry loops absorb it
+     * — while two writers in one root is silent file corruption.
+     */
     suspend fun <T> withOwnerLock(owner: String, block: suspend () -> T): T =
-        ownerLocks.computeIfAbsent(owner) { Mutex() }.withLock { block() }
+        ownerLocks.computeIfAbsent(owner) { Mutex() }.withLock {
+            withContext(Dispatchers.IO) { withCrossProcessLock(owner) { block() } }
+        }
+
+    private suspend fun <T> withCrossProcessLock(owner: String, block: suspend () -> T): T {
+        val lockFile = lockFileOf(owner)
+        Files.createDirectories(lockFile.parent)
+        val jvmLock = JVM_FILE_LOCKS.computeIfAbsent(lockFile) { Mutex() }
+        return jvmLock.withLock {
+            FileChannel.open(lockFile, StandardOpenOption.CREATE, StandardOpenOption.WRITE).use { channel ->
+                val lock = acquireLock(channel, owner)
+                try {
+                    block()
+                } finally {
+                    // Closing the channel releases the lock anyway; a failed explicit release must
+                    // not mask the block's own result.
+                    runCatching { lock.release() }
+                }
+            }
+        }
+    }
+
+    /**
+     * `{rootDir}/.locks/{owner}.lock` — deliberately a sibling of the owner roots, so no lock file
+     * ever lands inside a skill root where discovery or the directory digest would see it.
+     */
+    private fun lockFileOf(owner: String): Path =
+        Path.of(config.rootDir).toAbsolutePath().normalize()
+            .resolve(LOCK_DIR_NAME)
+            .resolve("${SkillPaths.safeSegment(owner)}.lock")
+
+    private suspend fun acquireLock(channel: FileChannel, owner: String): FileLock {
+        val deadline = System.currentTimeMillis() + LOCK_WAIT_MS
+        while (true) {
+            val lock = try {
+                channel.tryLock()
+            } catch (e: OverlappingFileLockException) {
+                // Only this JVM can overlap its own lock, and [JVM_FILE_LOCKS] serializes that case.
+                // Reaching here means some other caller bypassed it; wait it out rather than
+                // proceeding without exclusion, which is the corruption this lock exists to stop.
+                null
+            }
+            if (lock != null) return lock
+            if (System.currentTimeMillis() >= deadline) throw SkillOwnerBusyException(owner)
+            delay(LOCK_RETRY_MS)
+        }
+    }
 
     /** The normalized owner id a request maps to: blank or absent user ids are the shared layer. */
     fun ownerOf(userId: String?): String =
@@ -120,7 +188,16 @@ class SkillSyncService(
         var claimed = 0; var pushed = 0; var restored = 0; var backfilled = 0; var skipped = 0; var failed = 0
         var unclaimed = 0
         for (o in resolved) {
-            val partial = withOwnerLock(o) { syncOwner(o, self) }
+            // A root another process is working on is skipped, not waited on: this pass has more owners
+            // to visit and the caller (startup sweep, login hook) is retried anyway. Waiting here would
+            // let one busy owner hold up every other owner's sync.
+            val partial = try {
+                withOwnerLock(o) { syncOwner(o, self) }
+            } catch (e: SkillOwnerBusyException) {
+                logger.info("Skipping owner '{}' this pass: {}", o, e.message)
+                skipped++
+                continue
+            }
             claimed += partial.claimed; pushed += partial.pushed; restored += partial.restored
             backfilled += partial.backfilled; skipped += partial.skipped; failed += partial.failed
             unclaimed += partial.unclaimed
@@ -664,8 +741,27 @@ class SkillSyncService(
         const val ZIP_CONTENT_TYPE = "application/zip"
         private const val RESTORE_PREFIX = ".restore-"
         private const val STAGE_PREFIX = "easyai-skill-upload-"
+
+        /** Directory under the skill root holding one cross-process lock file per owner. */
+        private const val LOCK_DIR_NAME = ".locks"
+        private const val LOCK_WAIT_MS = 30_000L
+        private const val LOCK_RETRY_MS = 100L
+
+        /**
+         * One mutex per lock file for this JVM. A file lock is per *channel*, so two service
+         * instances in one process would otherwise both pass `tryLock` — the second throwing
+         * [OverlappingFileLockException] — and mutate the same root concurrently.
+         */
+        private val JVM_FILE_LOCKS = ConcurrentHashMap<Path, Mutex>()
     }
 }
+
+/**
+ * Another process is currently mutating this owner's skill root and the file lock did not free up in
+ * time. Transient by construction — the retry loops retry, an interactive call may be repeated.
+ */
+class SkillOwnerBusyException(owner: String) :
+    IllegalStateException("Skill root of '$owner' is locked by another process; try again shortly")
 
 /** Outcome of [SkillSyncService.claimPackage]: inserted, out-claimed by an existing row, or failed. */
 internal sealed interface PackageClaim {

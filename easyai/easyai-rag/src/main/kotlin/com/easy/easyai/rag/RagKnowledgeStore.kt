@@ -1,6 +1,7 @@
 package com.easy.easyai.rag
 
-import com.easy.easyai.core.knowledge.*
+import com.easy.easyai.core.knowledge.KnowledgeEntry
+import com.easy.easyai.core.knowledge.KnowledgeStore
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -10,20 +11,14 @@ import java.time.Instant
 /**
  * [KnowledgeStore] implementation backed by EasyRAG.
  *
- * Mirrors the [RagMemoryStore] pattern:
- * - key layout: `{source}/{relativePath}` (e.g. `easyai-docs/README.md`)
- * - externalId: `easyai:{key}`
+ * - key / externalId: the article id (`easyai:{id}`); folder layout lives only in the database
  * - bizId: `RagBizIdResolver.globalBizId(userId, "k")` (user-level, cross-project)
- * - content: YAML frontmatter (title/description/source/kcategory/ext/updated) + raw body
- * - metadata: `source, kcategory, ext, title`
+ * - content: YAML frontmatter (title/description/kcategory/ext/updated) + raw body
  *
  * Processing profile by extension:
  * - `.md` → structure_aware chunking, buildStructure=true, skipKg=false
  * - text whitelist → default chunking, skipKg=false
- * - others → rejected
- *
- * Upload concurrency is limited to 4 parallel upserts to avoid overwhelming
- * the EasyRAG pipeline (which may return 409 when busy).
+ * - others → rejected (`index` returns false)
  */
 internal class RagKnowledgeStore(
     private val client: RagClient
@@ -31,373 +26,135 @@ internal class RagKnowledgeStore(
 
     private val logger = LoggerFactory.getLogger(RagKnowledgeStore::class.java)
 
-    // ── uploadBatch ────────────────────────────────────────────────────
+    // ── search / read ──────────────────────────────────────────────────
 
-    override suspend fun uploadBatch(
-        userId: String,
-        source: String,
-        items: List<KnowledgeUploadItem>,
-        kcategory: String?
-    ): List<UploadResult> {
+    override suspend fun search(userId: String, query: String, topK: Int): List<KnowledgeEntry> {
         val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
-        val results = mutableListOf<UploadResult>()
+        val chunks = client.search(query = query, topK = topK, bizId = bizId)
+        val ids = chunks.mapNotNull { extractIdFromPath(it.filePath) }.distinct()
+        if (ids.isEmpty()) return emptyList()
 
-        // Process in chunks of 4 to limit concurrency
-        for (chunk in items.chunked(UPLOAD_CONCURRENCY)) {
-            coroutineScope {
-                val chunkResults = chunk.map { item ->
-                    async { uploadSingle(source, item, kcategory, bizId) }
-                }.awaitAll()
-                results.addAll(chunkResults)
-            }
-        }
-        return results
-    }
-
-    private suspend fun uploadSingle(
-        source: String,
-        item: KnowledgeUploadItem,
-        kcategory: String?,
-        bizId: String
-    ): UploadResult {
-        val relativePath = item.relativePath
-        val ext = relativePath.substringAfterLast('.', "").lowercase()
-        val options = processingOptionsFor(ext)
-            ?: return UploadResult(
-                relativePath = relativePath,
-                success = false,
-                reason = "Unsupported file extension: .$ext"
-            )
-
-        // Default uncategorised uploads to "other"
-        val resolvedCategory = kcategory?.takeIf { it.isNotBlank() } ?: "other"
-
-        val key = "$source/$relativePath"
-        val externalId = RagConstants.externalIdOf(key)
-        val title = extractTitle(item.content, relativePath)
-        val description = extractDescription(item.content)
-        val now = Instant.now()
-        val updatedMillis = now.toEpochMilli()
-
-        val content = buildFileContent(
-            title = title,
-            description = description,
-            source = source,
-            kcategory = resolvedCategory,
-            ext = ext,
-            updatedMillis = updatedMillis,
-            body = stripFrontmatter(item.content)
-        )
-
-        val metadata = buildMap<String, String> {
-            put("source", source)
-            put("kcategory", resolvedCategory)
-            put("ext", ext)
-            put("title", title)
-        }
-
-        val doc = RagDocument(
-            key = key,
-            content = content,
-            metadata = metadata,
-            createTime = now.epochSecond,
-            options = options
-        )
-
-        return try {
-            // Fire-and-forget: submit indexing but don't poll for completion.
-            // The server indexes asynchronously; entries become searchable shortly after.
-            // This avoids blocking the upload response for potentially minutes per file
-            // (pollUntilTerminal can wait up to indexPollMaxMs=5min per document).
-            val result = client.upsert(doc, bizId, awaitIndexing = false)
-            if (!result.indexed) {
-                logger.debug("Knowledge entry indexing submitted (not yet confirmed): {}", externalId)
-            } else {
-                logger.debug("Knowledge entry uploaded: {}", externalId)
-            }
-            UploadResult(relativePath = relativePath, success = true, key = key)
-        } catch (e: RagException) {
-            logger.warn("Knowledge upload failed for {}: {}", relativePath, e.message)
-            UploadResult(relativePath = relativePath, success = false, reason = e.message)
-        }
-    }
-
-    // ── list ───────────────────────────────────────────────────────────
-
-    override suspend fun list(
-        userId: String,
-        source: String?,
-        kcategory: String?,
-        query: String?
-    ): List<KnowledgeEntry> {
-        val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
-
-        // Semantic search mode
-        if (!query.isNullOrBlank()) {
-            return searchEntries(query, bizId, source, kcategory)
-        }
-
-        // List mode: fetch all docs under the knowledge prefix
-        val pathPrefix = if (source != null) {
-            "${RagConstants.FILE_PATH_ROOT}/$source/"
-        } else {
-            "${RagConstants.FILE_PATH_ROOT}/"
-        }
-        val docs = client.list(pathPrefix, bizId)
-        if (docs.isEmpty()) return emptyList()
-
-        // Read full details concurrently
-        val entries = coroutineScope {
-            docs.mapNotNull { doc ->
-                val extId = doc.externalId ?: return@mapNotNull null
+        // Read the distinct documents concurrently; one bad document must not abort the search.
+        return coroutineScope {
+            ids.map { id ->
                 async {
-                    val detail = client.readByExternalId(extId, bizId) ?: return@async null
-                    parseDetailToEntry(detail.content, detail.filePath, chunksCount = detail.chunksCount)
-                }
-            }.awaitAll().filterNotNull()
-        }
-
-        // Client-side category filter
-        return if (kcategory != null) {
-            entries.filter { it.kcategory == kcategory }
-        } else {
-            entries
-        }
-    }
-
-    private suspend fun searchEntries(
-        query: String,
-        bizId: String,
-        source: String?,
-        kcategory: String?
-    ): List<KnowledgeEntry> {
-        val chunks = client.search(
-            query = query,
-            topK = SEARCH_TOP_K,
-            bizId = bizId
-        )
-        // Deduplicate by extracting unique document keys from chunk filePaths
-        val seen = mutableSetOf<String>()
-        val keys = mutableListOf<String>()
-        for (chunk in chunks) {
-            val key = extractKeyFromPath(chunk.filePath) ?: continue
-            if (source != null && !key.startsWith("$source/")) continue
-            if (!seen.add(key)) continue
-            keys.add(key)
-        }
-        // Read full documents concurrently instead of one-by-one (N+1 HTTP calls).
-        // Per-item failure degrades gracefully (mirrors uploadBatch): one bad doc
-        // must not abort the whole search.
-        val entries = coroutineScope {
-            keys.map { key ->
-                async {
-                    val detail = try {
-                        client.readByExternalId(RagConstants.externalIdOf(key), bizId)
-                    } catch (ex: RagException) {
-                        logger.warn("Knowledge search: failed to read entry {}: {}", key, ex.message)
+                    val doc = try {
+                        client.readByExternalId(RagConstants.externalIdOf(id), bizId)
+                    } catch (e: RagException) {
+                        logger.warn("Knowledge search: failed to read entry {}: {}", id, e.message)
                         null
-                    }
-                    if (detail == null) return@async null
-                    // Longer preview than list mode: reduces follow-up knowledge_read calls.
-                    parseDetailToEntry(detail.content, detail.filePath, SEARCH_PREVIEW_LENGTH, chunksCount = detail.chunksCount)
+                    } ?: return@async null
+                    parseEntry(doc.content, doc.filePath ?: RagConstants.filePathOf(id), doc.chunksCount)
                 }
             }.awaitAll().filterNotNull()
         }
-        return if (kcategory != null) {
-            entries.filter { it.kcategory == kcategory }
-        } else {
-            entries
-        }
     }
 
-    // ── read ─────────────────────────────────────────────────────────
-
-    override suspend fun read(userId: String, key: String): String? {
+    override suspend fun read(userId: String, id: String): String? {
         val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
-        val doc = client.readByExternalId(RagConstants.externalIdOf(key), bizId) ?: return null
-        // Keep the not-found contract aligned with detail(): null content means no entry.
-        val content = doc.content ?: return null
-        return stripFrontmatter(content)
+        val doc = client.readByExternalId(RagConstants.externalIdOf(id), bizId) ?: return null
+        return doc.content?.let { stripFrontmatter(it) }
     }
 
-    // ── detail ─────────────────────────────────────────────────────────
+    override fun supports(ext: String): Boolean = processingOptionsFor(ext) != null
 
-    override suspend fun detail(userId: String, key: String): KnowledgeDetail? {
+    // ── index / delete ─────────────────────────────────────────────────
+
+    override suspend fun index(
+        userId: String,
+        id: String,
+        content: String,
+        title: String?,
+        kcategory: String?,
+        ext: String,
+    ): Boolean {
         val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
-        val externalId = RagConstants.externalIdOf(key)
-        val doc = client.readByExternalId(externalId, bizId) ?: return null
-        val entry = parseDetailToEntry(doc.content, doc.filePath, chunksCount = doc.chunksCount) ?: return null
-        val fullContent = stripFrontmatter(doc.content ?: "")
-        val toc = extractToc(fullContent)
-        val parent = deriveParent(key, bizId)
-        val children = deriveChildren(key, bizId)
-        val related = deriveRelated(entry, bizId)
-
-        return KnowledgeDetail(
-            entry = entry,
-            fullContent = fullContent,
-            toc = toc,
-            parent = parent,
-            children = children,
-            related = related
+        val resolvedTitle = title?.takeIf { it.isNotBlank() } ?: extractTitle(content, id)
+        val resolvedCategory = kcategory?.takeIf { it.isNotBlank() } ?: "other"
+        return upsertDoc(
+            bizId = bizId,
+            id = id,
+            content = content,
+            title = resolvedTitle,
+            description = extractDescription(content),
+            kcategory = resolvedCategory,
+            ext = ext
         )
     }
 
-    // ── delete / deleteSource ──────────────────────────────────────────
-
-    override suspend fun delete(userId: String, key: String): Boolean {
+    override suspend fun delete(userId: String, id: String): Boolean {
         val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
-        val externalId = RagConstants.externalIdOf(key)
-        val existing = client.readByExternalId(externalId, bizId) ?: return false
+        val externalId = RagConstants.externalIdOf(id)
+        client.readByExternalId(externalId, bizId) ?: return false
         client.delete(externalId, bizId)
         logger.debug("Knowledge entry deleted: {}", externalId)
         return true
     }
 
-    override suspend fun deleteSource(userId: String, source: String): Int {
+    override suspend fun chunkCounts(userId: String, ids: Collection<String>): Map<String, Int> {
+        if (ids.isEmpty()) return emptyMap()
         val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
-        val prefix = "${RagConstants.FILE_PATH_ROOT}/$source/"
-        val docs = client.list(prefix, bizId)
-        if (docs.isEmpty()) return 0
-        val docIds = docs.map { it.docId }
-        val deleted = client.batchDelete(docIds, bizId)
-        logger.debug("Deleted {} knowledge entries for source {}", deleted, source)
-        return deleted
-    }
-
-    override suspend fun deleteEntries(userId: String, keys: Collection<String>): Int {
-        if (keys.isEmpty()) return 0
-        val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
-        var deleted = 0
-        // One list + one batch delete per source instead of a read/delete round-trip per key.
-        for ((source, sourceKeys) in keys.groupBy { it.substringBefore('/') }) {
-            val prefix = "${RagConstants.FILE_PATH_ROOT}/$source/"
-            val docIds = client.list(prefix, bizId)
-                .filter { extractKeyFromPath(it.filePath) in sourceKeys }
-                .map { it.docId }
-                .distinct()
-            if (docIds.isNotEmpty()) deleted += client.batchDelete(docIds, bizId)
+        val result = mutableMapOf<String, Int>()
+        // Bounded concurrency: upload batches can be large.
+        for (chunk in ids.chunked(CHUNK_STATUS_CONCURRENCY)) {
+            coroutineScope {
+                chunk.map { id ->
+                    async {
+                        val doc = try {
+                            client.readByExternalId(RagConstants.externalIdOf(id), bizId)
+                        } catch (e: RagException) {
+                            logger.warn("Knowledge index-status: failed to read {}: {}", id, e.message)
+                            null
+                        }
+                        doc?.chunksCount?.let { id to it }
+                    }
+                }.awaitAll().filterNotNull().forEach { (id, count) -> result[id] = count }
+            }
         }
-        logger.debug("Deleted {} knowledge entries by key", deleted)
-        return deleted
+        return result
     }
 
-    // ── sources ────────────────────────────────────────────────────────
-
-    override suspend fun sources(userId: String): List<String> {
-        val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
-        val prefix = "${RagConstants.FILE_PATH_ROOT}/"
-        val docs = client.list(prefix, bizId)
-        return docs.map { doc ->
-            // Extract source from filePath: easyai/{source}/...
-            val fp = doc.filePath
-            val afterPrefix = fp.removePrefix(prefix)
-            afterPrefix.substringBefore('/')
-        }.distinct().sorted()
-    }
-
-    override suspend fun listKeys(userId: String, source: String?): List<String> {
-        val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
-        val pathPrefix = if (source != null) {
-            "${RagConstants.FILE_PATH_ROOT}/$source/"
-        } else {
-            "${RagConstants.FILE_PATH_ROOT}/"
-        }
-        return client.list(pathPrefix, bizId).mapNotNull { extractKeyFromPath(it.filePath) }.distinct()
-    }
-
-    // ── update ─────────────────────────────────────────────────────────
-
-    override suspend fun update(
-        userId: String,
-        key: String,
-        content: String,
-        title: String?,
-        kcategory: String?
-    ): Boolean {
-        val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
-        val externalId = RagConstants.externalIdOf(key)
-
-        val existing = client.readByExternalId(externalId, bizId) ?: return false
-
-        val oldMeta = parseFrontmatter(splitFrontmatter(existing.content ?: "").first)
-        val relativePath = key.substringAfter('/')
-
-        val resolvedTitle = title ?: oldMeta["title"] ?: extractTitle(content, relativePath)
-        val resolvedDescription = oldMeta["description"] ?: extractDescription(content)
-        val resolvedCategory = kcategory ?: oldMeta["kcategory"] ?: "other"
-
-        return upsertDoc(bizId, key, content, resolvedTitle, resolvedDescription, resolvedCategory)
-    }
-
-    override suspend fun index(
-        userId: String,
-        key: String,
-        content: String,
-        title: String?,
-        kcategory: String?
-    ): Boolean {
-        val bizId = RagBizIdResolver.globalBizId(userId, RagBizIdResolver.KNOWLEDGE_TYPE)
-        val relativePath = key.substringAfter('/')
-
-        return upsertDoc(
-            bizId = bizId,
-            key = key,
-            content = content,
-            title = title?.takeIf { it.isNotBlank() } ?: extractTitle(content, relativePath),
-            description = extractDescription(content),
-            kcategory = kcategory?.takeIf { it.isNotBlank() } ?: "other"
-        )
-    }
-
-    /** Shared create-or-update write used by [update] and [index]. */
     private suspend fun upsertDoc(
         bizId: String,
-        key: String,
+        id: String,
         content: String,
         title: String,
         description: String,
-        kcategory: String
+        kcategory: String,
+        ext: String,
     ): Boolean {
-        val source = key.substringBefore('/')
-        val relativePath = key.substringAfter('/')
-        val ext = relativePath.substringAfterLast('.', "").lowercase()
+        val options = processingOptionsFor(ext)
+        if (options == null) {
+            logger.warn("Unsupported knowledge file extension: .{}", ext)
+            return false
+        }
         val now = Instant.now()
-        val externalId = RagConstants.externalIdOf(key)
-
         val wrappedContent = buildFileContent(
             title = title,
             description = description,
-            source = source,
             kcategory = kcategory,
             ext = ext,
             updatedMillis = now.toEpochMilli(),
             body = stripFrontmatter(content)
         )
-
         val metadata = buildMap<String, String> {
-            put("source", source)
             put("kcategory", kcategory)
             put("ext", ext)
             put("title", title)
         }
-
-        val options = processingOptionsFor(ext) ?: RagProcessingOptions(skipKg = false)
-
         val doc = RagDocument(
-            key = key,
+            key = id,
             content = wrappedContent,
             metadata = metadata,
             createTime = now.epochSecond,
             options = options
         )
-
         return try {
             client.upsert(doc, bizId, awaitIndexing = false)
-            logger.debug("Knowledge entry written: {}", externalId)
+            logger.debug("Knowledge entry written: {}", RagConstants.externalIdOf(id))
             true
         } catch (e: RagException) {
-            logger.warn("Knowledge write failed for {}: {}", key, e.message)
+            logger.warn("Knowledge write failed for {}: {}", id, e.message)
             false
         }
     }
@@ -416,122 +173,35 @@ internal class RagKnowledgeStore(
 
     // ── Content parsing ────────────────────────────────────────────────
 
-    private fun parseDetailToEntry(
+    private fun parseEntry(
         content: String?,
         filePath: String?,
-        previewLength: Int = CONTENT_PREVIEW_LENGTH,
-        chunksCount: Int? = null
+        chunksCount: Int?,
+        previewLength: Int = SEARCH_PREVIEW_LENGTH,
     ): KnowledgeEntry? {
         if (content == null) return null
-        val (frontmatter, body) = splitFrontmatter(content)
+        val id = extractIdFromPath(filePath) ?: return null
+        val (frontmatter, _) = splitFrontmatter(content)
         val meta = parseFrontmatter(frontmatter)
-        val key = extractKeyFromPath(filePath) ?: return null
-        val source = key.substringBefore('/')
-        val relativePath = key.substringAfter('/')
-        val ext = relativePath.substringAfterLast('.', "").lowercase()
-
+        val ext = meta["ext"]?.takeIf { it.isNotBlank() }
+            ?: id.substringAfterLast('.', "").lowercase()
         return KnowledgeEntry(
-            key = key,
-            source = source,
-            relativePath = relativePath,
-            title = meta["title"] ?: relativePath.substringAfterLast('/').removeSuffix(".$ext"),
+            id = id,
+            title = meta["title"] ?: id,
             description = meta["description"] ?: "",
             kcategory = meta["kcategory"] ?: "",
             ext = ext,
-            content = body.take(previewLength),
+            content = stripFrontmatter(content).take(previewLength),
             updatedAt = meta["updated"]?.toLongOrNull(),
             chunksCount = chunksCount
         )
     }
 
-    private fun extractKeyFromPath(filePath: String?): String? {
+    private fun extractIdFromPath(filePath: String?): String? {
         if (filePath == null) return null
         val prefix = "${RagConstants.FILE_PATH_ROOT}/"
         if (!filePath.startsWith(prefix)) return null
-        val relative = filePath.removePrefix(prefix)
-        return relative.ifBlank { null }
-    }
-
-    // ── Relationship derivation (MVP: directory convention) ────────────
-
-    /** Extract Markdown headings as table of contents, skipping fenced code blocks. */
-    private fun extractToc(content: String): List<String> {
-        val headings = mutableListOf<String>()
-        var inFence = false
-        for (line in content.lines()) {
-            val trimmed = line.trim()
-            if (trimmed.startsWith("```")) {
-                inFence = !inFence
-                continue
-            }
-            if (inFence) continue
-            if (line.startsWith("#")) {
-                val text = line.trimStart('#').trim()
-                if (text.isNotBlank()) headings.add(text)
-            }
-        }
-        return headings
-    }
-
-    /**
-     * Derive the parent key by looking for README.md / index.md / {dirname}.md
-     * in ancestor directories. Only returns a candidate that actually exists.
-     */
-    private suspend fun deriveParent(key: String, bizId: String): String? {
-        val parts = key.split('/')
-        if (parts.size < 2) return null
-        // Walk up directory segments
-        for (i in parts.size - 2 downTo 1) {
-            val dir = parts.subList(0, i).joinToString("/")
-            val candidates = listOf("$dir/README.md", "$dir/index.md", "$dir/${parts[i - 1]}.md")
-            for (candidate in candidates) {
-                val extId = RagConstants.externalIdOf(candidate)
-                if (client.readByExternalId(extId, bizId) != null) {
-                    return candidate
-                }
-            }
-        }
-        return null
-    }
-
-    /**
-     * When this entry is a directory index document (README.md / index.md),
-     * list the direct child documents in the same directory.
-     */
-    private suspend fun deriveChildren(key: String, bizId: String): List<String> {
-        val fileName = key.substringAfterLast('/')
-        if (fileName !in INDEX_FILE_NAMES) return emptyList()
-        val dir = key.substringBeforeLast('/')
-        val prefix = "${RagConstants.FILE_PATH_ROOT}/$dir/"
-        val docs = client.list(prefix, bizId)
-        return docs.mapNotNull { doc ->
-            val childKey = extractKeyFromPath(doc.filePath) ?: return@mapNotNull null
-            if (!childKey.startsWith("$dir/")) return@mapNotNull null
-            // Only direct children: no further path separators below $dir
-            val rel = childKey.removePrefix("$dir/")
-            if (rel.contains('/')) return@mapNotNull null
-            val childName = childKey.substringAfterLast('/')
-            if (childName != fileName && childName !in INDEX_FILE_NAMES) childKey else null
-        }.sorted()
-    }
-
-    /** Semantic search for related entries based on title + description. */
-    private suspend fun deriveRelated(entry: KnowledgeEntry, bizId: String): List<String> {
-        val queryText = listOfNotNull(
-            entry.title.takeIf { it.isNotBlank() },
-            entry.description.takeIf { it.isNotBlank() }
-        ).joinToString(" ")
-        if (queryText.isBlank()) return emptyList()
-
-        val chunks = client.search(
-            query = queryText,
-            topK = RELATED_TOP_K,
-            bizId = bizId
-        )
-        return chunks.mapNotNull { extractKeyFromPath(it.filePath) }
-            .filter { it != entry.key }
-            .distinct()
-            .take(RELATED_MAX)
+        return filePath.removePrefix(prefix).ifBlank { null }
     }
 
     // ── Frontmatter helpers ────────────────────────────────────────────
@@ -539,7 +209,6 @@ internal class RagKnowledgeStore(
     private fun buildFileContent(
         title: String,
         description: String,
-        source: String,
         kcategory: String,
         ext: String,
         updatedMillis: Long,
@@ -548,7 +217,6 @@ internal class RagKnowledgeStore(
         appendLine(FRONTMATTER_DELIMITER)
         appendLine("title: ${quoteYamlValue(title)}")
         appendLine("description: ${quoteYamlValue(description)}")
-        appendLine("source: ${quoteYamlValue(source)}")
         if (kcategory.isNotBlank()) {
             appendLine("kcategory: ${quoteYamlValue(kcategory)}")
         }
@@ -559,14 +227,13 @@ internal class RagKnowledgeStore(
         append(body)
     }
 
-    private fun extractTitle(content: String, fallbackPath: String): String {
+    private fun extractTitle(content: String, fallbackId: String): String {
         val (frontmatter, body) = splitFrontmatter(content)
         val meta = parseFrontmatter(frontmatter)
         meta["title"]?.let { return it }
-        // Fallback: first heading or filename
         body.lines().firstOrNull { it.startsWith("#") }
             ?.let { return it.trimStart('#').trim() }
-        return fallbackPath.substringAfterLast('/').substringBeforeLast('.')
+        return fallbackId
     }
 
     private fun extractDescription(content: String): String {
@@ -577,7 +244,9 @@ internal class RagKnowledgeStore(
 
     private fun stripFrontmatter(content: String): String {
         val (_, body) = splitFrontmatter(content)
-        return body
+        // The wrapper writes a blank line after the delimiter; drop it so a read round-trips
+        // the body exactly as it was indexed.
+        return body.trimStart('\n')
     }
 
     private fun splitFrontmatter(text: String): Pair<String, String> {
@@ -621,20 +290,11 @@ internal class RagKnowledgeStore(
         }
     }
 
-    // ── Path safety ────────────────────────────────────────────────────
-
     companion object {
         private const val FRONTMATTER_DELIMITER = "---"
         private const val CHUNK_METHOD_STRUCTURE_AWARE = "structure_aware"
-        private const val UPLOAD_CONCURRENCY = 4
-        private const val SEARCH_TOP_K = 10
-        /** Preview length for semantic search hits (matches KnowledgeSearchTool.CONTENT_PREVIEW_LIMIT). */
         private const val SEARCH_PREVIEW_LENGTH = 1500
-        private const val RELATED_TOP_K = 6
-        private const val RELATED_MAX = 5
-        private const val CONTENT_PREVIEW_LENGTH = 200
-
-        private val INDEX_FILE_NAMES = setOf("README.md", "readme.md", "index.md")
+        private const val CHUNK_STATUS_CONCURRENCY = 8
 
         private val TEXT_WHITELIST = setOf(
             "txt", "kt", "java", "py", "ts", "tsx", "js", "json",

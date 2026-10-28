@@ -70,6 +70,7 @@ class DatabaseMigration(
                 Tables.TeamMemberExecutionTable,
                 Tables.TeamRoundRecordTable,
                 Tables.SwarmPresetTable,
+                Tables.KnowledgeFolderTable,
                 Tables.KnowledgeArticleTable
             )
         )

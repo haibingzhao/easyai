@@ -25,6 +25,9 @@ import org.springframework.stereotype.Component
 /**
  * Agent-facing CRUD over knowledge articles.
  *
+ * Articles are addressed by their opaque, stable id. The folder path is a display/placement
+ * concern only: moving or renaming folders never changes the id or the search index.
+ *
  * The tool resolves the caller's access context from [AgentContext] and delegates every
  * decision to [KnowledgeArticleService], which consults the host KnowledgeAccessPolicy.
  */
@@ -36,11 +39,12 @@ class KnowledgeArticleTool(
 
     data class Parameters(
         val action: String,
-        val key: String? = null,
+        val id: String? = null,
         val title: String? = null,
         val content: String? = null,
         val category: String? = null,
-        val source: String? = null,
+        /** Folder display path, e.g. `Family/Recipes`. */
+        val folderPath: String? = null,
         val status: String? = null,
         val limit: Int? = null,
         val offset: Int? = null,
@@ -79,26 +83,35 @@ class KnowledgeArticleTool(
                     }
                     val articles = service.listAccessible(
                         accessContext,
-                        source = stringArg(args, "source"),
                         category = stringArg(args, "category"),
                         status = statusFilter,
                     )
-                    val page = articles.drop(offset).take(limit)
+                    val folderScope = stringArg(args, "folderPath")
+                    val filtered = if (folderScope == null) {
+                        articles
+                    } else {
+                        val prefix = folderScope.trimEnd('/')
+                        articles.filter {
+                            it.folderPath == prefix || it.folderPath.startsWith("$prefix/")
+                        }
+                    }
+                    val page = filtered.drop(offset).take(limit)
                     jsonResult(
                         mapOf(
                             "articles" to page.map { item ->
                                 mapOf(
-                                    "key" to item.article.knowledgeKey,
+                                    "id" to item.article.id,
                                     "title" to item.article.title,
+                                    "path" to item.folderPath,
                                     "category" to item.article.category,
-                                    "source" to item.article.source,
                                     "status" to ArticleStatus.toWire(item.article.status),
+                                    "ragEnabled" to item.article.ragEnabled,
                                     "updatedAt" to item.article.updatedAt,
                                     "canWrite" to item.canWrite,
                                     "canManage" to item.canManage,
                                 )
                             },
-                            "total" to articles.size,
+                            "total" to filtered.size,
                             "offset" to offset,
                             "limit" to limit,
                         )
@@ -106,11 +119,11 @@ class KnowledgeArticleTool(
                 }
 
                 "read" -> {
-                    val key = stringArg(args, "key")
-                        ?: return errorResult(toolCallId, name, "read requires 'key'")
-                    val content = service.readContent(accessContext, key)
-                        ?: return errorResult(toolCallId, name, "Article not found or access denied: $key")
-                    jsonResult(mapOf("key" to key, "content" to content))
+                    val id = stringArg(args, "id")
+                        ?: return errorResult(toolCallId, name, "read requires 'id'")
+                    val content = service.readContent(accessContext, id)
+                        ?: return errorResult(toolCallId, name, "Article not found or access denied: $id")
+                    jsonResult(mapOf("id" to id, "content" to content))
                 }
 
                 "create" -> {
@@ -118,26 +131,35 @@ class KnowledgeArticleTool(
                         ?: return errorResult(toolCallId, name, "create requires 'title'")
                     val content = args["content"] as? String
                         ?: return errorResult(toolCallId, name, "create requires 'content'")
+                    val folderPath = stringArg(args, "folderPath")
+                    val folderId = folderPath?.let { path ->
+                        service.resolveFolderIdByPath(accessContext, path)
+                            ?: return errorResult(toolCallId, name, "Folder not found: $path")
+                    }
                     val article = service.saveArticle(
                         context = accessContext,
                         title = title,
                         content = content,
-                        source = stringArg(args, "source") ?: "assistant",
-                        relativePath = null,
+                        folderId = folderId,
                         category = stringArg(args, "category") ?: "other",
                         origin = "assistant",
                     )
-                    jsonResult(mapOf("created" to true, "article" to articleToMap(article)))
+                    jsonResult(
+                        mapOf(
+                            "created" to true,
+                            "article" to articleToMap(article, service.folderPathOf(article)),
+                        )
+                    )
                 }
 
                 "update" -> {
-                    val key = stringArg(args, "key")
-                        ?: return errorResult(toolCallId, name, "update requires 'key'")
+                    val id = stringArg(args, "id")
+                        ?: return errorResult(toolCallId, name, "update requires 'id'")
                     val content = args["content"] as? String
                         ?: return errorResult(toolCallId, name, "update requires 'content'")
                     val result = service.updateArticle(
                         context = accessContext,
-                        key = key,
+                        id = id,
                         content = content,
                         title = stringArg(args, "title"),
                         category = stringArg(args, "category"),
@@ -146,16 +168,16 @@ class KnowledgeArticleTool(
                         mapOf(
                             "updated" to true,
                             "indexPending" to result.indexPending,
-                            "article" to articleToMap(result.article),
+                            "article" to articleToMap(result.article, service.folderPathOf(result.article)),
                         )
                     )
                 }
 
                 "delete" -> {
-                    val key = stringArg(args, "key")
-                        ?: return errorResult(toolCallId, name, "delete requires 'key'")
-                    val deleted = service.deleteArticle(accessContext, key)
-                    jsonResult(mapOf("deleted" to deleted, "key" to key))
+                    val id = stringArg(args, "id")
+                        ?: return errorResult(toolCallId, name, "delete requires 'id'")
+                    val deleted = service.deleteArticle(accessContext, id)
+                    jsonResult(mapOf("deleted" to deleted, "id" to id))
                 }
 
                 else -> errorResult(
@@ -171,12 +193,13 @@ class KnowledgeArticleTool(
         }
     }
 
-    private fun articleToMap(article: KnowledgeArticle): Map<String, Any?> = mapOf(
-        "key" to article.knowledgeKey,
+    private fun articleToMap(article: KnowledgeArticle, folderPath: String): Map<String, Any?> = mapOf(
+        "id" to article.id,
         "title" to article.title,
+        "path" to folderPath,
         "category" to article.category,
-        "source" to article.source,
         "status" to ArticleStatus.toWire(article.status),
+        "ragEnabled" to article.ragEnabled,
         "updatedAt" to article.updatedAt,
     )
 
@@ -208,13 +231,14 @@ class KnowledgeArticleToolBuilder(
     override val metadata = ToolMetadata(
         name = "knowledge_article",
         description = """Manage knowledge base articles (the single entry point for family and personal articles).
-action: list (readable articles; optional source/category/status filters plus limit/offset) / read (full content by key) / create (new DRAFT article; requires title and content, optional category and source) / update (update content by key; optional title and category) / delete (by key).
+action: list (readable articles; optional category/status/folderPath filters plus limit/offset) / read (full content by id) / create (new DRAFT article; requires title and content, optional category and folderPath) / update (content by id; optional title and category) / delete (by id).
+Ids are opaque and stable (UUIDs): always address an article by the 'id' returned from list or knowledge_search. 'path' (e.g. 'Family/Recipes') is display and placement only — renaming or moving folders never changes the id.
 Access is decided by the host application's policy; unauthorized actions fail, so do not try to bypass them.
-Status: 'draft' articles are private to their creator and are NOT in the search index; only 'published' articles are retrievable via knowledge_search. An article created here stays a draft until the user publishes it in the UI — do not claim it is searchable.
-list returns at most 50 articles by default (max 200), includes each article's status, and reports total/offset/limit.""",
+Status: 'draft' articles are private to their creator and are NOT in the search index; only 'published' articles with ragEnabled=true are retrievable via knowledge_search. An article created here stays a draft until the user publishes it in the UI — do not claim it is searchable.
+list returns at most 50 articles by default (max 200), includes status and ragEnabled, and reports total/offset/limit.""",
         permissionCategory = "knowledge",
         isDefaultTool = false,
-        patternKeys = listOf("key", "source"),
+        patternKeys = listOf("id", "folderPath"),
     )
 
     override suspend fun build(context: AgentContext, agentService: AgentService): ToolDefinition? {

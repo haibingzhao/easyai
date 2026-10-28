@@ -47,8 +47,8 @@ enableWatchesNav();
 // Remount the editor when the article changes so per-article state (content,
 // title, dirty flag) never leaks between routes.
 const ArticleEditorRoute = () => {
-  const { articleKey } = useParams<{ articleKey: string }>();
-  return <ArticleEditorPage key={articleKey ?? ''} />;
+  const { articleId } = useParams<{ articleId: string }>();
+  return <ArticleEditorPage key={articleId ?? ''} />;
 };
 
 function App() {
@@ -196,7 +196,7 @@ function App() {
             element={<KnowledgePage />}
           />
           <Route
-            path="/knowledge/editor/:articleKey"
+            path="/knowledge/editor/:articleId"
             element={<ArticleEditorRoute />}
           />
           <Route

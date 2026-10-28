@@ -1,11 +1,17 @@
 package com.easy.easyai.repository.task
 
+import com.easy.easyai.common.util.SharedObjectMapper
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.task.AsyncTask
 import com.easy.easyai.core.task.AsyncTaskStatus
 import com.easy.easyai.core.task.AsyncTaskType
 import com.easy.easyai.core.task.TaskTrigger
 import com.easy.easyai.repository.database.DatabaseMigration
 import com.easy.easyai.repository.database.Tables.AsyncTaskTable
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
 import org.jetbrains.exposed.v1.r2dbc.insert
@@ -17,6 +23,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -27,6 +34,8 @@ import kotlin.test.assertTrue
  * result round-trip, status transitions, strict per-user isolation, in-place retry bookkeeping and
  * orphan lookup.
  */
+private const val SELF = "agent-api"
+
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class R2dbcAsyncTaskStoreTest {
 
@@ -41,7 +50,7 @@ class R2dbcAsyncTaskStoreTest {
         DatabaseMigration.defaultTables().execute(db)
     }
 
-    private fun createStore() = R2dbcAsyncTaskStore(db)
+    private fun createStore() = R2dbcAsyncTaskStore(db, HostIdentity(SELF))
 
     /** Insert a row with raw column strings, bypassing the typed constructors — a newer writer or a rollback. */
     private suspend fun insertRawType(
@@ -125,10 +134,27 @@ class R2dbcAsyncTaskStoreTest {
             assertEquals(300_000, loaded.timeoutMs)
             assertEquals(0, loaded.retryCount)
             assertNull(loaded.result)
+            assertEquals(SELF, loaded.ownerApp, "the persisting host stamps ownership")
             assertEquals("project", loaded.payload["scope"])
             assertEquals(true, loaded.payload["dryRun"])
             @Suppress("UNCHECKED_CAST")
             assertEquals(listOf("alice", "system"), loaded.payload["owners"] as List<String>)
+        }
+
+        @Test
+        fun `insertRow participates in its callers transaction and stamps the supplied host`() = runTest {
+            val first = task().copy(ownerApp = "caller-must-not-control-owner", trigger = TaskTrigger.SCHEDULE)
+            val second = task(trigger = TaskTrigger.SCHEDULE)
+            assertFailsWith<IllegalStateException> {
+                suspendTransaction(db) {
+                    val inserted = R2dbcAsyncTaskStore.insertRow(first, SELF, SharedObjectMapper.instance)
+                    assertEquals(first.copy(ownerApp = SELF), inserted)
+                    R2dbcAsyncTaskStore.insertRow(second, SELF, SharedObjectMapper.instance)
+                    throw IllegalStateException("schedule advance failed")
+                }
+            }
+            assertNull(createStore().findById(first.id), "the helper must not commit independently")
+            assertNull(createStore().findById(second.id))
         }
 
         @Test
@@ -214,15 +240,61 @@ class R2dbcAsyncTaskStoreTest {
         }
 
         @Test
-        fun `markRunning only fires from PENDING`() = runTest {
+        fun `markRunning only returns a row when its PENDING claim wins`() = runTest {
             val store = createStore()
             val id = UUID.randomUUID().toString()
+            assertNull(store.markRunning(id), "a missing row is not a claim")
             store.create(task(id = id))
-            store.markRunning(id)
-            store.complete(id, null)
+            val running = assertNotNull(store.markRunning(id))
+            assertNull(store.markRunning(id), "an already RUNNING row is not a second successful claim")
+            assertEquals(running, store.findById(id), "a lost claim must not overwrite startedAt")
+            val completed = store.complete(id, null)
 
-            val revived = assertNotNull(store.markRunning(id))
-            assertEquals(AsyncTaskStatus.COMPLETED, revived.status, "a settled task must not go RUNNING again")
+            assertNull(store.markRunning(id), "a settled task must not go RUNNING again")
+            assertEquals(completed, store.findById(id))
+        }
+
+        @Test
+        fun `concurrent H2 claims return exactly one running task`() = runTest {
+            val store = createStore()
+            val pending = store.create(task(trigger = TaskTrigger.SCHEDULE))
+            val start = CompletableDeferred<Unit>()
+            val ready = List(2) { CompletableDeferred<Unit>() }
+            val claims = ready.map { signal ->
+                async(Dispatchers.IO) {
+                    signal.complete(Unit)
+                    start.await()
+                    createStore().markRunning(pending.id)
+                }
+            }
+            ready.forEach { it.await() }
+            start.complete(Unit)
+            val results = claims.awaitAll()
+
+            assertEquals(1, results.count { it != null }, "UPDATE affected-row count, not a reread, decides the winner")
+            assertEquals(1, results.count { it == null })
+            val winner = results.filterNotNull().single()
+            assertEquals(AsyncTaskStatus.RUNNING, winner.status)
+            assertEquals(SELF, winner.ownerApp)
+            assertNotNull(winner.startedAt)
+            assertEquals(winner, store.findById(pending.id))
+        }
+
+        @Test
+        fun `markRunning cannot claim another hosts task or an unowned legacy row`() = runTest {
+            val store = createStore()
+            val other = R2dbcAsyncTaskStore(db, HostIdentity("trading-api"))
+            val pending = store.create(task(trigger = TaskTrigger.SCHEDULE).copy(ownerApp = "trading-api"))
+            assertEquals(SELF, pending.ownerApp, "create stamps its host, ignoring caller ownership")
+            assertNull(other.markRunning(pending.id))
+            assertEquals(pending, store.findById(pending.id))
+            assertNotNull(store.markRunning(pending.id), "only the persisting host may execute the row")
+
+            val legacy = UUID.randomUUID().toString()
+            insertRawType(legacy, "alice", AsyncTaskType.MEMORY_CONSOLIDATION.key)
+            assertNull(store.markRunning(legacy))
+            assertNull(other.markRunning(legacy))
+            assertEquals(AsyncTaskStatus.PENDING, store.findById(legacy)?.status)
         }
     }
 
@@ -376,6 +448,39 @@ class R2dbcAsyncTaskStoreTest {
         }
 
         @Test
+        fun `findOrphans ignores tasks another application owns, while the list still shows them`() = runTest {
+            val user = "host-${UUID.randomUUID()}"
+            val mine = UUID.randomUUID().toString()
+            val theirs = UUID.randomUUID().toString()
+            createStore().create(task(id = mine, userId = user))
+            R2dbcAsyncTaskStore(db, HostIdentity("trading-api")).create(task(id = theirs, userId = user))
+
+            // Parking a foreign row would interrupt a worker that other process is still running.
+            // Other tests in this class leave their own non-terminal rows behind, so assert membership.
+            val orphans = createStore().findOrphans().map { it.id }
+            assertTrue(mine in orphans, "a row this host created is an orphan")
+            assertTrue(theirs !in orphans, "a row another application owns is not")
+            // Visibility is deliberately global: the queue is shared and the Tasks page reads it.
+            assertEquals(
+                setOf(mine, theirs),
+                createStore().listNonTerminal(user, AsyncTaskType.MEMORY_CONSOLIDATION, 10).map { it.id }.toSet()
+            )
+        }
+
+        @Test
+        fun `deleteByUser only clears rows this application owns`() = runTest {
+            val user = "bulk-${UUID.randomUUID()}"
+            val mine = UUID.randomUUID().toString()
+            val theirs = UUID.randomUUID().toString()
+            createStore().create(task(id = mine, userId = user))
+            R2dbcAsyncTaskStore(db, HostIdentity("trading-api")).create(task(id = theirs, userId = user))
+
+            assertEquals(1, createStore().deleteByUser(user, SELF))
+            assertNull(createStore().findById(mine))
+            assertNotNull(createStore().findById(theirs), "the other application's row survives")
+        }
+
+        @Test
         fun `delete removes one row and deleteByUser clears by status`() = runTest {
             val store = createStore()
             val keep = UUID.randomUUID().toString()
@@ -389,9 +494,9 @@ class R2dbcAsyncTaskStoreTest {
             assertNull(store.findById(drop))
             assertNotNull(store.findById(keep))
 
-            val cleared = store.deleteByUser("henry", AsyncTaskStatus.COMPLETED)
+            val cleared = store.deleteByUser("henry", SELF, AsyncTaskStatus.COMPLETED)
             assertEquals(0, cleared, "the completed row was already deleted")
-            assertEquals(1, store.deleteByUser("henry"))
+            assertEquals(1, store.deleteByUser("henry", SELF))
             assertTrue(store.listByUser("henry").isEmpty())
         }
     }

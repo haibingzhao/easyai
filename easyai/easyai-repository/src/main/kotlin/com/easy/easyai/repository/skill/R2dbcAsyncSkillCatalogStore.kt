@@ -14,6 +14,7 @@ import org.jetbrains.exposed.v1.core.ResultRow
 import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
+import org.jetbrains.exposed.v1.core.isNull
 import org.jetbrains.exposed.v1.core.inList
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
 import org.jetbrains.exposed.v1.r2dbc.deleteWhere
@@ -150,6 +151,18 @@ class R2dbcAsyncSkillCatalogStore(private val db: R2dbcDatabase) : AsyncSkillCat
                 it[lastError] = update.lastError?.take(2000)
                 it[revision] = expectedRevision + 1
                 it[updatedAt] = System.currentTimeMillis()
+            } > 0
+        }
+
+    override suspend fun claimForSync(id: String, expectedNextAttemptAt: Long?, leaseUntil: Long): Boolean =
+        suspendTransaction(db) {
+            val expected = if (expectedNextAttemptAt == null) {
+                table.nextAttemptAt.isNull()
+            } else {
+                table.nextAttemptAt eq expectedNextAttemptAt
+            }
+            table.update({ (table.id eq id) and expected }) {
+                it[nextAttemptAt] = leaseUntil
             } > 0
         }
 

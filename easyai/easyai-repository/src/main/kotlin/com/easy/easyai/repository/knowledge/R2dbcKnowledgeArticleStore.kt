@@ -37,21 +37,20 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
 
             if (existing != null) {
                 table.update(where = { table.id eq article.id }) {
-                    it[knowledgeKey] = article.knowledgeKey
-                    it[ossKey] = article.ossKey
+                    it[userId] = article.userId
+                    it[createdBy] = article.createdBy
+                    it[folderId] = article.folderId
+                    it[fileName] = article.fileName
                     it[title] = article.title
                     it[description] = article.description
                     it[category] = article.category
-                    it[articleSource] = article.source
-                    it[relativePath] = article.relativePath
                     it[ext] = article.ext
-                    it[contentHash] = article.contentHash
-                    it[createdBy] = article.createdBy
                     it[origin] = article.origin
                     it[originSessionId] = article.originSessionId
                     it[originMessageId] = article.originMessageId
                     it[composedFrom] = article.composedFrom
                     it[status] = ArticleStatus.toWire(article.status)
+                    it[ragEnabled] = article.ragEnabled
                     it[updatedAt] = article.updatedAt
                 }
                 logger.debug("Updated knowledge article: {}", article.id)
@@ -60,20 +59,18 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
                     it[id] = article.id
                     it[userId] = article.userId
                     it[createdBy] = article.createdBy
-                    it[knowledgeKey] = article.knowledgeKey
-                    it[ossKey] = article.ossKey
+                    it[folderId] = article.folderId
+                    it[fileName] = article.fileName
                     it[title] = article.title
                     it[description] = article.description
                     it[category] = article.category
-                    it[articleSource] = article.source
-                    it[relativePath] = article.relativePath
                     it[ext] = article.ext
-                    it[contentHash] = article.contentHash
                     it[origin] = article.origin
                     it[originSessionId] = article.originSessionId
                     it[originMessageId] = article.originMessageId
                     it[composedFrom] = article.composedFrom
                     it[status] = ArticleStatus.toWire(article.status)
+                    it[ragEnabled] = article.ragEnabled
                     it[createdAt] = article.createdAt
                     it[updatedAt] = article.updatedAt
                 }
@@ -81,19 +78,6 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
             }
         }
     }
-
-    override suspend fun findByKey(userId: String, knowledgeKey: String): KnowledgeArticle? =
-        suspendTransaction(db) {
-            val table = Tables.KnowledgeArticleTable
-            table.selectAll()
-                .where {
-                    (table.userId eq userId) and (table.knowledgeKey eq knowledgeKey)
-                }
-                .limit(1)
-                .toList()
-                .firstOrNull()
-                ?.toArticle()
-        }
 
     override suspend fun findById(id: String): KnowledgeArticle? =
         suspendTransaction(db) {
@@ -106,25 +90,38 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
                 ?.toArticle()
         }
 
-    override suspend fun findByKeys(
-        userId: String,
-        knowledgeKeys: Collection<String>,
-    ): List<KnowledgeArticle> {
-        if (knowledgeKeys.isEmpty()) return emptyList()
+    override suspend fun findByIds(userId: String, ids: Collection<String>): List<KnowledgeArticle> {
+        if (ids.isEmpty()) return emptyList()
         return suspendTransaction(db) {
             val table = Tables.KnowledgeArticleTable
             table.selectAll()
                 .where {
-                    (table.userId eq userId) and (table.knowledgeKey inList knowledgeKeys.toList())
+                    (table.userId eq userId) and (table.id inList ids.toList())
                 }
                 .toList()
                 .map { it.toArticle() }
         }
     }
 
+    override suspend fun findByFolderAndFileName(
+        userId: String,
+        folderId: String,
+        fileName: String,
+    ): KnowledgeArticle? = suspendTransaction(db) {
+        val table = Tables.KnowledgeArticleTable
+        table.selectAll()
+            .where {
+                (table.userId eq userId) and (table.folderId eq folderId) and (table.fileName eq fileName)
+            }
+            .limit(1)
+            .toList()
+            .firstOrNull()
+            ?.toArticle()
+    }
+
     override fun findAllInBuckets(
         userIds: Collection<String>,
-        source: String?,
+        folderId: String?,
         category: String?,
         status: ArticleStatus?,
     ): Flow<KnowledgeArticle> = flow {
@@ -132,8 +129,8 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
         val table = Tables.KnowledgeArticleTable
         val rows = suspendTransaction(db) {
             var condition: Op<Boolean> = table.userId inList userIds.toList()
-            if (!source.isNullOrBlank()) {
-                condition = condition and (table.articleSource eq source)
+            if (!folderId.isNullOrBlank()) {
+                condition = condition and (table.folderId eq folderId)
             }
             if (!category.isNullOrBlank()) {
                 condition = condition and (table.category eq category)
@@ -143,7 +140,9 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
             }
             table.selectAll()
                 .where { condition }
-                .orderBy(table.updatedAt to SortOrder.DESC)
+                // Id breaks updated_at ties: the article tool pages with offset/limit, and an
+                // undefined order for rows written in the same millisecond can repeat or skip one.
+                .orderBy(table.updatedAt to SortOrder.DESC, table.id to SortOrder.ASC)
                 .toList()
         }
         for (row in rows) {
@@ -169,7 +168,6 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
         }
     }
 
-    /** Metadata-only delete; the caller owns OSS/RAG cleanup or a policy that denies orphans. */
     override suspend fun deleteByCreatedBy(userId: String, createdBy: String) {
         suspendTransaction(db) {
             val table = Tables.KnowledgeArticleTable
@@ -186,20 +184,18 @@ class R2dbcKnowledgeArticleStore(private val db: R2dbcDatabase) : KnowledgeArtic
             id = this[table.id],
             userId = this[table.userId],
             createdBy = this[table.createdBy],
-            knowledgeKey = this[table.knowledgeKey],
-            ossKey = this[table.ossKey],
+            folderId = this[table.folderId],
+            fileName = this[table.fileName],
             title = this[table.title],
             description = this[table.description],
             category = this[table.category],
-            source = this[table.articleSource],
-            relativePath = this[table.relativePath],
             ext = this[table.ext],
-            contentHash = this[table.contentHash],
             origin = this[table.origin],
             originSessionId = this[table.originSessionId],
             originMessageId = this[table.originMessageId],
             composedFrom = this[table.composedFrom],
             status = ArticleStatus.fromColumn(this[table.status]),
+            ragEnabled = this[table.ragEnabled],
             createdAt = this[table.createdAt],
             updatedAt = this[table.updatedAt]
         )

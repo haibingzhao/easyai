@@ -19,5 +19,10 @@ data class ScheduledTaskSetting(
     val cron: String? = null,
     val params: Map<String, Any?> = emptyMap(),
     val timeoutMs: Long? = null,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val nextFireAt: Long? = null,
+    val scheduleRevision: String? = null,
+    val scheduleZone: String? = null
 )
+
+data class ScheduledTaskSettingChanged(val userId: String, val taskType: AsyncTaskType)

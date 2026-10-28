@@ -11,6 +11,7 @@ import com.easy.easyai.core.command.AsyncUserCommandStore
 import com.easy.easyai.core.goal.GoalCompletionCheck
 import com.easy.easyai.core.goal.GoalStatusNotifier
 import com.easy.easyai.core.goal.GoalStore
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.model.aux.AuxModelSettingsStore
 import com.easy.easyai.core.memory.consolidation.MemoryConsolidationSettingsStore
 import com.easy.easyai.core.memory.consolidation.ScheduledSettingBackedConsolidationStore
@@ -61,7 +62,9 @@ import com.easy.easyai.core.knowledge.DefaultKnowledgeAccessPolicy
 import com.easy.easyai.core.knowledge.KnowledgeAccessGuard
 import com.easy.easyai.core.knowledge.KnowledgeAccessPolicy
 import com.easy.easyai.core.knowledge.KnowledgeArticleStore
+import com.easy.easyai.core.knowledge.KnowledgeFolderStore
 import com.easy.easyai.repository.knowledge.R2dbcKnowledgeArticleStore
+import com.easy.easyai.repository.knowledge.R2dbcKnowledgeFolderStore
 import com.easy.easyai.skills.SkillPromptSource
 import com.easy.easyai.skills.SkillRegistry
 import com.easy.easyai.skills.command.BuiltinCommandHandler
@@ -76,6 +79,7 @@ import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.boot.context.properties.EnableConfigurationProperties
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Lazy
 import org.springframework.core.annotation.Order
@@ -89,7 +93,7 @@ import java.time.Duration
  * Supports any R2DBC-compatible database (H2, PostgreSQL, etc.).
  */
 @AutoConfiguration
-@EnableConfigurationProperties(value = [R2dbcProperties::class, EasyAiProperties::class])
+@EnableConfigurationProperties(value = [R2dbcProperties::class, EasyAiProperties::class, HostProperties::class])
 @ConditionalOnProperty(prefix = "easyai.r2dbc", name = ["enabled"], havingValue = "true", matchIfMissing = true)
 class R2dbcRepositoryAutoConfiguration(
     private val r2dbcProperties: R2dbcProperties,
@@ -343,9 +347,10 @@ class R2dbcRepositoryAutoConfiguration(
 
     @Bean
     @ConditionalOnMissingBean(AsyncProjectStore::class)
-    fun asyncProjectStore(initializer: R2dbcDatabaseInitializer): AsyncProjectStore {
+    fun asyncProjectStore(initializer: R2dbcDatabaseInitializer, host: HostIdentity): AsyncProjectStore {
         return R2dbcAsyncProjectStore(
-            db = initializer.getDatabase()
+            db = initializer.getDatabase(),
+            host = host
         )
     }
 
@@ -364,18 +369,52 @@ class R2dbcRepositoryAutoConfiguration(
      */
     @Bean
     @ConditionalOnMissingBean(AsyncTaskStore::class)
-    fun asyncTaskStore(initializer: R2dbcDatabaseInitializer): AsyncTaskStore {
+    fun asyncTaskStore(
+        initializer: R2dbcDatabaseInitializer,
+        host: HostIdentity,
+        eventPublisher: ApplicationEventPublisher
+    ): AsyncTaskStore {
         return R2dbcAsyncTaskStore(
-            db = initializer.getDatabase()
+            db = initializer.getDatabase(),
+            host = host,
+            onChanged = eventPublisher::publishEvent
         )
     }
 
-    /** Durable watch definitions; the planner claims them and the handler writes their findings. */
+    /**
+     * Durable watch definitions; the scheduler admits due rows and the handler writes their findings.
+     * Every committed schedule change (including a claim advancing `next_due_at`) wakes the timer.
+     */
     @Bean
     @ConditionalOnMissingBean(WatchStore::class)
-    fun watchStore(initializer: R2dbcDatabaseInitializer): WatchStore {
-        return R2dbcWatchStore(db = initializer.getDatabase())
+    fun watchStore(
+        initializer: R2dbcDatabaseInitializer,
+        host: HostIdentity,
+        eventPublisher: ApplicationEventPublisher
+    ): WatchStore {
+        return R2dbcWatchStore(
+            db = initializer.getDatabase(),
+            host = host,
+            onChanged = eventPublisher::publishEvent
+        )
     }
+
+    /**
+     * Gives rows written before `owner_app` existed an owner, or reports them. Lives beside the stores
+     * rather than in the task subsystem because it spans three tables that only share the column.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    fun legacyOwnerAdopter(
+        initializer: R2dbcDatabaseInitializer,
+        host: HostIdentity,
+        properties: HostProperties
+    ): LegacyOwnerAdopter = LegacyOwnerAdopter(
+        db = initializer.getDatabase(),
+        host = host,
+        properties = properties,
+        dbInitializer = initializer
+    )
 
     @Bean
     @ConditionalOnMissingBean(PermissionRuleStore::class)
@@ -585,8 +624,12 @@ class R2dbcRepositoryAutoConfiguration(
      */
     @Bean
     @ConditionalOnMissingBean(ScheduledTaskSettingStore::class)
-    fun scheduledTaskSettingStore(initializer: R2dbcDatabaseInitializer): ScheduledTaskSettingStore {
-        return R2dbcScheduledTaskSettingStore(initializer.getDatabase())
+    fun scheduledTaskSettingStore(
+        initializer: R2dbcDatabaseInitializer,
+        host: HostIdentity,
+        eventPublisher: ApplicationEventPublisher
+    ): ScheduledTaskSettingStore {
+        return R2dbcScheduledTaskSettingStore(initializer.getDatabase(), host, onChanged = eventPublisher::publishEvent)
     }
 
     /**
@@ -622,6 +665,12 @@ class R2dbcRepositoryAutoConfiguration(
     @ConditionalOnMissingBean(KnowledgeArticleStore::class)
     fun knowledgeArticleStore(initializer: R2dbcDatabaseInitializer): KnowledgeArticleStore {
         return R2dbcKnowledgeArticleStore(initializer.getDatabase())
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(KnowledgeFolderStore::class)
+    fun knowledgeFolderStore(initializer: R2dbcDatabaseInitializer): KnowledgeFolderStore {
+        return R2dbcKnowledgeFolderStore(initializer.getDatabase())
     }
 
     @Bean

@@ -116,6 +116,110 @@ class FlywayMigrationRunnerTest {
         }
 
         @Test
+        fun `V39 preserves V38 preferences and adds nullable schedule state with the due index`() {
+            val jdbcUrl = "jdbc:h2:mem:flyway_scheduled_next_fire;MODE=MYSQL;DB_CLOSE_DELAY=-1"
+            Flyway.configure()
+                .dataSource(jdbcUrl, "sa", "")
+                .locations("classpath:db/migration")
+                .target("38")
+                .load()
+                .migrate()
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.executeUpdate(
+                        "INSERT INTO scheduled_task_setting " +
+                            "(user_id, task_type, enabled, schedule_cron, params, timeout_ms, updated_at) VALUES " +
+                            "('alice', 'daily', TRUE, '0 0 3 * * *', '{\"state\":\"kept\"}', 90000, 42), " +
+                            "('alice', 'other', TRUE, NULL, NULL, NULL, 43), " +
+                            "('bob', 'daily', FALSE, NULL, NULL, NULL, 44)"
+                    )
+                }
+            }
+            val result = Flyway.configure()
+                .dataSource(jdbcUrl, "sa", "")
+                .locations("classpath:db/migration")
+                .target("39")
+                .load()
+                .migrate()
+            assertEquals(1, result.migrationsExecuted)
+            assertEquals("39", result.targetSchemaVersion)
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use { statement ->
+                    val settings = Tables.ScheduledTaskSettingTable
+                    val settingColumns = settings.columns.joinToString(", ") { it.name }
+                    statement.executeQuery(
+                        "SELECT $settingColumns FROM scheduled_task_setting WHERE user_id = 'alice' AND task_type = 'daily'"
+                    ).use { row ->
+                        assertTrue(row.next())
+                        assertTrue(row.getBoolean(settings.enabled.name))
+                        assertEquals("0 0 3 * * *", row.getString(settings.scheduleCron.name))
+                        assertEquals("{\"state\":\"kept\"}", row.getString(settings.params.name))
+                        assertEquals(90_000L, row.getLong(settings.timeoutMs.name))
+                        assertEquals(42L, row.getLong(settings.updatedAt.name))
+                    }
+                    statement.executeQuery("SELECT $settingColumns FROM scheduled_task_setting").use { rows ->
+                        var count = 0
+                        while (rows.next()) {
+                            count++
+                            assertEquals(null, rows.getObject(settings.nextFireAt.name))
+                            assertEquals(null, rows.getString(settings.scheduleRevision.name))
+                            assertEquals(null, rows.getString(settings.scheduleZone.name))
+                        }
+                        assertEquals(3, count)
+                    }
+                    statement.executeQuery(
+                        "SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE " +
+                            "FROM INFORMATION_SCHEMA.COLUMNS WHERE UPPER(TABLE_NAME) = 'SCHEDULED_TASK_SETTING' " +
+                            "AND UPPER(COLUMN_NAME) IN ('NEXT_FIRE_AT', 'SCHEDULE_REVISION', 'SCHEDULE_ZONE')"
+                    ).use { columns ->
+                        var count = 0
+                        while (columns.next()) {
+                            count++
+                            assertEquals("YES", columns.getString("IS_NULLABLE"))
+                            if (columns.getString("COLUMN_NAME").equals(settings.nextFireAt.name, ignoreCase = true)) {
+                                assertEquals("BIGINT", columns.getString("DATA_TYPE").uppercase())
+                            } else {
+                                assertEquals(64L, columns.getLong("CHARACTER_MAXIMUM_LENGTH"))
+                            }
+                        }
+                        assertEquals(3, count)
+                    }
+                    val indexColumns = mutableListOf<String>()
+                    statement.executeQuery(
+                        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEX_COLUMNS " +
+                            "WHERE UPPER(TABLE_NAME) = 'SCHEDULED_TASK_SETTING' " +
+                            "AND UPPER(INDEX_NAME) = 'IDX_SCHEDULED_TASK_SETTING_DUE' ORDER BY ORDINAL_POSITION"
+                    ).use { columns ->
+                        while (columns.next()) indexColumns += columns.getString(1).lowercase()
+                    }
+                    val expected = listOf(settings.enabled, settings.taskType, settings.nextFireAt)
+                    assertEquals(expected.map { it.name }, indexColumns)
+                    assertTrue(settings.indices.any { it.columns == expected && !it.unique })
+                    statement.executeQuery(
+                        "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE UPPER(TABLE_NAME) = 'SCHEDULED_TASK_SCAN'"
+                    ).use { rows ->
+                        assertTrue(rows.next())
+                        assertEquals(0, rows.getInt(1))
+                    }
+                    statement.executeUpdate(
+                        "UPDATE scheduled_task_setting SET next_fire_at = 1234567890123, " +
+                            "schedule_revision = 'revision', schedule_zone = 'Asia/Shanghai' " +
+                            "WHERE user_id = 'alice' AND task_type = 'daily'"
+                    )
+                    statement.executeQuery(
+                        "SELECT $settingColumns FROM scheduled_task_setting WHERE user_id = 'alice' AND task_type = 'daily'"
+                    ).use { row ->
+                        assertTrue(row.next())
+                        assertEquals(1_234_567_890_123L, row.getLong(settings.nextFireAt.name))
+                        assertEquals("revision", row.getString(settings.scheduleRevision.name))
+                        assertEquals("Asia/Shanghai", row.getString(settings.scheduleZone.name))
+                    }
+                }
+            }
+        }
+
+        @Test
         fun `V1 creates all expected tables on fresh database`() {
             // Validates that the consolidated V1 schema contains all tables
             val jdbcUrl = "jdbc:h2:mem:flyway_tables_test;MODE=MYSQL;DB_CLOSE_DELAY=-1"

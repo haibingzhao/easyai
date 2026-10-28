@@ -1,25 +1,55 @@
 package com.easy.easyai.repository.watch
 
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.model.ProjectKind
+import com.easy.easyai.core.task.AsyncTask
+import com.easy.easyai.core.task.AsyncTaskStatus
+import com.easy.easyai.core.task.AsyncTaskType
+import com.easy.easyai.core.task.ScheduledTaskSetting
+import com.easy.easyai.core.task.TaskTrigger
 import com.easy.easyai.core.watch.Watch
+import com.easy.easyai.core.watch.WatchClaimPolicy
+import com.easy.easyai.core.watch.WatchEnqueueResult
 import com.easy.easyai.core.watch.WatchFinding
 import com.easy.easyai.core.watch.WatchFoundTag
 import com.easy.easyai.core.watch.WatchMode
 import com.easy.easyai.core.watch.WatchNotifyPolicy
 import com.easy.easyai.core.watch.WatchPendingAction
+import com.easy.easyai.core.watch.WatchProperties
+import com.easy.easyai.core.watch.WatchRunKind
 import com.easy.easyai.core.watch.WatchSchedule
+import com.easy.easyai.core.watch.WatchScheduleChanged
+import com.easy.easyai.core.watch.WatchScheduleCursor
+import com.easy.easyai.core.watch.WatchScheduleEntry
 import com.easy.easyai.core.watch.WatchScheduleKind
 import com.easy.easyai.core.watch.WatchSource
 import com.easy.easyai.core.watch.WatchStatus
 import com.easy.easyai.core.watch.WatchTag
+import com.easy.easyai.core.watch.WatchTaskPayload
 import com.easy.easyai.core.watch.WatchVerdict
 import com.easy.easyai.repository.database.DatabaseMigration
+import com.easy.easyai.repository.database.Tables.AsyncTaskTable
+import com.easy.easyai.repository.database.Tables.ScheduledTaskSettingTable
 import com.easy.easyai.repository.database.Tables.WatchTable
+import com.easy.easyai.repository.task.R2dbcAsyncTaskStore
+import com.easy.easyai.repository.task.R2dbcScheduledTaskSettingStore
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.test.runTest
+import org.jetbrains.exposed.v1.core.and
+import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
+import org.jetbrains.exposed.v1.r2dbc.R2dbcTransaction
 import org.jetbrains.exposed.v1.r2dbc.insert
+import org.jetbrains.exposed.v1.r2dbc.selectAll
+import org.jetbrains.exposed.v1.r2dbc.statements.SuspendStatementInterceptor
 import org.jetbrains.exposed.v1.r2dbc.transactions.TransactionManager
+import org.jetbrains.exposed.v1.r2dbc.transactions.inTopLevelSuspendTransaction
 import org.jetbrains.exposed.v1.r2dbc.transactions.suspendTransaction
+import org.jetbrains.exposed.v1.r2dbc.update
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -30,16 +60,16 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/**
- * Integration tests for [R2dbcWatchStore] over in-memory H2: JSON round-trips, strict per-user reads,
- * the due listing, the guarded claim that makes the planner single-writer, and every version /
- * pending-action guard the handler depends on.
- */
+/** H2 integration coverage for Watch admission, run slots, guarded writes and commit notifications. */
+private const val SELF = "agent-api"
+
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class R2dbcWatchStoreTest {
 
@@ -54,13 +84,18 @@ class R2dbcWatchStoreTest {
         DatabaseMigration.defaultTables().execute(db)
     }
 
-    private fun store() = R2dbcWatchStore(db)
+    private fun store(onChanged: (WatchScheduleChanged) -> Unit = {}) =
+        R2dbcWatchStore(db, HostIdentity(SELF), onChanged = onChanged)
+
+    private fun tasks() = R2dbcAsyncTaskStore(db, HostIdentity(SELF))
 
     private val zone = ZoneId.of("Asia/Shanghai")
+    private val now = Instant.parse("2026-10-25T04:00:00Z")
+    private val properties = WatchProperties()
 
     private fun watch(
         id: String = UUID.randomUUID().toString(),
-        userId: String = "alice",
+        userId: String = "user-${UUID.randomUUID()}",
         title: String = "Price watch",
         status: WatchStatus = WatchStatus.ACTIVE,
         pendingAction: WatchPendingAction = WatchPendingAction.CHECK,
@@ -99,7 +134,7 @@ class R2dbcWatchStoreTest {
         projectKind = ProjectKind.USER,
         owners = setOf("alice", "group-1"),
         originSessionId = "origin-session",
-        runSessionId = "run-session",
+        runSessionId = "run-$id",
         allowedTools = listOf("webfetch", "memory_search"),
         sourceHints = "look at the quote page",
         lastTaskId = "task-0",
@@ -111,6 +146,47 @@ class R2dbcWatchStoreTest {
         createdAt = createdAt,
         updatedAt = 999
     )
+
+    private suspend fun setting(userId: String, enabled: Boolean = true, timeoutMs: Long? = null) {
+        R2dbcScheduledTaskSettingStore(db, HostIdentity(SELF)).save(
+            ScheduledTaskSetting(userId = userId, taskType = AsyncTaskType.WATCH, enabled = enabled, timeoutMs = timeoutMs)
+        )
+    }
+
+    private fun snapshot(watch: Watch) = WatchScheduleEntry(
+        watch.id, watch.userId, watch.ownerApp ?: SELF, watch.version, watch.nextDueAt, watch.pendingAction
+    )
+
+    private fun task(watch: Watch, status: AsyncTaskStatus = AsyncTaskStatus.PENDING) = AsyncTask(
+        id = UUID.randomUUID().toString(),
+        userId = watch.userId,
+        type = AsyncTaskType.WATCH,
+        trigger = TaskTrigger.SCHEDULE,
+        title = watch.title,
+        status = status,
+        sessionId = watch.runSessionId,
+        ownerApp = SELF,
+        payload = mapOf(
+            WatchTaskPayload.KEY_WATCH_ID to watch.id,
+            WatchTaskPayload.KEY_KIND to WatchRunKind.CHECK.name,
+            WatchTaskPayload.KEY_SCHEDULED_FOR to watch.nextDueAt.toEpochMilli(),
+            WatchTaskPayload.KEY_DEFINITION_VERSION to watch.version,
+            WatchTaskPayload.KEY_TITLE to watch.title
+        ),
+        createdAt = now.toEpochMilli(),
+        updatedAt = now.toEpochMilli()
+    )
+
+    /** Arrange the existing handler-CAS tests independently of admission and execution. */
+    private suspend fun setLastTaskId(watchId: String, taskId: String) = suspendTransaction(db) {
+        WatchTable.update({ WatchTable.id eq watchId }) { it[lastTaskId] = taskId }
+    }
+
+    private suspend fun taskCount(watch: Watch): Long = suspendTransaction(db) {
+        AsyncTaskTable.selectAll().where {
+            (AsyncTaskTable.userId eq watch.userId) and (AsyncTaskTable.sessionId eq watch.runSessionId)
+        }.count()
+    }
 
     private fun finding() = WatchFinding(
         conclusion = "Price crossed 100",
@@ -172,6 +248,45 @@ class R2dbcWatchStoreTest {
         }
 
         @Test
+        fun `create stamps the owning application`() = runTest {
+            val created = store().create(watch(userId = "owner-${UUID.randomUUID()}"))
+            assertEquals(SELF, created.ownerApp)
+            assertEquals(SELF, store().findById(created.id)?.ownerApp)
+        }
+
+        @Test
+        fun `another application's watch is neither listed nor scheduled, but is readable by id`() = runTest {
+            val user = "host-${UUID.randomUUID()}"
+            val now = Instant.parse("2026-10-26T00:00:00Z")
+            val mine = store().create(watch(userId = user))
+            val theirs = R2dbcWatchStore(db, HostIdentity("trading-api")).create(watch(userId = user))
+            setting(user)
+
+            assertEquals(listOf(mine.id), store().listUpcoming(now, userId = user).map { it.watchId })
+            assertEquals(listOf(mine.id), store().listByUser(user).map { it.id })
+            assertEquals(1, store().countActive(user))
+            // The handler reads by id so it can say *why* it refuses to run the row.
+            assertEquals("trading-api", store().findById(theirs.id)?.ownerApp)
+        }
+
+        @Test
+        fun `an unclaimed watch is not scheduled`() = runTest {
+            val store = store()
+            val user = "legacy-${UUID.randomUUID()}"
+            val created = store.create(watch(userId = user))
+            // A row written before owner_app existed: the column is null and nothing claims it.
+            suspendTransaction(db) {
+                WatchTable.update({ WatchTable.id eq created.id }) { it[WatchTable.ownerApp] = null }
+            }
+
+            setting(user)
+            assertEquals(emptyList(), store.listUpcoming(Instant.parse("2026-10-26T00:00:00Z"), userId = user))
+            assertNull(store.findSchedule(created.id))
+            assertEquals(emptyList(), store.listByUser(user))
+            assertNull(store.findById(created.id)?.ownerApp)
+        }
+
+        @Test
         fun `statuses filter the listing`() = runTest {
             val store = store()
             val active = watch(userId = "dana")
@@ -190,7 +305,8 @@ class R2dbcWatchStoreTest {
             store.create(watch(userId = "erin", nextDueAt = Instant.ofEpochMilli(now + 500), createdAt = 3))
             store.create(watch(userId = "erin", status = WatchStatus.PAUSED, nextDueAt = Instant.ofEpochMilli(now - 200), createdAt = 4))
 
-            val due = store.listDue("erin", now)
+            setting("erin")
+            val due = store.listUpcoming(Instant.ofEpochMilli(now), userId = "erin")
             assertEquals(2, due.size)
             assertTrue(due[0].nextDueAt < due[1].nextDueAt)
         }
@@ -238,37 +354,42 @@ class R2dbcWatchStoreTest {
     inner class `guarded writes` {
 
         @Test
-        fun `a claim advances the row exactly once`() = runTest {
+        fun `an automatic admission advances the due and inserts the task exactly once`() = runTest {
             val store = store()
             val original = watch()
             store.create(original)
-            val due = original.nextDueAt.toEpochMilli()
+            setting(original.userId)
+            val snapshot = snapshot(store.findById(original.id)!!)
 
-            assertTrue(store.claim(original.id, due, due + 60_000, WatchPendingAction.CHECK))
-            assertFalse(store.claim(original.id, due, due + 120_000, WatchPendingAction.CHECK))
+            val first = assertIs<WatchEnqueueResult.Enqueued>(
+                store.enqueueScheduled(snapshot, now, properties)
+            )
+            val scheduledFor = (first.task.payload[WatchTaskPayload.KEY_SCHEDULED_FOR] as Number).toLong()
+            assertEquals(original.nextDueAt.toEpochMilli(), scheduledFor)
+
+            assertIs<WatchEnqueueResult.Stale>(store.enqueueScheduled(snapshot, now, properties))
 
             val updated = store.findById(original.id)!!
-            assertEquals(due + 60_000, updated.nextDueAt.toEpochMilli())
+            val decision = assertNotNull(WatchClaimPolicy.decide(original, now, properties))
+            assertEquals(decision.newNextDueAt, updated.nextDueAt)
+            assertEquals(first.task.id, updated.lastTaskId)
+            assertEquals(1, taskCount(original))
         }
 
         @Test
-        fun `a claim can route the row into an expiry review`() = runTest {
+        fun `an automatic admission can route the row into an expiry review`() = runTest {
             val store = store()
-            val original = watch()
+            val original = watch().copy(untilAt = now.minusSeconds(3_600))
             store.create(original)
-            val due = original.nextDueAt.toEpochMilli()
-            assertTrue(
-                store.claim(
-                    original.id,
-                    due,
-                    due + 600_000,
-                    WatchPendingAction.EXPIRY_REVIEW,
-                    statusReason = "until passed"
-                )
-            )
+            setting(original.userId)
+
+            val result = store.enqueueScheduled(snapshot(store.findById(original.id)!!), now, properties)
+
+            val task = assertIs<WatchEnqueueResult.Enqueued>(result).task
+            assertEquals(WatchRunKind.EXPIRY_REVIEW.name, task.payload[WatchTaskPayload.KEY_KIND])
             val updated = store.findById(original.id)!!
             assertEquals(WatchPendingAction.EXPIRY_REVIEW, updated.pendingAction)
-            assertEquals("until passed", updated.statusReason)
+            assertNotNull(updated.statusReason)
         }
 
         @Test
@@ -276,7 +397,7 @@ class R2dbcWatchStoreTest {
             val store = store()
             val original = watch()
             store.create(original)
-            store.markRunStarted(original.id, "task-1", 1)
+            setLastTaskId(original.id, "task-1")
 
             assertNull(
                 store.applyFinding(
@@ -317,8 +438,8 @@ class R2dbcWatchStoreTest {
             val store = store()
             val original = watch()
             store.create(original)
-            store.markRunStarted(original.id, "task-1", 1)
-            store.markRunStarted(original.id, "task-2", 2)
+            setLastTaskId(original.id, "task-1")
+            setLastTaskId(original.id, "task-2")
 
             assertNull(
                 store.applyFinding(
@@ -353,7 +474,7 @@ class R2dbcWatchStoreTest {
             val store = store()
             val original = watch()
             store.create(original)
-            store.markRunStarted(original.id, "task-1", 1)
+            setLastTaskId(original.id, "task-1")
             val updated = store.recordFailure(
                 id = original.id,
                 expectedVersion = original.version,
@@ -377,7 +498,7 @@ class R2dbcWatchStoreTest {
             val store = store()
             val original = watch()
             store.create(original)
-            store.markRunStarted(original.id, "task-2", 2)
+            setLastTaskId(original.id, "task-2")
 
             assertNull(
                 store.recordFailure(
@@ -400,7 +521,7 @@ class R2dbcWatchStoreTest {
             val store = store()
             val original = watch(pendingAction = WatchPendingAction.EXPIRY_REVIEW)
             store.create(original)
-            store.markRunStarted(original.id, "task-1", 1)
+            setLastTaskId(original.id, "task-1")
 
             assertNull(
                 store.applyExpiryReview(
@@ -519,14 +640,156 @@ class R2dbcWatchStoreTest {
         }
 
         @Test
-        fun `run start stamps the task without touching the schedule`() = runTest {
+        fun `a run slot is reserved for a live task without touching the schedule`() = runTest {
             val store = store()
             val original = watch()
             store.create(original)
-            assertTrue(store.markRunStarted(original.id, "task-7", 700))
+            val running = tasks().create(task(original, AsyncTaskStatus.RUNNING))
+
+            assertTrue(store.claimRunSlot(running, original.version, Instant.ofEpochMilli(700)))
+
             val updated = store.findById(original.id)!!
-            assertEquals("task-7", updated.lastTaskId)
+            assertEquals(running.id, updated.lastTaskId)
             assertEquals(original.nextDueAt, updated.nextDueAt)
+
+            // A second live run has no free slot, even though the watch row itself is untouched.
+            val other = tasks().create(task(original, AsyncTaskStatus.RUNNING))
+            assertFalse(store.claimRunSlot(other, original.version, Instant.ofEpochMilli(800)))
+            assertEquals(running.id, store.findById(original.id)!!.lastTaskId)
+        }
+    }
+
+    @Nested
+    inner class `manual and retry admission` {
+
+        @Test
+        fun `an in-flight run blocks both admission paths without moving the due`() = runTest {
+            val store = store()
+            val original = watch()
+            store.create(original)
+            setting(original.userId)
+            val running = tasks().create(task(original, AsyncTaskStatus.RUNNING))
+
+            val scheduled = store.enqueueScheduled(snapshot(store.findById(original.id)!!), now, properties)
+            assertEquals(running.id, assertIs<WatchEnqueueResult.Busy>(scheduled).taskId)
+
+            assertIs<WatchEnqueueResult.Busy>(
+                store.enqueueManual(original.userId, original.id, now, properties)
+            )
+            assertEquals(original.nextDueAt, store.findById(original.id)!!.nextDueAt)
+            assertEquals(listOf(running.id), store.listInFlight(original.userId, original.id).map { it.id })
+            assertEquals(1, taskCount(original))
+        }
+
+        @Test
+        fun `a manual run is inserted without consuming the schedule`() = runTest {
+            val store = store()
+            val original = watch()
+            store.create(original)
+
+            val task = assertIs<WatchEnqueueResult.Enqueued>(
+                store.enqueueManual(original.userId, original.id, now, properties)
+            ).task
+
+            assertEquals(TaskTrigger.FRONTEND, task.trigger)
+            assertEquals(WatchRunKind.CHECK.name, task.payload[WatchTaskPayload.KEY_KIND])
+            // A manual run reports its own request instant as the firing, not the stored due.
+            assertEquals(
+                now.toEpochMilli(),
+                (task.payload[WatchTaskPayload.KEY_SCHEDULED_FOR] as Number).toLong()
+            )
+            val updated = store.findById(original.id)!!
+            assertEquals(original.nextDueAt, updated.nextDueAt)
+            assertEquals(task.id, updated.lastTaskId)
+        }
+
+        @Test
+        fun `a disabled setting stops automatic admission but not manual runs`() = runTest {
+            val store = store()
+            val original = watch()
+            store.create(original)
+            setting(original.userId, enabled = false)
+
+            assertIs<WatchEnqueueResult.Stale>(
+                store.enqueueScheduled(snapshot(store.findById(original.id)!!), now, properties)
+            )
+            assertTrue(
+                store.listUpcoming(now.plusSeconds(3_600), userId = original.userId).isEmpty()
+            )
+            assertIs<WatchEnqueueResult.Enqueued>(
+                store.enqueueManual(original.userId, original.id, now, properties)
+            )
+        }
+
+        @Test
+        fun `another user's enabled setting does not schedule this watch`() = runTest {
+            val store = store()
+            val original = watch()
+            store.create(original)
+            setting(original.userId, enabled = false)
+            setting("someone-else", enabled = true)
+
+            assertTrue(
+                store.listUpcoming(now.plusSeconds(3_600), userId = original.userId).isEmpty()
+            )
+        }
+
+        @Test
+        fun `a committed admission publishes exactly one schedule change`() = runTest {
+            val events = mutableListOf<WatchScheduleChanged>()
+            val store = store { events += it }
+            val original = watch()
+            store.create(original)
+            setting(original.userId)
+            events.clear()
+
+            store.enqueueScheduled(snapshot(store.findById(original.id)!!), now, properties)
+
+            val event = events.single()
+            assertEquals(SELF, event.ownerApp)
+            assertEquals(original.id, event.watchId)
+            assertEquals(original.userId, event.userId)
+        }
+
+        @Test
+        fun `a stale admission publishes no schedule change`() = runTest {
+            val events = mutableListOf<WatchScheduleChanged>()
+            val store = store { events += it }
+            val original = watch()
+            store.create(original)
+            setting(original.userId)
+            val snapshot = snapshot(store.findById(original.id)!!)
+            store.enqueueScheduled(snapshot, now, properties)
+            events.clear()
+
+            assertIs<WatchEnqueueResult.Stale>(store.enqueueScheduled(snapshot, now, properties))
+            assertTrue(events.isEmpty())
+        }
+
+        @Test
+        fun `a retry reuses the finished row and keeps its original firing`() = runTest {
+            val store = store()
+            val original = watch()
+            store.create(original)
+            setting(original.userId)
+            val first = assertIs<WatchEnqueueResult.Enqueued>(
+                store.enqueueScheduled(snapshot(store.findById(original.id)!!), now, properties)
+            ).task
+            tasks().complete(first.id, mapOf("ok" to true))
+
+            val retried = assertIs<WatchEnqueueResult.Enqueued>(
+                store.retryRun(original.userId, original.id, first.id, 0, now.plusSeconds(60))
+            )
+
+            assertEquals(first.id, retried.task.id)
+            assertEquals(AsyncTaskStatus.PENDING, retried.task.status)
+            assertEquals(1, retried.task.retryCount)
+            assertEquals(
+                (first.payload[WatchTaskPayload.KEY_SCHEDULED_FOR] as Number).toLong(),
+                (retried.task.payload[WatchTaskPayload.KEY_SCHEDULED_FOR] as Number).toLong()
+            )
+            assertEquals(first.id, store.findById(original.id)!!.lastTaskId)
+            assertEquals(1, taskCount(original))
         }
     }
 }

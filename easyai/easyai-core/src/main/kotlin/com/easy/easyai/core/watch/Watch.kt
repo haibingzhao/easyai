@@ -2,6 +2,7 @@ package com.easy.easyai.core.watch
 
 import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.task.AsyncTask
+import com.easy.easyai.core.task.TaskTrigger
 import com.easy.easyai.core.tool.ToolDefinition
 import java.time.DayOfWeek
 import java.time.Duration
@@ -114,11 +115,17 @@ data class Watch(
     val consecutiveFailures: Int = 0,
     val lastError: String? = null,
     val statusReason: String? = null,
+    /**
+     * The application that fires this watch, stamped by the store on insert. A watch runs with the
+     * creating agent's tools resolved on that host, so another host sharing the database must not
+     * claim it: it would run with a degraded toolset and only log about it.
+     */
+    val ownerApp: String? = null,
     val createdAt: Long,
     val updatedAt: Long
 )
 
-/** A due watch the planner decided to run, with the schedule mutation that goes with the claim. */
+/** A due watch the claim policy decided to run, with the schedule mutation that goes with it. */
 data class WatchClaim(
     val watch: Watch,
     val kind: WatchRunKind,
@@ -218,6 +225,25 @@ data class WatchNotice(
     val dedupeKey: String
 )
 
+data class WatchScheduleEntry(
+    val watchId: String,
+    val userId: String,
+    val ownerApp: String,
+    val version: Int,
+    val nextDueAt: Instant,
+    val pendingAction: WatchPendingAction
+)
+
+data class WatchScheduleCursor(val nextDueAt: Instant, val watchId: String)
+
+data class WatchScheduleChanged(val ownerApp: String, val watchId: String, val userId: String)
+
+sealed interface WatchEnqueueResult {
+    data class Enqueued(val task: AsyncTask) : WatchEnqueueResult
+    data class Busy(val taskId: String) : WatchEnqueueResult
+    data object Stale : WatchEnqueueResult
+}
+
 /** Persistence for [Watch] definitions, keyed by the owning user. */
 interface WatchStore {
 
@@ -233,27 +259,44 @@ interface WatchStore {
 
     suspend fun countActive(userId: String): Int
 
-    /** A user's ACTIVE rows whose next due instant has arrived, oldest due first. */
-    suspend fun listDue(userId: String, now: Long, limit: Int = 200): List<Watch>
+    suspend fun listUpcoming(
+        horizon: Instant,
+        cursor: WatchScheduleCursor? = null,
+        limit: Int = 200,
+        userId: String? = null
+    ): List<WatchScheduleEntry>
 
-    /**
-     * Move a due row's schedule forward, guarded by the due instant the planner read. Returns true
-     * only for the one caller that won the update; a concurrent tick sees zero rows and skips.
-     */
-    suspend fun claim(
-        id: String,
-        expectedNextDueAt: Long,
-        newNextDueAt: Long,
-        pendingAction: WatchPendingAction,
-        newStatus: WatchStatus? = null,
-        statusReason: String? = null
-    ): Boolean
+    suspend fun findSchedule(watchId: String): WatchScheduleEntry?
 
-    suspend fun markRunStarted(id: String, taskId: String, at: Long): Boolean
+    suspend fun enqueueScheduled(
+        expected: WatchScheduleEntry,
+        now: Instant,
+        properties: WatchProperties
+    ): WatchEnqueueResult
+
+    suspend fun enqueueManual(
+        userId: String,
+        watchId: String,
+        now: Instant,
+        properties: WatchProperties,
+        trigger: TaskTrigger = TaskTrigger.FRONTEND
+    ): WatchEnqueueResult
+
+    suspend fun retryRun(
+        userId: String,
+        watchId: String,
+        taskId: String,
+        expectedRetryCount: Int,
+        now: Instant
+    ): WatchEnqueueResult
+
+    suspend fun listInFlight(userId: String, watchId: String): List<AsyncTask>
+
+    suspend fun claimRunSlot(task: AsyncTask, expectedVersion: Int, at: Instant): Boolean
 
     /**
      * Apply a check result, only while the row still has [expectedVersion], [expectedStatus], and
-     * [taskId] is still the run that [markRunStarted] last claimed. Null means a guard rejected the
+     * [taskId] is still the run that [claimRunSlot] last claimed. Null means a guard rejected the
      * write (edited, paused, cancelled, completed, or another run took the slot).
      */
     suspend fun applyFinding(
@@ -281,7 +324,7 @@ interface WatchStore {
         at: Long
     ): Watch?
 
-    /** Same guards as [applyFinding], including the task slot claimed by [markRunStarted]. */
+    /** Same guards as [applyFinding], including the task slot claimed by [claimRunSlot]. */
     suspend fun applyExpiryReview(
         id: String,
         expectedVersion: Int,
@@ -368,13 +411,17 @@ fun interface WatchToolsetResolver {
  * cancel interrupts the live worker instead of only flipping the row's status.
  */
 interface WatchRunGateway {
-    suspend fun launch(task: AsyncTask): AsyncTask?
+    fun dispatch(task: AsyncTask)
+    suspend fun awaitIdle(taskId: String)
     suspend fun cancel(taskId: String): Boolean
 }
 
 /** Deployment defaults and hard caps for the watch subsystem. */
 data class WatchProperties(
+    /** Deployment-wide kill switch; false stops planning and fails no existing row. */
     val enabled: Boolean = true,
+
+    /** Hard cap on ACTIVE definitions per user **in this application**; hosts on one database count separately. */
     val maxActivePerUser: Int = 50,
     val runTimeoutMs: Long = 180_000,
     val maxIterations: Int = 12,
@@ -387,6 +434,5 @@ data class WatchProperties(
     val failureBackoffBaseMs: Long = 3_600_000,
     val failureBackoffMaxMs: Long = 86_400_000,
     val maxFailuresBeforePause: Int = 3,
-    val scanCron: String = "0 * * * * *",
-    val perUserPerTickLimit: Int = 20
+    val perUserPerMinuteLimit: Int = 20
 )

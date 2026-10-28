@@ -19,7 +19,7 @@ internal class KnowledgeReadTool(
     private val accessContext: KnowledgeAccessContext,
 ) : BaseToolDefinition(metadata) {
 
-    data class Parameters(val key: String)
+    data class Parameters(val id: String)
     override fun parameterType(): Class<*> = Parameters::class.java
 
     override suspend fun doExecute(
@@ -30,16 +30,16 @@ internal class KnowledgeReadTool(
         coroutineScope: CoroutineScope,
         onUpdate: suspend (ToolUpdate) -> Unit
     ): ToolResult {
-        val key = args["key"] as? String
-        if (key.isNullOrBlank()) {
-            return errorResult("Error: 'key' parameter is required.")
+        val id = (args["id"] as? String)?.trim()
+        if (id.isNullOrBlank()) {
+            return errorResult("Error: 'id' parameter is required.")
         }
 
-        if (!accessGuard.canReadEntry(accessContext, knowledgeOwnerId, key)) {
-            return errorResult("Knowledge entry not found: $key")
+        if (!accessGuard.canReadEntry(accessContext, knowledgeOwnerId, id)) {
+            return errorResult("Knowledge article not found: $id")
         }
-        val content = store.read(knowledgeOwnerId, key)
-            ?: return errorResult("Knowledge entry not found: $key")
+        val content = store.read(knowledgeOwnerId, id)
+            ?: return errorResult("Knowledge article not found: $id")
         return ToolResult(content = listOf(TextContent(content)))
     }
 }

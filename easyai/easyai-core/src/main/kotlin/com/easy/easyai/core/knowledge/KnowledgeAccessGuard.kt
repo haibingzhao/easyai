@@ -1,69 +1,46 @@
 package com.easy.easyai.core.knowledge
 
 /**
- * Single entry point for knowledge access checks.
+ * Single entry point for index-level knowledge access checks.
  *
- * Article objects go straight to the policy (or through [KnowledgeArticleService] for the
- * article APIs); RAG entries (which may have no metadata row) are resolved against
- * [KnowledgeArticleStore] first so the policy sees the row when it exists. Web controllers and
- * agent tools use this class instead of re-implementing the lookup.
+ * The retrieval index only knows article ids; the guard resolves the metadata row inside the
+ * searched bucket and asks the host [KnowledgeAccessPolicy]. An id without a row is denied:
+ * after the article/index merge there is no such thing as a retrievable document without
+ * metadata.
  */
 class KnowledgeAccessGuard(
     private val policy: KnowledgeAccessPolicy,
     private val articleStore: KnowledgeArticleStore,
 ) {
 
-    /** Object-level helpers for host call sites that already hold an article row. */
-    suspend fun canRead(context: KnowledgeAccessContext, article: KnowledgeArticle): Boolean =
-        policy.canRead(context, article)
-
-    suspend fun canWrite(context: KnowledgeAccessContext, article: KnowledgeArticle): Boolean =
-        policy.canWrite(context, article)
-
-    suspend fun canManage(context: KnowledgeAccessContext, article: KnowledgeArticle): Boolean =
-        policy.canManage(context, article)
-
     suspend fun canReadEntry(
         context: KnowledgeAccessContext,
         ownerId: String,
-        key: String,
+        articleId: String,
     ): Boolean {
-        val article = articleStore.findByKey(ownerId, key)
-        return policy.canReadEntry(context, ownerId, key, article)
+        val article = articleStore.findById(articleId) ?: return false
+        if (article.userId != ownerId) return false
+        if (!article.isRetrievable()) return false
+        return policy.canRead(context, article)
     }
 
-    suspend fun canManageEntry(
-        context: KnowledgeAccessContext,
-        ownerId: String,
-        key: String,
-    ): Boolean {
-        val article = articleStore.findByKey(ownerId, key)
-        return policy.canManageEntry(context, ownerId, key, article)
-    }
-
-    /** Batch variant used by RAG list/search: returns the subset of [keys] the caller may read. */
+    /** Batch variant used by RAG search: returns the subset of [ids] the caller may read. */
     suspend fun filterReadableEntries(
         context: KnowledgeAccessContext,
         ownerId: String,
-        keys: Collection<String>,
+        ids: Collection<String>,
     ): Set<String> {
-        if (keys.isEmpty()) return emptySet()
-        val byKey = articleStore.findByKeys(ownerId, keys).associateBy { it.knowledgeKey }
-        return keys.filterTo(linkedSetOf()) { key ->
-            policy.canReadEntry(context, ownerId, key, byKey[key])
+        if (ids.isEmpty()) return emptySet()
+        val byId = articleStore.findByIds(ownerId, ids).associateBy { it.id }
+        return ids.filterTo(linkedSetOf()) { id ->
+            // findByIds is already bucket-scoped; re-checking the bucket keeps the batch path
+            // as strict as the single-id lookup if a store ever widens its query.
+            byId[id]?.takeIf { it.userId == ownerId && it.isRetrievable() }
+                ?.let { policy.canRead(context, it) } ?: false
         }
     }
 
-    /** Batch variant used by source deletion. */
-    suspend fun filterManageableEntries(
-        context: KnowledgeAccessContext,
-        ownerId: String,
-        keys: Collection<String>,
-    ): Set<String> {
-        if (keys.isEmpty()) return emptySet()
-        val byKey = articleStore.findByKeys(ownerId, keys).associateBy { it.knowledgeKey }
-        return keys.filterTo(linkedSetOf()) { key ->
-            policy.canManageEntry(context, ownerId, key, byKey[key])
-        }
-    }
+    /** A stale index entry never makes a draft or a retrieval-disabled article readable. */
+    private fun KnowledgeArticle.isRetrievable(): Boolean =
+        status == ArticleStatus.PUBLISHED && ragEnabled
 }

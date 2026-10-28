@@ -109,12 +109,21 @@ class SkillIndexer(
         force: Boolean,
         await: Boolean = false,
         self: String? = null
-    ): ReconcileSummary =
+    ): ReconcileSummary = try {
         syncService.withOwnerLock(entry.userId) {
             val store = catalog ?: return@withOwnerLock ReconcileSummary()
             var row = store.findById(entry.id) ?: return@withOwnerLock ReconcileSummary()
             if (!force && (row.nextAttemptAt ?: 0L) > System.currentTimeMillis()) {
                 return@withOwnerLock ReconcileSummary(pending = if (isPending(row)) 1 else 0)
+            }
+            // The cross-process half of the owner lock. A background pass has no caller waiting on it,
+            // so a row another application is already reconciling is skipped rather than duplicated.
+            // The interactive path (self != null) never claims: a user's explicit refresh must not be
+            // dropped, and the owner root's file lock already serializes the directory itself.
+            val leaseUntil = System.currentTimeMillis() + LEASE_MS
+            val claimed = self == null && store.claimForSync(row.id, row.nextAttemptAt, leaseUntil)
+            if (self == null && !claimed) {
+                return@withOwnerLock ReconcileSummary(pending = 1)
             }
             var updated = 0
             try {
@@ -204,8 +213,19 @@ class SkillIndexer(
             } catch (e: Exception) {
                 logger.warn("Skill reconciliation failed for '{}': {}", row.name, e.message)
                 failure(row, e.message ?: "Skill reconciliation failed").copy(updated = updated)
+            } finally {
+                // Early returns (drift of a read-only owner, push failure, RAG off) leave the lease in
+                // place, which would stretch the 5-second retry into a five-minute wait. Paths that
+                // already persisted a retry (failure/complete/compensate) changed next_attempt_at, so
+                // this CAS against the lease value is a no-op for them.
+                if (claimed) runCatching { store.claimForSync(row.id, leaseUntil, 0L) }
             }
         }
+    } catch (e: SkillOwnerBusyException) {
+        // Another process holds this owner root; the retry loop picks the row up on a later pass.
+        logger.debug("Skill '{}' deferred this pass: {}", entry.name, e.message)
+        ReconcileSummary(pending = 1)
+    }
 
     private suspend fun runCatchingPush(
         row: SkillCatalogEntry, snapshot: SkillSnapshot, enable: Boolean = false
@@ -273,5 +293,8 @@ class SkillIndexer(
         private const val RETRY_MS = 5_000L
         private const val MAX_RETRY_MS = 60_000L
         private const val VERIFY_MS = 300_000L
+
+        /** Lease held by one background reconcile of a row; long enough for an index submit, short enough to recover. */
+        private const val LEASE_MS = 300_000L
     }
 }

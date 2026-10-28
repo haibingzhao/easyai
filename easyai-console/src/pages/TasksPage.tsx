@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Ban, ListChecks, MessageSquare, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
+import { ArrowUpRight, Ban, ListChecks, MessageSquare, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
 import { useTaskStore } from '@/services/stores/task-store';
 import { Dialog } from '@/components/ui/Dialog';
 import { getTaskDescriptor, taskTitle, taskTypeLabel, TASK_TYPE_REGISTRY } from '@/constants/task-types';
-import type { AsyncTaskStatus, TaskFilters } from '@/types/task';
+import type { AsyncTaskStatus, TaskFilters, TaskLink } from '@/types/task';
 import { isTerminalStatus } from '@/types/task';
 import { i18n } from '@/utils/i18n';
 
@@ -81,6 +81,7 @@ export const TasksPage: React.FC = () => {
   // a running task at the instant it was opened while the list behind it kept polling.
   const [detailId, setDetailId] = useState<string | null>(null);
   const detail = useMemo(() => tasks.find((t) => t.id === detailId) ?? null, [tasks, detailId]);
+  const detailLink = detail ? (getTaskDescriptor(detail.type).link?.(detail) ?? null) : null;
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -122,6 +123,17 @@ export const TasksPage: React.FC = () => {
   const openTranscript = (taskId: string) => {
     setDetailId(null);
     navigate(`/tasks/${taskId}/transcript`);
+  };
+
+  /**
+   * Follow the route a host descriptor named for this run. The contract is an in-app route, so
+   * anything without a leading slash (an absolute URL, a relative fragment) is ignored rather than
+   * resolved against the current path.
+   */
+  const openLink = (target: TaskLink) => {
+    if (!target.path.startsWith('/')) return;
+    setDetailId(null);
+    navigate(target.path);
   };
 
   /** Bulk irreversible delete, so it asks first — the same bar a single row's inline confirm sets. */
@@ -213,7 +225,11 @@ export const TasksPage: React.FC = () => {
               const descriptor = getTaskDescriptor(task.type);
               const Icon = descriptor.icon;
               const terminal = isTerminalStatus(task.status);
+              // A row another application wrote lists here (the queue is shared) but its worker lives
+              // there, so retry / cancel / delete are not ours to issue.
+              const controllable = task.controllable !== false;
               const summary = descriptor.summarize ? descriptor.summarize(task) : '';
+              const link = descriptor.link?.(task) ?? null;
               return (
                 <div
                   key={task.id}
@@ -228,6 +244,11 @@ export const TasksPage: React.FC = () => {
                           {statusLabel(task.status)}
                         </span>
                         <span className="text-xs text-muted-foreground">{triggerLabel(task.trigger)}</span>
+                        {!controllable && task.ownerApp && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                            {task.ownerApp}
+                          </span>
+                        )}
                       </div>
                       <div className="text-xs text-muted-foreground flex items-center gap-3 flex-wrap">
                         <span>{formatTime(task.createdAt)}</span>
@@ -240,6 +261,15 @@ export const TasksPage: React.FC = () => {
                       )}
                     </button>
                     <div className="flex items-center gap-1 shrink-0">
+                      {link && (
+                        <button
+                          onClick={() => openLink(link)}
+                          className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                          title={i18n(link.labelKey)}
+                        >
+                          <ArrowUpRight className="w-4 h-4" />
+                        </button>
+                      )}
                       {task.sessionId && (
                         <button
                           onClick={() => void openTranscript(task.id)}
@@ -249,7 +279,7 @@ export const TasksPage: React.FC = () => {
                           <MessageSquare className="w-4 h-4" />
                         </button>
                       )}
-                      {!terminal && (
+                      {!terminal && controllable && (
                         <button
                           onClick={() => void cancelTask(task.id)}
                           className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
@@ -261,7 +291,7 @@ export const TasksPage: React.FC = () => {
                       {/* Retry re-runs the handler and overwrites the row's result, so it only
                           makes sense for a run that did not finish cleanly — a completed pass
                           has already done its work and re-running it just burns model calls. */}
-                      {(task.status === 'failed' || task.status === 'interrupted' || task.status === 'timed_out') && (
+                      {controllable && (task.status === 'failed' || task.status === 'interrupted' || task.status === 'timed_out') && (
                         <button
                           onClick={() => void retryTask(task.id)}
                           className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
@@ -270,7 +300,7 @@ export const TasksPage: React.FC = () => {
                           <RotateCcw className="w-4 h-4" />
                         </button>
                       )}
-                      {confirmDeleteId === task.id ? (
+                      {controllable && (confirmDeleteId === task.id ? (
                         <div className="flex items-center gap-1">
                           <button
                             onClick={() => { void deleteTask(task.id); setConfirmDeleteId(null); }}
@@ -293,7 +323,7 @@ export const TasksPage: React.FC = () => {
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
-                      )}
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -319,6 +349,15 @@ export const TasksPage: React.FC = () => {
               <DetailRow label={i18n('Retries')} value={`${detail.retryCount} (${formatTime(detail.retriedAt)})`} />
             )}
             {detail.error && <DetailRow label={i18n('Error')} value={detail.error} />}
+            {detailLink && (
+              <button
+                onClick={() => openLink(detailLink)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border text-sm hover:bg-muted transition-colors"
+              >
+                <ArrowUpRight className="w-4 h-4" />
+                {i18n(detailLink.labelKey)}
+              </button>
+            )}
             {detail.sessionId && (
               <button
                 onClick={() => void openTranscript(detail.id)}

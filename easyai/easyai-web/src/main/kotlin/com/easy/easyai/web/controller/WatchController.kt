@@ -4,6 +4,7 @@ import com.easy.easyai.core.task.AsyncTaskStore
 import com.easy.easyai.core.task.AsyncTaskType
 import com.easy.easyai.core.watch.WatchConflictException
 import com.easy.easyai.core.watch.WatchException
+import com.easy.easyai.core.watch.WatchForeignHostException
 import com.easy.easyai.core.watch.WatchMode
 import com.easy.easyai.core.watch.WatchNotFoundException
 import com.easy.easyai.core.watch.WatchNotifyPolicy
@@ -168,6 +169,8 @@ class WatchController(
         throw when (e) {
             is WatchNotFoundException -> ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
             is WatchConflictException -> ResponseStatusException(HttpStatus.CONFLICT, e.message)
+            // Not a malformed request: the row is fine, it just is not this application's to touch.
+            is WatchForeignHostException -> ResponseStatusException(HttpStatus.CONFLICT, e.message)
             is WatchUnavailableException -> ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, e.message)
             else -> ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
         }

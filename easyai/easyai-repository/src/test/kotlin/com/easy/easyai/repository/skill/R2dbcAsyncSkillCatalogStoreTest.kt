@@ -351,4 +351,26 @@ class R2dbcAsyncSkillCatalogStoreTest {
             assertEquals(otherOwner, store.findById(otherOwner.id))
         }
     }
+
+    @Nested
+    inner class `cross-process sync lease` {
+
+        @Test
+        fun `one claimant wins and a stale expectation loses`() = runTest {
+            val store = createStore()
+            val row = store.claim(entry("leased", uniqueUser("lease")))
+            val lease = System.currentTimeMillis() + 60_000
+
+            assertTrue(store.claimForSync(row.id, row.nextAttemptAt, lease))
+            assertFalse(store.claimForSync(row.id, row.nextAttemptAt, lease + 1), "the first claimant holds it")
+            assertTrue(store.claimForSync(row.id, lease, lease + 2), "the holder may extend its own lease")
+            assertEquals(lease + 2, store.findById(row.id)?.nextAttemptAt)
+            assertEquals(row.revision, store.findById(row.id)?.revision, "a lease must not disturb the content CAS")
+        }
+
+        @Test
+        fun `a missing row is never claimed`() = runTest {
+            assertFalse(createStore().claimForSync(UUID.randomUUID().toString(), null, 1))
+        }
+    }
 }

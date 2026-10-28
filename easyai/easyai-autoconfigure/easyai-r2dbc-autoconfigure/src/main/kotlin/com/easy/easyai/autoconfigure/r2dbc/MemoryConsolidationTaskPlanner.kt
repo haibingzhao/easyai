@@ -19,7 +19,6 @@ import com.easy.easyai.repository.project.AsyncProjectStore
 import kotlinx.coroutines.flow.toList
 import org.slf4j.LoggerFactory
 import java.nio.file.Paths
-import java.time.ZoneId
 import java.util.UUID
 
 /**
@@ -63,11 +62,11 @@ class MemoryConsolidationTaskPlanner(
 
     override suspend fun plan(context: ScheduledTaskPlanContext): List<TaskDraft> {
         if (!settings.available) return emptyList()
-        val store = memoryStore ?: return emptyList()
+        val store = checkNotNull(memoryStore) { "Memory store is unavailable for scheduled consolidation" }
         val user = MemoryConsolidationUserSettings.fromScheduled(context.setting)
         val pending = pendingKeys(context.pendingTasks)
         val memoryTypes = MemoryType.entriesFor(DomainCatalog.activeDomain)
-        val nowEpochMs = context.now.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val nowEpochMs = context.now.toEpochMilli()
         val drafts = mutableListOf<TaskDraft>()
         for (slice in slicesOf(context.userId)) {
             // Gates that need no store read are settled first, so a fully deferred or fully pending slice
@@ -124,9 +123,7 @@ class MemoryConsolidationTaskPlanner(
     private suspend fun slicesOf(userId: String): List<Slice> {
         val slices = mutableListOf(Slice(MemoryScope.GLOBAL, MemoryOwnerContext(userId, null), null))
         val projects = projectStore ?: return slices
-        runCatching { projects.findAll(limit = null, userId = userId, includeTemp = false).toList() }
-            .onFailure { logger.warn("Failed to list projects for user {}: {}", userId, it.message) }
-            .getOrDefault(emptyList())
+        projects.findAll(limit = null, userId = userId, includeTemp = false).toList()
             .forEach { project ->
                 val path = project.path
                 slices += Slice(MemoryScope.PROJECT, MemoryOwnerContext(userId, Paths.get(path)), path)

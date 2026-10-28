@@ -1,23 +1,15 @@
 package com.easy.easyai.core.knowledge
 
 /**
- * Summary of a knowledge base entry returned by list operations.
+ * A retrieval hit from the knowledge index.
  *
- * @param key logical key `{source}/{relativePath}`
- * @param source upload source (folder name or user-provided label)
- * @param relativePath path of the file within the source
- * @param title extracted or frontmatter title
- * @param description extracted or frontmatter description
+ * @param id stable article id; use it for `knowledge_read`
  * @param kcategory knowledge category code (e.g. "architecture")
  * @param ext file extension without dot (e.g. "md", "kt")
- * @param content first ~200 chars of content for preview
- * @param updatedAt epoch milliseconds of last modification
- * @param chunksCount number of chunks after indexing, if available
+ * @param content preview of the indexed body
  */
 data class KnowledgeEntry(
-    val key: String,
-    val source: String,
-    val relativePath: String,
+    val id: String,
     val title: String,
     val description: String,
     val kcategory: String,
@@ -28,179 +20,39 @@ data class KnowledgeEntry(
 )
 
 /**
- * Full detail of a knowledge entry including relationship information.
+ * The knowledge retrieval index.
  *
- * @param toc table of contents derived from Markdown headings
- * @param parent key of the parent index document, if any
- * @param children keys of child documents when this entry is a directory index
- * @param related keys of semantically related knowledge entries
- */
-data class KnowledgeDetail(
-    val entry: KnowledgeEntry,
-    val fullContent: String,
-    val toc: List<String>,
-    val parent: String?,
-    val children: List<String>,
-    val related: List<String>
-)
-
-/**
- * Result of a single file upload within a batch.
- */
-data class UploadResult(
-    val relativePath: String,
-    val success: Boolean,
-    val key: String? = null,
-    val reason: String? = null
-)
-
-/**
- * Input item for a knowledge upload batch.
- *
- * @param relativePath relative path within the source (used as key segment)
- * @param content file content as text
- */
-data class KnowledgeUploadItem(
-    val relativePath: String,
-    val content: String
-)
-
-/**
- * Abstraction for knowledge base storage operations.
- *
- * Implementations decide the backend (EasyRAG, local files, etc.).
- * All methods are suspending and never block.
+ * Only published articles with `ragEnabled` are indexed. Directory layout lives in the database,
+ * not in this store: an entry is addressed by the article id alone.
  */
 interface KnowledgeStore {
 
-    /**
-     * Upload a batch of files to the knowledge base.
-     *
-     * @param userId owner user id for biz_id isolation
-     * @param source label identifying the upload source (folder name or user-provided)
-     * @param items files to upload
-     * @param kcategory optional knowledge category to assign
-     * @return per-file results; partial failures do not abort the batch
-     */
-    suspend fun uploadBatch(
-        userId: String,
-        source: String,
-        items: List<KnowledgeUploadItem>,
-        kcategory: String? = null
-    ): List<UploadResult>
+    /** Semantic retrieval over the index. */
+    suspend fun search(userId: String, query: String, topK: Int = DEFAULT_TOP_K): List<KnowledgeEntry>
 
-    /**
-     * List knowledge entries, optionally filtered.
-     *
-     * @param userId owner user id
-     * @param source filter by source (null = all)
-     * @param kcategory filter by category (null = all)
-     * @param query optional semantic search query
-     */
-    suspend fun list(
-        userId: String,
-        source: String? = null,
-        kcategory: String? = null,
-        query: String? = null
-    ): List<KnowledgeEntry>
+    /** Full indexed body; null when the entry is absent. */
+    suspend fun read(userId: String, id: String): String?
 
-    /**
-     * List entry keys under an owner bucket without reading document bodies.
-     * Access filtering only needs keys; implementations backed by remote storage should
-     * override this to skip the per-document content fetch of [list].
-     *
-     * @param userId owner user id
-     * @param source filter by source (null = all)
-     */
-    suspend fun listKeys(userId: String, source: String? = null): List<String> =
-        list(userId, source).map { it.key }
+    /** Whether the index accepts this file extension (upload validation). */
+    fun supports(ext: String): Boolean = true
 
-    /**
-     * Read full detail of a knowledge entry including relationships.
-     *
-     * @param userId owner user id
-     * @param key logical key `{source}/{relativePath}`
-     */
-    suspend fun detail(userId: String, key: String): KnowledgeDetail?
-
-    /**
-     * Read full document content by key without deriving relationships.
-     * Lightweight path for LLM tools; default implementation delegates to [detail].
-     * Implementations backed by remote storage SHOULD override this to avoid the
-     * relationship-derivation cost of [detail].
-     *
-     * @param userId owner user id
-     * @param key logical key `{source}/{relativePath}`
-     */
-    suspend fun read(userId: String, key: String): String? = detail(userId, key)?.fullContent
-
-    /**
-     * Delete a single knowledge entry.
-     *
-     * @return true if the entry existed and was deleted
-     */
-    suspend fun delete(userId: String, key: String): Boolean
-
-    /**
-     * Delete all knowledge entries from a given source.
-     *
-     * @return number of entries deleted
-     */
-    suspend fun deleteSource(userId: String, source: String): Int
-
-    /**
-     * Delete a known set of entries (the caller has already filtered them by access).
-     * The default implementation deletes one by one; remote stores should override it with a
-     * batch delete.
-     *
-     * @return number of entries deleted
-     */
-    suspend fun deleteEntries(userId: String, keys: Collection<String>): Int =
-        keys.count { delete(userId, it) }
-
-    /**
-     * List all distinct sources for the user.
-     */
-    suspend fun sources(userId: String): List<String>
-
-    /**
-     * Update the content of an existing knowledge entry and re-index it.
-     *
-     * Article flows no longer call this: content updates use [index] so a missing entry is
-     * recreated. Kept for host callers that need the existing-entry contract.
-     *
-     * @param userId owner user id for biz_id isolation
-     * @param key logical key `{source}/{relativePath}`
-     * @param content new full content (without frontmatter — wrapping is handled internally)
-     * @param title optional updated title
-     * @param kcategory optional updated category
-     * @return true if the entry existed and was updated
-     */
-    suspend fun update(
-        userId: String,
-        key: String,
-        content: String,
-        title: String? = null,
-        kcategory: String? = null
-    ): Boolean = false
-
-    /**
-     * Insert or re-index one entry by key. Idempotent. Used by publishing/re-indexing and by
-     * content updates of an already published article; the upload batch indexes files before their
-     * metadata rows are written. Drafts never reach the index.
-     *
-     * @param userId owner user id for biz_id isolation
-     * @param key logical key `{source}/{relativePath}`
-     * @param content full content (without frontmatter — wrapping is handled internally)
-     * @param title article title; derived from the content when null
-     * @param kcategory knowledge category; defaults to "other"
-     * @return true when the document was accepted for indexing
-     */
+    /** Insert or re-index one article. Idempotent. */
     suspend fun index(
         userId: String,
-        key: String,
+        id: String,
         content: String,
         title: String? = null,
-        kcategory: String? = null
-    ): Boolean = false
+        kcategory: String? = null,
+        ext: String = "md"
+    ): Boolean
+
+    /** Remove one article from the index. */
+    suspend fun delete(userId: String, id: String): Boolean
+
+    /** Chunk counts for the ids that finished indexing; missing ids are still being processed. */
+    suspend fun chunkCounts(userId: String, ids: Collection<String>): Map<String, Int>
+
+    companion object {
+        const val DEFAULT_TOP_K = 8
+    }
 }

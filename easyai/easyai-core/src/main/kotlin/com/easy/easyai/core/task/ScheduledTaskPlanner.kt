@@ -1,14 +1,14 @@
 package com.easy.easyai.core.task
 
-import java.time.LocalDateTime
+import java.time.Instant
 
 /**
  * Expands one user's [ScheduledTaskSetting] into the tasks a scan tick should create for [type].
  * Pairs with [TaskHandler] by division: a planner decides *whether and what* to run, a handler runs it.
  *
- * The driver calls this every tick for every enabled row, including while an earlier batch for the
- * same user is still queued, so [ScheduledTaskPlanContext.pendingTasks] exists for duplicate
- * suppression. Returning an empty list is the normal "nothing is due" answer, not an error.
+ * The driver calls this at a due firing, including while an earlier batch for the same user is still
+ * queued. [ScheduledTaskPlanContext.pendingTasks] supports duplicate suppression; an empty list
+ * consumes the firing, so unavailable data must throw rather than masquerade as no work.
  */
 interface ScheduledTaskPlanner {
 
@@ -17,6 +17,9 @@ interface ScheduledTaskPlanner {
 
     /** Scan cron used when the user's row sets none; null means a row without a cron is never due. */
     val defaultCron: String?
+
+    /** False for planners that claim their own due rows, such as host-owned watches. */
+    val usesPersistentSchedule: Boolean get() = true
 
     /** Hard cap on drafts accepted per user per tick, so one scan cannot enqueue unbounded LLM runs. */
     val perUserPerTickLimit: Int
@@ -36,7 +39,7 @@ interface ScheduledTaskPlanner {
 data class ScheduledTaskPlanContext(
     val userId: String,
     val setting: ScheduledTaskSetting,
-    val now: LocalDateTime,
+    val now: Instant,
     val pendingTasks: List<AsyncTask>
 )
 

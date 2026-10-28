@@ -26,6 +26,13 @@ export interface AsyncTask {
   trigger: TaskTrigger;
   title: string;
   sessionId?: string | null;
+  /** Application that ran the task; absent on rows written before ownership was recorded. */
+  ownerApp?: string | null;
+  /**
+   * False when another application wrote the row: it lists here (the queue is shared) but the
+   * control actions belong to that application, which is the only one holding the worker.
+   */
+  controllable?: boolean;
   timeoutMs?: number | null;
   payload?: Record<string, unknown> | null;
   result?: Record<string, unknown> | null;
@@ -47,9 +54,21 @@ export interface TaskFilters {
 }
 
 /**
+ * A host-owned page that shows what one run produced — the Tasks page only navigates to `path`,
+ * it never interprets it.
+ */
+export interface TaskLink {
+  /** Button text: an i18n key, or the host's own display string. */
+  labelKey: string;
+  /** In-app route to navigate to, built from the row. */
+  path: string;
+}
+
+/**
  * Per-type presentation, the single extension point for the Tasks page: adding a backend task type
  * only needs one entry here. `summarize` renders a one-line outcome from the type-specific `result`;
- * the detail view falls back to a generic JSON dump when absent.
+ * the detail view falls back to a generic JSON dump when absent. `link` points a run at the host's
+ * own result page.
  */
 export interface TaskTypeDescriptor {
   labelKey: string;
@@ -61,6 +80,12 @@ export interface TaskTypeDescriptor {
   title?: (task: Pick<AsyncTask, 'payload' | 'title'>) => string;
   /** Renders a one-line outcome from the task's `result`/`error`, the fields every row carries. */
   summarize?: (outcome: Pick<AsyncTask, 'result' | 'error'>) => string;
+  /**
+   * Deep link to the host's own result page for this run, built from the row's `payload`/`result`.
+   * Return null when the row identifies nothing — the Tasks page then shows no link button, so
+   * hosts that do not fill in a result stay on the generic row.
+   */
+  link?: (task: Pick<AsyncTask, 'payload' | 'result'>) => TaskLink | null;
 }
 
 export const isTerminalStatus = (status: AsyncTaskStatus): boolean =>

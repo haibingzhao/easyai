@@ -12,13 +12,12 @@ import org.springframework.context.annotation.Bean
 import org.springframework.scheduling.annotation.EnableScheduling
 
 /**
- * Wires the one scheduler the whole application needs: [ScheduledTaskRunner] collects every
- * [ScheduledTaskPlanner] present and drives them from the shared `scheduled_task_setting` table.
+ * Wires [ScheduledTaskRunner] with every registered [ScheduledTaskPlanner].
  *
- * Making a task type schedulable is a planner bean plus its settings key — no new scheduler, no new
- * table, no change here. Turn `easyai.tasks.scheduled.enabled=false` to stop all scanning without
- * touching task execution; the tick interval is `easyai.tasks.scheduled.scan-cron` (kebab-case, because
- * a `@Scheduled` placeholder reads the literal property name and does not get relaxed binding).
+ * Persistent schedules are preloaded every 30 minutes and triggered by in-memory timers; watches
+ * have their own per-row timers. `easyai.tasks.scheduled.scan-cron` only controls planners that
+ * poll their own due rows.
+ * `easyai.tasks.scheduled.enabled=false` disables both paths without stopping existing tasks.
  *
  * Sits in this module because the settings rows require the repository layer; without R2DBC there is
  * nothing durable to scan.

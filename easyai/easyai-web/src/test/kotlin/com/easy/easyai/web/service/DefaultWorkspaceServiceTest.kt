@@ -1,5 +1,6 @@
 package com.easy.easyai.web.service
 
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.model.ProjectInfo
 import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.permission.PermissionRuleStore
@@ -36,6 +37,7 @@ class DefaultWorkspaceServiceTest {
     private val sessionStore: AsyncSessionStore = mockk(relaxed = true)
     private val permissionRuleStore: PermissionRuleStore = mockk(relaxed = true)
     private val snapshotService: SnapshotService = mockk(relaxed = true)
+    private val host = HostIdentity(APP)
 
     @TempDir
     lateinit var dataDir: Path
@@ -45,14 +47,16 @@ class DefaultWorkspaceServiceTest {
         sessionStore = sessionStore,
         permissionRuleStore = permissionRuleStore,
         snapshotService = snapshotService,
-        dataDir = dataDir.toString()
+        dataDir = dataDir.toString(),
+        host = host
     )
 
     private fun tempProject(sessionId: String, path: Path) = ProjectInfo(
         id = "tmp-$sessionId",
         name = "temp",
         path = path.toString(),
-        kind = ProjectKind.TEMP
+        kind = ProjectKind.TEMP,
+        ownerApp = APP
     )
 
     @Nested
@@ -159,6 +163,19 @@ class DefaultWorkspaceServiceTest {
         }
 
         @Test
+        fun `refuses to release a workspace another application owns`() = runTest {
+            Files.createDirectories(dir)
+            coEvery { projectStore.findById("tmp-$SESSION", USER) } returns
+                tempProject(SESSION, dir).copy(ownerApp = "trading-api")
+            val service = createService()
+
+            service.releaseWorkspace("tmp-$SESSION", USER)
+
+            assertTrue(Files.exists(dir), "the owning host releases its own scratch space")
+            coVerify(exactly = 0) { projectStore.delete(any(), any()) }
+        }
+
+        @Test
         fun `keeps a workspace that is still inside the grace window`() = runTest {
             Files.createDirectories(dir)
             stubSweep(tempProject(SESSION, dir))
@@ -215,12 +232,31 @@ class DefaultWorkspaceServiceTest {
         }
 
         @Test
+        fun `leaves another application's stale workspace alone`() = runTest {
+            val stale = Instant.now().minusSeconds(3600)
+            Files.createDirectories(dir)
+            coEvery { projectStore.listDistinctUserIds() } returns listOf(USER)
+            every { projectStore.findAll(limit = any(), search = any(), userId = USER, includeTemp = true) } returns
+                flowOf(
+                    tempProject(SESSION, dir).copy(createdAt = stale, ownerApp = "trading-api"),
+                    tempProject(SESSION, dir).copy(createdAt = stale, ownerApp = null)
+                )
+            val service = createService()
+
+            assertEquals(0, service.sweepOrphanWorkspaces())
+
+            assertTrue(Files.exists(dir), "the other host's scratch space is still in use")
+            coVerify(exactly = 0) { projectStore.delete(any(), any()) }
+        }
+
+        @Test
         fun `is a no-op when session existence cannot be checked`() = runTest {
             val service = DefaultWorkspaceService(
                 projectStore = projectStore,
                 permissionRuleStore = permissionRuleStore,
                 snapshotService = snapshotService,
-                dataDir = dataDir.toString()
+                dataDir = dataDir.toString(),
+                host = host
             )
 
             assertEquals(0, service.sweepOrphanWorkspaces())
@@ -367,5 +403,6 @@ class DefaultWorkspaceServiceTest {
     companion object {
         private const val SESSION = "5f0d7b7c-2a4e-4d3b-9d3f-1c8e0a6b2d41"
         private const val USER = "4a1b9d2e-7c5f-4b3a-8f1d-2e6c9a0b5d73"
+        private const val APP = "agent-api"
     }
 }

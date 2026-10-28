@@ -1,6 +1,7 @@
 package com.easy.easyai.web.service
 
 import com.easy.easyai.common.util.isSafePathSegment
+import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.model.ProjectInfo
 import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.permission.PermissionRuleStore
@@ -34,7 +35,8 @@ class DefaultWorkspaceService(
     private val sessionStore: AsyncSessionStore? = null,
     private val permissionRuleStore: PermissionRuleStore? = null,
     private val snapshotService: SnapshotService? = null,
-    dataDir: String
+    dataDir: String,
+    private val host: HostIdentity
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
 
@@ -96,6 +98,15 @@ class DefaultWorkspaceService(
             logger.warn("Refusing to release non-temporary workspace {}", projectId)
             return
         }
+        // Deleting the session that points at another application's scratch space must not remove a
+        // directory its worker may still be writing: the owning host releases it on its own sweep.
+        if (!host.owns(project.ownerApp)) {
+            logger.info(
+                "Leaving temporary workspace {} to its owning application; '{}' does not release it",
+                projectId, host.appName
+            )
+            return
+        }
         val path = Path.of(project.path)
         permissionRuleStore?.deleteProjectRules(projectId)
         try {
@@ -132,6 +143,9 @@ class DefaultWorkspaceService(
         for (userId in projectStore.listDistinctUserIds()) {
             for (project in projectStore.findAll(userId = userId, includeTemp = true).toList()) {
                 if (project.kind != ProjectKind.TEMP || project.createdAt.isAfter(cutoff)) continue
+                // Another application's scratch space, or one from before ownership was recorded:
+                // its worker may still be writing there, and only the owning host knows when it is done.
+                if (!host.owns(project.ownerApp)) continue
                 try {
                     if (sessions.findIdsByProjectId(project.id, userId).isNotEmpty()) continue
                     releaseWorkspace(project.id, userId)
