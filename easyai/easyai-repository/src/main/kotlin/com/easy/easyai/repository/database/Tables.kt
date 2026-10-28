@@ -607,6 +607,7 @@ object Tables {
     object ScheduledTaskSettingTable : Table("scheduled_task_setting") {
         val userId = varchar("user_id", 255)
         val taskType = varchar("task_type", 64)
+        val scheduleKey = varchar("schedule_key", 64).default("")
         val enabled = bool("enabled").default(false)
         val scheduleCron = varchar("schedule_cron", 64).nullable()
         val params = text("params").nullable()  // JSON: type-specific configuration
@@ -616,7 +617,7 @@ object Tables {
         val scheduleRevision = varchar("schedule_revision", 64).nullable()
         val scheduleZone = varchar("schedule_zone", 64).nullable()
 
-        override val primaryKey = PrimaryKey(userId, taskType)
+        override val primaryKey = PrimaryKey(userId, taskType, scheduleKey)
 
         init {
             index(false, taskType, enabled)  // the scan reads every enabled row of one type

@@ -84,6 +84,7 @@ class R2dbcScheduledTaskSettingStoreTest {
     private fun setting(
         userId: String = "alice",
         taskType: AsyncTaskType = AsyncTaskType.MEMORY_CONSOLIDATION,
+        scheduleKey: String = "",
         enabled: Boolean = true,
         cron: String? = "0 0 3 * * *",
         params: Map<String, Any?> = mapOf("typeThresholds" to mapOf("experience_lessons" to 7)),
@@ -91,6 +92,7 @@ class R2dbcScheduledTaskSettingStoreTest {
     ) = ScheduledTaskSetting(
         userId = userId,
         taskType = taskType,
+        scheduleKey = scheduleKey,
         enabled = enabled,
         cron = cron,
         params = params,
@@ -192,6 +194,101 @@ class R2dbcScheduledTaskSettingStoreTest {
         @Test
         fun `get returns null for a user who never configured the type`() = runTest {
             assertNull(createStore().get("absent", AsyncTaskType.MEMORY_CONSOLIDATION))
+        }
+    }
+
+    @Nested
+    inner class `multiple rows per type` {
+
+        @Test
+        fun `rows with different schedule keys stay independent`() = runTest {
+            val store = createStore()
+            val user = "multi-row"
+            ensureUser(user)
+            store.save(setting(userId = user, scheduleKey = "cn", params = mapOf("symbols" to "600519.SH")))
+            store.save(setting(userId = user, scheduleKey = "us", params = mapOf("symbols" to "AAPL")))
+
+            assertEquals("600519.SH", store.get(user, AsyncTaskType.MEMORY_CONSOLIDATION, "cn")?.params?.get("symbols"))
+            assertEquals("AAPL", store.get(user, AsyncTaskType.MEMORY_CONSOLIDATION, "us")?.params?.get("symbols"))
+            assertNull(store.get(user, AsyncTaskType.MEMORY_CONSOLIDATION))
+            assertEquals(
+                listOf("cn", "us"),
+                store.list(user, AsyncTaskType.MEMORY_CONSOLIDATION).map { it.scheduleKey }
+            )
+
+            store.save(setting(userId = user, scheduleKey = "us", enabled = false, params = mapOf("symbols" to "MSFT")))
+            assertTrue(assertNotNull(store.get(user, AsyncTaskType.MEMORY_CONSOLIDATION, "cn")).enabled)
+            val updatedUs = assertNotNull(store.get(user, AsyncTaskType.MEMORY_CONSOLIDATION, "us"))
+            assertFalse(updatedUs.enabled)
+            assertEquals("MSFT", updatedUs.params["symbols"])
+
+            assertTrue(store.delete(user, AsyncTaskType.MEMORY_CONSOLIDATION, "cn"))
+            assertNull(store.get(user, AsyncTaskType.MEMORY_CONSOLIDATION, "cn"))
+            assertNotNull(store.get(user, AsyncTaskType.MEMORY_CONSOLIDATION, "us"))
+        }
+
+        @Test
+        fun `keyed saves and deletes publish the schedule key`() = runTest {
+            val events = mutableListOf<ScheduledTaskSettingChanged>()
+            val store = R2dbcScheduledTaskSettingStore(db, HostIdentity("host-a"), onChanged = events::add)
+            val user = "multi-row-events"
+            ensureUser(user)
+            val cn = setting(userId = user, scheduleKey = "cn")
+
+            store.save(cn)
+            assertEquals(listOf(ScheduledTaskSettingChanged(user, cn.taskType, "cn")), events)
+
+            assertTrue(store.delete(user, cn.taskType, "cn"))
+            assertEquals(2, events.size)
+            assertEquals("cn", events.last().scheduleKey)
+        }
+
+        @Test
+        fun `scheduling paging walks sibling keys with the composite cursor`() = runTest {
+            val store = createStore(appName = "host-pager")
+            ensureUser("page-user-1", ownerApp = "host-pager")
+            ensureUser("page-user-2", ownerApp = "host-pager")
+            for (key in listOf("a", "b", "c")) store.save(setting(userId = "page-user-1", scheduleKey = key))
+            store.save(setting(userId = "page-user-2", scheduleKey = "a"))
+
+            val first = store.listForScheduling(AsyncTaskType.MEMORY_CONSOLIDATION, Long.MAX_VALUE, limit = 2)
+            assertEquals(listOf("a" to "page-user-1", "b" to "page-user-1"), first.map { it.scheduleKey to it.userId })
+
+            val second = store.listForScheduling(
+                AsyncTaskType.MEMORY_CONSOLIDATION,
+                Long.MAX_VALUE,
+                afterUserId = first.last().userId,
+                limit = 2,
+                afterScheduleKey = first.last().scheduleKey
+            )
+            assertEquals(listOf("c" to "page-user-1", "a" to "page-user-2"), second.map { it.scheduleKey to it.userId })
+        }
+
+        @Test
+        fun `a scheduled firing advances only its own row`() = runTest {
+            val store = createStore()
+            val user = "advance"
+            ensureUser(user)
+            store.save(setting(userId = user, scheduleKey = "cn"))
+            store.save(setting(userId = user, scheduleKey = "us"))
+
+            val cn = assertNotNull(store.get(user, AsyncTaskType.MEMORY_CONSOLIDATION, "cn"))
+            val us = assertNotNull(store.get(user, AsyncTaskType.MEMORY_CONSOLIDATION, "us"))
+            assertTrue(store.initializeSchedule(cn, 1_000L, "UTC"))
+            assertTrue(store.initializeSchedule(us, 2_000L, "UTC"))
+            val cnReady = assertNotNull(store.get(user, AsyncTaskType.MEMORY_CONSOLIDATION, "cn"))
+
+            val task = AsyncTask(
+                id = "task-cn",
+                userId = user,
+                type = AsyncTaskType.MEMORY_CONSOLIDATION,
+                trigger = TaskTrigger.SCHEDULE,
+                title = "cn"
+            )
+            val accepted = assertNotNull(store.submitScheduled(cnReady, 9_000L, listOf(task)))
+            assertEquals(1, accepted.size)
+            assertEquals(9_000L, store.get(user, AsyncTaskType.MEMORY_CONSOLIDATION, "cn")?.nextFireAt)
+            assertEquals(2_000L, store.get(user, AsyncTaskType.MEMORY_CONSOLIDATION, "us")?.nextFireAt)
         }
     }
 
@@ -445,14 +542,19 @@ class R2dbcScheduledTaskSettingStoreTest {
             initialized(setting("page-h", type), null)
             initialized(setting("page-a", AsyncTaskType("schedule-other-page")), 1L)
             val first = store.listForScheduling(type, 1_000L, limit = 2)
-            val second = store.listForScheduling(type, 1_000L, first.last().userId, 2)
-            val third = store.listForScheduling(type, 1_000L, second.last().userId, 2)
+            val second = store.listForScheduling(type, 1_000L, first.last().userId, 2, first.last().scheduleKey)
+            val third = store.listForScheduling(type, 1_000L, second.last().userId, 2, second.last().scheduleKey)
             assertEquals(listOf("page-a", "page-b"), first.map { it.userId })
             assertEquals(listOf("page-c", "page-d"), second.map { it.userId })
             assertEquals(listOf("page-e"), third.map { it.userId })
-            assertTrue(store.listForScheduling(type, 1_000L, third.last().userId, 2).isEmpty())
+            assertTrue(
+                store.listForScheduling(type, 1_000L, third.last().userId, 2, third.last().scheduleKey).isEmpty()
+            )
             assertTrue((first + second + third).all { it.taskType == type })
             assertFailsWith<IllegalArgumentException> { store.listForScheduling(type, 1_000L, limit = 0) }
+            assertFailsWith<IllegalArgumentException> {
+                store.listForScheduling(type, 1_000L, first.last().userId, 2)
+            }
         }
     }
 

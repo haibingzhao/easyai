@@ -66,6 +66,7 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
   const pendingPermission = useChatStore((state) => state.pendingPermission);
   const retryInfo = useChatStore((state) => state.retryInfo);
   const livePreview = useChatStore((state) => state.livePreview);
+  const transcriptMode = useChatStore((state) => state.transcriptMode);
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
 
   const items = useMemo(() => buildRenderItems(messages), [messages]);
@@ -195,7 +196,7 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
       
       {isStreaming && streamingBlocks.length === 0 && !runningSessionId && !retryInfo && <StreamingIndicator />}
 
-      {!isStreaming && cancelReason && !runningSessionId && (
+      {!isStreaming && !transcriptMode && cancelReason && !runningSessionId && (
         <div className="px-4 flex items-center gap-2">
           <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-muted text-muted-foreground">
             {i18n(cancelReason)}

@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import { MessageList } from '@/components/chat/MessageList';
 import { useChatStore } from '@/services/stores/chat-store';
 import { useTaskStore } from '@/services/stores/task-store';
+import { sliceTaskTranscript } from '@/services/stores/chat/task-run-slice';
 import { loadTranscriptSession } from '@/services/session-switch';
 import { taskService } from '@/services/task-service';
 import { getTaskDescriptor, taskTitle, taskTypeLabel } from '@/constants/task-types';
@@ -133,6 +134,12 @@ export const TaskTranscriptPage: React.FC = () => {
     };
   }, [task]);
 
+  // A watch fires every day into the same session; show only the firing this task opened.
+  const transcript = useMemo(
+    () => (task ? sliceTaskTranscript(messages, task) : []),
+    [messages, task]
+  );
+
   // Clear chat store state when leaving the transcript so a subsequent navigation
   // to `/` does not show the task's messages in the regular chat view.
   useEffect(() => {
@@ -216,12 +223,12 @@ export const TaskTranscriptPage: React.FC = () => {
 
       {/* Message list — read-only, no input */}
       <div className="flex-1 min-h-0 overflow-y-auto">
-        {messages.length === 0 ? (
+        {transcript.length === 0 ? (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-            {i18n('No messages in this session')}
+            {i18n('No messages recorded for this run')}
           </div>
         ) : (
-          <MessageList messages={messages} isStreaming={false} disableEdit={true} />
+          <MessageList messages={transcript} isStreaming={false} disableEdit={true} />
         )}
       </div>
     </div>

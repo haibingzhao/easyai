@@ -5,11 +5,13 @@ import com.easy.easyai.core.task.AsyncTaskStore
 import com.easy.easyai.core.task.ScheduledTaskPlanner
 import com.easy.easyai.core.task.ScheduledTaskSettingStore
 import org.springframework.beans.factory.ObjectProvider
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.context.annotation.Bean
 import org.springframework.scheduling.annotation.EnableScheduling
+import java.time.ZoneId
 
 /**
  * Wires [ScheduledTaskRunner] with every registered [ScheduledTaskPlanner].
@@ -39,11 +41,13 @@ class ScheduledTaskAutoConfiguration {
         settingStore: ObjectProvider<ScheduledTaskSettingStore>,
         taskStore: ObjectProvider<AsyncTaskStore>,
         taskRunner: ObjectProvider<AsyncTaskRunner>,
-        planners: ObjectProvider<ScheduledTaskPlanner>
+        planners: ObjectProvider<ScheduledTaskPlanner>,
+        @Value("\${easyai.tasks.scheduled.zone:}") scheduleZone: String,
     ): ScheduledTaskRunner = ScheduledTaskRunner(
         settingStore = settingStore.ifAvailable,
         taskStore = taskStore.ifAvailable,
         taskRunner = taskRunner.ifAvailable,
-        planners = planners.orderedStream().toList()
+        planners = planners.orderedStream().toList(),
+        scheduleZone = scheduleZone.takeIf { it.isNotBlank() }?.let(ZoneId::of) ?: ZoneId.systemDefault(),
     )
 }

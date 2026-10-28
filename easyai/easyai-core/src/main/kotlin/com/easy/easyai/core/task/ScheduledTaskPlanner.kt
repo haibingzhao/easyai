@@ -21,10 +21,10 @@ interface ScheduledTaskPlanner {
     /** False for planners that claim their own due rows, such as host-owned watches. */
     val usesPersistentSchedule: Boolean get() = true
 
-    /** Hard cap on drafts accepted per user per tick, so one scan cannot enqueue unbounded LLM runs. */
+    /** Hard cap on drafts accepted per `(user, type, schedule key)` row per tick, so one scan cannot enqueue unbounded LLM runs. */
     val perUserPerTickLimit: Int
 
-    /** The tasks to create for this `(user, type)` row, or an empty list. */
+    /** The tasks to create for this `(user, type, schedule key)` row, or an empty list. */
     suspend fun plan(context: ScheduledTaskPlanContext): List<TaskDraft>
 }
 
@@ -33,8 +33,9 @@ interface ScheduledTaskPlanner {
  * free of scheduling mechanics (cron parsing, tick timing, submission).
  *
  * @property now the tick instant, injected so a planner's due-ness logic stays testable
- * @property pendingTasks this user's non-terminal tasks of [ScheduledTaskPlanner.type]; the planner
- *   decides what makes a draft a duplicate of one of these
+ * @property pendingTasks every non-terminal task of this user and [ScheduledTaskPlanner.type]; a
+ *   planner that owns several rows per user (distinct [ScheduledTaskSetting.scheduleKey]) must filter
+ *   these by its own row before deciding a draft is a duplicate
  */
 data class ScheduledTaskPlanContext(
     val userId: String,

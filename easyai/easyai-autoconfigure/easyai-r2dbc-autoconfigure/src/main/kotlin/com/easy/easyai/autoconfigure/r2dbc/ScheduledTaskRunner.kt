@@ -43,7 +43,9 @@ class ScheduledTaskRunner(
     private val taskRunner: AsyncTaskRunner?,
     planners: List<ScheduledTaskPlanner>,
     private val clock: () -> Instant = { Instant.now() },
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    /** Zone cron expressions are interpreted in; hosts that promise a fixed timezone set it explicitly. */
+    private val scheduleZone: ZoneId = ZoneId.systemDefault()
 ) : DisposableBean {
 
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -94,7 +96,7 @@ class ScheduledTaskRunner(
     @EventListener
     fun onSettingChanged(event: ScheduledTaskSettingChanged) {
         if (!started.get() || plannersByType[event.taskType]?.usesPersistentSchedule != true) return
-        scope.launch { refresh(ScheduleKey(event.userId, event.taskType)) }
+        scope.launch { refresh(ScheduleKey(event.userId, event.taskType, event.scheduleKey)) }
     }
 
     suspend fun preload() {
@@ -104,18 +106,21 @@ class ScheduledTaskRunner(
             val horizon = clock().toEpochMilli() + LOOKAHEAD_MS
             for (planner in plannersByType.values.filter { it.usesPersistentSchedule }) {
                 var afterUserId: String? = null
+                var afterScheduleKey: String? = null
                 do {
-                    val rows = store.listForScheduling(planner.type, horizon, afterUserId, PAGE_SIZE)
+                    val rows = store.listForScheduling(planner.type, horizon, afterUserId, PAGE_SIZE, afterScheduleKey)
                     for (setting in rows) {
                         try {
-                            refreshOnce(ScheduleKey(setting.userId, setting.taskType))
+                            refreshOnce(ScheduleKey(setting.userId, setting.taskType, setting.scheduleKey))
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            logger.warn("Failed to load schedule for {} {}: {}", setting.userId, planner.type.key, e.message)
+                            logger.warn("Failed to load schedule for {} {} '{}': {}",
+                                setting.userId, planner.type.key, setting.scheduleKey, e.message)
                         }
                     }
                     afterUserId = rows.lastOrNull()?.userId
+                    afterScheduleKey = rows.lastOrNull()?.scheduleKey
                 } while (rows.size == PAGE_SIZE)
             }
         } catch (e: CancellationException) {
@@ -135,7 +140,8 @@ class ScheduledTaskRunner(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                logger.warn("Failed to refresh schedule for {} {}: {}", key.userId, key.type.key, e.message)
+                logger.warn("Failed to refresh schedule for {} {} '{}': {}",
+                    key.userId, key.type.key, key.scheduleKey, e.message)
                 delay(RETRY_MS)
             }
         }
@@ -144,7 +150,7 @@ class ScheduledTaskRunner(
     private suspend fun refreshOnce(key: ScheduleKey) {
         val store = settingStore ?: return
         refreshLocks[(key.hashCode() ushr 1) % refreshLocks.size].withLock {
-            val setting = store.get(key.userId, key.type)
+            val setting = store.get(key.userId, key.type, key.scheduleKey)
             val planner = plannersByType[key.type] ?: return@withLock
             val current = setting?.takeIf { it.enabled }?.let { initialize(it, planner) }
             if (current == null) timers.remove(key)?.job?.cancel() else schedule(current)
@@ -154,7 +160,7 @@ class ScheduledTaskRunner(
     private suspend fun initialize(setting: ScheduledTaskSetting, planner: ScheduledTaskPlanner): ScheduledTaskSetting? {
         if (!setting.enabled || setting.scheduleZone != null) return setting
         val store = settingStore ?: return null
-        val zone = ZoneId.systemDefault()
+        val zone = scheduleZone
         val cron = resolveCron(setting, planner)
         val next = if (cron == null) null else if (setting.scheduleRevision == null) {
             clock().toEpochMilli()
@@ -162,11 +168,11 @@ class ScheduledTaskRunner(
             nextFire(cron, Instant.ofEpochMilli(setting.updatedAt), zone)
         }
         store.initializeSchedule(setting, next, zone.id)
-        return store.get(setting.userId, setting.taskType)
+        return store.get(setting.userId, setting.taskType, setting.scheduleKey)
     }
 
     private fun schedule(setting: ScheduledTaskSetting) {
-        val key = ScheduleKey(setting.userId, setting.taskType)
+        val key = ScheduleKey(setting.userId, setting.taskType, setting.scheduleKey)
         val due = setting.nextFireAt
         if (!setting.enabled || due == null || due > clock().toEpochMilli() + LOOKAHEAD_MS) {
             timers.remove(key)?.job?.cancel()
@@ -183,7 +189,8 @@ class ScheduledTaskRunner(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    logger.error("Scheduled firing failed for {} {}: {}", key.userId, key.type.key, e.message, e)
+                    logger.error("Scheduled firing failed for {} {} '{}': {}",
+                        key.userId, key.type.key, key.scheduleKey, e.message, e)
                     delay(RETRY_MS)
                 }
             }
@@ -212,7 +219,7 @@ class ScheduledTaskRunner(
     private suspend fun fire(expected: ScheduledTaskSetting) {
         val store = settingStore ?: return
         val runner = taskRunner ?: return
-        val current = store.get(expected.userId, expected.taskType) ?: return
+        val current = store.get(expected.userId, expected.taskType, expected.scheduleKey) ?: return
         if (!current.enabled || current.scheduleRevision != expected.scheduleRevision ||
             current.nextFireAt != expected.nextFireAt || current.scheduleZone != expected.scheduleZone
         ) return
@@ -233,7 +240,7 @@ class ScheduledTaskRunner(
 
     suspend fun pollOnce(now: Instant = clock()) {
         val store = settingStore ?: return
-        val localNow = LocalDateTime.ofInstant(now, ZoneId.systemDefault())
+        val localNow = LocalDateTime.ofInstant(now, scheduleZone)
         val windowStart = lastPollAt ?: localNow.minusSeconds(60)
         lastPollAt = localNow
         for (planner in plannersByType.values.filterNot { it.usesPersistentSchedule }) {
@@ -302,7 +309,7 @@ class ScheduledTaskRunner(
         timers.clear()
     }
 
-    private data class ScheduleKey(val userId: String, val type: AsyncTaskType)
+    private data class ScheduleKey(val userId: String, val type: AsyncTaskType, val scheduleKey: String)
     private data class Timer(val revision: String?, val due: Long, val job: Job)
 
     private companion object {

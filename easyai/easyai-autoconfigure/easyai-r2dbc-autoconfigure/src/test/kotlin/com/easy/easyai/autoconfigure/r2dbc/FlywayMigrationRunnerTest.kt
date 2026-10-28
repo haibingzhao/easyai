@@ -116,7 +116,7 @@ class FlywayMigrationRunnerTest {
         }
 
         @Test
-        fun `V39 preserves V38 preferences and adds nullable schedule state with the due index`() {
+        fun `V42 preserves V39 schedule state and rebuilds the key around schedule_key`() {
             val jdbcUrl = "jdbc:h2:mem:flyway_scheduled_next_fire;MODE=MYSQL;DB_CLOSE_DELAY=-1"
             Flyway.configure()
                 .dataSource(jdbcUrl, "sa", "")
@@ -135,14 +135,33 @@ class FlywayMigrationRunnerTest {
                     )
                 }
             }
+            val upTo41 = Flyway.configure()
+                .dataSource(jdbcUrl, "sa", "")
+                .locations("classpath:db/migration")
+                .target("41")
+                .load()
+                .migrate()
+            assertEquals(3, upTo41.migrationsExecuted)
+            assertEquals("41", upTo41.targetSchemaVersion)
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.executeUpdate(
+                        "UPDATE scheduled_task_setting SET next_fire_at = 1234567890123, " +
+                            "schedule_revision = 'revision', schedule_zone = 'Asia/Shanghai' " +
+                            "WHERE user_id = 'alice' AND task_type = 'daily'"
+                    )
+                }
+            }
+
             val result = Flyway.configure()
                 .dataSource(jdbcUrl, "sa", "")
                 .locations("classpath:db/migration")
-                .target("39")
+                .target("42")
                 .load()
                 .migrate()
             assertEquals(1, result.migrationsExecuted)
-            assertEquals("39", result.targetSchemaVersion)
+            assertEquals("42", result.targetSchemaVersion)
 
             DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
                 connection.createStatement().use { statement ->
@@ -157,11 +176,20 @@ class FlywayMigrationRunnerTest {
                         assertEquals("{\"state\":\"kept\"}", row.getString(settings.params.name))
                         assertEquals(90_000L, row.getLong(settings.timeoutMs.name))
                         assertEquals(42L, row.getLong(settings.updatedAt.name))
+                        assertEquals("", row.getString(settings.scheduleKey.name))
+                        assertEquals(1_234_567_890_123L, row.getLong(settings.nextFireAt.name))
+                        assertEquals("revision", row.getString(settings.scheduleRevision.name))
+                        assertEquals("Asia/Shanghai", row.getString(settings.scheduleZone.name))
                     }
-                    statement.executeQuery("SELECT $settingColumns FROM scheduled_task_setting").use { rows ->
+                    statement.executeQuery(
+                        "SELECT $settingColumns FROM scheduled_task_setting ORDER BY user_id, task_type"
+                    ).use { rows ->
                         var count = 0
                         while (rows.next()) {
                             count++
+                            if (rows.getString(settings.userId.name) == "alice" &&
+                                rows.getString(settings.taskType.name) == "daily"
+                            ) continue
                             assertEquals(null, rows.getObject(settings.nextFireAt.name))
                             assertEquals(null, rows.getString(settings.scheduleRevision.name))
                             assertEquals(null, rows.getString(settings.scheduleZone.name))
@@ -203,17 +231,22 @@ class FlywayMigrationRunnerTest {
                         assertEquals(0, rows.getInt(1))
                     }
                     statement.executeUpdate(
-                        "UPDATE scheduled_task_setting SET next_fire_at = 1234567890123, " +
-                            "schedule_revision = 'revision', schedule_zone = 'Asia/Shanghai' " +
-                            "WHERE user_id = 'alice' AND task_type = 'daily'"
+                        "INSERT INTO scheduled_task_setting " +
+                            "(user_id, task_type, schedule_key, enabled, updated_at) VALUES " +
+                            "('alice', 'daily', 'plan-2', TRUE, 45)"
                     )
                     statement.executeQuery(
-                        "SELECT $settingColumns FROM scheduled_task_setting WHERE user_id = 'alice' AND task_type = 'daily'"
-                    ).use { row ->
-                        assertTrue(row.next())
-                        assertEquals(1_234_567_890_123L, row.getLong(settings.nextFireAt.name))
-                        assertEquals("revision", row.getString(settings.scheduleRevision.name))
-                        assertEquals("Asia/Shanghai", row.getString(settings.scheduleZone.name))
+                        "SELECT COUNT(*) FROM scheduled_task_setting WHERE user_id = 'alice' AND task_type = 'daily'"
+                    ).use { rows ->
+                        assertTrue(rows.next())
+                        assertEquals(2, rows.getInt(1))
+                    }
+                    assertThrows(SQLException::class.java) {
+                        statement.executeUpdate(
+                            "INSERT INTO scheduled_task_setting " +
+                                "(user_id, task_type, schedule_key, enabled, updated_at) VALUES " +
+                                "('alice', 'daily', '', TRUE, 46)"
+                        )
                     }
                 }
             }

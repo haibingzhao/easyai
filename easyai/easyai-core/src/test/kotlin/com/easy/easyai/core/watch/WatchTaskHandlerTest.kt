@@ -1,16 +1,29 @@
 package com.easy.easyai.core.watch
 
+import com.easy.easyai.core.event.AgentEvent
+import com.easy.easyai.core.event.EventStream
+import com.easy.easyai.core.model.AssistantMessage
+import com.easy.easyai.core.model.UserMessage
 import com.easy.easyai.core.task.TaskOutcome
 import com.easy.easyai.core.task.TaskTrigger
 import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.every
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.time.Instant
 import java.time.ZoneId
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -365,5 +378,59 @@ class WatchTaskHandlerTest {
             assertEquals(0, store.applyFindingCalls)
             assertEquals(1, store.failureCalls)
         }
+    }
+
+    @Nested
+    inner class `transcript marker` {
+
+        @Test
+        fun `the prompt records the run id the transcript slice cuts on`() = runTest {
+            val store = RecordingWatchStore(testWatch())
+            val model = WatchModelStub(checkAnswer())
+            val task = watchTask(store.current)
+
+            handler(store, model = model).execute(task)
+
+            coVerify {
+                model.sessionManager.saveSessionMessages(
+                    any(),
+                    match { messages ->
+                        (messages.single() as UserMessage).metadata["watchRun"] == task.id
+                    }
+                )
+            }
+        }
+    }
+
+    @Nested
+    inner class `cancellation` {
+
+        @Test
+        fun `a timeout cancels the model stream`() = runTest {
+            val store = RecordingWatchStore(testWatch())
+            val model = WatchModelStub(checkAnswer())
+            val stream = HangingStream()
+            every { model.session.promptWithHistory(any()) } returns stream
+
+            assertFailsWith<TimeoutCancellationException> {
+                withTimeout(100) { handler(store, model = model).execute(watchTask(store.current)) }
+            }
+
+            assertTrue(stream.cancelled.isCompleted)
+            assertEquals(1, store.failureCalls)
+        }
+    }
+}
+
+/** A model turn that never finishes, so cancellation is observable at the stream boundary. */
+private class HangingStream : EventStream<AgentEvent, List<AssistantMessage>> {
+    val cancelled = CompletableDeferred<Unit>()
+
+    override fun asFlow(): Flow<AgentEvent> = emptyFlow()
+
+    override suspend fun result(): List<AssistantMessage> = awaitCancellation()
+
+    override fun cancel() {
+        cancelled.complete(Unit)
     }
 }

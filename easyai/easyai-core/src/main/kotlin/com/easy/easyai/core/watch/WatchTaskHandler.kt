@@ -21,7 +21,6 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -419,13 +418,24 @@ class WatchTaskHandler(
         )
         sessionManager.saveSessionMessages(session.agentContext, listOf(userMessage))
         val stream = session.promptWithHistory(listOf(userMessage))
-        val text = stream.result().lastOrNull()?.text().orEmpty()
+        var lastError: ErrorEvent? = null
+        val text = try {
+            // Drain while the turn runs: the producer writes into an unbounded channel, and nobody
+            // else consumes it, so skipping this would retain every delta until the run ends.
+            stream.asFlow().collect { event -> if (event is ErrorEvent) lastError = event }
+            stream.result().lastOrNull()?.text().orEmpty()
+        } catch (e: CancellationException) {
+            // The producer runs on its own SupervisorJob, so cancelling this caller (task timeout or
+            // user stop) does not stop it. Cancellation is cooperative: an in-flight tool call may
+            // still finish, but the loop will not start another model or tool turn.
+            stream.cancel()
+            throw e
+        }
         if (session.lastEndReason == AgentCompletionCheck.END_REASON_STALLED) {
             throw WatchException("The model did not produce an answer matching the required schema")
         }
         if (session.lastEndReason == END_REASON_LLM_ERROR) {
-            val reason = stream.asFlow().filterIsInstance<ErrorEvent>().firstOrNull()?.error?.message
-            throw WatchException("The model call failed: ${reason ?: "no error message"}")
+            throw WatchException("The model call failed: ${lastError?.error?.message ?: "no error message"}")
         }
         if (text.isBlank()) throw WatchException("The model returned an empty answer")
         return text

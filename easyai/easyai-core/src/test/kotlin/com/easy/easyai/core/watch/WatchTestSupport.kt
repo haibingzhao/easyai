@@ -372,7 +372,7 @@ internal class WatchModelStub(
     val agentService: AgentService = mockk()
     val modelConfigStore: ModelProviderConfigStore = mockk()
     private val factory: ChatModelFactory = mockk()
-    private val session: ChatSession = mockk(relaxed = true)
+    val session: ChatSession = mockk(relaxed = true)
 
     init {
         val config = ModelProviderConfig(
