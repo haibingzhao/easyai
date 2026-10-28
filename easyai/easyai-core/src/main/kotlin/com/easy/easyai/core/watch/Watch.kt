@@ -416,8 +416,8 @@ data class WatchProperties(
 
     /** Hard cap on ACTIVE definitions per user; an account belongs to exactly one application. */
     val maxActivePerUser: Int = 50,
-    val runTimeoutMs: Long = 180_000,
-    val maxIterations: Int = 12,
+    val runTimeoutMs: Long = 300_000,
+    val maxIterations: Int = 30,
     val expiryReviewMaxIterations: Int = 6,
     val maxAutoExtensions: Int = 1,
     val maxExtensionHorizonDays: Long = 90,

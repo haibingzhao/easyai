@@ -50,22 +50,36 @@ class R2dbcScheduledTaskSettingStore(
 
     private val logger = LoggerFactory.getLogger(javaClass)
 
-    override suspend fun get(userId: String, taskType: AsyncTaskType): ScheduledTaskSetting? =
+    override suspend fun get(
+        userId: String,
+        taskType: AsyncTaskType,
+        scheduleKey: String
+    ): ScheduledTaskSetting? =
         suspendTransaction(db) {
             val table = ScheduledTaskSettingTable
             table.selectAll()
-                .where { key(userId, taskType) }
+                .where { key(userId, taskType, scheduleKey) }
                 .limit(1)
                 .map { toSetting(it) }
                 .toList()
                 .firstOrNull()
         }
 
+    override suspend fun list(userId: String, taskType: AsyncTaskType): List<ScheduledTaskSetting> =
+        suspendTransaction(db) {
+            val table = ScheduledTaskSettingTable
+            table.selectAll()
+                .where { UserScope.filterStrict(table.userId, userId) and (table.taskType eq taskType.key) }
+                .orderBy(table.scheduleKey to SortOrder.ASC)
+                .map { toSetting(it) }
+                .toList()
+        }
+
     override suspend fun save(setting: ScheduledTaskSetting): Unit = suspendTransaction(db) {
         val table = ScheduledTaskSettingTable
         // Serialize preference saves with initialization and firing; caller runtime state may be stale.
         val current = table.selectAll()
-            .where { key(setting.userId, setting.taskType) }
+            .where { key(setting.userId, setting.taskType, setting.scheduleKey) }
             .forUpdate()
             .toList()
             .firstOrNull()
@@ -75,6 +89,7 @@ class R2dbcScheduledTaskSettingStore(
         table.upsert {
             it[table.userId] = setting.userId
             it[table.taskType] = setting.taskType.key
+            it[table.scheduleKey] = setting.scheduleKey
             it[table.enabled] = setting.enabled
             it[table.scheduleCron] = setting.cron
             it[table.params] = params
@@ -85,19 +100,26 @@ class R2dbcScheduledTaskSettingStore(
             it[table.scheduleZone] = if (definitionChanged) null else current?.get(table.scheduleZone)
         }
         if (definitionChanged) {
-            TransactionEvents.afterCommit(this) { onChanged(ScheduledTaskSettingChanged(setting.userId, setting.taskType)) }
+            TransactionEvents.afterCommit(this) {
+                onChanged(ScheduledTaskSettingChanged(setting.userId, setting.taskType, setting.scheduleKey))
+            }
         }
         logger.debug(
-            "Saved scheduled settings for user '{}' type '{}' (enabled={})",
-            setting.userId, setting.taskType.key, setting.enabled
+            "Saved scheduled settings for user '{}' type '{}' key '{}' (enabled={})",
+            setting.userId, setting.taskType.key, setting.scheduleKey, setting.enabled
         )
     }
 
-    override suspend fun delete(userId: String, taskType: AsyncTaskType): Boolean = suspendTransaction(db) {
-        val deleted = ScheduledTaskSettingTable.deleteWhere { key(userId, taskType) } > 0
-        if (deleted) TransactionEvents.afterCommit(this) { onChanged(ScheduledTaskSettingChanged(userId, taskType)) }
-        deleted
-    }
+    override suspend fun delete(userId: String, taskType: AsyncTaskType, scheduleKey: String): Boolean =
+        suspendTransaction(db) {
+            val deleted = ScheduledTaskSettingTable.deleteWhere { key(userId, taskType, scheduleKey) } > 0
+            if (deleted) {
+                TransactionEvents.afterCommit(this) {
+                    onChanged(ScheduledTaskSettingChanged(userId, taskType, scheduleKey))
+                }
+            }
+            deleted
+        }
 
     override suspend fun listEnabled(taskType: AsyncTaskType?): List<ScheduledTaskSetting> =
         suspendTransaction(db) {
@@ -115,17 +137,27 @@ class R2dbcScheduledTaskSettingStore(
         taskType: AsyncTaskType,
         horizon: Long,
         afterUserId: String?,
-        limit: Int
+        limit: Int,
+        afterScheduleKey: String?
     ): List<ScheduledTaskSetting> {
         require(limit > 0) { "Scheduling page size must be positive" }
+        require((afterUserId == null) == (afterScheduleKey == null)) {
+            "afterUserId and afterScheduleKey must be passed together"
+        }
         return suspendTransaction(db) {
             val table = ScheduledTaskSettingTable
             var condition = (table.enabled eq true) and (table.taskType eq taskType.key) and
                 UserScope.ownedByApp(table.userId, host.appName) and
                 ((table.nextFireAt lessEq horizon) or table.scheduleZone.isNull())
-            afterUserId?.let { condition = condition and (table.userId greater it) }
+            afterUserId?.let { cursorUser ->
+                val cursorKey = requireNotNull(afterScheduleKey)
+                condition = condition and (
+                    (table.userId greater cursorUser) or
+                        ((table.userId eq cursorUser) and (table.scheduleKey greater cursorKey))
+                    )
+            }
             table.selectAll().where { condition }
-                .orderBy(table.userId to SortOrder.ASC)
+                .orderBy(table.userId to SortOrder.ASC, table.scheduleKey to SortOrder.ASC)
                 .limit(limit)
                 .map { toSetting(it) }
                 .toList()
@@ -138,7 +170,7 @@ class R2dbcScheduledTaskSettingStore(
         return suspendTransaction(db) {
             val table = ScheduledTaskSettingTable
             table.update({
-                key(setting.userId, setting.taskType) and (table.enabled eq true) and
+                key(setting.userId, setting.taskType, setting.scheduleKey) and (table.enabled eq true) and
                     (table.scheduleRevision eq setting.scheduleRevision) and (table.scheduleCron eq setting.cron) and
                     table.scheduleZone.isNull()
             }) {
@@ -168,7 +200,7 @@ class R2dbcScheduledTaskSettingStore(
         return suspendTransaction(db) {
             val table = ScheduledTaskSettingTable
             val advanced = table.update({
-                key(setting.userId, setting.taskType) and (table.enabled eq true) and
+                key(setting.userId, setting.taskType, setting.scheduleKey) and (table.enabled eq true) and
                     (table.scheduleRevision eq setting.scheduleRevision) and (table.scheduleZone eq setting.scheduleZone) and
                     (table.nextFireAt eq setting.nextFireAt)
             }) {
@@ -180,9 +212,10 @@ class R2dbcScheduledTaskSettingStore(
         }
     }
 
-    private fun key(userId: String, taskType: AsyncTaskType): Op<Boolean> {
+    private fun key(userId: String, taskType: AsyncTaskType, scheduleKey: String): Op<Boolean> {
         val table = ScheduledTaskSettingTable
-        return UserScope.filterStrict(table.userId, userId) and (table.taskType eq taskType.key)
+        return UserScope.filterStrict(table.userId, userId) and (table.taskType eq taskType.key) and
+            (table.scheduleKey eq scheduleKey)
     }
 
     private fun toSetting(row: ResultRow): ScheduledTaskSetting {
@@ -198,6 +231,7 @@ class R2dbcScheduledTaskSettingStore(
         return ScheduledTaskSetting(
             userId = row[table.userId],
             taskType = AsyncTaskType(typeKey),
+            scheduleKey = row[table.scheduleKey],
             enabled = row[table.enabled],
             cron = row[table.scheduleCron],
             params = params,

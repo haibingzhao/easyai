@@ -333,7 +333,13 @@ private class ChannelEventStream<TEvent : AgentEvent, TResult>(
 
     override suspend fun result(): TResult {
         start()
-        return resultDeferred.await()
+        return try {
+            resultDeferred.await()
+        } catch (e: CancellationException) {
+            // The producer runs on its own SupervisorJob, so a caller that stops waiting must stop it.
+            producerJob?.cancel()
+            throw e
+        }
     }
 }
 

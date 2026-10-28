@@ -167,6 +167,24 @@ internal class ScheduledTaskRunnerTest {
         }
 
         @Test
+        fun `an explicit schedule zone governs initialization`() = runTest {
+            store.save(setting().copy(nextFireAt = null, scheduleZone = null))
+            val probe = Probe()
+            val scheduler = ScheduledTaskRunner(
+                store, taskStore, taskRunner, listOf(probe),
+                { base.plusMillis(testScheduler.currentTime) }, backgroundScope,
+                ZoneId.of("Asia/Shanghai")
+            )
+
+            scheduler.start()
+            runCurrent()
+
+            assertEquals("Asia/Shanghai", store.row().scheduleZone)
+            // 09:00Z is 17:00 in Shanghai; the next 03:00 local fire is 19:00Z the same day.
+            assertEquals(Instant.parse("2026-10-17T19:00:00Z").toEpochMilli(), store.row().nextFireAt)
+        }
+
+        @Test
         fun `fresh enable starts after updatedAt and never replays an earlier daily cron`() = runTest {
             val zone = ZoneId.systemDefault()
             val enabledAt = LocalDateTime.of(2026, 10, 17, 9, 0).atZone(zone).toInstant()
@@ -776,8 +794,110 @@ internal class ScheduledTaskRunnerTest {
         }
     }
 
+    @Nested
+    inner class MultiRow {
+
+        @Test
+        fun `rows of one type keep independent timers and next-fire state`() = runTest {
+            store.save(setting().copy(scheduleKey = "cn", scheduleRevision = "revision-cn"))
+            store.save(
+                setting().copy(
+                    scheduleKey = "us",
+                    cron = "0 30 3 * * *",
+                    scheduleRevision = "revision-us",
+                    nextFireAt = base.plusSeconds(1_800).toEpochMilli()
+                )
+            )
+            val probe = Probe()
+            val scheduler = runner(this, probe)
+
+            scheduler.start()
+            runCurrent()
+            assertEquals(listOf("cn"), probe.seen.map { it.setting.scheduleKey })
+
+            advanceTimeBy(1_800_000)
+            runCurrent()
+            assertEquals(listOf("cn", "us"), probe.seen.map { it.setting.scheduleKey })
+            assertEquals(
+                Instant.parse("2026-10-18T03:00:00Z").toEpochMilli(),
+                store.row(scheduleKey = "cn").nextFireAt
+            )
+            assertEquals(
+                Instant.parse("2026-10-18T03:30:00Z").toEpochMilli(),
+                store.row(scheduleKey = "us").nextFireAt
+            )
+        }
+
+        @Test
+        fun `a firing re-reads its own row and skips when that row was deleted`() = runTest {
+            store.save(setting().copy(scheduleKey = "cn", scheduleRevision = "revision-cn"))
+            store.save(
+                setting().copy(
+                    scheduleKey = "us",
+                    scheduleRevision = "revision-us",
+                    nextFireAt = base.plusSeconds(60).toEpochMilli()
+                )
+            )
+            val probe = Probe()
+            val scheduler = runner(this, probe)
+
+            scheduler.start()
+            runCurrent()
+            store.delete("alice", AsyncTaskType.MEMORY_CONSOLIDATION, "us")
+
+            advanceTimeBy(60_000)
+            runCurrent()
+
+            assertEquals(listOf("cn"), probe.seen.map { it.setting.scheduleKey })
+            assertEquals(1, dispatched.size)
+        }
+
+        @Test
+        fun `a keyed change notification refreshes only that row`() = runTest {
+            store.save(
+                setting().copy(
+                    scheduleKey = "cn",
+                    scheduleRevision = "revision-cn",
+                    nextFireAt = base.plusSeconds(60).toEpochMilli()
+                )
+            )
+            store.save(
+                setting().copy(
+                    scheduleKey = "us",
+                    enabled = false,
+                    nextFireAt = null,
+                    scheduleRevision = "revision-us"
+                )
+            )
+            val probe = Probe()
+            val scheduler = runner(this, probe)
+
+            scheduler.start()
+            runCurrent()
+            store.save(
+                setting().copy(
+                    scheduleKey = "us",
+                    scheduleRevision = "revision-us-edited",
+                    nextFireAt = base.plusSeconds(120).toEpochMilli()
+                )
+            )
+            scheduler.onSettingChanged(
+                ScheduledTaskSettingChanged("alice", AsyncTaskType.MEMORY_CONSOLIDATION, "us")
+            )
+            runCurrent()
+
+            advanceTimeBy(60_000)
+            runCurrent()
+            assertEquals(listOf("cn"), probe.seen.map { it.setting.scheduleKey })
+
+            advanceTimeBy(60_000)
+            runCurrent()
+            assertEquals(listOf("cn", "us"), probe.seen.map { it.setting.scheduleKey })
+        }
+    }
+
     private class ScheduleStore : ScheduledTaskSettingStore {
-        private val rows = mutableMapOf<Pair<String, AsyncTaskType>, ScheduledTaskSetting>()
+        private val rows = mutableMapOf<Triple<String, AsyncTaskType, String>, ScheduledTaskSetting>()
         val queries = mutableListOf<Query>()
         val enabledQueries = mutableListOf<AsyncTaskType?>()
         val initialized = mutableListOf<ScheduledTaskSetting>()
@@ -788,20 +908,32 @@ internal class ScheduledTaskRunnerTest {
         var submitFailure: Exception? = null
         var beforeQuery: suspend () -> Unit = {}
 
-        fun row(userId: String = "alice", type: AsyncTaskType = AsyncTaskType.MEMORY_CONSOLIDATION): ScheduledTaskSetting =
-            requireNotNull(rows[userId to type])
+        fun row(
+            userId: String = "alice",
+            type: AsyncTaskType = AsyncTaskType.MEMORY_CONSOLIDATION,
+            scheduleKey: String = ""
+        ): ScheduledTaskSetting =
+            requireNotNull(rows[Triple(userId, type, scheduleKey)])
 
-        override suspend fun get(userId: String, taskType: AsyncTaskType): ScheduledTaskSetting? {
+        override suspend fun get(
+            userId: String,
+            taskType: AsyncTaskType,
+            scheduleKey: String
+        ): ScheduledTaskSetting? {
             reads++
             readFailure?.let { throw it }
-            return rows[userId to taskType]
+            return rows[Triple(userId, taskType, scheduleKey)]
         }
+
+        override suspend fun list(userId: String, taskType: AsyncTaskType): List<ScheduledTaskSetting> =
+            rows.values.filter { it.userId == userId && it.taskType == taskType }.sortedBy { it.scheduleKey }
 
         override suspend fun save(setting: ScheduledTaskSetting) {
-            rows[setting.userId to setting.taskType] = setting
+            rows[Triple(setting.userId, setting.taskType, setting.scheduleKey)] = setting
         }
 
-        override suspend fun delete(userId: String, taskType: AsyncTaskType): Boolean = rows.remove(userId to taskType) != null
+        override suspend fun delete(userId: String, taskType: AsyncTaskType, scheduleKey: String): Boolean =
+            rows.remove(Triple(userId, taskType, scheduleKey)) != null
 
         override suspend fun listEnabled(taskType: AsyncTaskType?): List<ScheduledTaskSetting> {
             enabledQueries += taskType
@@ -809,24 +941,32 @@ internal class ScheduledTaskRunnerTest {
         }
 
         override suspend fun listForScheduling(
-            taskType: AsyncTaskType, horizon: Long, afterUserId: String?, limit: Int
+            taskType: AsyncTaskType,
+            horizon: Long,
+            afterUserId: String?,
+            limit: Int,
+            afterScheduleKey: String?
         ): List<ScheduledTaskSetting> {
-            queries += Query(taskType, horizon, afterUserId, limit)
+            queries += Query(taskType, horizon, afterUserId, limit, afterScheduleKey)
             beforeQuery()
             return rows.values.filter {
-                it.enabled && it.taskType == taskType && (afterUserId == null || it.userId > afterUserId) &&
+                it.enabled && it.taskType == taskType && (
+                    afterUserId == null || it.userId > afterUserId ||
+                        (it.userId == afterUserId && it.scheduleKey > (afterScheduleKey ?: ""))
+                    ) &&
                     (it.scheduleZone == null || it.nextFireAt?.let { due -> due <= horizon } == true)
-            }.sortedBy { it.userId }.take(limit)
+            }.sortedWith(compareBy({ it.userId }, { it.scheduleKey })).take(limit)
         }
 
         override suspend fun initializeSchedule(setting: ScheduledTaskSetting, nextFireAt: Long?, zone: String): Boolean {
-            val current = rows[setting.userId to setting.taskType] ?: return false
+            val key = Triple(setting.userId, setting.taskType, setting.scheduleKey)
+            val current = rows[key] ?: return false
             if (!matches(current, setting) || current.scheduleZone != null) return false
             val updated = current.copy(
                 nextFireAt = nextFireAt, scheduleZone = zone,
                 scheduleRevision = current.scheduleRevision ?: "initialized-${current.userId}"
             )
-            rows[current.userId to current.taskType] = updated
+            rows[key] = updated
             initialized += updated
             return true
         }
@@ -836,11 +976,12 @@ internal class ScheduledTaskRunnerTest {
         ): List<AsyncTask>? {
             submitAttempts++
             submitFailure?.let { throw it }
-            val current = rows[setting.userId to setting.taskType] ?: return null
+            val key = Triple(setting.userId, setting.taskType, setting.scheduleKey)
+            val current = rows[key] ?: return null
             if (!matches(current, setting)) return null
             // No suspension between the CAS check, advancement and insert on the single test scheduler.
             val persisted = tasks
-            rows[current.userId to current.taskType] = current.copy(nextFireAt = nextFireAt)
+            rows[key] = current.copy(nextFireAt = nextFireAt)
             batches += persisted
             return persisted
         }
@@ -849,6 +990,12 @@ internal class ScheduledTaskRunnerTest {
             current.enabled && current.scheduleRevision == expected.scheduleRevision &&
                 current.nextFireAt == expected.nextFireAt && current.scheduleZone == expected.scheduleZone
 
-        data class Query(val type: AsyncTaskType, val horizon: Long, val afterUserId: String?, val limit: Int)
+        data class Query(
+            val type: AsyncTaskType,
+            val horizon: Long,
+            val afterUserId: String?,
+            val limit: Int,
+            val afterScheduleKey: String?
+        )
     }
 }

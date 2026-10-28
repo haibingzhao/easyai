@@ -3,7 +3,10 @@ package com.easy.easyai.core.event
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
@@ -130,6 +133,33 @@ class EventStreamTest {
                 intrinsicJob,
                 scopeJob,
                 "ProducerScope.coroutineContext must expose the running coroutine's context, not a detached child Job"
+            )
+        }
+    }
+
+    @Nested
+    inner class `Awaiting cancellation` {
+
+        @Test
+        fun `cancelling the awaiting caller stops the producer`() = runBlocking {
+            val started = CompletableDeferred<Unit>()
+            val stopped = CompletableDeferred<Unit>()
+            val stream = EventStream.create<AgentEvent, Unit> {
+                started.complete(Unit)
+                try {
+                    awaitCancellation()
+                } finally {
+                    stopped.complete(Unit)
+                }
+            }
+
+            val waiter = launch { stream.result() }
+            withTimeout(5_000) { started.await() }
+            waiter.cancelAndJoin()
+
+            assertTrue(
+                withTimeoutOrNull(5_000) { stopped.await() } != null,
+                "cancelling the caller awaiting result() must cancel the producer"
             )
         }
     }
