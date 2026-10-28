@@ -30,6 +30,7 @@ class SecurityConfigUnauthorizedTest {
     private val tokenProvider = JwtTokenProvider(
         privateKey = keyPair.private,
         publicKey = keyPair.public,
+        appName = APP,
         accessExpirySeconds = 7200,
         refreshExpirySeconds = 15552000
     )
@@ -72,9 +73,27 @@ class SecurityConfigUnauthorizedTest {
     }
 
     @Test
+    fun `a token minted by another application is rejected`() {
+        val otherAppProvider = JwtTokenProvider(
+            privateKey = keyPair.private,
+            publicKey = keyPair.public,
+            appName = "other-app"
+        )
+        val token = otherAppProvider.generateAccessToken("user-1", "alice")
+        client(authEnabled = true).get().uri("/api/agent/list")
+            .header(HttpHeaders.AUTHORIZATION, "Bearer $token")
+            .exchange()
+            .expectStatus().isUnauthorized
+    }
+
+    @Test
     fun `disabling auth permits every route`() {
         client(authEnabled = false).get().uri("/api/agent/list")
             .exchange()
             .expectStatus().isOk
+    }
+
+    private companion object {
+        const val APP = "agent-api"
     }
 }

@@ -1,6 +1,11 @@
 package com.easy.easyai.tools.memory
 
 import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.agent.AgentService
+import com.easy.easyai.core.domain.CodingDomainCatalog
+import com.easy.easyai.core.domain.DomainCatalog
+import com.easy.easyai.core.domain.DomainCatalogContributor
+import com.easy.easyai.core.domain.MemoryCategorySpec
 import com.easy.easyai.core.memory.MemoryContentLimits
 import com.easy.easyai.core.memory.MemoryEntry
 import com.easy.easyai.core.memory.MemoryOwnerContext
@@ -11,6 +16,8 @@ import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.core.tool.ToolResult
+import io.mockk.every
+import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
@@ -98,7 +105,8 @@ class MemoryWriteToolTest {
             permissionCategory = "memory",
             tracksFileChanges = true
         ),
-        store = store
+        store = store,
+        memoryCategories = CodingDomainCatalog.memoryCategories
     )
 
     private fun execute(args: Map<String, Any?>): ToolResult = runBlocking {
@@ -127,6 +135,51 @@ class MemoryWriteToolTest {
         @Test
         fun `schema annotates name rule for bare file names`() {
             assertTrue(tool.inputSchema.contains("Bare entry file name"), tool.inputSchema)
+        }
+    }
+
+    /**
+     * The categories a caller may write are whatever the active domain declares — the framework
+     * ships `coding`, hosts contribute their own. These tests pin both halves of that contract:
+     * the LLM-visible list and the write-time rejection come from the same catalog.
+     */
+    @Nested
+    inner class `domain taxonomy` {
+
+        private val tradingCatalog = DomainCatalog(
+            listOf(object : DomainCatalogContributor {
+                override val domain = "trading"
+                override val memoryCategories = listOf(
+                    MemoryCategorySpec("market_insights", "Market Insights", "Market observations"),
+                    MemoryCategorySpec("other", "Other", "Uncategorised memories")
+                )
+            }),
+            activeDomain = "trading"
+        )
+
+        private fun builtBy(builder: MemoryWriteToolBuilder): ToolDefinition = runBlocking {
+            val agentService = mockk<AgentService>()
+            every { agentService.memoryStore } returns store
+            builder.build(
+                AgentContext(agentId = "test", userId = "u", projectPath = Path.of("/proj")),
+                agentService
+            ) ?: error("memory_write must build whenever a memory store is wired")
+        }
+
+        @Test
+        fun `add rejects a category outside the active domain`() {
+            val result = execute(addArgs("type" to "market_insights"))
+            assertTrue(result.isError)
+            val message = output(result)
+            assertTrue(message.contains("not available in the current domain"), message)
+            assertTrue(message.contains("user_preferences"), message)
+        }
+
+        @Test
+        fun `the LLM-visible type list is the active domain's`() {
+            val description = builtBy(MemoryWriteToolBuilder(tradingCatalog)).description
+            assertTrue(description.contains("market_insights"), description)
+            assertFalse(description.contains("experience_lessons"), description)
         }
     }
 

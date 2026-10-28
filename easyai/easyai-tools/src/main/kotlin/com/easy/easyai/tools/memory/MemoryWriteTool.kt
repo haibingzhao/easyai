@@ -1,7 +1,7 @@
 package com.easy.easyai.tools.memory
 
 import com.easy.easyai.core.agent.AgentContext
-import com.easy.easyai.core.domain.DomainCatalog
+import com.easy.easyai.core.domain.MemoryCategorySpec
 import com.easy.easyai.core.memory.MemoryContentLimits
 import com.easy.easyai.core.memory.MemoryEntry
 import com.easy.easyai.core.memory.MemoryMaturity
@@ -23,8 +23,13 @@ import java.time.LocalDate
 
 internal class MemoryWriteTool(
     metadata: ToolMetadata,
-    private val store: MemoryStore
+    private val store: MemoryStore,
+    private val memoryCategories: List<MemoryCategorySpec>
 ) : BaseToolDefinition(metadata) {
+
+    private val categoryCodes: Set<String> = memoryCategories.map { it.code }.toSet()
+
+    private val categoryList: String = memoryCategories.joinToString(", ") { it.code }
 
     override val executionMode = ToolExecutionMode.SEQUENTIAL
 
@@ -134,15 +139,13 @@ internal class MemoryWriteTool(
      * reporting a false "not found".
      */
     private fun lookupType(type: String?): MemoryType? = type?.let {
-        MemoryType.fromDirName(it)?.takeIf { candidate -> candidate in MemoryType.entriesFor(DomainCatalog.activeDomain) }
+        MemoryType.of(it)?.takeIf { candidate -> candidate.dirName in categoryCodes }
     }
 
     private suspend fun handleAdd(
         name: String, type: String?, description: String?, content: String?,
         maturity: String?, scenarios: List<String>?, scope: MemoryScope, owner: MemoryOwnerContext
     ): ToolResult {
-        val validTypes = MemoryType.entriesFor(DomainCatalog.activeDomain)
-
         // Report every violated parameter at once so the caller can fix them all in a single retry.
         val contentLength = content?.length ?: 0
         val descriptionLength = description?.length ?: 0
@@ -152,7 +155,7 @@ internal class MemoryWriteTool(
             !isValidMemoryName(name) || contentTooLong || descriptionTooLong
         ) {
             val problems = mutableListOf<String>()
-            if (type.isNullOrBlank()) problems.add("- 'type' is required for add; valid values: ${validTypes.joinToString(", ") { it.dirName }}")
+            if (type.isNullOrBlank()) problems.add("- 'type' is required for add; valid values: $categoryList")
             if (description.isNullOrBlank()) problems.add("- 'description' is required for add")
             if (content.isNullOrBlank()) problems.add("- 'content' is required for add")
             if (!isValidMemoryName(name)) {
@@ -175,10 +178,10 @@ internal class MemoryWriteTool(
             return errorResult("Error: invalid parameters for add:\n${problems.joinToString("\n")}")
         }
 
-        val memoryType = MemoryType.fromDirName(type)
-            ?: return errorResult("Error: Unknown type '$type'. Use: ${validTypes.joinToString(", ") { it.dirName }}.")
-        if (memoryType !in validTypes) {
-            return errorResult("Error: Type '$type' is not available in the current domain. Use: ${validTypes.joinToString(", ") { it.dirName }}.")
+        val memoryType = MemoryType.of(type)
+            ?: return errorResult("Error: Unknown type '$type'. Use: $categoryList.")
+        if (memoryType.dirName !in categoryCodes) {
+            return errorResult("Error: Type '$type' is not available in the current domain. Use: $categoryList.")
         }
 
         // Name dedup check: the type is already validated, so resolve the key directly. Archived

@@ -11,6 +11,7 @@ import com.easy.easyai.core.task.TaskTrigger
 import com.easy.easyai.repository.database.DatabaseMigration
 import com.easy.easyai.repository.database.Tables.AsyncTaskTable
 import com.easy.easyai.repository.database.Tables.ScheduledTaskSettingTable
+import com.easy.easyai.repository.database.Tables.UserTable
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -62,6 +63,23 @@ class R2dbcScheduledTaskSettingStoreTest {
 
     private fun createStore(appName: String = "host-a"): ScheduledTaskSettingStore =
         R2dbcScheduledTaskSettingStore(db, HostIdentity(appName))
+
+    /** Cross-user scans are scoped through the account's application. */
+    private suspend fun ensureUser(userId: String, ownerApp: String = "host-a") = suspendTransaction(db) {
+        val existing = UserTable.selectAll().where { UserTable.id eq userId }.count()
+        if (existing == 0L) {
+            val now = System.currentTimeMillis()
+            UserTable.insert {
+                it[id] = userId
+                it[UserTable.ownerApp] = ownerApp
+                it[username] = userId
+                it[displayName] = userId
+                it[passwordHash] = "hash"
+                it[createdAt] = now
+                it[updatedAt] = now
+            }
+        }
+    }
 
     private fun setting(
         userId: String = "alice",
@@ -206,6 +224,8 @@ class R2dbcScheduledTaskSettingStoreTest {
         @Test
         fun `listEnabled skips disabled rows`() = runTest {
             val store = createStore()
+            ensureUser("scan-on")
+            ensureUser("scan-off")
             store.save(setting(userId = "scan-on", enabled = true))
             store.save(setting(userId = "scan-off", enabled = false))
 
@@ -218,6 +238,7 @@ class R2dbcScheduledTaskSettingStoreTest {
         fun `listEnabled narrows to the requested type`() = runTest {
             val store = createStore()
             val user = "filter-user"
+            ensureUser(user)
             store.save(setting(userId = user))
             // An enabled row for a type this build cannot name must not reach the filtered scan — and it
             // really is enabled, so an absent result means the filter worked rather than the row being off.
@@ -230,6 +251,7 @@ class R2dbcScheduledTaskSettingStoreTest {
 
         @Test
         fun `a host-defined task type is returned like any other key`() = runTest {
+            ensureUser("host-user")
             insertRawType("host-user", "DAILY_ANALYSIS", enabled = true)
 
             val store = createStore()
@@ -239,6 +261,21 @@ class R2dbcScheduledTaskSettingStoreTest {
                 assertNotNull(store.get("host-user", AsyncTaskType("DAILY_ANALYSIS"))).taskType.key
             )
             assertNull(store.get("host-user", AsyncTaskType.MEMORY_CONSOLIDATION))
+        }
+
+        @Test
+        fun `scans never return another application's accounts`() = runTest {
+            val mine = "scan-mine-${UUID.randomUUID()}"
+            val theirs = "scan-theirs-${UUID.randomUUID()}"
+            ensureUser(mine, "host-a")
+            ensureUser(theirs, "host-b")
+            val store = createStore()
+            store.save(setting(userId = mine))
+            store.save(setting(userId = theirs))
+
+            assertEquals(listOf(mine), store.listEnabled().map { it.userId }.filter { it == mine || it == theirs })
+            val page = store.listForScheduling(AsyncTaskType.MEMORY_CONSOLIDATION, 10_000L, null, 10)
+            assertEquals(listOf(mine), page.map { it.userId }.filter { it == mine || it == theirs })
         }
 
         @Test
@@ -391,6 +428,8 @@ class R2dbcScheduledTaskSettingStoreTest {
         fun `keyset pages include all overdue and uninitialized rows through inclusive horizon`() = runTest {
             val store = createStore()
             val type = AsyncTaskType("schedule-paging")
+            listOf("page-a", "page-b", "page-c", "page-d", "page-e", "page-f", "page-g", "page-h")
+                .forEach { ensureUser(it) }
             initialized(setting("page-a", type), -1_000_000L)
             initialized(setting("page-b", type), 900L)
             initialized(setting("page-c", type), 1_000L)
@@ -421,7 +460,7 @@ class R2dbcScheduledTaskSettingStoreTest {
     inner class `atomic scheduled submission` {
 
         @Test
-        fun `concurrent hosts have one winner and preserve the full host stamped batch`() = runTest {
+        fun `concurrent hosts have one winner and preserve the full winning batch`() = runTest {
             val configured = initialized(setting(userId = "schedule-race"), 1_700_000_000_000L)
             val next = 1_700_100_000_000L
             val ready = Channel<Unit>(2)
@@ -443,7 +482,7 @@ class R2dbcScheduledTaskSettingStoreTest {
             assertEquals(1, results.count { it != null })
             val winner = results.indexOfFirst { it != null }
             val accepted = assertNotNull(results[winner])
-            assertEquals(batches[winner].map { it.copy(ownerApp = hosts[winner]) }, accepted)
+            assertEquals(batches[winner], accepted)
             val tasks = R2dbcAsyncTaskStore(db, HostIdentity("host-a"))
             for (task in accepted) assertEquals(task, tasks.findById(task.id))
             for (task in batches[1 - winner]) assertNull(tasks.findById(task.id))
@@ -503,7 +542,7 @@ class R2dbcScheduledTaskSettingStoreTest {
             }
             assertEquals(configured, store.get(configured.userId, configured.taskType))
             assertEquals(0L, taskRowsFor(configured.userId))
-            assertEquals(listOf(first.copy(ownerApp = "host-a")), store.submitScheduled(configured, 200L, listOf(first)))
+            assertEquals(listOf(first), store.submitScheduled(configured, 200L, listOf(first)))
         }
 
         @Test
@@ -643,7 +682,6 @@ class R2dbcScheduledTaskSettingStoreTest {
         type = configured.taskType,
         trigger = TaskTrigger.SCHEDULE,
         title = "Scheduled batch",
-        ownerApp = "untrusted-owner",
         sessionId = "origin-session",
         timeoutMs = 90_000L,
         payload = mapOf("scheduledFor" to configured.nextFireAt, "slice" to "experience"),

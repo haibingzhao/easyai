@@ -184,8 +184,9 @@ export const MEMORY_CONTENT_TARGET_CHARS = 2000;
 export const MEMORY_CONTENT_HARD_CAP_CHARS = 6000;
 
 /**
- * Memory categories fallback (coding domain defaults).
- * Prefer useCategoryStore().memoryCategories for dynamic domain-aware categories.
+ * Memory categories of the framework's own coding domain, used only as the offline fallback by
+ * `useCategoryStore`. Prefer `useCategoryStore().memoryCategories` for the active domain's list,
+ * and `memoryCategoryLabelKey` when rendering a stored entry's type.
  */
 export const MEMORY_CATEGORIES = [
   { apiName: 'user_preferences', labelKey: 'User Preferences' },
@@ -196,18 +197,12 @@ export const MEMORY_CATEGORIES = [
   { apiName: 'other', labelKey: 'Other' },
 ] as const;
 
-export const MEMORY_CATEGORY_NAMES = MEMORY_CATEGORIES.map((c) => c.apiName);
-
 /** Maturity levels with display keys. */
 export const MEMORY_MATURITIES = [
   { apiName: 'low', labelKey: 'Low' },
   { apiName: 'medium', labelKey: 'Medium' },
   { apiName: 'high', labelKey: 'High' },
 ] as const;
-
-export function categoryLabelKey(apiName: string): string {
-  return MEMORY_CATEGORIES.find((c) => c.apiName === apiName)?.labelKey ?? apiName;
-}
 
 export function maturityLabelKey(apiName: string): string {
   return MEMORY_MATURITIES.find((m) => m.apiName === apiName)?.labelKey ?? apiName;

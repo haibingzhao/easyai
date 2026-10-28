@@ -28,9 +28,9 @@ interface AsyncProjectStore {
     suspend fun saveIfAbsent(project: ProjectInfo, userId: String = "system"): Boolean
 
     /**
-     * Maintenance query: distinct owners of project rows, ignoring user scoping.
-     * Only for background reconciliation that must see every user's rows (e.g. the temporary
-     * workspace sweep) — never expose it through a request-scoped API.
+     * Maintenance query: distinct owners of project rows belonging to this application's accounts.
+     * Only for background reconciliation that must see every user of the application (e.g. the
+     * temporary workspace sweep) — never expose it through a request-scoped API.
      */
     suspend fun listDistinctUserIds(): List<String> = emptyList()
 

@@ -225,9 +225,6 @@ export const TasksPage: React.FC = () => {
               const descriptor = getTaskDescriptor(task.type);
               const Icon = descriptor.icon;
               const terminal = isTerminalStatus(task.status);
-              // A row another application wrote lists here (the queue is shared) but its worker lives
-              // there, so retry / cancel / delete are not ours to issue.
-              const controllable = task.controllable !== false;
               const summary = descriptor.summarize ? descriptor.summarize(task) : '';
               const link = descriptor.link?.(task) ?? null;
               return (
@@ -244,11 +241,6 @@ export const TasksPage: React.FC = () => {
                           {statusLabel(task.status)}
                         </span>
                         <span className="text-xs text-muted-foreground">{triggerLabel(task.trigger)}</span>
-                        {!controllable && task.ownerApp && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
-                            {task.ownerApp}
-                          </span>
-                        )}
                       </div>
                       <div className="text-xs text-muted-foreground flex items-center gap-3 flex-wrap">
                         <span>{formatTime(task.createdAt)}</span>
@@ -279,7 +271,7 @@ export const TasksPage: React.FC = () => {
                           <MessageSquare className="w-4 h-4" />
                         </button>
                       )}
-                      {!terminal && controllable && (
+                      {!terminal && (
                         <button
                           onClick={() => void cancelTask(task.id)}
                           className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
@@ -291,7 +283,7 @@ export const TasksPage: React.FC = () => {
                       {/* Retry re-runs the handler and overwrites the row's result, so it only
                           makes sense for a run that did not finish cleanly — a completed pass
                           has already done its work and re-running it just burns model calls. */}
-                      {controllable && (task.status === 'failed' || task.status === 'interrupted' || task.status === 'timed_out') && (
+                      {(task.status === 'failed' || task.status === 'interrupted' || task.status === 'timed_out') && (
                         <button
                           onClick={() => void retryTask(task.id)}
                           className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
@@ -300,7 +292,7 @@ export const TasksPage: React.FC = () => {
                           <RotateCcw className="w-4 h-4" />
                         </button>
                       )}
-                      {controllable && (confirmDeleteId === task.id ? (
+                      {confirmDeleteId === task.id ? (
                         <div className="flex items-center gap-1">
                           <button
                             onClick={() => { void deleteTask(task.id); setConfirmDeleteId(null); }}
@@ -323,7 +315,7 @@ export const TasksPage: React.FC = () => {
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
-                      ))}
+                      )}
                     </div>
                   </div>
                 </div>

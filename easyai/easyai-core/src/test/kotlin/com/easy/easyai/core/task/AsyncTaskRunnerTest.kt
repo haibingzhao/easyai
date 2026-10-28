@@ -66,9 +66,9 @@ class AsyncTaskRunnerTest {
         override suspend fun listNonTerminal(userId: String, type: AsyncTaskType?, limit: Int) =
             rows.values.filter { it.userId == userId && !it.status.isTerminal }.toList()
         override suspend fun delete(id: String) = rows.remove(id) != null
-        override suspend fun deleteByUser(userId: String, ownerApp: String, status: AsyncTaskStatus?) =
+        override suspend fun deleteByUser(userId: String, status: AsyncTaskStatus?) =
             rows.values.filter {
-                it.userId == userId && (status == null || it.status == status) && it.ownerApp == ownerApp
+                it.userId == userId && (status == null || it.status == status)
             }
                 .also { matched -> matched.forEach { rows.remove(it.id) } }.size
         override suspend fun findOrphans() = rows.values.filter { !it.status.isTerminal }.toList()
@@ -233,7 +233,6 @@ class AsyncTaskRunnerTest {
                 type = AsyncTaskType.WATCH,
                 timeoutMs = 50,
                 payload = mapOf("fresh" to true),
-                ownerApp = "agent-api",
                 sessionId = "persisted-session"
             )
             store.create(authoritative)

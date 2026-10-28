@@ -630,7 +630,7 @@ internal class ScheduledTaskRunnerTest {
             assertEquals(listOf(2, 2), store.batches.map { it.size })
             assertEquals(store.batches.flatten(), dispatched)
             assertEquals(4, dispatched.map { it.id }.toSet().size)
-            assertTrue(dispatched.all { it.id.isNotBlank() && it.ownerApp == "test-host" })
+            assertTrue(dispatched.all { it.id.isNotBlank() })
             assertTrue(dispatched.all { it.trigger == TaskTrigger.SCHEDULE && it.status == AsyncTaskStatus.PENDING })
             assertTrue(dispatched.all { it.type == AsyncTaskType.MEMORY_CONSOLIDATION })
             assertTrue(dispatched.all { it.sessionId == "session-${it.userId}-${it.payload["slice"]}" })
@@ -839,7 +839,7 @@ internal class ScheduledTaskRunnerTest {
             val current = rows[setting.userId to setting.taskType] ?: return null
             if (!matches(current, setting)) return null
             // No suspension between the CAS check, advancement and insert on the single test scheduler.
-            val persisted = tasks.map { it.copy(ownerApp = "test-host") }
+            val persisted = tasks
             rows[current.userId to current.taskType] = current.copy(nextFireAt = nextFireAt)
             batches += persisted
             return persisted

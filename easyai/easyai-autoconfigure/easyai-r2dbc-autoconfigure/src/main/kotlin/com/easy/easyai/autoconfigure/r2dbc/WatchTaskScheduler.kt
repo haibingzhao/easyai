@@ -1,6 +1,5 @@
 package com.easy.easyai.autoconfigure.r2dbc
 
-import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.task.AsyncTaskRunner
 import com.easy.easyai.core.task.AsyncTaskStateChanged
 import com.easy.easyai.core.task.AsyncTaskType
@@ -41,7 +40,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 class WatchTaskScheduler(
     private val store: WatchStore,
     private val runner: AsyncTaskRunner,
-    private val host: HostIdentity,
     private val properties: WatchProperties = WatchProperties(),
     private val clock: () -> Instant = { Instant.now() },
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -106,7 +104,6 @@ class WatchTaskScheduler(
         do {
             val page = store.listUpcoming(horizon, cursor, PAGE_SIZE, userId)
             for (entry in page) {
-                if (!host.owns(entry.ownerApp)) continue
                 synchronized(slotLock) {
                     val existing = slots[entry.watchId]
                     if (existing == null || existing.job.isCompleted) {
@@ -122,13 +119,13 @@ class WatchTaskScheduler(
 
     @EventListener
     fun onWatchChanged(event: WatchScheduleChanged) {
-        if (started.get() && host.owns(event.ownerApp)) wake(event.watchId, event.userId)
+        if (started.get()) wake(event.watchId, event.userId)
     }
 
     @EventListener
     fun onTaskChanged(event: AsyncTaskStateChanged) {
         val task = event.task
-        if (!started.get() || task.type != AsyncTaskType.WATCH || !host.owns(task.ownerApp)) return
+        if (!started.get() || task.type != AsyncTaskType.WATCH) return
         if (!event.removed && !task.status.isTerminal) return
         val watchId = WatchTaskPayload.watchIdOf(task) ?: return
         wake(watchId, task.userId, terminal = true)
@@ -198,7 +195,7 @@ class WatchTaskScheduler(
             if (refresh && (reason != RetryReason.ERROR || now >= retryAt)) {
                 try {
                     val current = store.findSchedule(slot.watchId)
-                    if (current == null || !host.owns(current.ownerApp) || current.nextDueAt.toEpochMilli() > now + LOOKAHEAD_MS) return
+                    if (current == null || current.nextDueAt.toEpochMilli() > now + LOOKAHEAD_MS) return
                     val changed = slot.snapshot != current
                     val terminal = slot.terminalWake.getAndSet(false)
                     slot.snapshot = current

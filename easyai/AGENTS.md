@@ -41,7 +41,7 @@ easyai/
 
 **Permission** (`easyai-core/permission/`): `PermissionService` evaluates tool actions against `PermissionRule` patterns. Supports auto-approve, ask-user (SSE prompt), deny. `SafeCommandDetector` for bash command risk analysis.
 
-**Memory** (`easyai-core/memory/`): `MemoryStore` is the storage interface; `RagMemoryStore` (in `easyai-rag`) is its only implementation and keeps each memory as one EasyRAG document. `MemoryFlushAgent` uses an LLM to extract memories from conversations before compaction, reconciling facts against existing entries (update instead of adding a contradicting twin). Scoped to project or global.
+**Memory** (`easyai-core/memory/`): `MemoryStore` is the storage interface; `RagMemoryStore` (in `easyai-rag`) is its only implementation and keeps each memory as one EasyRAG document. `MemoryFlushAgent` uses an LLM to extract memories from conversations before compaction, reconciling facts against existing entries (update instead of adding a contradicting twin). Scoped to project or global. `MemoryType` is only the storage directory name (`{type}/{name}.md`); which types exist is the active domain's `DomainCatalog`, seeded with `coding` and extended by a host's own `DomainCatalogContributor` bean — never hardcode another application's categories here.
 
 **Snapshot** (`easyai-snapshot/`): `GitSnapshotService` creates git checkpoints. `RevertService` supports file-level selective revert. `SnapshotEventListener` auto-checkpoints on tool executions.
 

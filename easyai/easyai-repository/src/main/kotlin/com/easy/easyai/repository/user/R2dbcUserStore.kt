@@ -4,6 +4,7 @@ import com.easy.easyai.auth.UserStore
 import com.easy.easyai.auth.model.User
 import com.easy.easyai.repository.database.Tables
 import kotlinx.coroutines.flow.firstOrNull
+import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
 import org.jetbrains.exposed.v1.r2dbc.insert
@@ -19,22 +20,22 @@ import org.slf4j.LoggerFactory
 class R2dbcUserStore(private val db: R2dbcDatabase) : UserStore {
     private val logger = LoggerFactory.getLogger(javaClass)
 
-    override suspend fun findByUsername(username: String): User? {
+    override suspend fun findByUsername(username: String, ownerApp: String): User? {
         return suspendTransaction(db) {
             Tables.UserTable
                 .selectAll()
-                .where { Tables.UserTable.username eq username }
+                .where { (Tables.UserTable.username eq username) and (Tables.UserTable.ownerApp eq ownerApp) }
                 .limit(1)
                 .firstOrNull()
                 ?.toUser()
         }
     }
 
-    override suspend fun findById(id: String): User? {
+    override suspend fun findById(id: String, ownerApp: String): User? {
         return suspendTransaction(db) {
             Tables.UserTable
                 .selectAll()
-                .where { Tables.UserTable.id eq id }
+                .where { (Tables.UserTable.id eq id) and (Tables.UserTable.ownerApp eq ownerApp) }
                 .limit(1)
                 .firstOrNull()
                 ?.toUser()
@@ -45,6 +46,7 @@ class R2dbcUserStore(private val db: R2dbcDatabase) : UserStore {
         suspendTransaction(db) {
             Tables.UserTable.insert {
                 it[id] = user.id
+                it[ownerApp] = user.ownerApp
                 it[username] = user.username
                 it[displayName] = user.displayName
                 it[email] = user.email
@@ -74,14 +76,15 @@ class R2dbcUserStore(private val db: R2dbcDatabase) : UserStore {
         return user
     }
 
-    override suspend fun count(): Long {
+    override suspend fun count(ownerApp: String): Long {
         return suspendTransaction(db) {
-            Tables.UserTable.selectAll().count()
+            Tables.UserTable.selectAll().where { Tables.UserTable.ownerApp eq ownerApp }.count()
         }
     }
 
     private fun org.jetbrains.exposed.v1.core.ResultRow.toUser(): User = User(
         id = this[Tables.UserTable.id],
+        ownerApp = this[Tables.UserTable.ownerApp],
         username = this[Tables.UserTable.username],
         displayName = this[Tables.UserTable.displayName],
         email = this[Tables.UserTable.email],

@@ -276,6 +276,87 @@ class FlywayMigrationRunnerTest {
         }
 
         @Test
+        fun `V41 moves app ownership onto app_user and drops the row-level columns`() {
+            val jdbcUrl = "jdbc:h2:mem:flyway_owner_app;MODE=MYSQL;DB_CLOSE_DELAY=-1"
+            Flyway.configure()
+                .dataSource(jdbcUrl, "sa", "")
+                .locations("classpath:db/migration")
+                .load()
+                .migrate()
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { conn ->
+                conn.createStatement().use { statement ->
+                    statement.executeQuery(
+                        "SELECT CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS " +
+                            "WHERE UPPER(TABLE_NAME) = 'APP_USER' AND UPPER(COLUMN_NAME) = 'OWNER_APP'"
+                    ).use { column ->
+                        assertTrue(column.next(), "app_user.owner_app is missing from the migrated schema")
+                        assertEquals(64L, column.getLong(1))
+                        // Non-null in the migration itself: an account without an application can
+                        // neither sign in nor own background work, so existing databases must
+                        // backfill before upgrading rather than drift into unowned rows.
+                        assertEquals("NO", column.getString(2))
+                    }
+
+                    val ownerIndexColumns = mutableListOf<String>()
+                    statement.executeQuery(
+                        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEX_COLUMNS " +
+                            "WHERE UPPER(TABLE_NAME) = 'APP_USER' " +
+                            "AND UPPER(INDEX_NAME) = 'UX_APP_USER_OWNER_USERNAME' ORDER BY ORDINAL_POSITION"
+                    ).use { columns ->
+                        while (columns.next()) ownerIndexColumns += columns.getString(1).lowercase()
+                    }
+                    assertEquals(listOf("owner_app", "username"), ownerIndexColumns)
+
+                    listOf("IDX_APP_USER_USERNAME", "IDX_ASYNC_TASK_OWNER_STATUS", "IDX_WATCH_OWNER_DUE").forEach { index ->
+                        statement.executeQuery(
+                            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.INDEXES WHERE UPPER(INDEX_NAME) = '$index'"
+                        ).use { rows ->
+                            assertTrue(rows.next())
+                            assertEquals(0, rows.getInt(1), "$index should be gone")
+                        }
+                    }
+
+                    listOf("ASYNC_TASK", "WATCH", "PROJECT").forEach { table ->
+                        statement.executeQuery(
+                            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS " +
+                                "WHERE UPPER(TABLE_NAME) = '$table' AND UPPER(COLUMN_NAME) = 'OWNER_APP'"
+                        ).use { rows ->
+                            assertTrue(rows.next())
+                            assertEquals(0, rows.getInt(1), "$table.owner_app should be gone")
+                        }
+                    }
+
+                    val dueIndexColumns = mutableListOf<String>()
+                    statement.executeQuery(
+                        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.INDEX_COLUMNS " +
+                            "WHERE UPPER(TABLE_NAME) = 'WATCH' AND UPPER(INDEX_NAME) = 'IDX_WATCH_STATUS_DUE' " +
+                            "ORDER BY ORDINAL_POSITION"
+                    ).use { columns ->
+                        while (columns.next()) dueIndexColumns += columns.getString(1).lowercase()
+                    }
+                    assertEquals(listOf("status", "next_due_at"), dueIndexColumns)
+
+                    statement.executeUpdate(
+                        "INSERT INTO app_user (id, username, owner_app, display_name, password_hash, created_at, updated_at) " +
+                            "VALUES ('u1', 'admin', 'home-api', 'Home', 'hash', 1, 1), " +
+                            "('u2', 'admin', 'trading-api', 'Trading', 'hash', 1, 1)"
+                    )
+                    val duplicate = assertThrows(SQLException::class.java) {
+                        statement.executeUpdate(
+                            "INSERT INTO app_user (id, username, owner_app, display_name, password_hash, created_at, updated_at) " +
+                                "VALUES ('u3', 'admin', 'home-api', 'Home', 'hash', 1, 1)"
+                        )
+                    }
+                    assertTrue(
+                        "UX_APP_USER_OWNER_USERNAME" in duplicate.message!!.uppercase(),
+                        "got: ${duplicate.message}"
+                    )
+                }
+            }
+        }
+
+        @Test
         fun `a skill name is unique inside one owner and free across owners`() {
             val jdbcUrl = "jdbc:h2:mem:flyway_skill_names;MODE=MYSQL;DB_CLOSE_DELAY=-1"
             DriverManager.getConnection(jdbcUrl, "sa", "").use { conn ->
@@ -341,8 +422,8 @@ class FlywayMigrationRunnerTest {
 
         private fun Connection.insertUserWithAvatar(avatar: String) {
             createStatement().execute(
-                "INSERT INTO app_user (id, username, display_name, password_hash, avatar, created_at, updated_at) " +
-                    "VALUES ('avatar-user', 'avatar-user', 'Avatar User', 'hash', '$avatar', 1, 1)"
+                "INSERT INTO app_user (id, username, owner_app, display_name, password_hash, avatar, created_at, updated_at) " +
+                    "VALUES ('avatar-user', 'avatar-user', 'agent-api', 'Avatar User', 'hash', '$avatar', 1, 1)"
             )
         }
 

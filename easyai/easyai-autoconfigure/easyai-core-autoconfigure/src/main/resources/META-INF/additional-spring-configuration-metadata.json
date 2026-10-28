@@ -31,7 +31,7 @@
     {
       "name": "easyai.domain",
       "type": "java.lang.String",
-      "description": "Active domain catalog that drives domain-scoped memory, knowledge and instructions.",
+      "description": "Active application domain. It selects the memory taxonomy contributed by a DomainCatalogContributor bean; the framework ships 'coding', and a value no contributor declares fails startup.",
       "sourceType": "com.easy.easyai.autoconfigure.core.EasyAiProperties",
       "defaultValue": "coding"
     },

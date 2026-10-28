@@ -1,6 +1,5 @@
 package com.easy.easyai.autoconfigure.r2dbc
 
-import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.task.AsyncTask
 import com.easy.easyai.core.task.AsyncTaskRunner
 import com.easy.easyai.core.task.AsyncTaskStateChanged
@@ -37,7 +36,6 @@ import kotlin.test.assertTrue
 class WatchTaskSchedulerTest {
 
     private val base = Instant.parse("2026-10-25T04:00:00Z")
-    private val host = HostIdentity(HOST)
     private val store = mockk<WatchStore>()
     private val runner = mockk<AsyncTaskRunner>()
 
@@ -92,9 +90,8 @@ class WatchTaskSchedulerTest {
         userId: String = "alice",
         due: Instant = base.minusSeconds(30),
         version: Int = 3,
-        pendingAction: WatchPendingAction = WatchPendingAction.CHECK,
-        ownerApp: String = HOST
-    ) = WatchScheduleEntry(id, userId, ownerApp, version, due, pendingAction)
+        pendingAction: WatchPendingAction = WatchPendingAction.CHECK
+    ) = WatchScheduleEntry(id, userId, version, due, pendingAction)
 
     private fun taskFor(entry: WatchScheduleEntry) = AsyncTask(
         id = "task-${entry.watchId}-${entry.version}",
@@ -103,7 +100,6 @@ class WatchTaskSchedulerTest {
         trigger = TaskTrigger.SCHEDULE,
         title = "Watch · ${entry.watchId}",
         sessionId = "run-${entry.watchId}",
-        ownerApp = entry.ownerApp,
         payload = mapOf(WatchTaskPayload.KEY_WATCH_ID to entry.watchId)
     )
 
@@ -111,7 +107,6 @@ class WatchTaskSchedulerTest {
         WatchTaskScheduler(
             store = store,
             runner = runner,
-            host = host,
             properties = properties,
             clock = { base.plusMillis(test.testScheduler.currentTime) },
             scope = test.backgroundScope
@@ -200,16 +195,6 @@ class WatchTaskSchedulerTest {
             assertEquals(201, enqueued.size)
             assertEquals(201, dispatched.size)
         }
-
-        @Test
-        fun `a watch owned by another application is never armed`() = runTest {
-            rows["watch-1"] = entry(due = base.minusSeconds(30), ownerApp = "other-app")
-
-            scheduler(this).start()
-            runCurrent()
-            assertTrue(enqueued.isEmpty())
-            assertEquals(0, enqueueAttempts)
-        }
     }
 
     @Nested
@@ -225,7 +210,7 @@ class WatchTaskSchedulerTest {
             advanceTimeBy(60_000)
 
             rows["watch-1"] = entry(due = base.plusSeconds(60), version = 4)
-            scheduler.onWatchChanged(WatchScheduleChanged(HOST, "watch-1", "alice"))
+            scheduler.onWatchChanged(WatchScheduleChanged("watch-1", "alice"))
             runCurrent()
 
             advanceTimeBy(60_000)
@@ -245,7 +230,7 @@ class WatchTaskSchedulerTest {
             runCurrent()
 
             rows["watch-1"] = entry(due = base.plusSeconds(3 * 3_600), version = 5)
-            scheduler.onWatchChanged(WatchScheduleChanged(HOST, "watch-1", "alice"))
+            scheduler.onWatchChanged(WatchScheduleChanged("watch-1", "alice"))
             runCurrent()
 
             advanceTimeBy(2 * 3_600_000L)
@@ -276,7 +261,7 @@ class WatchTaskSchedulerTest {
         }
 
         @Test
-        fun `an unrelated task or another host's watch event wakes nothing`() = runTest {
+        fun `an unrelated task or an unknown watch event wakes nothing`() = runTest {
             rows["watch-1"] = entry(due = base.plusSeconds(50 * 60))
 
             val scheduler = scheduler(this)
@@ -288,7 +273,7 @@ class WatchTaskSchedulerTest {
                     taskFor(entry()).copy(id = "other", type = AsyncTaskType.MEMORY_CONSOLIDATION)
                 )
             )
-            scheduler.onWatchChanged(WatchScheduleChanged("other-app", "watch-1", "alice"))
+            scheduler.onWatchChanged(WatchScheduleChanged("watch-unknown", "alice"))
             runCurrent()
 
             advanceTimeBy(50 * 60_000L)
@@ -370,9 +355,5 @@ class WatchTaskSchedulerTest {
             assertEquals(2, enqueueAttempts)
             assertEquals(1, enqueued.size)
         }
-    }
-
-    private companion object {
-        const val HOST = "agent-api"
     }
 }

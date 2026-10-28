@@ -5,7 +5,6 @@ import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.agent.AsyncAgentStore
 import com.easy.easyai.core.agent.SessionManager
-import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.task.AsyncTask
 import com.easy.easyai.core.task.AsyncTaskRunner
 import com.easy.easyai.core.task.AsyncTaskStore
@@ -56,14 +55,12 @@ class WatchTaskAutoConfiguration {
     @ConditionalOnMissingBean
     fun watchService(
         store: WatchStore,
-        host: HostIdentity,
         properties: WatchProperties,
         settingStore: ObjectProvider<ScheduledTaskSettingStore>,
         taskStore: ObjectProvider<AsyncTaskStore>,
         runner: ObjectProvider<AsyncTaskRunner>
     ): WatchService = WatchService(
         store = store,
-        host = host,
         settingStore = settingStore.ifAvailable,
         taskStore = taskStore.ifAvailable,
         runGateway = runner.ifAvailable?.let { asyncRunner -> AsyncTaskRunnerGateway(asyncRunner) },
@@ -85,12 +82,10 @@ class WatchTaskAutoConfiguration {
     fun watchTaskScheduler(
         store: WatchStore,
         runner: AsyncTaskRunner,
-        host: HostIdentity,
         properties: WatchProperties
     ): WatchTaskScheduler = WatchTaskScheduler(
         store = store,
         runner = runner,
-        host = host,
         properties = properties
     )
 
@@ -98,7 +93,6 @@ class WatchTaskAutoConfiguration {
     @ConditionalOnMissingBean
     fun watchTaskHandler(
         store: WatchStore,
-        host: HostIdentity,
         properties: WatchProperties,
         sessionManager: ObjectProvider<SessionManager>,
         agentService: ObjectProvider<AgentService>,
@@ -108,7 +102,6 @@ class WatchTaskAutoConfiguration {
         taskStore: ObjectProvider<AsyncTaskStore>
     ): WatchTaskHandler = WatchTaskHandler(
         store = store,
-        host = host,
         properties = properties,
         sessionManager = sessionManager.ifAvailable,
         agentService = agentService.ifAvailable,

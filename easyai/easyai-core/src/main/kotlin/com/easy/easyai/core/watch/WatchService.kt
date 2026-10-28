@@ -1,6 +1,5 @@
 package com.easy.easyai.core.watch
 
-import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.task.AsyncTask
 import com.easy.easyai.core.task.AsyncTaskStore
@@ -28,12 +27,6 @@ class WatchNotFoundException(message: String) : WatchException(message)
 /** The row changed underneath the caller (concurrent edit); reload and retry. */
 class WatchConflictException(message: String) : WatchException(message)
 
-/**
- * The definition belongs to another application sharing this database, so this process could neither
- * run it (its agent's tools resolve on the owner) nor honestly report on it.
- */
-class WatchForeignHostException(message: String) : WatchException(message)
-
 /** A host dependency is missing, e.g. no task runner is wired. */
 class WatchUnavailableException(message: String) : WatchException(message)
 
@@ -46,7 +39,6 @@ class WatchUnavailableException(message: String) : WatchException(message)
  */
 class WatchService(
     private val store: WatchStore,
-    private val host: HostIdentity,
     private val settingStore: ScheduledTaskSettingStore? = null,
     private val taskStore: AsyncTaskStore? = null,
     private val runGateway: WatchRunGateway? = null,
@@ -401,9 +393,6 @@ class WatchService(
     suspend fun retryRun(userId: String, task: AsyncTask): AsyncTask {
         if (task.type != AsyncTaskType.WATCH) throw WatchException("Only a watch task can be retried here")
         if (task.userId != userId) throw WatchNotFoundException("Watch task ${task.id} was not found")
-        if (!host.owns(task.ownerApp)) {
-            throw WatchForeignHostException("Watch task ${task.id} does not belong to application '${host.appName}'")
-        }
         val watchId = WatchTaskPayload.watchIdOf(task)
             ?: throw WatchException("Watch task ${task.id} has no watch id in its payload")
         requireOwned(userId, watchId)
@@ -450,32 +439,13 @@ class WatchService(
     /**
      * The caller's watch, or the reason it is not theirs.
      *
-     * Two different refusals: another user's row is not found (it must not be distinguishable from a
-     * deleted one), while a row this application cannot run is reported as such — the page needs to
-     * say why instead of pretending the watch never existed.
-     *
-     * An unowned row is refused too, not treated as fair game. Ownership is stamped on insert, so a
-     * null owner means the row predates the column; letting both applications edit or fire it would
-     * recreate exactly the double-run this column exists to prevent. Adoption or the documented
-     * backfill claims it once, and then it is ordinary again.
+     * Another user's row is not found, so it must not be distinguishable from a deleted one. The
+     * caller's own account is already app-scoped, which is what keeps watches of another application
+     * on the same database out of reach.
      */
-    private suspend fun requireOwned(userId: String, watchId: String): Watch {
-        val watch = store.findById(watchId)?.takeIf { it.userId == userId }
+    private suspend fun requireOwned(userId: String, watchId: String): Watch =
+        store.findById(watchId)?.takeIf { it.userId == userId }
             ?: throw WatchNotFoundException("Watch $watchId was not found")
-        val owner = watch.ownerApp
-        if (!host.owns(owner)) {
-            throw WatchForeignHostException(
-                if (owner == null) {
-                    "Watch '${watch.title}' does not belong to an application yet; it must be claimed " +
-                        "(owner_app backfill or startup adoption) before it can be viewed, edited or run"
-                } else {
-                    "Watch '${watch.title}' belongs to application '$owner' and cannot be viewed, " +
-                        "edited or run from '${host.appName}'"
-                }
-            )
-        }
-        return watch
-    }
 
     private suspend fun cancelInFlight(watch: Watch) {
         store.listInFlight(watch.userId, watch.id).forEach { task ->

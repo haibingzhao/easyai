@@ -1,5 +1,6 @@
 package com.easy.easyai.autoconfigure.r2dbc
 
+import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.memory.MemoryConsolidationSettings
 import com.easy.easyai.core.memory.MemoryIndexEntry
 import com.easy.easyai.core.memory.MemoryScope
@@ -46,6 +47,10 @@ class MemoryConsolidationTaskPlannerTest {
     private val memoryStore = mockk<MemoryStore>()
     private val projectStore = mockk<AsyncProjectStore>()
 
+    /** The planner walks whatever the active domain declares; the fixture is the framework's own. */
+    private val domainCatalog = DomainCatalog(emptyList(), DomainCatalog.CODING_DOMAIN)
+    private val codingTypes: List<MemoryType> = domainCatalog.active().map { MemoryType(it.code) }
+
     private val now = LocalDateTime.of(2026, 10, 17, 3, 0)
 
     private fun planner(
@@ -53,7 +58,8 @@ class MemoryConsolidationTaskPlannerTest {
     ) = MemoryConsolidationTaskPlanner(
         settings = settings,
         memoryStore = memoryStore,
-        projectStore = projectStore
+        projectStore = projectStore,
+        domainCatalog = domainCatalog
     )
 
     /**
@@ -233,7 +239,7 @@ class MemoryConsolidationTaskPlannerTest {
     @Test
     fun `a slice whose every type is pending is never measured`() = runBlocking {
         givenOverThreshold()
-        val pending = MemoryType.entriesFor("coding").map { pendingTask(scope = "global", type = it.dirName) }
+        val pending = codingTypes.map { pendingTask(scope = "global", type = it.dirName) }
 
         assertEquals(emptyList(), planner().plan(context(pending = pending)))
         coVerify(exactly = 0) { memoryStore.listActiveIndex(MemoryScope.GLOBAL, any(), null) }
@@ -302,7 +308,9 @@ class MemoryConsolidationTaskPlannerTest {
 
     @Test
     fun `an unavailable memory store must not consume a scheduled firing`() = runTest {
-        val storeless = MemoryConsolidationTaskPlanner(MemoryConsolidationSettings(defaultThreshold = 2), null, projectStore)
+        val storeless = MemoryConsolidationTaskPlanner(
+            MemoryConsolidationSettings(defaultThreshold = 2), null, projectStore, domainCatalog
+        )
 
         assertFailsWith<IllegalStateException> { storeless.plan(context()) }
     }
@@ -345,7 +353,7 @@ class MemoryConsolidationTaskPlannerTest {
     @Test
     fun `a type in its zero-gain delay proposes nothing, and every deferred type skips the listing`() = runBlocking {
         givenOverThreshold()
-        val deferred = MemoryType.entriesFor("coding").associate { memoryType ->
+        val deferred = codingTypes.associate { memoryType ->
             "global||${memoryType.dirName}" to
                 MemoryConsolidationSliceState(zeroGainStreak = 1, nextEligibleAt = epoch(now.plusDays(6)))
         }
@@ -430,7 +438,7 @@ class MemoryConsolidationTaskPlannerTest {
             givenGlobalRows(indexRows(2))
             for (zone in listOf(ZoneId.of("Pacific/Kiritimati"), ZoneId.of("Etc/GMT+12"))) {
                 val deadline = now.atZone(zone).toInstant().toEpochMilli()
-                val states = MemoryType.entriesFor("coding").associate {
+                val states = codingTypes.associate {
                     "global||${it.dirName}" to MemoryConsolidationSliceState(zeroGainStreak = 1, nextEligibleAt = deadline)
                 }
                 val input = context(user = MemoryConsolidationUserSettings(userId = "alice", enabled = true, sliceStates = states))
@@ -449,7 +457,7 @@ class MemoryConsolidationTaskPlannerTest {
         fun `fall back overlap does not extend an expired backoff`() = runTest {
             givenGlobalRows(indexRows(2))
             val deadline = Instant.parse("2026-11-01T06:00:00Z")
-            val states = MemoryType.entriesFor("coding").associate {
+            val states = codingTypes.associate {
                 "global||${it.dirName}" to MemoryConsolidationSliceState(nextEligibleAt = deadline.toEpochMilli())
             }
             val input = context(user = MemoryConsolidationUserSettings(userId = "alice", enabled = true, sliceStates = states))

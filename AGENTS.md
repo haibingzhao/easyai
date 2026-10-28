@@ -69,7 +69,7 @@ These are project-specific traps that differ from framework defaults:
 - **Tool system**: `ToolDefinition` interface + `ToolBuilder` pattern. `doExecute()` is `suspend fun`. Tools organized by category (file, search, shell, web, mcp, memory, goal, todo, question, calc).
 - **Swarm multi-agent**: DAG-based task orchestration in `easyai-swarm`. Supports SINGLE tasks, TEAM tasks (parallel workers), and DELIBERATION (multi-round debate with judge).
 - **Permission system**: Rule-based tool permission evaluation in `easyai-core/permission/`. Auto-approve, ask-user, or deny per tool/action pattern.
-- **Memory system**: File-based memory store with search, scoped to project. LLM-powered memory flush.
+- **Memory system**: EasyRAG-backed store with search, scoped to project or global. LLM-powered memory flush. Which memory categories exist is per application domain (`easyai.domain` + a `DomainCatalogContributor` bean in the host repo); knowledge article categories are a free-form tag owned by each host console.
 - **Snapshot/Revert**: Git-based checkpoint system in `easyai-snapshot`. Automatic checkpoints on tool executions, file-level revert.
 - **Repository**: Exposed R2DBC (async), never JDBC. 35 tables covering users, agents, sessions, messages, swarm, MCP, permissions, todos, push and notifications.
 - **SSE bridge**: `ChatStreamService` bridges Kotlin Flow → Reactor Flux via kotlinx-coroutines-reactor.

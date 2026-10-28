@@ -27,24 +27,18 @@ import { getToolRowSummary, parseMemoryDocument } from './parsers';
 import { ToolRowHeader } from './ToolRowHeader';
 import { useStreamingRowExpand } from './useStreamingRowExpand';
 import { TextMarkdown } from '../segments/TextMarkdown';
+import { useCategoryStore } from '@/services/stores/category-store';
+import type { CategorySpec } from '@/types/category';
 import { i18n } from '@/utils/i18n';
 
 // ---------------------------------------------------------------------------
-// Memory type display mapping (apiName -> display name)
+// Memory type display (apiName -> the active domain's label)
 // ---------------------------------------------------------------------------
 
-const TYPE_DISPLAY: Record<string, string> = {
-  user_preferences: 'User Preferences',
-  project_information: 'Project Information',
-  development_standards: 'Development Standards',
-  task_summary: 'Task Summary',
-  experience_lessons: 'Experience & Lessons',
-  other: 'Other',
-};
-
-function typeDisplay(type?: string): string {
+function typeDisplay(type: string | undefined, memoryCategories: CategorySpec[]): string {
   if (!type) return '';
-  return i18n(TYPE_DISPLAY[type] ?? type);
+  // Unknown code = an entry written under another application's taxonomy; show the code itself.
+  return i18n(memoryCategories.find((c) => c.code === type)?.labelKey ?? type);
 }
 
 // ---------------------------------------------------------------------------
@@ -553,6 +547,7 @@ function ActionBadge({ action }: { action: string }) {
 function MemoryWriteView({ toolCall, result, status, streamingOutput, compact }: ToolMessageProps) {
   const [expanded, setExpanded] = useState(false);
   const markTouched = useStreamingRowExpand(status, setExpanded);
+  const memoryCategories = useCategoryStore((s) => s.memoryCategories);
   const parsed = parseArgs<MemoryWriteArgs>(toolCall.args);
   const output = extractResultOutput(result, streamingOutput);
   const isFailed = status === 'FAILED';
@@ -622,7 +617,7 @@ function MemoryWriteView({ toolCall, result, status, streamingOutput, compact }:
                         <span className="font-medium text-foreground">{op.name}</span>
                         {op.type && (
                           <span className="text-xs text-muted-foreground bg-muted px-1 rounded">
-                            {typeDisplay(op.type)}
+                            {typeDisplay(op.type, memoryCategories)}
                           </span>
                         )}
                       </div>
@@ -643,7 +638,7 @@ function MemoryWriteView({ toolCall, result, status, streamingOutput, compact }:
               {parsed?.type && (
                 <div className="text-xs text-muted-foreground">
                   <span className="font-medium">Type: </span>
-                  <span className="bg-muted px-1 rounded">{typeDisplay(parsed.type)}</span>
+                  <span className="bg-muted px-1 rounded">{typeDisplay(parsed.type, memoryCategories)}</span>
                   {parsed.scope && (
                     <>
                       <span className="mx-2">·</span>

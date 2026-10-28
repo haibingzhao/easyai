@@ -3,49 +3,50 @@ package com.easy.easyai.core.memory
 import com.easy.easyai.core.domain.DomainCatalog
 
 /**
- * Memory entry categories, determining the storage directory and classification.
- * Mirrors the knowledge-base taxonomy shown in the Memory UI.
+ * Storage category of a memory entry: the `{type}/{name}.md` directory and stable API value.
  *
- * Each entry carries a [domains] set indicating which application domains it
- * belongs to. Shared categories (e.g. user_preferences) appear in multiple
- * domains; domain-specific categories (e.g. development_standards for coding)
- * are restricted to a single domain.
+ * The set of categories available to a deployment is **not** defined here — it lives in the
+ * domain's [DomainCatalog] (`CodingDomainCatalog` in the framework, one contributor per host
+ * application). This type only carries the storage key, so an entry written under another
+ * domain's taxonomy still parses and round-trips unchanged.
  */
-enum class MemoryType(val dirName: String, val domains: Set<String>) {
-    /** User preferences, role, background info. */
-    USER_PREFERENCES("user_preferences", setOf("coding", "trading")),
-    /** Active project context, decisions, constraints. */
-    PROJECT_INFORMATION("project_information", setOf("coding", "trading")),
-    /** Coding and process standards the agent must follow. */
-    DEVELOPMENT_STANDARDS("development_standards", setOf("coding")),
-    /** Completed task retrospectives and execution summaries. */
-    TASK_SUMMARY("task_summary", setOf("coding", "trading")),
-    /** Reusable experience and lessons learned. */
-    EXPERIENCE_LESSONS("experience_lessons", setOf("coding", "trading")),
-    /** Anything that does not fit the other categories. */
-    OTHER("other", setOf("coding", "trading")),
-    /** Market observations and macro views (trading domain). */
-    MARKET_INSIGHTS("market_insights", setOf("trading")),
-    /** Strategy back-test lessons and insights (trading domain). */
-    STRATEGY_LESSONS("strategy_lessons", setOf("trading")),
-    /** Risk management red lines and rules (trading domain). */
-    RISK_RULES("risk_rules", setOf("trading"));
+data class MemoryType(val dirName: String) {
+
+    init {
+        require(DomainCatalog.CODE_PATTERN.matches(dirName)) {
+            "Invalid memory type code '$dirName': codes must match ${DomainCatalog.CODE_PATTERN.pattern}"
+        }
+    }
 
     companion object {
-        private val byDirName = entries.associateBy { it.dirName }
+        @JvmField
+        val USER_PREFERENCES = MemoryType("user_preferences")
 
-        /** Resolve a type from its directory name (case-insensitive), or null if not found. */
-        @JvmStatic
-        fun fromDirName(name: String): MemoryType? = byDirName[name.lowercase()]
+        @JvmField
+        val PROJECT_INFORMATION = MemoryType("project_information")
+
+        @JvmField
+        val DEVELOPMENT_STANDARDS = MemoryType("development_standards")
+
+        @JvmField
+        val TASK_SUMMARY = MemoryType("task_summary")
+
+        @JvmField
+        val EXPERIENCE_LESSONS = MemoryType("experience_lessons")
+
+        @JvmField
+        val OTHER = MemoryType(DomainCatalog.OTHER_CODE)
 
         /**
-         * Return all memory types available for the given [domain].
-         * Used by prompt builders, validators, and UI category lists.
-         * Falls back to the coding domain's types for unknown domains.
+         * Tolerant parse of a stored type code (frontmatter, file path, tool argument).
+         * Returns null for values that cannot be a storage directory name; callers fall back
+         * to [OTHER]. Membership in the active domain is deliberately not checked here — use
+         * [DomainCatalog.memoryType] for input validation.
          */
         @JvmStatic
-        fun entriesFor(domain: String): List<MemoryType> =
-            entries.filter { domain.lowercase() in it.domains }
-                .ifEmpty { entries.filter { "coding" in it.domains } }
+        fun of(code: String): MemoryType? {
+            val normalized = code.trim().lowercase()
+            return if (DomainCatalog.CODE_PATTERN.matches(normalized)) MemoryType(normalized) else null
+        }
     }
 }

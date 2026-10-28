@@ -3,7 +3,6 @@ package com.easy.easyai.tools.memory
 import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.memory.MemoryContentLimits
 import com.easy.easyai.core.memory.MemoryStore
-import com.easy.easyai.core.memory.MemoryType
 import com.easy.easyai.core.tool.ToolCapability
 import com.easy.easyai.core.tool.ToolDefinition
 import com.easy.easyai.core.tool.ToolMetadata
@@ -96,7 +95,9 @@ class MemoryReadToolBuilder : AbstractMemoryToolBuilder() {
 }
 
 @Component
-class MemoryWriteToolBuilder : AbstractMemoryToolBuilder() {
+class MemoryWriteToolBuilder(
+    private val domainCatalog: DomainCatalog
+) : AbstractMemoryToolBuilder() {
     override val metadata = ToolMetadata(
         name = "memory_write",
         description = MEMORY_WRITE_DESCRIPTION,
@@ -105,9 +106,11 @@ class MemoryWriteToolBuilder : AbstractMemoryToolBuilder() {
     )
 
     override fun createTool(store: MemoryStore): ToolDefinition {
+        val memoryCategories = domainCatalog.active()
         // Inject the active domain's valid type list into the LLM-visible description so the
-        // model can emit a valid 'type' on the first attempt instead of failing with an enum error.
-        val validTypes = MemoryType.entriesFor(DomainCatalog.activeDomain).joinToString(", ") { it.dirName }
+        // model can emit a valid 'type' on the first attempt instead of being rejected by the
+        // store, which refuses any category its domain catalog does not declare.
+        val validTypes = memoryCategories.joinToString(", ") { it.code }
         val parameterRules = """
 
 Parameter rules (violating any of these is the most common call failure):
@@ -116,19 +119,31 @@ Parameter rules (violating any of these is the most common call failure):
 - 'scenarios': a real JSON array of strings like ["scenario one"]. Never pass it as a single JSON-encoded string.
 - 'content': distilled facts, target ~${MemoryContentLimits.CONTENT_TARGET_CHARS} characters; calls over ${MemoryContentLimits.CONTENT_HARD_CAP_CHARS} characters are rejected. Split broader material into multiple focused entries instead of one giant entry.
 - 'description': a one-line summary of at most ${MemoryContentLimits.DESCRIPTION_CAP_CHARS} characters."""
-        return MemoryWriteTool(metadata.copy(description = metadata.description + parameterRules), store)
+        return MemoryWriteTool(
+            metadata.copy(description = metadata.description + parameterRules), store, memoryCategories
+        )
     }
 }
 
 @Component
-class MemoryListToolBuilder : AbstractMemoryToolBuilder() {
+class MemoryListToolBuilder(
+    private val domainCatalog: DomainCatalog
+) : AbstractMemoryToolBuilder() {
     override val metadata = ToolMetadata(
         name = "memory_list",
-        description = "List all memory entries. Optionally filter by type (user/feedback/project/reference). " +
-            "Shows docId, name, type, description, path, level, dates, maturity and staleness hints for governance review.",
+        description = "List all memory entries. Shows docId, name, type, description, path, level, " +
+            "dates, maturity and staleness hints for governance review.",
         permissionCategory = "memory",
         capabilities = setOf(ToolCapability.READ_ONLY)
     )
 
-    override fun createTool(store: MemoryStore): ToolDefinition = MemoryListTool(metadata, store)
+    override fun createTool(store: MemoryStore): ToolDefinition {
+        // The filter's legal values are domain-specific; state them where the model reads them.
+        val typeFilterHint = " Optionally filter by 'type', one of: " +
+            domainCatalog.memoryCodes().joinToString(", ") + "."
+        return MemoryListTool(
+            metadata.copy(description = metadata.description + typeFilterHint),
+            store
+        )
+    }
 }

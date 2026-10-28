@@ -31,7 +31,6 @@ internal fun testWatch(
     id: String = "watch-1",
     userId: String = "alice",
     status: WatchStatus = WatchStatus.ACTIVE,
-    ownerApp: String? = TEST_APP,
     mode: WatchMode = WatchMode.CHECK,
     schedule: WatchSchedule = WatchSchedule(
         kind = WatchScheduleKind.DAILY,
@@ -62,7 +61,6 @@ internal fun testWatch(
     untilAt = untilAt,
     nextDueAt = nextDueAt,
     status = status,
-    ownerApp = ownerApp,
     pendingAction = pendingAction,
     version = version,
     extensionCount = extensionCount,
@@ -102,7 +100,6 @@ internal fun watchTask(
     trigger = TaskTrigger.SCHEDULE,
     title = "Watch · ${watch.title}",
     sessionId = watch.runSessionId,
-    ownerApp = watch.ownerApp,
     payload = mapOf(
         WatchTaskPayload.KEY_WATCH_ID to watch.id,
         WatchTaskPayload.KEY_KIND to kind.name,
@@ -175,8 +172,8 @@ internal class RecordingWatchStore(var current: Watch) : WatchStore {
     }.take(limit)
 
     override suspend fun findSchedule(watchId: String): WatchScheduleEntry? =
-        current.takeIf { it.id == watchId && it.status == WatchStatus.ACTIVE && it.ownerApp == TEST_APP }?.let {
-            WatchScheduleEntry(it.id, it.userId, TEST_APP, it.version, it.nextDueAt, it.pendingAction)
+        current.takeIf { it.id == watchId && it.status == WatchStatus.ACTIVE }?.let {
+            WatchScheduleEntry(it.id, it.userId, it.version, it.nextDueAt, it.pendingAction)
         }
 
     override suspend fun enqueueScheduled(

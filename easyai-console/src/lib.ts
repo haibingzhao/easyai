@@ -163,7 +163,11 @@ export { useAuthStore } from './services/stores/auth-store';
 export { useSettingsStore } from './services/stores/settings-store';
 export { useSessionStore } from './services/stores/session-store';
 export { useAgentStore } from './services/stores/agent-store';
-export { useCategoryStore } from './services/stores/category-store';
+export { useCategoryStore, registerKnowledgeCategories } from './services/stores/category-store';
+export type { CategorySpec } from './types/category';
+// Host-authored vocabulary: category labels and business terms a host owns, merged into the
+// console's dictionaries at startup so the shared package never carries another app's taxonomy.
+export { registerTranslations, i18n } from './utils/i18n';
 export { useTaskStore } from './services/stores/task-store';
 export { useCapabilityStore, selectCanManage } from './services/stores/capability-store';
 export {

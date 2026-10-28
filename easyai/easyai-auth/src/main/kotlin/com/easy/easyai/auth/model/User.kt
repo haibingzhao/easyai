@@ -4,9 +4,14 @@ import com.easy.easyai.auth.AuthConstants
 
 /**
  * User entity representing an authenticated user in the system.
+ *
+ * [ownerApp] is the application this account belongs to (`spring.application.name`). It is the
+ * single source of truth for application isolation: login, refresh and every background scan that
+ * joins a row's `user_id` to this table are scoped by it.
  */
 data class User(
     val id: String,
+    val ownerApp: String,
     val username: String,
     val displayName: String,
     val passwordHash: String,

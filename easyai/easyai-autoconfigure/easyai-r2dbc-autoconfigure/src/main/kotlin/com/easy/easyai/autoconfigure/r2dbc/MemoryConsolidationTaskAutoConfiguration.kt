@@ -1,5 +1,6 @@
 package com.easy.easyai.autoconfigure.r2dbc
 
+import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.memory.MemoryConsolidationSettings
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.memory.consolidation.MemoryConsolidationRunHandle
@@ -50,11 +51,13 @@ class MemoryConsolidationTaskAutoConfiguration {
     fun memoryConsolidationTaskPlanner(
         settings: ObjectProvider<MemoryConsolidationSettings>,
         memoryStore: ObjectProvider<MemoryStore>,
-        projectStore: ObjectProvider<AsyncProjectStore>
+        projectStore: ObjectProvider<AsyncProjectStore>,
+        domainCatalog: DomainCatalog
     ): MemoryConsolidationTaskPlanner = MemoryConsolidationTaskPlanner(
         settings = settings.ifAvailable ?: MemoryConsolidationSettings(),
         memoryStore = memoryStore.ifAvailable,
-        projectStore = projectStore.ifAvailable
+        projectStore = projectStore.ifAvailable,
+        domainCatalog = domainCatalog
     )
 
     @Bean

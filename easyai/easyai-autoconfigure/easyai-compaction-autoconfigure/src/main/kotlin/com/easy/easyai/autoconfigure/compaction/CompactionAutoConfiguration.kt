@@ -10,6 +10,7 @@ import com.easy.easyai.compaction.strategy.CompactionAgentStrategy
 import com.easy.easyai.compaction.strategy.CompactionStrategy
 import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.agent.TransformContextService
+import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.memory.MemoryFlushAgent
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.model.aux.AuxModelResolver
@@ -86,11 +87,13 @@ class CompactionAutoConfiguration(
         @Autowired(required = false) listener: CompactionListener?,
         @Autowired(required = false) originalMessageLoader: OriginalMessageLoader?,
         @Autowired(required = false) memoryStore: MemoryStore?,
-        @Autowired(required = false) auxModelResolver: AuxModelResolver?
+        @Autowired(required = false) auxModelResolver: AuxModelResolver?,
+        domainCatalog: DomainCatalog
     ): TransformContextService {
         val memoryFlushAgent = memoryStore?.let {
             MemoryFlushAgent(
                 store = it,
+                memoryCategories = domainCatalog.active(),
                 threshold = properties.memoryFlushThreshold,
                 allowRemovals = properties.memoryFlushAllowRemove
             )

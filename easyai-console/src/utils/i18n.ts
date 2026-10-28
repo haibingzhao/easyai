@@ -566,19 +566,11 @@ const translations: Record<string, Record<string, string>> = {
     'Task Summary': 'Task Summary',
     'Experience & Lessons': 'Experience & Lessons',
     'Other': 'Other',
-    // Trading memory categories
-    'Market Insights': 'Market Insights',
-    'Strategy Lessons': 'Strategy Lessons',
-    'Risk Rules': 'Risk Rules',
     // Knowledge categories
     'Overview': 'Overview',
     'Architecture': 'Architecture',
     'Conventions': 'Conventions',
     'Setup & Commands': 'Setup & Commands',
-    'Market Data': 'Market Data',
-    'Broker Connectors': 'Broker Connectors',
-    'Strategy & Research': 'Strategy & Research',
-    'Risk & Compliance': 'Risk & Compliance',
     // Knowledge page
     'Knowledge': 'Knowledge',
     'Knowledge Base': 'Knowledge Base',
@@ -1781,19 +1773,11 @@ const translations: Record<string, Record<string, string>> = {
     'Task Summary': '任务总结',
     'Experience & Lessons': '经验与教训',
     'Other': '其他',
-    // Trading memory categories
-    'Market Insights': '市场认知',
-    'Strategy Lessons': '策略教训',
-    'Risk Rules': '风控红线',
     // Knowledge categories
     'Overview': '概述',
     'Architecture': '架构',
     'Conventions': '规范',
     'Setup & Commands': '环境与命令',
-    'Market Data': '行情数据',
-    'Broker Connectors': '券商连接器',
-    'Strategy & Research': '策略研究',
-    'Risk & Compliance': '风控合规',
     // Knowledge page
     'Knowledge': '知识',
     'Knowledge Base': '知识库',
@@ -2500,6 +2484,21 @@ export function setLanguage(lang: string): void {
 /** Active language code, for the few phrases whose word order differs by language. */
 export function getLanguage(): string {
   return currentLanguage;
+}
+
+/**
+ * Merge host-authored phrases into one language's dictionary.
+ *
+ * Host applications own their domain vocabulary — memory/knowledge category labels, business
+ * terms — and must not add it to the shared console. Call once at startup, before rendering;
+ * an existing key is overwritten, so a host can also re-word a console phrase.
+ */
+export function registerTranslations(language: string, entries: Record<string, string>): void {
+  const dictionary = translations[language] ?? {};
+  for (const [key, value] of Object.entries(entries)) {
+    dictionary[key] = value;
+  }
+  translations[language] = dictionary;
 }
 
 export { translations };

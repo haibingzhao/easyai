@@ -1,5 +1,6 @@
 package com.easy.easyai.rag
 
+import com.easy.easyai.core.domain.CodingDomainCatalog
 import com.easy.easyai.core.memory.MemoryBackendException
 import com.easy.easyai.core.memory.MemoryEntry
 import com.easy.easyai.core.memory.MemoryMaturity
@@ -29,7 +30,7 @@ import kotlin.test.assertTrue
 class RagMemoryStoreTest {
 
     private val client = mockk<RagClient>(relaxed = true)
-    private val store = RagMemoryStore(client)
+    private val store = RagMemoryStore(client, CodingDomainCatalog.memoryCategories.map { it.code })
 
     private val projectPath = Path.of("/tmp/demo-project")
     private val globalOwner = MemoryOwnerContext(userId = "alice")
@@ -484,13 +485,31 @@ class RagMemoryStoreTest {
     fun `a listing row with no derivable type is skipped, not guessed`() = runTest {
         coEvery { client.list("easyai/", globalBizId, excludeArchived = true) } returns listOf(
             docInfo("doc-1", "easyai/experience_lessons/a.md", contentLength = 10),
-            docInfo("doc-2", "easyai/not_a_type/z.md", contentLength = 10),
+            docInfo("doc-2", "easyai/loose.md", contentLength = 10),
             docInfo("", "easyai/experience_lessons/empty-id.md", contentLength = 10)
         )
 
         val index = store.listActiveIndex(MemoryScope.GLOBAL, globalOwner)
 
-        assertEquals(listOf("doc-1"), index.map { it.docId }, "an untypeable or id-less row cannot be cited")
+        assertEquals(
+            listOf("doc-1"),
+            index.map { it.docId },
+            "a row that is not `{type}/{name}.md`, or carries no docId, cannot be cited"
+        )
+    }
+
+    @Test
+    fun `a category another domain declared still lists`() = runTest {
+        // Taxonomy is per application while the store is shared, so `market_insights` is a real
+        // directory here even though this deployment does not offer it. Dropping the row would hide
+        // memory the user can still open by path and the agent can still search.
+        coEvery { client.list("easyai/", globalBizId, excludeArchived = true) } returns listOf(
+            docInfo("doc-9", "easyai/market_insights/oil.md", contentLength = 10)
+        )
+
+        val index = store.listActiveIndex(MemoryScope.GLOBAL, globalOwner)
+
+        assertEquals(listOf(MemoryType("market_insights")), index.map { it.type })
     }
 
     @Test

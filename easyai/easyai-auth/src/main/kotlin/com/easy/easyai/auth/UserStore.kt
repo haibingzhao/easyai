@@ -9,29 +9,33 @@ import com.easy.easyai.auth.model.User
 interface UserStore {
 
     /**
-     * Find a user by unique username.
-     * @return the user, or null if not found.
+     * Find a user by username **within one application**.
+     *
+     * Usernames are namespaced per application: the same name may exist in another application on
+     * the same database and must not be returned here.
+     *
+     * @return the user, or null if not found in [ownerApp].
      */
-    suspend fun findByUsername(username: String): User?
+    suspend fun findByUsername(username: String, ownerApp: String): User?
 
     /**
-     * Find a user by ID.
-     * @return the user, or null if not found.
+     * Find a user by ID within one application.
+     * @return the user, or null if not found or if the account belongs to another application.
      */
-    suspend fun findById(id: String): User?
+    suspend fun findById(id: String, ownerApp: String): User?
 
     /**
-     * Save a new user. The caller must ensure username uniqueness.
+     * Save a new user. The caller must ensure the username is unique inside [User.ownerApp].
      */
     suspend fun save(user: User): User
 
     /**
-     * Update an existing user (e.g., change avatar, display name).
+     * Update an existing user (e.g., change avatar, display name). Ownership is immutable.
      */
     suspend fun update(user: User): User
 
     /**
-     * Count total users in the system.
+     * Count accounts in one application.
      */
-    suspend fun count(): Long
+    suspend fun count(ownerApp: String): Long
 }

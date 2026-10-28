@@ -1,6 +1,5 @@
 package com.easy.easyai.core.watch
 
-import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.task.AsyncTask
 import com.easy.easyai.core.task.AsyncTaskStatus
@@ -83,7 +82,6 @@ class WatchServiceTest {
         gateway: WatchRunGateway? = null
     ) = WatchService(
         store = store,
-        host = HostIdentity(TEST_APP),
         settingStore = settingStore,
         taskStore = taskStore,
         runGateway = gateway,
@@ -767,12 +765,8 @@ class WatchServiceTest {
             val svc = service(store, gateway = gateway)
             assertThrows<WatchException> { svc.retryRun("alice", task.copy(type = AsyncTaskType("other"))) }
             assertThrows<WatchNotFoundException> { svc.retryRun("bob", task) }
-            assertThrows<WatchForeignHostException> { svc.retryRun("alice", task.copy(ownerApp = "other-app")) }
-            assertThrows<WatchForeignHostException> { svc.retryRun("alice", task.copy(ownerApp = null)) }
             assertThrows<WatchException> { svc.retryRun("alice", task.copy(payload = emptyMap())) }
             assertThrows<WatchConflictException> { svc.retryRun("alice", task.copy(status = AsyncTaskStatus.RUNNING)) }
-            store.seed(watch.copy(ownerApp = "other-app"))
-            assertThrows<WatchForeignHostException> { svc.retryRun("alice", task) }
             store.seed(watch.copy(userId = "bob"))
             assertThrows<WatchNotFoundException> { svc.retryRun("alice", task) }
             assertTrue(store.admissions.isEmpty())
@@ -842,39 +836,6 @@ class WatchServiceTest {
         }
     }
 
-    @Nested
-    inner class `host ownership` {
-
-        @Test
-        fun `a watch owned by another application is refused, naming its owner`() = runTest {
-            val store = FakeWatchStore()
-            store.seed(testWatch(ownerApp = "trading-api"))
-
-            val error = assertThrows<WatchForeignHostException> { service(store).get("alice", "watch-1") }
-
-            assertTrue(error.message!!.contains("trading-api"))
-        }
-
-        @Test
-        fun `an unclaimed watch is refused until an owner is assigned`() = runTest {
-            val store = FakeWatchStore()
-            store.seed(testWatch(ownerApp = null))
-
-            val error = assertThrows<WatchForeignHostException> { service(store).runNow("alice", "watch-1") }
-
-            assertTrue(error.message!!.contains("does not belong to an application"))
-        }
-
-        @Test
-        fun `own watches keep working`() = runTest {
-            val store = FakeWatchStore()
-            val created = service(store).create(origin(), input()).watch
-
-            assertEquals(TEST_APP, created.ownerApp)
-            assertEquals(created.id, service(store).get("alice", created.id).id)
-        }
-    }
-
 }
 
 /** In-memory [WatchStore] honouring the same version guard the SQL store uses. */
@@ -892,13 +853,11 @@ private class FakeWatchStore : WatchStore {
     var beforeSetStatus: (() -> Unit)? = null
 
     override suspend fun create(watch: Watch): Watch {
-        // Mirrors the R2DBC store: ownership is stamped by whoever persists the row.
-        val stamped = watch.copy(ownerApp = TEST_APP)
-        rows[stamped.id] = stamped
-        return stamped
+        rows[watch.id] = watch
+        return watch
     }
 
-    /** Insert a row exactly as given — another application's row, or an unclaimed legacy one. */
+    /** Insert a row exactly as given, bypassing the create path. */
     fun seed(watch: Watch) {
         rows[watch.id] = watch
     }
@@ -926,8 +885,8 @@ private class FakeWatchStore : WatchStore {
         }.sortedWith(compareBy({ it.nextDueAt }, { it.watchId })).take(limit)
 
     override suspend fun findSchedule(watchId: String): WatchScheduleEntry? = rows[watchId]
-        ?.takeIf { it.status == WatchStatus.ACTIVE && it.ownerApp == TEST_APP }
-        ?.let { WatchScheduleEntry(it.id, it.userId, TEST_APP, it.version, it.nextDueAt, it.pendingAction) }
+        ?.takeIf { it.status == WatchStatus.ACTIVE }
+        ?.let { WatchScheduleEntry(it.id, it.userId, it.version, it.nextDueAt, it.pendingAction) }
 
     override suspend fun enqueueScheduled(
         expected: WatchScheduleEntry,
@@ -977,7 +936,7 @@ private class FakeWatchStore : WatchStore {
         val task = tasks[taskId] ?: return WatchEnqueueResult.Stale
         if (watch.userId != userId || findSchedule(watchId) == null ||
             task.userId != userId || WatchTaskPayload.watchIdOf(task) != watchId ||
-            task.ownerApp != TEST_APP || !task.status.isTerminal || task.retryCount != expectedRetryCount ||
+            !task.status.isTerminal || task.retryCount != expectedRetryCount ||
             (WatchTaskPayload.kindOf(task) == WatchRunKind.EXPIRY_REVIEW &&
                 watch.pendingAction != WatchPendingAction.EXPIRY_REVIEW)
         ) return WatchEnqueueResult.Stale

@@ -1,6 +1,7 @@
 package com.easy.easyai.web.security
 
 import com.easy.easyai.auth.jwt.JwtTokenProvider
+import com.easy.easyai.core.host.HostIdentity
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpMethod
@@ -85,7 +86,7 @@ class SecurityConfig {
     }
 
     @Bean
-    fun jwtTokenProvider(authProperties: AuthProperties): JwtTokenProvider {
+    fun jwtTokenProvider(authProperties: AuthProperties, host: HostIdentity): JwtTokenProvider {
         val keyPair = if (authProperties.privateKeyPath.isNotBlank() && authProperties.publicKeyPath.isNotBlank()) {
             val privateKeyPem = Files.readString(Path.of(authProperties.privateKeyPath))
             val publicKeyPem = Files.readString(Path.of(authProperties.publicKeyPath))
@@ -98,6 +99,7 @@ class SecurityConfig {
         return JwtTokenProvider(
             privateKey = keyPair.private,
             publicKey = keyPair.public,
+            appName = host.appName,
             accessExpirySeconds = authProperties.accessTokenExpirationSeconds,
             refreshExpirySeconds = authProperties.refreshTokenExpirationSeconds
         )

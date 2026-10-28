@@ -15,13 +15,6 @@ data class AsyncTaskDto(
     val trigger: String,
     val title: String,
     val sessionId: String? = null,
-    /** The application that ran this task; null on rows written before ownership was recorded. */
-    val ownerApp: String? = null,
-    /**
-     * False when another application wrote the row. The task is still listed (the queue is shared),
-     * but retry/cancel/delete would act on a worker this process cannot reach.
-     */
-    val controllable: Boolean = true,
     val timeoutMs: Long? = null,
     val payload: Map<String, Any?>? = null,
     val result: Map<String, Any?>? = null,

@@ -93,7 +93,7 @@ import java.time.Duration
  * Supports any R2DBC-compatible database (H2, PostgreSQL, etc.).
  */
 @AutoConfiguration
-@EnableConfigurationProperties(value = [R2dbcProperties::class, EasyAiProperties::class, HostProperties::class])
+@EnableConfigurationProperties(value = [R2dbcProperties::class, EasyAiProperties::class])
 @ConditionalOnProperty(prefix = "easyai.r2dbc", name = ["enabled"], havingValue = "true", matchIfMissing = true)
 class R2dbcRepositoryAutoConfiguration(
     private val r2dbcProperties: R2dbcProperties,
@@ -398,23 +398,6 @@ class R2dbcRepositoryAutoConfiguration(
             onChanged = eventPublisher::publishEvent
         )
     }
-
-    /**
-     * Gives rows written before `owner_app` existed an owner, or reports them. Lives beside the stores
-     * rather than in the task subsystem because it spans three tables that only share the column.
-     */
-    @Bean
-    @ConditionalOnMissingBean
-    fun legacyOwnerAdopter(
-        initializer: R2dbcDatabaseInitializer,
-        host: HostIdentity,
-        properties: HostProperties
-    ): LegacyOwnerAdopter = LegacyOwnerAdopter(
-        db = initializer.getDatabase(),
-        host = host,
-        properties = properties,
-        dbInitializer = initializer
-    )
 
     @Bean
     @ConditionalOnMissingBean(PermissionRuleStore::class)

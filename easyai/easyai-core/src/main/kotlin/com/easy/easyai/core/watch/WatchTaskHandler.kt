@@ -7,7 +7,6 @@ import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.agent.SessionManager
 import com.easy.easyai.core.event.ErrorEvent
-import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.model.UserMessage
 import com.easy.easyai.core.task.AsyncTask
@@ -44,14 +43,14 @@ import java.time.ZoneId
  * - the run remembers the [Watch.version] it started with and refuses to apply a finding when the
  *   row changed underneath it (the user edited, paused or cancelled);
  * - a review task whose watch no longer has `pending_action=EXPIRY_REVIEW` is stale on arrival;
- * - a watch owned by another application sharing this database is refused: its agent's tools resolve
- *   on that host, and running here would quietly use a degraded toolset;
  * - a timeout is booked as a watch failure (so the schedule backs off) before it is rethrown for the
  *   task runner to park the row TIMED_OUT. A user cancel is never booked as a failure.
+ *
+ * Application isolation is upstream of this handler: the scheduling query only returns watches of
+ * this application's accounts, and the task carries that owner's user id.
  */
 class WatchTaskHandler(
     private val store: WatchStore,
-    private val host: HostIdentity,
     private val properties: WatchProperties = WatchProperties(),
     private val sessionManager: SessionManager? = null,
     private val agentService: AgentService? = null,
@@ -73,20 +72,6 @@ class WatchTaskHandler(
             ?: return TaskOutcome.Failure("The watch this task belongs to no longer exists")
         if (watch.userId != task.userId) {
             return TaskOutcome.Failure("Watch task ${task.id} belongs to a different user")
-        }
-        // Defence in depth: the scheduling query already filters on ownership, so reaching this means a task
-        // row outlived the assumption (written before ownership was recorded, or submitted by hand).
-        // Fail loudly instead of running with a toolset this process cannot resolve. Deliberately
-        // before claimRunSlot, so the watch keeps its schedule and books no failure backoff.
-        val watchOwner = watch.ownerApp
-        if (!host.owns(watchOwner)) {
-            return TaskOutcome.Failure(
-                if (watchOwner == null) {
-                    "Watch ${watch.id} has no owning application; refusing to run it on '${host.appName}'"
-                } else {
-                    "Watch ${watch.id} belongs to application '$watchOwner'; this process is '${host.appName}'"
-                }
-            )
         }
         if (watch.status != WatchStatus.ACTIVE) {
             logger.info("Watch {} is {}; skipping task {}", watch.id, watch.status, task.id)

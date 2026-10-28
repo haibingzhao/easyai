@@ -10,6 +10,7 @@ import com.easy.easyai.auth.jwt.JwtTokenProvider
 import com.easy.easyai.auth.model.RefreshToken
 import com.easy.easyai.auth.model.User
 import com.easy.easyai.auth.model.UserProfile
+import com.easy.easyai.core.host.HostIdentity
 import kotlinx.coroutines.CancellationException
 import org.slf4j.LoggerFactory
 import at.favre.lib.crypto.bcrypt.BCrypt
@@ -24,6 +25,7 @@ class AuthService(
     private val refreshTokenStore: RefreshTokenStore,
     private val jwtTokenProvider: JwtTokenProvider,
     private val authProperties: AuthProperties,
+    private val host: HostIdentity,
     private val claimsContributor: AccessTokenClaimsContributor = NoopClaimsContributor
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -38,7 +40,7 @@ class AuthService(
         if (password.length < 6) {
             throw AuthException("Password must be at least 6 characters", 400)
         }
-        val existing = userStore.findByUsername(username)
+        val existing = userStore.findByUsername(username, host.appName)
         if (existing != null) {
             throw AuthException("Username already taken", 409)
         }
@@ -46,6 +48,7 @@ class AuthService(
         val passwordHash = hashPassword(password)
         val user = User(
             id = UUID.randomUUID().toString(),
+            ownerApp = host.appName,
             username = username,
             displayName = displayName ?: username,
             passwordHash = passwordHash,
@@ -58,7 +61,7 @@ class AuthService(
     }
 
     suspend fun login(username: String, password: String, groupId: String? = null): AuthResponse {
-        val user = userStore.findByUsername(username)
+        val user = userStore.findByUsername(username, host.appName)
             ?: throw AuthException("Invalid username or password", 401)
 
         if (!verifyPassword(password, user.passwordHash)) {
@@ -107,7 +110,7 @@ class AuthService(
     }
 
     suspend fun getProfile(userId: String): UserProfile {
-        val user = userStore.findById(userId)
+        val user = userStore.findById(userId, host.appName)
             ?: throw AuthException("User not found", 404)
         return user.toProfile()
     }
@@ -165,7 +168,7 @@ class AuthService(
         if (userId == AuthConstants.SYSTEM_USER_ID) {
             throw AuthException("Profile editing requires an account", 403)
         }
-        return userStore.findById(userId) ?: throw AuthException("User not found", 404)
+        return userStore.findById(userId, host.appName) ?: throw AuthException("User not found", 404)
     }
 
     private suspend fun generateTokenPair(user: User, groupId: String? = null): AuthResponse =
@@ -237,7 +240,7 @@ class AuthService(
             throw AuthException("Refresh token expired", 401)
         }
 
-        val user = userStore.findById(claims.userId)
+        val user = userStore.findById(claims.userId, host.appName)
             ?: throw AuthException("User not found", 401)
 
         return ValidatedRefresh(user, claims, storedToken.id)

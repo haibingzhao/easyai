@@ -4,6 +4,7 @@ import com.easy.easyai.auth.RefreshTokenStore
 import com.easy.easyai.auth.UserStore
 import com.easy.easyai.auth.jwt.JwtTokenProvider
 import com.easy.easyai.auth.model.User
+import com.easy.easyai.core.host.HostIdentity
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -26,15 +27,17 @@ class AuthServiceProfileTest {
         every { generateAccessToken(any(), any(), any()) } returns "access"
         every { generateRefreshToken(any(), any()) } returns "refresh"
     }
-    private val service = AuthService(userStore, refreshTokenStore, jwtTokenProvider, AuthProperties())
+    private val host = HostIdentity(APP)
+    private val service = AuthService(userStore, refreshTokenStore, jwtTokenProvider, AuthProperties(), host)
 
     private fun stored(user: User) {
-        coEvery { userStore.findById(user.id) } returns user
+        coEvery { userStore.findById(user.id, APP) } returns user
         coEvery { userStore.update(any()) } answers { firstArg() }
     }
 
     private val alice = User(
         id = "alice-id",
+        ownerApp = APP,
         username = "alice",
         displayName = "Alice",
         passwordHash = "bcrypt\$2a\$12\$stored-hash",
@@ -148,11 +151,15 @@ class AuthServiceProfileTest {
         }
     }
 
+    private companion object {
+        const val APP = "agent-api"
+    }
+
     @Nested
     inner class `registration` {
         @Test
         fun `validates the same email rule the profile editor uses`() = runTest {
-            coEvery { userStore.findByUsername("carol") } returns null
+            coEvery { userStore.findByUsername("carol", APP) } returns null
 
             assertEquals(
                 400,
@@ -163,7 +170,7 @@ class AuthServiceProfileTest {
 
         @Test
         fun `stores the trimmed address and the default avatar`() = runTest {
-            coEvery { userStore.findByUsername("carol") } returns null
+            coEvery { userStore.findByUsername("carol", APP) } returns null
             coEvery { userStore.save(any()) } answers { firstArg() }
 
             service.register("carol", "secret123", null, "  carol@example.com  ")

@@ -48,7 +48,7 @@ internal class MemoryListTool(
         coroutineScope: CoroutineScope,
         onUpdate: suspend (ToolUpdate) -> Unit
     ): ToolResult {
-        val typeFilter = (args["type"] as? String)?.let { MemoryType.fromDirName(it) }
+        val typeFilter = (args["type"] as? String)?.let { MemoryType.of(it) }
         val owner = MemoryOwnerContext(agentContext.userId, agentContext.projectPath)
 
         val sb = StringBuilder()

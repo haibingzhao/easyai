@@ -23,6 +23,12 @@ import java.util.*
 class JwtTokenProvider(
     private val privateKey: PrivateKey,
     private val publicKey: PublicKey,
+    /**
+     * The application this process is (`spring.application.name`). Every token carries it and every
+     * validation requires a match, so two applications sharing one signing key or one database
+     * cannot accept each other's tokens.
+     */
+    private val appName: String,
     private val accessExpirySeconds: Long = DEFAULT_ACCESS_EXPIRY,
     private val refreshExpirySeconds: Long = DEFAULT_REFRESH_EXPIRY
 ) {
@@ -36,6 +42,7 @@ class JwtTokenProvider(
      */
     data class JwtClaims(
         val userId: String,
+        val app: String,
         val username: String?,
         val tokenId: String,
         val owners: List<String> = emptyList(),
@@ -70,6 +77,7 @@ class JwtTokenProvider(
         val builder = Jwts.builder()
             .id(UUID.randomUUID().toString())
             .subject(userId)
+            .claim(CLAIM_APP, appName)
             .claim(CLAIM_USERNAME, username)
             .claim(CLAIM_TYPE, TOKEN_TYPE_ACCESS)
         if (group.owners.isNotEmpty()) builder.claim(CLAIM_OWNERS, group.owners)
@@ -97,6 +105,7 @@ class JwtTokenProvider(
         val builder = Jwts.builder()
             .id(UUID.randomUUID().toString())
             .subject(userId)
+            .claim(CLAIM_APP, appName)
             .claim(CLAIM_TYPE, TOKEN_TYPE_REFRESH)
         groupId?.let { builder.claim(CLAIM_GROUP_ID, it) }
         return builder
@@ -135,6 +144,7 @@ class JwtTokenProvider(
         return Jwts.builder()
             .id(UUID.randomUUID().toString())
             .subject(userId)
+            .claim(CLAIM_APP, appName)
             .claim(CLAIM_TYPE, TOKEN_TYPE_SCRIPT)
             .claim(CLAIM_SESSION_ID, sessionId)
             .claim(CLAIM_MODEL_CONFIG_ID, modelConfigId)
@@ -161,6 +171,7 @@ class JwtTokenProvider(
                 logger.debug("Token type mismatch: expected={}, actual={}", TOKEN_TYPE_SCRIPT, tokenType)
                 return null
             }
+            if (!appMatches(claims)) return null
 
             ScriptTokenClaims(
                 userId = claims.subject,
@@ -190,9 +201,11 @@ class JwtTokenProvider(
                 logger.debug("Token type mismatch: expected={}, actual={}", expectedType, tokenType)
                 return null
             }
+            if (!appMatches(claims)) return null
 
             JwtClaims(
                 userId = claims.subject,
+                app = appName,
                 username = claims[CLAIM_USERNAME] as? String,
                 tokenId = claims.id,
                 owners = (claims[CLAIM_OWNERS] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
@@ -209,7 +222,21 @@ class JwtTokenProvider(
         }
     }
 
+    /**
+     * Missing claim is refused too: tokens minted before application isolation existed must not
+     * authenticate anywhere after the upgrade.
+     */
+    private fun appMatches(claims: Claims): Boolean {
+        val app = claims[CLAIM_APP] as? String
+        if (app != appName) {
+            logger.debug("Token application mismatch: expected={}, actual={}", appName, app)
+            return false
+        }
+        return true
+    }
+
     companion object {
+        private const val CLAIM_APP = "app"
         private const val CLAIM_USERNAME = "username"
         private const val CLAIM_TYPE = "type"
         private const val CLAIM_SESSION_ID = "sessionId"

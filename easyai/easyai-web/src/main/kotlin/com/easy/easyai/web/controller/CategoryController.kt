@@ -1,36 +1,36 @@
 package com.easy.easyai.web.controller
 
-import com.easy.easyai.core.domain.CategorySpec
 import com.easy.easyai.core.domain.DomainCatalog
+import com.easy.easyai.core.domain.MemoryCategorySpec
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Mono
 
 /**
- * REST controller exposing the category taxonomy for the active domain.
+ * REST controller exposing the active domain's memory category taxonomy.
  *
- * The frontend calls this once at startup to populate memory/knowledge
- * category dropdowns. Response reflects [DomainCatalog.active] which is
- * set at application startup from `easyai.domain`.
+ * The frontend calls this once at startup to populate memory category dropdowns and
+ * consolidation controls. Knowledge categories are not served here: article `category`
+ * is a free-form tag, and the knowledge picker is a host-console preset.
  */
 @RestController
 @RequestMapping("/api/system")
-class CategoryController {
+class CategoryController(
+    private val domainCatalog: DomainCatalog
+) {
 
     @GetMapping("/categories")
     fun getCategories(): Mono<CategoryResponseDto> {
-        val cats = DomainCatalog.active()
         return Mono.just(
             CategoryResponseDto(
-                domain = cats.domain,
-                knowledge = cats.knowledge.map { it.toDto() },
-                memory = cats.memory.map { it.toDto() }
+                domain = domainCatalog.activeDomain,
+                memory = domainCatalog.active().map { it.toDto() }
             )
         )
     }
 
-    private fun CategorySpec.toDto(): CategorySpecDto =
+    private fun MemoryCategorySpec.toDto(): CategorySpecDto =
         CategorySpecDto(code = code, labelKey = labelKey, description = description)
 }
 
@@ -42,6 +42,5 @@ data class CategorySpecDto(
 
 data class CategoryResponseDto(
     val domain: String,
-    val knowledge: List<CategorySpecDto>,
     val memory: List<CategorySpecDto>
 )

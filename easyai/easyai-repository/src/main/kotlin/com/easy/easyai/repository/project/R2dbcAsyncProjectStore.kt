@@ -32,9 +32,9 @@ import java.time.Instant
  * R2DBC-based implementation of AsyncProjectStore.
  * Uses Exposed R2DBC for pure async database operations.
  *
- * [host] is stamped on insert and read back, but no query filters on it: projects are shared content
- * that every application on the database must see. The one consumer is the temp-workspace orphan
- * sweep, which releases only the rows its own host created.
+ * Project ownership is the account's application. Ordinary request paths are user-strict; the one
+ * cross-user consumer is the temp-workspace orphan sweep, which enumerates only user ids belonging
+ * to [host]'s application.
  */
 class R2dbcAsyncProjectStore(
     private val db: R2dbcDatabase,
@@ -93,7 +93,6 @@ class R2dbcAsyncProjectStore(
             it[Tables.Project.userId] = userId
             it[Tables.Project.memoryAutoGeneration] = project.memoryAutoGeneration
             it[Tables.Project.kind] = project.kind.value
-            it[Tables.Project.ownerApp] = host.appName
             it[Tables.Project.createdAt] = project.createdAt.toEpochMilli()
             it[Tables.Project.updatedAt] = project.updatedAt.toEpochMilli()
         }
@@ -160,7 +159,9 @@ class R2dbcAsyncProjectStore(
     }
 
     override suspend fun listDistinctUserIds(): List<String> = suspendTransaction(db) {
-        Tables.Project.select(Tables.Project.userId).withDistinct()
+        Tables.Project.select(Tables.Project.userId)
+            .where { UserScope.ownedByApp(Tables.Project.userId, host.appName) }
+            .withDistinct()
             .map { it[Tables.Project.userId] }
             .toList()
     }
@@ -184,7 +185,6 @@ class R2dbcAsyncProjectStore(
             description = row[Tables.Project.description],
             memoryAutoGeneration = row[Tables.Project.memoryAutoGeneration] ?: true,
             kind = ProjectKind.from(row[Tables.Project.kind]),
-            ownerApp = row[Tables.Project.ownerApp],
             createdAt = Instant.ofEpochMilli(row[Tables.Project.createdAt]),
             updatedAt = Instant.ofEpochMilli(row[Tables.Project.updatedAt])
         )

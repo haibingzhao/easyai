@@ -41,7 +41,9 @@ class UserProfileControllerTest {
         UsernamePasswordAuthenticationToken("alice", null, emptyList())
     )
 
-    private val alice = User(id = "alice-id", username = "alice", displayName = "Alice", passwordHash = "hash")
+    private val alice = User(
+        id = "alice-id", ownerApp = "agent-api", username = "alice", displayName = "Alice", passwordHash = "hash"
+    )
     private val oldKey = "avatars/alice/0f0a2b1c-3d4e-5f60-7182-93a4b5c6d7e8.png"
     private val newKey = "avatars/alice/1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d.png"
 

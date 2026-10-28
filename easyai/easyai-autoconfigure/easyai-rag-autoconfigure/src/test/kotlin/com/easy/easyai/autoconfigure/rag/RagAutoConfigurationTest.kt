@@ -1,5 +1,6 @@
 package com.easy.easyai.autoconfigure.rag
 
+import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.memory.MemoryConsolidationAgent
 import com.easy.easyai.core.memory.MemoryConsolidationSettings
 import com.easy.easyai.core.memory.MemoryStore
@@ -31,6 +32,13 @@ class RagAutoConfigurationTest {
 
     private val contextRunner = ApplicationContextRunner()
         .withConfiguration(AutoConfigurations.of(RagAutoConfiguration::class.java))
+        // The memory beans resolve their taxonomy through the DomainCatalog bean, which the
+        // core auto-configuration owns and this module must not conjure a default for.
+        .withBean(
+            "domainCatalog",
+            DomainCatalog::class.java,
+            Supplier { DomainCatalog(emptyList(), DomainCatalog.CODING_DOMAIN) }
+        )
 
     @Test
     fun `no rag beans when rag disabled`() {

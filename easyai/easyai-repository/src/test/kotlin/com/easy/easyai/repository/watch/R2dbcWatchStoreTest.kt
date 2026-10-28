@@ -30,6 +30,7 @@ import com.easy.easyai.core.watch.WatchVerdict
 import com.easy.easyai.repository.database.DatabaseMigration
 import com.easy.easyai.repository.database.Tables.AsyncTaskTable
 import com.easy.easyai.repository.database.Tables.ScheduledTaskSettingTable
+import com.easy.easyai.repository.database.Tables.UserTable
 import com.easy.easyai.repository.database.Tables.WatchTable
 import com.easy.easyai.repository.task.R2dbcAsyncTaskStore
 import com.easy.easyai.repository.task.R2dbcScheduledTaskSettingStore
@@ -88,6 +89,23 @@ class R2dbcWatchStoreTest {
         R2dbcWatchStore(db, HostIdentity(SELF), onChanged = onChanged)
 
     private fun tasks() = R2dbcAsyncTaskStore(db, HostIdentity(SELF))
+
+    /** Cross-user scans are scoped through the account's application. */
+    private suspend fun ensureUser(userId: String, ownerApp: String = SELF) = suspendTransaction(db) {
+        val existing = UserTable.selectAll().where { UserTable.id eq userId }.count()
+        if (existing == 0L) {
+            val now = System.currentTimeMillis()
+            UserTable.insert {
+                it[id] = userId
+                it[UserTable.ownerApp] = ownerApp
+                it[username] = userId
+                it[displayName] = userId
+                it[passwordHash] = "hash"
+                it[createdAt] = now
+                it[updatedAt] = now
+            }
+        }
+    }
 
     private val zone = ZoneId.of("Asia/Shanghai")
     private val now = Instant.parse("2026-10-25T04:00:00Z")
@@ -154,7 +172,7 @@ class R2dbcWatchStoreTest {
     }
 
     private fun snapshot(watch: Watch) = WatchScheduleEntry(
-        watch.id, watch.userId, watch.ownerApp ?: SELF, watch.version, watch.nextDueAt, watch.pendingAction
+        watch.id, watch.userId, watch.version, watch.nextDueAt, watch.pendingAction
     )
 
     private fun task(watch: Watch, status: AsyncTaskStatus = AsyncTaskStatus.PENDING) = AsyncTask(
@@ -165,7 +183,6 @@ class R2dbcWatchStoreTest {
         title = watch.title,
         status = status,
         sessionId = watch.runSessionId,
-        ownerApp = SELF,
         payload = mapOf(
             WatchTaskPayload.KEY_WATCH_ID to watch.id,
             WatchTaskPayload.KEY_KIND to WatchRunKind.CHECK.name,
@@ -248,42 +265,36 @@ class R2dbcWatchStoreTest {
         }
 
         @Test
-        fun `create stamps the owning application`() = runTest {
-            val created = store().create(watch(userId = "owner-${UUID.randomUUID()}"))
-            assertEquals(SELF, created.ownerApp)
-            assertEquals(SELF, store().findById(created.id)?.ownerApp)
-        }
-
-        @Test
         fun `another application's watch is neither listed nor scheduled, but is readable by id`() = runTest {
-            val user = "host-${UUID.randomUUID()}"
+            val mineUser = "host-mine-${UUID.randomUUID()}"
+            val theirsUser = "host-theirs-${UUID.randomUUID()}"
             val now = Instant.parse("2026-10-26T00:00:00Z")
-            val mine = store().create(watch(userId = user))
-            val theirs = R2dbcWatchStore(db, HostIdentity("trading-api")).create(watch(userId = user))
-            setting(user)
+            ensureUser(mineUser, SELF)
+            ensureUser(theirsUser, "trading-api")
+            val mine = store().create(watch(userId = mineUser))
+            val theirs = store().create(watch(userId = theirsUser))
+            setting(mineUser)
+            setting(theirsUser)
 
-            assertEquals(listOf(mine.id), store().listUpcoming(now, userId = user).map { it.watchId })
-            assertEquals(listOf(mine.id), store().listByUser(user).map { it.id })
-            assertEquals(1, store().countActive(user))
-            // The handler reads by id so it can say *why* it refuses to run the row.
-            assertEquals("trading-api", store().findById(theirs.id)?.ownerApp)
+            assertEquals(listOf(mine.id), store().listUpcoming(now, userId = mineUser).map { it.watchId })
+            assertEquals(emptyList(), store().listUpcoming(now, userId = theirsUser))
+            assertEquals(listOf(mine.id), store().listByUser(mineUser).map { it.id })
+            assertEquals(1, store().countActive(mineUser))
+            // The handler reads by id so it can explain a missing row.
+            assertNotNull(store().findById(theirs.id))
         }
 
         @Test
-        fun `an unclaimed watch is not scheduled`() = runTest {
+        fun `a watch of an account that no longer exists is not scheduled`() = runTest {
             val store = store()
             val user = "legacy-${UUID.randomUUID()}"
             val created = store.create(watch(userId = user))
-            // A row written before owner_app existed: the column is null and nothing claims it.
-            suspendTransaction(db) {
-                WatchTable.update({ WatchTable.id eq created.id }) { it[WatchTable.ownerApp] = null }
-            }
 
             setting(user)
             assertEquals(emptyList(), store.listUpcoming(Instant.parse("2026-10-26T00:00:00Z"), userId = user))
             assertNull(store.findSchedule(created.id))
-            assertEquals(emptyList(), store.listByUser(user))
-            assertNull(store.findById(created.id)?.ownerApp)
+            // Request-scoped listing is still user-strict.
+            assertEquals(listOf(created.id), store.listByUser(user).map { it.id })
         }
 
         @Test
@@ -305,6 +316,7 @@ class R2dbcWatchStoreTest {
             store.create(watch(userId = "erin", nextDueAt = Instant.ofEpochMilli(now + 500), createdAt = 3))
             store.create(watch(userId = "erin", status = WatchStatus.PAUSED, nextDueAt = Instant.ofEpochMilli(now - 200), createdAt = 4))
 
+            ensureUser("erin")
             setting("erin")
             val due = store.listUpcoming(Instant.ofEpochMilli(now), userId = "erin")
             assertEquals(2, due.size)
@@ -707,6 +719,7 @@ class R2dbcWatchStoreTest {
         fun `a disabled setting stops automatic admission but not manual runs`() = runTest {
             val store = store()
             val original = watch()
+            ensureUser(original.userId)
             store.create(original)
             setting(original.userId, enabled = false)
 
@@ -725,6 +738,7 @@ class R2dbcWatchStoreTest {
         fun `another user's enabled setting does not schedule this watch`() = runTest {
             val store = store()
             val original = watch()
+            ensureUser(original.userId)
             store.create(original)
             setting(original.userId, enabled = false)
             setting("someone-else", enabled = true)
@@ -746,9 +760,8 @@ class R2dbcWatchStoreTest {
             store.enqueueScheduled(snapshot(store.findById(original.id)!!), now, properties)
 
             val event = events.single()
-            assertEquals(SELF, event.ownerApp)
-            assertEquals(original.id, event.watchId)
             assertEquals(original.userId, event.userId)
+            assertEquals(original.id, event.watchId)
         }
 
         @Test

@@ -1,6 +1,7 @@
 import { BellRing, Layers, ListChecks } from 'lucide-react';
 import type { AsyncTask, TaskTypeDescriptor } from '@/types/task';
-import { categoryLabelKey, type ConsolidationPlanItem } from '@/types/memory';
+import { type ConsolidationPlanItem } from '@/types/memory';
+import { memoryCategoryLabelKey } from '@/services/stores/category-store';
 import { i18n } from '@/utils/i18n';
 
 const VERDICT_LABEL: Record<string, string> = {
@@ -36,7 +37,7 @@ export const TASK_TYPE_REGISTRY: Record<string, TaskTypeDescriptor> = {
     title: (task) => {
       const type = task.payload?.type;
       if (typeof type !== 'string') return i18n('Memory Consolidation');
-      return `${i18n('Memory Consolidation')} · ${i18n(categoryLabelKey(type))}`;
+      return `${i18n('Memory Consolidation')} · ${i18n(memoryCategoryLabelKey(type))}`;
     },
     summarize: (outcome) => {
       const r = outcome.result;

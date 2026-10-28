@@ -15,7 +15,8 @@ easyai-core/src/main/kotlin/com/easy/easyai/core/
 ├── tool/        # ToolDefinition, ToolBuilder, ToolExecutionEngine, ToolFactory, ToolMetadata
 ├── event/       # AgentEvent (sealed hierarchy), MessageListener
 ├── permission/  # PermissionService, PermissionEvaluator, PermissionRule, SafeCommandDetector
-├── memory/      # MemoryStore (interface), MemoryEntry, MemoryType, MemoryFlushAgent, MemoryAccessTracker
+├── memory/      # MemoryStore (interface), MemoryEntry, MemoryType (storage directory only), MemoryFlushAgent, MemoryAccessTracker
+├── domain/      # DomainCatalog (per-domain memory taxonomy) + DomainCatalogContributor + CodingDomainCatalog
 ├── goal/        # GoalState, GoalCompletionCheck, GoalStatusNotifier, GoalStore
 ├── command/     # UserCommandDefinition, AsyncUserCommandStore
 ├── model/       # EasyAiMessage, ProjectInfo, TodoInfo, ToolCallStatus
@@ -33,6 +34,7 @@ easyai-core/src/main/kotlin/com/easy/easyai/core/
 | Events | `event/AgentEvent.kt` | Sealed: MessageStart/End, ToolExecution*, Error, etc. |
 | Permission | `permission/PermissionService.kt` | Rule evaluation, user prompt flow |
 | Memory | `memory/MemoryStore.kt` | Storage interface; the only implementation is `RagMemoryStore` in `easyai-rag` (one EasyRAG document per entry) |
+| Memory categories | `domain/DomainCatalog.kt` | Active domain's memory types; `CodingDomainCatalog` is the framework default, hosts contribute a `DomainCatalogContributor` bean |
 | Goal tracking | `goal/GoalState.kt` + `GoalCompletionCheck.kt` | Auto-pause on completion |
 | Message conversion | `message/MessageConverter.kt` | EasyAI ↔ `com.easy.easyai.api.llm` message types |
 
