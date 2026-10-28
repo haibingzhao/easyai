@@ -54,3 +54,15 @@ jobs:
 
       - name: Unit tests
         run: npx vitest run
+
+      # Hosts consume dist-lib with skipLibCheck; an unrewritten "@/*" specifier degrades the whole
+      # type surface to any without failing their builds, so the published declarations are checked.
+      - name: Build library declarations
+        run: npm run build:lib
+
+      - name: Assert no internal alias in declarations
+        run: |
+          if grep -rE "(from|import\()\s*['\"]@/" dist-lib --include='*.d.ts'; then
+            echo "dist-lib still contains @/ alias specifiers"
+            exit 1
+          fi

@@ -25,7 +25,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "build:lib": "vite build -c vite.lib.config.ts && tsc -p tsconfig.lib.json",
+    "build:lib": "vite build -c vite.lib.config.ts && tsc -p tsconfig.lib.json && node scripts/fix-lib-alias.mjs",
     "preview": "vite preview",
     "lint": "eslint .",
     "test": "vitest run"
