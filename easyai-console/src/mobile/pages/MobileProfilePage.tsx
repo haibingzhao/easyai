@@ -14,6 +14,7 @@ import { ConnectionSheet } from '@/plugins/connection/ConnectionSheet';
 import { msText, qualityDot, routeText } from '@/plugins/connection/labels';
 import { startConnectionProbe, useConnectionStatus } from '@/plugins/connection/store';
 import { i18n } from '@/utils/i18n';
+import { APP_CONFIG } from '@/constants/navigation';
 import type { Theme } from '@/utils/theme';
 
 const THEMES: { value: Theme; labelKey: string }[] = [
@@ -87,14 +88,18 @@ export const MobileProfilePage: React.FC = () => {
             </span>
           </button>
 
-          <div className="mobile-section-title">{i18n('Workspace')}</div>
-          <button className="mobile-row w-full text-left border-b border-border" onClick={chooseProject}>
-            <Monitor className="w-5 h-5 shrink-0 text-muted-foreground" />
-            <span className="flex-1 min-w-0 text-sm truncate">
-              {currentProject?.name ?? (workspaceOnly ? i18n('Start without a project') : i18n('Select a Project'))}
-            </span>
-            <span className="text-xs text-muted-foreground">{i18n('Change')}</span>
-          </button>
+          {APP_CONFIG.showProjectSelector && (
+            <>
+              <div className="mobile-section-title">{i18n('Workspace')}</div>
+              <button className="mobile-row w-full text-left border-b border-border" onClick={chooseProject}>
+                <Monitor className="w-5 h-5 shrink-0 text-muted-foreground" />
+                <span className="flex-1 min-w-0 text-sm truncate">
+                  {currentProject?.name ?? (workspaceOnly ? i18n('Start without a project') : i18n('Select a Project'))}
+                </span>
+                <span className="text-xs text-muted-foreground">{i18n('Change')}</span>
+              </button>
+            </>
+          )}
 
           <div className="mobile-section-title">{i18n('Appearance')}</div>
           {THEMES.map((item) => (

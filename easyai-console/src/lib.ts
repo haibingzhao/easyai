@@ -127,6 +127,13 @@ export { useWatchStore } from './services/stores/watch-store';
 export { WatchesPage } from './pages/WatchesPage';
 export { WatchDetailPage } from './pages/WatchDetailPage';
 export {
+  formatInZone,
+  scheduleSummary,
+  UnknownVerdictBadge,
+  VerdictBadge,
+  WatchStatusBadge,
+} from './components/watch/watch-ui';
+export {
   isWatchActive,
   isWatchTerminal,
   parseWatchRunResult,
