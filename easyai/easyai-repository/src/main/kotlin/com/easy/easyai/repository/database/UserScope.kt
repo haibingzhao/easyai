@@ -4,9 +4,12 @@ import com.easy.easyai.auth.AuthConstants
 import com.easy.easyai.repository.database.UserScope.filter
 import org.jetbrains.exposed.v1.core.Column
 import org.jetbrains.exposed.v1.core.Op
+import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
+import org.jetbrains.exposed.v1.core.exists
 import org.jetbrains.exposed.v1.core.inList
 import org.jetbrains.exposed.v1.core.or
+import org.jetbrains.exposed.v1.r2dbc.select
 
 /**
  * Data isolation helper for user-scoped queries.
@@ -71,4 +74,19 @@ object UserScope {
      */
     fun matchesStrict(dataOwnerId: String, userId: String): Boolean =
         dataOwnerId == userId
+
+    /**
+     * Rows whose `user_id` belongs to an account of [appName].
+     *
+     * This is the background-pass boundary: a process may only run schedules, watches, orphan
+     * sweeps or workspace cleanups for accounts of its own application. Rows owned by `system` or
+     * by a user that no longer exists have no `app_user` row and never match — no application is
+     * responsible for executing them.
+     */
+    fun ownedByApp(userIdColumn: Column<String>, appName: String): Op<Boolean> =
+        exists(
+            Tables.UserTable.select(Tables.UserTable.id).where {
+                (Tables.UserTable.id eq userIdColumn) and (Tables.UserTable.ownerApp eq appName)
+            }
+        )
 }

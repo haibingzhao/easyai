@@ -105,10 +105,9 @@ open class WebAutoConfiguration {
         permissionRuleStore: PermissionRuleStore? = null,
         @Autowired(required = false)
         snapshotService: SnapshotService? = null,
-        @Value("\${easyai.data-dir:\${user.home}/.easyai}") dataDir: String,
-        host: HostIdentity
+        @Value("\${easyai.data-dir:\${user.home}/.easyai}") dataDir: String
     ): DefaultWorkspaceService =
-        DefaultWorkspaceService(projectStore, sessionStore, permissionRuleStore, snapshotService, dataDir, host)
+        DefaultWorkspaceService(projectStore, sessionStore, permissionRuleStore, snapshotService, dataDir)
 
     @Bean
     @ConditionalOnMissingBean
@@ -342,9 +341,10 @@ open class WebAutoConfiguration {
         refreshTokenStore: RefreshTokenStore,
         jwtTokenProvider: JwtTokenProvider,
         authProperties: AuthProperties,
+        host: HostIdentity,
         claimsContributor: AccessTokenClaimsContributor
     ): AuthService {
-        return AuthService(userStore, refreshTokenStore, jwtTokenProvider, authProperties, claimsContributor)
+        return AuthService(userStore, refreshTokenStore, jwtTokenProvider, authProperties, host, claimsContributor)
     }
 
     @Bean

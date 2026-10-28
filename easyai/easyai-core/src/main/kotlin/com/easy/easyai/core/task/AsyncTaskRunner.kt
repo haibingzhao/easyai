@@ -294,8 +294,8 @@ class AsyncTaskRunner(
      * PENDING rows as INTERRUPTED; then dispatch only SCHEDULE PENDING rows. Their enqueue committed
      * before the crash but no handler claimed them, whereas replaying RUNNING could repeat effects.
      *
-     * Called once by the startup lifecycle, after legacy ownership adoption. [AsyncTaskStore.findOrphans]
-     * excludes other applications' rows and unclaimed legacy rows. Scheduler preload must wait for
+     * Called once by the startup lifecycle. [AsyncTaskStore.findOrphans] excludes other applications'
+     * accounts and users with no account row (e.g. `system`). Scheduler preload must wait for
      * [awaitStartupRecovery] so newly enqueued work cannot be mistaken for an orphan.
      */
     suspend fun reconcileOrphans() {

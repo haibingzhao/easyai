@@ -43,7 +43,8 @@ class MemoryConsolidationTaskHandler(
     private val settingsStore: MemoryConsolidationSettingsStore? = null,
     private val backoffBaseDays: Int = DEFAULT_BACKOFF_BASE_DAYS,
     private val backoffMaxDays: Int = DEFAULT_BACKOFF_MAX_DAYS,
-    private val failedRunBackoffBaseDays: Int = DEFAULT_FAILED_RUN_BACKOFF_BASE_DAYS
+    private val failedRunBackoffBaseDays: Int = DEFAULT_FAILED_RUN_BACKOFF_BASE_DAYS,
+    private val memoryCodes: Set<String>
 ) : TaskHandler {
 
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -62,8 +63,14 @@ class MemoryConsolidationTaskHandler(
             .ifEmpty { listOf(userId) }
         val typeDirName = payload[KEY_TYPE] as? String
             ?: return TaskOutcome.Failure("Invalid or missing memory type in task payload")
-        val memoryType = MemoryType.fromDirName(typeDirName)
-            ?: return TaskOutcome.Failure("Unknown memory type '$typeDirName'")
+        if (typeDirName !in memoryCodes) {
+            return TaskOutcome.Failure(
+                "Memory type '$typeDirName' is not part of the active domain catalog " +
+                    "(available: ${memoryCodes.joinToString()}); the task was queued under a different " +
+                    "catalog and cannot be re-run"
+            )
+        }
+        val memoryType = MemoryType(typeDirName)
         val dryRun = payload[KEY_DRY_RUN] as? Boolean ?: false
 
         val sessionId = (payload[KEY_SESSION_ID] as? String)?.takeIf { it.isNotBlank() }

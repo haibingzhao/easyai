@@ -25,7 +25,14 @@ object Tables {
      */
     object UserTable : Table("app_user") {
         val id = varchar("id", 255)
-        val username = varchar("username", 128).uniqueIndex()
+
+        /**
+         * The application this account belongs to (`spring.application.name`). Logins, refreshes and
+         * background scans are all scoped to it: accounts in another application on the same database
+         * are invisible here.
+         */
+        val ownerApp = varchar("owner_app", 64)
+        val username = varchar("username", 128)
         val displayName = varchar("display_name", 255)
         val email = varchar("email", 255).nullable()
         val passwordHash = varchar("password_hash", 256)
@@ -33,6 +40,10 @@ object Tables {
         val createdAt = long("created_at")
         val updatedAt = long("updated_at")
         override val primaryKey = PrimaryKey(id)
+
+        init {
+            uniqueIndex(ownerApp, username)
+        }
     }
 
     /**
@@ -227,14 +238,6 @@ object Tables {
         val memoryAutoGeneration = bool("memory_auto_generation").default(true)
         /** 'user' = user-registered project, 'temp' = system-managed per-session scratch workspace. */
         val kind = varchar("kind", 32).default("user")
-
-        /**
-         * The application that created the row (`spring.application.name`). Only its orphan sweep may
-         * release a temp workspace and delete the directory: hosts sharing one data directory would
-         * otherwise delete each other's in-flight scratch space. User projects are shared content, so
-         * no read path filters on this.
-         */
-        val ownerApp = varchar("owner_app", 64).nullable()
         val createdAt = long("created_at")
         val updatedAt = long("updated_at")
 
@@ -638,13 +641,6 @@ object Tables {
         val status = varchar("status", 32)
         val triggerSource = varchar("trigger_source", 32)
         val sessionId = varchar("session_id", 255).nullable()
-
-        /**
-         * The application that runs this row (`spring.application.name`). The orphan sweep parks only
-         * rows it owns, so a second host on the same database cannot interrupt the first one's live
-         * workers; ordinary reads ignore it. Null is unclaimed legacy data, which no host sweeps.
-         */
-        val ownerApp = varchar("owner_app", 64).nullable()
         val title = varchar("title", 255)
         val payload = text("payload").nullable()   // JSON: type-specific inputs
         val result = text("result").nullable()      // JSON: type-specific outputs
@@ -664,7 +660,6 @@ object Tables {
             index(false, userId, type, status)
             index(false, sessionId)
             index("idx_async_task_session_status", false, sessionId, status)
-            index(false, ownerApp, status)  // the startup orphan sweep reads one host's non-terminal rows
         }
     }
 
@@ -718,14 +713,6 @@ object Tables {
         val consecutiveFailures = integer("consecutive_failures").default(0)
         val lastError = text("last_error").nullable()
         val statusReason = text("status_reason").nullable()
-
-        /**
-         * The application that fires this row (`spring.application.name`). Due-scanning and listing
-         * read only its own rows: a watch runs with the creating agent's tools, which another host on
-         * the same database may not have. Null means no host owns the row — nothing fires or edits it
-         * until the startup adopter or the documented psql backfill claims it.
-         */
-        val ownerApp = varchar("owner_app", 64).nullable()
         val createdAt = long("created_at")
         val updatedAt = long("updated_at")
 
@@ -735,7 +722,7 @@ object Tables {
             index(false, userId, status, nextDueAt)
             index(false, userId, createdAt)
             index(false, runSessionId)
-            index(false, ownerApp, status, nextDueAt)  // the scheduler's due scan is host-scoped
+            index("idx_watch_status_due", false, status, nextDueAt)  // due scan across this app's users
         }
     }
 

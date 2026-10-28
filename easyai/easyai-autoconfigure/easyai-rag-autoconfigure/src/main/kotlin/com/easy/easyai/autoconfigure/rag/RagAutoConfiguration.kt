@@ -2,6 +2,7 @@ package com.easy.easyai.autoconfigure.rag
 
 import com.easy.easyai.core.agent.AgentService
 import com.easy.easyai.core.agent.SessionManager
+import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.memory.MemoryConsolidationAgent
 import com.easy.easyai.core.memory.MemoryConsolidationSettings
@@ -81,7 +82,8 @@ class RagAutoConfiguration {
 
     @Bean
     @ConditionalOnProperty(prefix = "easyai.memory", name = ["enabled"], havingValue = "true", matchIfMissing = true)
-    fun memoryStore(ragClient: RagClient): MemoryStore = RagMemoryStores.create(ragClient)
+    fun memoryStore(ragClient: RagClient, domainCatalog: DomainCatalog): MemoryStore =
+        RagMemoryStores.create(ragClient, domainCatalog.memoryCodes())
 
     /**
      * Deployment-level limits consumed by the agent and the scheduler; always present so callers
@@ -171,6 +173,7 @@ class RagAutoConfiguration {
     fun memoryConsolidationTaskHandler(
         agent: MemoryConsolidationAgent,
         settings: MemoryConsolidationSettings,
+        domainCatalog: DomainCatalog,
         taskStore: ObjectProvider<AsyncTaskStore>,
         titlePort: ObjectProvider<MemoryConsolidationSessionTitlePort>,
         memoryStore: ObjectProvider<MemoryStore>,
@@ -183,7 +186,8 @@ class RagAutoConfiguration {
         settingsStore = settingsStore.ifAvailable,
         backoffBaseDays = settings.zeroGainBackoffBaseDays,
         backoffMaxDays = settings.zeroGainBackoffMaxDays,
-        failedRunBackoffBaseDays = settings.failedRunBackoffBaseDays
+        failedRunBackoffBaseDays = settings.failedRunBackoffBaseDays,
+        memoryCodes = domainCatalog.memoryCodes().toSet()
     )
 
     @Bean

@@ -1,6 +1,5 @@
 package com.easy.easyai.web.controller
 
-import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.task.AsyncTask
 import com.easy.easyai.core.task.AsyncTaskRunner
 import com.easy.easyai.core.task.AsyncTaskStatus
@@ -8,7 +7,6 @@ import com.easy.easyai.core.task.AsyncTaskStore
 import com.easy.easyai.core.task.AsyncTaskType
 import com.easy.easyai.core.watch.WatchConflictException
 import com.easy.easyai.core.watch.WatchException
-import com.easy.easyai.core.watch.WatchForeignHostException
 import com.easy.easyai.core.watch.WatchNotFoundException
 import com.easy.easyai.core.watch.WatchService
 import com.easy.easyai.core.watch.WatchUnavailableException
@@ -29,19 +27,14 @@ import reactor.core.publisher.Mono
  * [AsyncTaskRunner] owns the running state.
  *
  * Ownership is `user_id` strict: a caller may only see and act on their own tasks. Every by-id
- * operation loads the row and verifies [UserScope.matchesStrict] before delegating.
- *
- * Control operations add a second, host-level check. The list stays global — a task is visible and
- * inspectable from any application on the database — but retry hands the row back to *this*
- * process's runner and cancel flips a row whose worker may live in the other process, so a task
- * written elsewhere is refused with the name of the application that owns it.
+ * operation loads the row and verifies [UserScope.matchesStrict] before delegating. Accounts are
+ * application-scoped, so this also isolates two applications sharing one database.
  */
 @RestController
 @RequestMapping("/api/tasks")
 class TaskController(
     @param:Autowired(required = false) private val store: AsyncTaskStore? = null,
     @param:Autowired(required = false) private val runner: AsyncTaskRunner? = null,
-    private val host: HostIdentity,
     private val watchService: WatchService? = null
 ) {
 
@@ -70,7 +63,7 @@ class TaskController(
 
     @PostMapping("/{id}/cancel")
     fun cancelTask(@PathVariable id: String): Mono<Map<String, Boolean>> = mono {
-        val task = controllableTask(id)
+        val task = ownedTask(id)
         val taskRunner = runner ?: throw runnerUnavailable()
         if (task.status.isTerminal) {
             mapOf("cancelled" to false)
@@ -85,7 +78,7 @@ class TaskController(
      */
     @PostMapping("/{id}/retry")
     fun retryTask(@PathVariable id: String): Mono<AsyncTaskDto> = mono {
-        val task = controllableTask(id)
+        val task = ownedTask(id)
         val taskStore = store ?: throw storeUnavailable()
         val taskRunner = runner ?: throw runnerUnavailable()
         if (!task.status.isTerminal) {
@@ -106,7 +99,7 @@ class TaskController(
     @DeleteMapping("/{id}")
     fun deleteTask(@PathVariable id: String): Mono<Map<String, Boolean>> = mono {
         val taskStore = store ?: throw storeUnavailable()
-        val task = controllableTask(id)
+        val task = ownedTask(id)
         // Watch workers must finish unwinding before their admission row can disappear.
         if (task.type == AsyncTaskType.WATCH) {
             (runner ?: throw runnerUnavailable()).cancelAndAwait(id)
@@ -116,12 +109,7 @@ class TaskController(
         mapOf("deleted" to taskStore.delete(id))
     }
 
-    /**
-     * Bulk manual cleanup of the caller's tasks, optionally only those in [status].
-     *
-     * Host-scoped like the by-id operations: another application's rows have live workers this
-     * process cannot see, so cancelling or deleting them would strand those workers.
-     */
+    /** Bulk manual cleanup of the caller's tasks, optionally only those in [status]. */
     @DeleteMapping
     fun clearTasks(@RequestParam(required = false) status: String?): Mono<Map<String, Int>> = mono {
         val taskStore = store ?: throw storeUnavailable()
@@ -130,14 +118,12 @@ class TaskController(
         // Cancel any in-flight workers about to be deleted, so they do not outlive their row.
         val taskRunner = runner
         if (taskRunner != null) {
-            taskStore.listByUser(userId = userId, status = parsedStatus, limit = 500)
-                .filter { host.owns(it.ownerApp) }
-                .forEach {
-                    if (it.type == AsyncTaskType.WATCH) taskRunner.cancelAndAwait(it.id)
-                    else if (!it.status.isTerminal) taskRunner.cancel(it.id)
-                }
+            taskStore.listByUser(userId = userId, status = parsedStatus, limit = 500).forEach {
+                if (it.type == AsyncTaskType.WATCH) taskRunner.cancelAndAwait(it.id)
+                else if (!it.status.isTerminal) taskRunner.cancel(it.id)
+            }
         }
-        val deleted = taskStore.deleteByUser(userId, host.appName, parsedStatus)
+        val deleted = taskStore.deleteByUser(userId, parsedStatus)
         mapOf("deleted" to deleted)
     }
 
@@ -147,7 +133,6 @@ class TaskController(
         throw when (e) {
             is WatchNotFoundException -> ResponseStatusException(HttpStatus.NOT_FOUND, e.message)
             is WatchConflictException -> ResponseStatusException(HttpStatus.CONFLICT, e.message)
-            is WatchForeignHostException -> ResponseStatusException(HttpStatus.CONFLICT, e.message)
             is WatchUnavailableException -> ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, e.message)
             else -> ResponseStatusException(HttpStatus.BAD_REQUEST, e.message)
         }
@@ -157,28 +142,6 @@ class TaskController(
         val taskStore = store ?: throw storeUnavailable()
         val task = taskStore.findById(id) ?: throw notFound(id)
         if (!UserScope.matchesStrict(task.userId, getCurrentUserId())) throw notFound(id)
-        return task
-    }
-
-    /**
-     * The caller's task, plus the requirement that this process is the one that wrote it. An
-     * unowned row is refused as well: it predates ownership tracking, and nothing here can tell which
-     * application's runner is behind it.
-     */
-    private suspend fun controllableTask(id: String): AsyncTask {
-        val task = ownedTask(id)
-        if (!host.owns(task.ownerApp)) {
-            val owner = task.ownerApp
-            throw ResponseStatusException(
-                HttpStatus.CONFLICT,
-                if (owner == null) {
-                    "Task $id has no owning application and cannot be retried, cancelled or deleted from " +
-                        "'${host.appName}'"
-                } else {
-                    "Task $id ran in application '$owner'; retry, cancel and delete must be issued from there"
-                }
-            )
-        }
         return task
     }
 
@@ -209,8 +172,6 @@ class TaskController(
         trigger = trigger.name.lowercase(),
         title = title,
         sessionId = sessionId,
-        ownerApp = ownerApp,
-        controllable = host.owns(ownerApp),
         timeoutMs = timeoutMs,
         payload = payload.takeIf { it.isNotEmpty() },
         result = result,

@@ -4,10 +4,15 @@ import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.model.ProjectInfo
 import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.repository.database.DatabaseMigration
+import com.easy.easyai.repository.database.Tables.UserTable
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
+import org.jetbrains.exposed.v1.r2dbc.insert
+import org.jetbrains.exposed.v1.r2dbc.selectAll
 import org.jetbrains.exposed.v1.r2dbc.transactions.TransactionManager
+import org.jetbrains.exposed.v1.r2dbc.transactions.suspendTransaction
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -15,6 +20,7 @@ import org.junit.jupiter.api.TestInstance
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Integration tests for the project `kind` column (V14).
@@ -41,6 +47,23 @@ class R2dbcAsyncProjectStoreKindTest {
     }
 
     private fun createStore() = R2dbcAsyncProjectStore(db, HostIdentity(SELF))
+
+    /** The sweep enumerates accounts of this application only. */
+    private suspend fun ensureUser(userId: String, ownerApp: String = SELF) = suspendTransaction(db) {
+        val existing = UserTable.selectAll().where { UserTable.id eq userId }.count()
+        if (existing == 0L) {
+            val now = System.currentTimeMillis()
+            UserTable.insert {
+                it[id] = userId
+                it[UserTable.ownerApp] = ownerApp
+                it[username] = userId
+                it[displayName] = userId
+                it[passwordHash] = "hash"
+                it[createdAt] = now
+                it[updatedAt] = now
+            }
+        }
+    }
 
     private fun project(
         path: String,
@@ -145,6 +168,8 @@ class R2dbcAsyncProjectStoreKindTest {
             val store = createStore()
             val owner = "sweep-owner-${UUID.randomUUID()}"
             val other = "sweep-other-${UUID.randomUUID()}"
+            ensureUser(owner)
+            ensureUser(other)
             store.save(project("/tmp/${UUID.randomUUID()}", ProjectKind.TEMP), owner)
             store.save(project("/tmp/${UUID.randomUUID()}", ProjectKind.TEMP), owner)
             store.save(project("/tmp/${UUID.randomUUID()}", ProjectKind.USER), other)
@@ -153,6 +178,22 @@ class R2dbcAsyncProjectStoreKindTest {
 
             assertEquals(1, owners.count { it == owner })
             assertEquals(1, owners.count { it == other })
+        }
+
+        @Test
+        fun `listDistinctUserIds excludes another application's accounts`() = runTest {
+            val mine = "sweep-mine-${UUID.randomUUID()}"
+            val theirs = "sweep-theirs-${UUID.randomUUID()}"
+            ensureUser(mine, SELF)
+            ensureUser(theirs, "trading-api")
+            val store = createStore()
+            store.save(project("/tmp/${UUID.randomUUID()}", ProjectKind.TEMP), mine)
+            store.save(project("/tmp/${UUID.randomUUID()}", ProjectKind.TEMP), theirs)
+
+            val owners = store.listDistinctUserIds()
+
+            assertTrue(mine in owners)
+            assertTrue(theirs !in owners)
         }
 
         @Test

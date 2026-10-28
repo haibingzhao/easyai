@@ -16,7 +16,11 @@ import kotlin.test.assertTrue
 class JwtTokenProviderGroupClaimsTest {
 
     private val keyPair = JwtTokenProvider.generateDevKeyPair()
-    private val provider = JwtTokenProvider(privateKey = keyPair.private, publicKey = keyPair.public)
+    private val provider = JwtTokenProvider(
+        privateKey = keyPair.private,
+        publicKey = keyPair.public,
+        appName = APP
+    )
 
     @Test
     fun `access token round-trips the full group claim set`() {
@@ -78,5 +82,9 @@ class JwtTokenProviderGroupClaimsTest {
 
         assertNotNull(claims)
         assertNull(claims.groupId)
+    }
+
+    private companion object {
+        const val APP = "test-app"
     }
 }

@@ -34,7 +34,13 @@ import tools.jackson.core.type.TypeReference
 import tools.jackson.databind.ObjectMapper
 import java.util.UUID
 
-/** Shared per-user preferences and schedule state; only accepted task batches belong to a host. */
+/**
+ * Shared per-user preferences and schedule state.
+ *
+ * Every scan that runs on behalf of other users (`listEnabled`, `listForScheduling`) is limited to
+ * accounts of this application, so two applications sharing the database never execute each
+ * other's schedules.
+ */
 class R2dbcScheduledTaskSettingStore(
     private val db: R2dbcDatabase,
     private val host: HostIdentity,
@@ -96,7 +102,8 @@ class R2dbcScheduledTaskSettingStore(
     override suspend fun listEnabled(taskType: AsyncTaskType?): List<ScheduledTaskSetting> =
         suspendTransaction(db) {
             val table = ScheduledTaskSettingTable
-            var condition: Op<Boolean> = table.enabled eq true
+            var condition: Op<Boolean> = (table.enabled eq true) and
+                UserScope.ownedByApp(table.userId, host.appName)
             taskType?.let { condition = condition and (table.taskType eq it.key) }
             table.selectAll()
                 .where { condition }
@@ -114,6 +121,7 @@ class R2dbcScheduledTaskSettingStore(
         return suspendTransaction(db) {
             val table = ScheduledTaskSettingTable
             var condition = (table.enabled eq true) and (table.taskType eq taskType.key) and
+                UserScope.ownedByApp(table.userId, host.appName) and
                 ((table.nextFireAt lessEq horizon) or table.scheduleZone.isNull())
             afterUserId?.let { condition = condition and (table.userId greater it) }
             table.selectAll().where { condition }
@@ -168,7 +176,7 @@ class R2dbcScheduledTaskSettingStore(
             } > 0
             if (!advanced) return@suspendTransaction null
             // No nested create(): advancing and every insert must share this transaction.
-            tasks.map { R2dbcAsyncTaskStore.insertRow(it, host.appName, objectMapper) }
+            tasks.map { R2dbcAsyncTaskStore.insertRow(it, objectMapper) }
         }
     }
 

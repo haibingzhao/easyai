@@ -1,5 +1,6 @@
 package com.easy.easyai.core.task
 
+import com.easy.easyai.core.domain.CodingDomainCatalog
 import com.easy.easyai.core.memory.ConsolidationReport
 import com.easy.easyai.core.memory.MemoryConsolidationAgent
 import com.easy.easyai.core.memory.MemoryIndexEntry
@@ -41,6 +42,9 @@ class MemoryConsolidationTaskHandlerTest {
 
     private companion object {
         const val MILLIS_PER_DAY = 24L * 60 * 60 * 1000
+
+        /** The memory types a task is allowed to name: the framework's own coding domain. */
+        val CODING_CODES: Set<String> = CodingDomainCatalog.memoryCategories.map { it.code }.toSet()
     }
 
     private val agent = mockk<MemoryConsolidationAgent>(relaxed = true)
@@ -53,7 +57,8 @@ class MemoryConsolidationTaskHandlerTest {
     /** The handler wired for the bookkeeping path, with backoff days as small numbers a test can assert. */
     private fun recordingHandler(failedRunBackoffBaseDays: Int = 1) = MemoryConsolidationTaskHandler(
         agent, taskStore, titlePort, memoryStore, settingsStore,
-        backoffBaseDays = 7, backoffMaxDays = 30, failedRunBackoffBaseDays = failedRunBackoffBaseDays
+        backoffBaseDays = 7, backoffMaxDays = 30, failedRunBackoffBaseDays = failedRunBackoffBaseDays,
+        memoryCodes = CODING_CODES
     )
 
     /**
@@ -159,7 +164,7 @@ class MemoryConsolidationTaskHandlerTest {
             )
         } returns report
 
-        val handler = MemoryConsolidationTaskHandler(agent, taskStore, titlePort)
+        val handler = MemoryConsolidationTaskHandler(agent, taskStore, titlePort, memoryCodes = CODING_CODES)
         val outcome = handler.execute(
             task(
                 mapOf(
@@ -199,7 +204,7 @@ class MemoryConsolidationTaskHandlerTest {
         coEvery { agent.consolidate(any(), any(), any(), any(), any(), any()) } returns
             ConsolidationReport(type = MemoryType.USER_PREFERENCES, scope = MemoryScope.GLOBAL, activeBefore = 0)
 
-        val handler = MemoryConsolidationTaskHandler(agent, taskStore, titlePort)
+        val handler = MemoryConsolidationTaskHandler(agent, taskStore, titlePort, memoryCodes = CODING_CODES)
         handler.execute(
             task(
                 mapOf(
@@ -219,7 +224,7 @@ class MemoryConsolidationTaskHandlerTest {
         coEvery { agent.consolidate(any(), any(), any(), any(), any(), any()) } returns
             ConsolidationReport(type = MemoryType.USER_PREFERENCES, scope = MemoryScope.GLOBAL, activeBefore = 0)
 
-        val handler = MemoryConsolidationTaskHandler(agent, taskStore, titlePort)
+        val handler = MemoryConsolidationTaskHandler(agent, taskStore, titlePort, memoryCodes = CODING_CODES)
         val outcome = handler.execute(
             task(
                 mapOf(
@@ -236,14 +241,14 @@ class MemoryConsolidationTaskHandlerTest {
 
     @Test
     fun `an invalid scope in the payload fails the task`() = runTest {
-        val handler = MemoryConsolidationTaskHandler(agent, taskStore, titlePort)
+        val handler = MemoryConsolidationTaskHandler(agent, taskStore, titlePort, memoryCodes = CODING_CODES)
         val outcome = handler.execute(task(mapOf(MemoryConsolidationTaskHandler.KEY_SCOPE to "nonsense")))
         assertTrue(outcome is TaskOutcome.Failure)
     }
 
     @Test
     fun `an unknown memory type fails the task`() = runTest {
-        val handler = MemoryConsolidationTaskHandler(agent, taskStore, titlePort)
+        val handler = MemoryConsolidationTaskHandler(agent, taskStore, titlePort, memoryCodes = CODING_CODES)
         val outcome = handler.execute(
             task(
                 mapOf(
@@ -253,6 +258,25 @@ class MemoryConsolidationTaskHandlerTest {
             )
         )
         assertTrue(outcome is TaskOutcome.Failure)
+    }
+
+    @Test
+    fun `a memory type belonging to another domain fails the task`() = runTest {
+        // Host taxonomies (trading's market_insights, ...) live in the host repository, so a task
+        // queued under them must not run in a coding deployment: the agent would be asked to
+        // consolidate a slice whose category the UI, the thresholds and the prompts do not know.
+        val handler = MemoryConsolidationTaskHandler(agent, taskStore, titlePort, memoryCodes = CODING_CODES)
+        val outcome = handler.execute(
+            task(
+                mapOf(
+                    MemoryConsolidationTaskHandler.KEY_SCOPE to "global",
+                    MemoryConsolidationTaskHandler.KEY_USER_ID to "alice",
+                    MemoryConsolidationTaskHandler.KEY_TYPE to "market_insights"
+                )
+            )
+        )
+        assertTrue(outcome is TaskOutcome.Failure)
+        coVerify(exactly = 0) { agent.consolidate(any(), any(), any(), any(), any(), any()) }
     }
 
     /**
@@ -549,7 +573,7 @@ class MemoryConsolidationTaskHandlerTest {
                     overTarget = 2
                 )
 
-            val outcome = MemoryConsolidationTaskHandler(agent, taskStore, titlePort).execute(
+            val outcome = MemoryConsolidationTaskHandler(agent, taskStore, titlePort, memoryCodes = CODING_CODES).execute(
                 task(
                     mapOf(
                         MemoryConsolidationTaskHandler.KEY_SCOPE to "global",

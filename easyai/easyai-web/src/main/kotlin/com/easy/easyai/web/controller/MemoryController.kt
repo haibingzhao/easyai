@@ -64,7 +64,8 @@ class MemoryController(
     @param:Autowired(required = false) private val auxModelResolver: AuxModelResolver? = null,
     @param:Autowired(required = false) private val asyncTaskRunner: AsyncTaskRunner? = null,
     @param:Autowired(required = false) private val asyncTaskStore: AsyncTaskStore? = null,
-    @param:Autowired(required = false) private val sessionService: SessionService? = null
+    @param:Autowired(required = false) private val sessionService: SessionService? = null,
+    private val domainCatalog: DomainCatalog
 ) {
 
     private val logger = LoggerFactory.getLogger(MemoryController::class.java)
@@ -473,7 +474,7 @@ class MemoryController(
 
     private fun validateThresholds(thresholds: Map<String, Int>) {
         if (thresholds.isEmpty()) return
-        val valid = MemoryType.entriesFor(DomainCatalog.activeDomain).map { it.dirName }.toSet()
+        val valid = domainCatalog.memoryCodes().toSet()
         thresholds.forEach { (type, threshold) ->
             if (type !in valid) {
                 throw ResponseStatusException(
@@ -565,15 +566,11 @@ class MemoryController(
         else -> throw IllegalArgumentException("Invalid scope: $scope (expected 'global' or 'project')")
     }
 
-    private fun parseType(type: String): MemoryType {
-        val memoryType = MemoryType.fromDirName(type)
-            ?: throw IllegalArgumentException("Invalid memory type: $type (expected one of: ${MemoryType.entriesFor(DomainCatalog.activeDomain).joinToString { it.dirName }})")
-        val validTypes = MemoryType.entriesFor(DomainCatalog.activeDomain)
-        if (memoryType !in validTypes) {
-            throw IllegalArgumentException("Memory type '$type' is not available in the current domain (expected one of: ${validTypes.joinToString { it.dirName }})")
-        }
-        return memoryType
-    }
+    private fun parseType(type: String): MemoryType =
+        domainCatalog.memoryType(type)
+            ?: throw IllegalArgumentException(
+                "Invalid memory type: $type (expected one of: ${domainCatalog.memoryCodes().joinToString()})"
+            )
 
     private fun MemoryEntry.toDto(scope: MemoryScope): MemoryEntryDto = MemoryEntryDto(
         name = name,

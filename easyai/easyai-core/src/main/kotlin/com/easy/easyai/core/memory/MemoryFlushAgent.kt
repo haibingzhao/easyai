@@ -8,7 +8,7 @@ import com.easy.easyai.api.model.SamplingIntent
 import com.easy.easyai.api.model.SamplingPolicy
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.core.agent.AgentContext
-import com.easy.easyai.core.domain.DomainCatalog
+import com.easy.easyai.core.domain.MemoryCategorySpec
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.validation.JsonExtractor
 import kotlinx.coroutines.Dispatchers
@@ -32,15 +32,19 @@ import java.util.*
  * documents behind. Removals stay behind [allowRemovals] because they are irreversible.
  *
  * @param store The memory store to write extracted facts to.
+ * @param memoryCategories The active domain's memory taxonomy: the prompt offers exactly these
+ *   codes, and a category outside them falls back to [MemoryType.OTHER].
  * @param threshold Context window usage ratio that triggers flush (default: 0.75 = 75%).
  * @param allowRemovals Whether a flush may delete existing entries (default: false). Removal is
  *   physical, so a blocked removal is still reported as a review candidate instead.
  */
 class MemoryFlushAgent(
     private val store: MemoryStore,
+    private val memoryCategories: List<MemoryCategorySpec>,
     private val threshold: Float = 0.75f,
     private val allowRemovals: Boolean = false
 ) {
+    private val categoryCodes: Set<String> = memoryCategories.map { it.code }.toSet()
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper = SharedObjectMapper.instance
 
@@ -256,10 +260,8 @@ class MemoryFlushAgent(
     }
 
     private fun buildFlushPrompt(messages: List<EasyAiMessage>, existing: Collection<MemoryEntry>): String = buildString {
-        // Read the active domain at call time: bean construction order relative to
-        // domain configuration is not guaranteed, so capturing it in the constructor races.
-        val categoryList = MemoryType.entriesFor(DomainCatalog.activeDomain).joinToString("|") { it.dirName }
-        val categoryCount = MemoryType.entriesFor(DomainCatalog.activeDomain).size
+        val categoryList = memoryCategories.joinToString("|") { it.code }
+        val categoryCount = memoryCategories.size
         appendLine("Extract the most important durable facts, decisions, and context from the following conversation.")
         appendLine("Focus on information that should persist across sessions:")
         appendLine("- User preferences and working style")
@@ -394,7 +396,10 @@ class MemoryFlushAgent(
 
     /** Build a [MemoryEntry] from a parsed flush item, applying safe defaults. */
     private fun buildEntry(item: FlushEntry): MemoryEntry {
-        val type = item.category?.let { MemoryType.fromDirName(it) } ?: MemoryType.OTHER
+        val type = item.category
+            ?.let { MemoryType.of(it) }
+            ?.takeIf { it.dirName in categoryCodes }
+            ?: MemoryType.OTHER
         val name = slugify(item.title.orEmpty())
         val today = LocalDate.now()
         return MemoryEntry(

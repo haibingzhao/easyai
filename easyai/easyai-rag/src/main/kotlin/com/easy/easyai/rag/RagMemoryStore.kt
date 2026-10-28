@@ -1,6 +1,5 @@
 package com.easy.easyai.rag
 
-import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.memory.*
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
@@ -38,7 +37,8 @@ import java.time.format.DateTimeFormatter
  * surface the outage instead of silently losing memories.
  */
 internal class RagMemoryStore(
-    private val client: RagClient
+    private val client: RagClient,
+    private val memoryCodes: List<String>
 ) : MemoryStore {
 
     private val logger = LoggerFactory.getLogger(RagMemoryStore::class.java)
@@ -345,7 +345,7 @@ internal class RagMemoryStore(
 
     /** The type directory of a listed document's `{type}/{name}.md` path; null for a foreign path. */
     private fun typeOfListedPath(filePath: String): MemoryType? =
-        relativePathOf(filePath)?.substringBefore('/')?.let { MemoryType.fromDirName(it) }
+        relativePathOf(filePath)?.substringBefore('/')?.let { MemoryType.of(it) }
 
     /**
      * The document listing alone: `id`, path, `level` and stored length are all fields the list endpoint
@@ -411,10 +411,10 @@ internal class RagMemoryStore(
         readEntryByExternalId(externalId, bizId, includeArchived)
     }
 
-    /** Possible externalIds for [name] across the types of the active domain. */
+    /** Possible externalIds for [name] across the active domain's memory categories. */
     private fun candidateExternalIds(name: String): Set<String> =
-        MemoryType.entriesFor(DomainCatalog.activeDomain)
-            .map { RagConstants.externalIdOf("${it.dirName}/$name.md") }
+        memoryCodes
+            .map { RagConstants.externalIdOf("$it/$name.md") }
             .toSet()
 
     override suspend fun touch(path: String, scope: MemoryScope, owner: MemoryOwnerContext): MemoryEntry? {
@@ -487,9 +487,9 @@ internal class RagMemoryStore(
             return null
         }
 
-        val fallbackType = relativePath?.substringBefore('/')?.let { MemoryType.fromDirName(it) }
+        val fallbackType = relativePath?.substringBefore('/')?.let { MemoryType.of(it) }
         val fallbackName = relativePath?.substringAfterLast('/')?.removeSuffix(".md")
-        val type = meta["type"]?.let { MemoryType.fromDirName(it) } ?: fallbackType ?: MemoryType.OTHER
+        val type = meta["type"]?.let { MemoryType.of(it) } ?: fallbackType ?: MemoryType.OTHER
         val name = unquoteYamlScalar(meta["name"]) ?: fallbackName ?: return null
         val keywords = parseYamlList(meta["keywords"])
         val scenarios = parseYamlList(meta["scenarios"])
@@ -670,5 +670,6 @@ internal class RagMemoryStore(
 object RagMemoryStores {
 
     @JvmStatic
-    fun create(client: RagClient): MemoryStore = RagMemoryStore(client)
+    fun create(client: RagClient, memoryCodes: List<String>): MemoryStore =
+        RagMemoryStore(client, memoryCodes)
 }

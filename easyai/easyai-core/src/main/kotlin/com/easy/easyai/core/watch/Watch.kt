@@ -115,12 +115,6 @@ data class Watch(
     val consecutiveFailures: Int = 0,
     val lastError: String? = null,
     val statusReason: String? = null,
-    /**
-     * The application that fires this watch, stamped by the store on insert. A watch runs with the
-     * creating agent's tools resolved on that host, so another host sharing the database must not
-     * claim it: it would run with a degraded toolset and only log about it.
-     */
-    val ownerApp: String? = null,
     val createdAt: Long,
     val updatedAt: Long
 )
@@ -228,7 +222,6 @@ data class WatchNotice(
 data class WatchScheduleEntry(
     val watchId: String,
     val userId: String,
-    val ownerApp: String,
     val version: Int,
     val nextDueAt: Instant,
     val pendingAction: WatchPendingAction
@@ -236,7 +229,7 @@ data class WatchScheduleEntry(
 
 data class WatchScheduleCursor(val nextDueAt: Instant, val watchId: String)
 
-data class WatchScheduleChanged(val ownerApp: String, val watchId: String, val userId: String)
+data class WatchScheduleChanged(val watchId: String, val userId: String)
 
 sealed interface WatchEnqueueResult {
     data class Enqueued(val task: AsyncTask) : WatchEnqueueResult
@@ -421,7 +414,7 @@ data class WatchProperties(
     /** Deployment-wide kill switch; false stops planning and fails no existing row. */
     val enabled: Boolean = true,
 
-    /** Hard cap on ACTIVE definitions per user **in this application**; hosts on one database count separately. */
+    /** Hard cap on ACTIVE definitions per user; an account belongs to exactly one application. */
     val maxActivePerUser: Int = 50,
     val runTimeoutMs: Long = 180_000,
     val maxIterations: Int = 12,

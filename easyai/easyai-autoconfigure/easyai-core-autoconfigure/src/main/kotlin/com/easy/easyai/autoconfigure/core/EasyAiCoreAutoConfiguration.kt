@@ -7,8 +7,8 @@ import com.easy.easyai.common.textio.template.TemplateRenderer
 import com.easy.easyai.core.agent.*
 import com.easy.easyai.core.command.AsyncUserCommandStore
 import com.easy.easyai.core.domain.DomainCatalog
+import com.easy.easyai.core.domain.DomainCatalogContributor
 import com.easy.easyai.core.host.HostIdentity
-import com.easy.easyai.core.host.HostStartupGate
 import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.memory.MemoryStore
 import com.easy.easyai.core.model.aux.AuxModelResolver
@@ -44,7 +44,6 @@ import com.easy.easyai.storage.local.LocalDirObjectStorage
 import com.easy.easyai.tools.SpringToolFactory
 import com.easy.easyai.tools.web.IntegrationConfig
 import io.micrometer.observation.ObservationRegistry
-import jakarta.annotation.PostConstruct
 import java.nio.file.Path
 import com.easy.easyai.api.llm.ChatModel
 import org.springframework.beans.factory.InitializingBean
@@ -72,14 +71,14 @@ open class EasyAiCoreAutoConfiguration(
     private val logger = LoggerFactory.getLogger(javaClass)
 
     /**
-     * Propagate the configured domain to [DomainCatalog] so all components
-     * (memory, knowledge, controllers) see a consistent category set.
-     * Uses @PostConstruct for reliable initialization order in Spring Boot 4.x.
+     * Resolves the active domain's memory taxonomy. The framework ships the `coding` default;
+     * every other deployment must contribute its own [DomainCatalogContributor] bean, and an
+     * unresolvable `easyai.domain` fails here at startup with the registered domains listed.
      */
-    @PostConstruct
-    open fun configureDomain() {
-        DomainCatalog.activeDomain = properties.domain
-    }
+    @Bean
+    @ConditionalOnMissingBean
+    open fun domainCatalog(contributors: ObjectProvider<DomainCatalogContributor>): DomainCatalog =
+        DomainCatalog(contributors.orderedStream().toList(), properties.domain)
 
     /**
      * Installs the deployment-wide STATIC integration config from `easyai.integrations.*` before any
@@ -99,8 +98,8 @@ open class EasyAiCoreAutoConfiguration(
     open fun hostIdentity(environment: Environment): HostIdentity {
         val name = environment.getProperty("spring.application.name")?.trim().orEmpty()
         check(name.isNotEmpty() && name != DEFAULT_APP_NAME) {
-            "spring.application.name must be a host-specific value (got '$name'): watches, async tasks and " +
-                "temporary workspaces are isolated per application sharing this database"
+            "spring.application.name must be a host-specific value (got '$name'): accounts, JWTs and " +
+                "scheduled work are isolated per application sharing this database"
         }
         return HostIdentity(name)
     }
@@ -175,10 +174,8 @@ open class EasyAiCoreAutoConfiguration(
 
     @Bean
     @ConditionalOnMissingBean
-    open fun asyncTaskLifecycle(
-        runner: AsyncTaskRunner,
-        startupGate: ObjectProvider<HostStartupGate>
-    ): AsyncTaskLifecycle = AsyncTaskLifecycle(runner, startupGate.ifAvailable)
+    open fun asyncTaskLifecycle(runner: AsyncTaskRunner): AsyncTaskLifecycle =
+        AsyncTaskLifecycle(runner)
 
     // ========== Agent System Prompt Beans ==========
     @Bean

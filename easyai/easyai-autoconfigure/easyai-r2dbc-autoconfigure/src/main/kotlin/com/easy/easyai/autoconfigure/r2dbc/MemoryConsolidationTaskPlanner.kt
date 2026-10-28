@@ -49,7 +49,8 @@ import java.util.UUID
 class MemoryConsolidationTaskPlanner(
     private val settings: MemoryConsolidationSettings,
     private val memoryStore: MemoryStore?,
-    private val projectStore: AsyncProjectStore?
+    private val projectStore: AsyncProjectStore?,
+    private val domainCatalog: DomainCatalog
 ) : ScheduledTaskPlanner {
 
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -65,7 +66,7 @@ class MemoryConsolidationTaskPlanner(
         val store = checkNotNull(memoryStore) { "Memory store is unavailable for scheduled consolidation" }
         val user = MemoryConsolidationUserSettings.fromScheduled(context.setting)
         val pending = pendingKeys(context.pendingTasks)
-        val memoryTypes = MemoryType.entriesFor(DomainCatalog.activeDomain)
+        val memoryTypes = domainCatalog.active().map { MemoryType(it.code) }
         val nowEpochMs = context.now.toEpochMilli()
         val drafts = mutableListOf<TaskDraft>()
         for (slice in slicesOf(context.userId)) {

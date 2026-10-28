@@ -26,13 +26,6 @@ export interface AsyncTask {
   trigger: TaskTrigger;
   title: string;
   sessionId?: string | null;
-  /** Application that ran the task; absent on rows written before ownership was recorded. */
-  ownerApp?: string | null;
-  /**
-   * False when another application wrote the row: it lists here (the queue is shared) but the
-   * control actions belong to that application, which is the only one holding the worker.
-   */
-  controllable?: boolean;
   timeoutMs?: number | null;
   payload?: Record<string, unknown> | null;
   result?: Record<string, unknown> | null;

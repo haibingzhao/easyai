@@ -73,10 +73,9 @@ import java.util.UUID
  * Ownership is strict per user ([UserScope.filterStrict]); the unscoped mutators are only reachable
  * after the service or handler checked the owner.
  *
- * A second axis is the host: [host] stamps every inserted row, and the listing paths a page or the
- * scheduler read are filtered on it, so a second application on the same database neither fires nor
- * administers watches it could not resolve the tools for. [findById] stays unfiltered on purpose —
- * the handler needs the row to say *why* it refuses to run it.
+ * Application isolation is a property of the account: the due scan ([schedulable]) only loads
+ * watches whose user belongs to [host]'s application. Request-scoped listing and mutation are
+ * already user-strict, and an account cannot belong to two applications.
  */
 class R2dbcWatchStore(
     private val db: R2dbcDatabase,
@@ -128,14 +127,11 @@ class R2dbcWatchStore(
             it[consecutiveFailures] = watch.consecutiveFailures
             it[lastError] = watch.lastError
             it[statusReason] = watch.statusReason
-            // Stamped, not copied: the host that persists a watch is the one that can resolve its
-            // agent's tools, so ownership is a fact about this process, not a caller's claim.
-            it[ownerApp] = host.appName
             it[createdAt] = watch.createdAt
             it[updatedAt] = watch.updatedAt
         }
         publishChanged(this, watch.id, watch.userId)
-        watch.copy(ownerApp = host.appName)
+        watch
     }
 
     override suspend fun findById(id: String): Watch? = suspendTransaction(db) { readRow(id) }
@@ -145,7 +141,7 @@ class R2dbcWatchStore(
         statuses: Set<WatchStatus>?,
         limit: Int
     ): List<Watch> = suspendTransaction(db) {
-        var condition: Op<Boolean> = UserScope.filterStrict(WatchTable.userId, userId) and ownedByThisHost()
+        var condition: Op<Boolean> = UserScope.filterStrict(WatchTable.userId, userId)
         statuses?.takeIf { it.isNotEmpty() }?.let { wanted ->
             condition = condition and (WatchTable.status inList wanted.map { it.name })
         }
@@ -161,8 +157,7 @@ class R2dbcWatchStore(
         WatchTable.selectAll()
             .where {
                 UserScope.filterStrict(WatchTable.userId, userId) and
-                    (WatchTable.status eq WatchStatus.ACTIVE.name) and
-                    ownedByThisHost()
+                    (WatchTable.status eq WatchStatus.ACTIVE.name)
             }
             .count()
             .toInt()
@@ -196,11 +191,11 @@ class R2dbcWatchStore(
     }
 
     private fun scheduleQuery() = WatchTable.select(
-        WatchTable.id, WatchTable.userId, WatchTable.ownerApp, WatchTable.version,
+        WatchTable.id, WatchTable.userId, WatchTable.version,
         WatchTable.nextDueAt, WatchTable.pendingAction
     )
 
-    private fun schedulable(): Op<Boolean> = ownedByThisHost() and
+    private fun schedulable(): Op<Boolean> = UserScope.ownedByApp(WatchTable.userId, host.appName) and
         (WatchTable.status eq WatchStatus.ACTIVE.name) and exists(
             ScheduledTaskSettingTable.select(ScheduledTaskSettingTable.userId).where {
                 (ScheduledTaskSettingTable.userId eq WatchTable.userId) and
@@ -215,22 +210,17 @@ class R2dbcWatchStore(
         return WatchScheduleEntry(
             watchId = row[WatchTable.id],
             userId = row[WatchTable.userId],
-            ownerApp = row[WatchTable.ownerApp] ?: return null,
             version = row[WatchTable.version],
             nextDueAt = Instant.ofEpochMilli(row[WatchTable.nextDueAt]),
             pendingAction = pending
         )
     }
 
-    /** Null owners are deliberately not adopted by a scheduling or admission query. */
-    private fun ownedByThisHost(): Op<Boolean> = WatchTable.ownerApp eq host.appName
-
     override suspend fun enqueueScheduled(
         expected: WatchScheduleEntry,
         now: Instant,
         properties: WatchProperties
     ): WatchEnqueueResult = suspendTransaction(db) {
-        if (expected.ownerApp != host.appName) return@suspendTransaction WatchEnqueueResult.Stale
         // Preference writes and automatic admission share this lock; never acquire it after a watch.
         val setting = ScheduledTaskSettingTable.selectAll().where {
             UserScope.filterStrict(ScheduledTaskSettingTable.userId, expected.userId) and
@@ -249,7 +239,7 @@ class R2dbcWatchStore(
             watch, decision.kind, watch.nextDueAt, now, TaskTrigger.SCHEDULE,
             setting[ScheduledTaskSettingTable.timeoutMs] ?: properties.runTimeoutMs
         )
-        val updated = WatchTable.update({ (WatchTable.id eq watch.id) and ownedByThisHost() }) {
+        val updated = WatchTable.update({ WatchTable.id eq watch.id }) {
             it[nextDueAt] = decision.newNextDueAt.toEpochMilli()
             it[pendingAction] = decision.pendingAction.name
             if (decision.statusReason != null) it[statusReason] = decision.statusReason
@@ -257,7 +247,7 @@ class R2dbcWatchStore(
             it[updatedAt] = now.toEpochMilli()
         }
         if (updated == 0) return@suspendTransaction WatchEnqueueResult.Stale
-        val persisted = R2dbcAsyncTaskStore.insertRow(task, host.appName, objectMapper)
+        val persisted = R2dbcAsyncTaskStore.insertRow(task, objectMapper)
         publishChanged(this, watch.id, watch.userId)
         WatchEnqueueResult.Enqueued(persisted)
     }
@@ -276,7 +266,7 @@ class R2dbcWatchStore(
         firstInFlightId(watch)?.let { return@suspendTransaction WatchEnqueueResult.Busy(it) }
         val task = newTask(watch, WatchRunKind.CHECK, now, now, trigger, properties.runTimeoutMs)
         if (!reserveSlot(watch.id, task.id, now)) return@suspendTransaction WatchEnqueueResult.Stale
-        val persisted = R2dbcAsyncTaskStore.insertRow(task, host.appName, objectMapper)
+        val persisted = R2dbcAsyncTaskStore.insertRow(task, objectMapper)
         publishChanged(this, watch.id, watch.userId)
         WatchEnqueueResult.Enqueued(persisted)
     }
@@ -296,7 +286,7 @@ class R2dbcWatchStore(
         }
         firstInFlightId(watch)?.let { return@suspendTransaction WatchEnqueueResult.Busy(it) }
         val updated = AsyncTaskTable.update({
-            (AsyncTaskTable.id eq taskId) and (AsyncTaskTable.ownerApp eq host.appName) and
+            (AsyncTaskTable.id eq taskId) and
                 (AsyncTaskTable.status eq task.status.name) and (AsyncTaskTable.retryCount eq expectedRetryCount)
         }) {
             it[status] = AsyncTaskStatus.PENDING.name
@@ -317,7 +307,7 @@ class R2dbcWatchStore(
 
     override suspend fun listInFlight(userId: String, watchId: String): List<AsyncTask> = suspendTransaction(db) {
         val watch = readRow(watchId) ?: return@suspendTransaction emptyList()
-        if (watch.userId != userId || watch.ownerApp != host.appName) return@suspendTransaction emptyList()
+        if (watch.userId != userId) return@suspendTransaction emptyList()
         AsyncTaskTable.selectAll().where { inFlight(watch) }
             .orderBy(AsyncTaskTable.createdAt to SortOrder.ASC, AsyncTaskTable.id to SortOrder.ASC)
             .mapNotNull { taskRows.mapRow(it) }.toList()
@@ -347,21 +337,21 @@ class R2dbcWatchStore(
         }
 
     private suspend fun lockWatch(userId: String, watchId: String): Watch? = WatchTable.selectAll().where {
-        (WatchTable.id eq watchId) and UserScope.filterStrict(WatchTable.userId, userId) and ownedByThisHost()
+        (WatchTable.id eq watchId) and UserScope.filterStrict(WatchTable.userId, userId)
     }.forUpdate().mapNotNull { it.toWatch() }.toList().firstOrNull()
 
     private suspend fun lockTask(taskId: String): AsyncTask? = AsyncTaskTable.selectAll()
         .where { AsyncTaskTable.id eq taskId }.forUpdate().mapNotNull { taskRows.mapRow(it) }.toList().firstOrNull()
 
     private fun belongsToWatch(task: AsyncTask, watch: Watch): Boolean =
-        task.ownerApp == host.appName && task.userId == watch.userId && task.type == AsyncTaskType.WATCH &&
+        task.userId == watch.userId && task.type == AsyncTaskType.WATCH &&
             task.sessionId == watch.runSessionId && WatchTaskPayload.watchIdOf(task) == watch.id
 
     private fun taskNonTerminal(): Op<Boolean> = AsyncTaskTable.status inList
         listOf(AsyncTaskStatus.PENDING.name, AsyncTaskStatus.RUNNING.name)
 
     private fun inFlight(watch: Watch): Op<Boolean> =
-        UserScope.filterStrict(AsyncTaskTable.userId, watch.userId) and (AsyncTaskTable.ownerApp eq host.appName) and
+        UserScope.filterStrict(AsyncTaskTable.userId, watch.userId) and
             (AsyncTaskTable.sessionId eq watch.runSessionId) and (AsyncTaskTable.type eq AsyncTaskType.WATCH.key) and
             taskNonTerminal()
 
@@ -375,7 +365,7 @@ class R2dbcWatchStore(
     }
 
     private suspend fun reserveSlot(watchId: String, taskId: String, now: Instant): Boolean =
-        WatchTable.update({ (WatchTable.id eq watchId) and ownedByThisHost() }) {
+        WatchTable.update({ WatchTable.id eq watchId }) {
             it[lastTaskId] = taskId
             it[updatedAt] = now.toEpochMilli()
         } > 0
@@ -418,7 +408,7 @@ class R2dbcWatchStore(
         at: Long
     ): Watch? = suspendTransaction(db) {
         val updated = WatchTable.update(where = {
-            (WatchTable.id eq id) and ownedByThisHost() and
+            (WatchTable.id eq id) and
                 (WatchTable.version eq expectedVersion) and
                 (WatchTable.status eq expectedStatus.name) and
                 // The task that most recently claimed the run is the only one allowed to settle it.
@@ -455,7 +445,7 @@ class R2dbcWatchStore(
         // a superseded task cannot overwrite the state of a newer one.
         val claimedByCaller = if (taskId == null) Op.TRUE else (WatchTable.lastTaskId eq taskId)
         val updated = WatchTable.update(where = {
-            (WatchTable.id eq id) and ownedByThisHost() and
+            (WatchTable.id eq id) and
                 (WatchTable.version eq expectedVersion) and
                 (WatchTable.status eq expectedStatus.name) and
                 claimedByCaller
@@ -487,7 +477,7 @@ class R2dbcWatchStore(
         at: Long
     ): Watch? = suspendTransaction(db) {
         val updated = WatchTable.update(where = {
-            (WatchTable.id eq id) and ownedByThisHost() and
+            (WatchTable.id eq id) and
                 (WatchTable.version eq expectedVersion) and
                 (WatchTable.pendingAction eq expectedPendingAction.name) and
                 (WatchTable.status eq WatchStatus.ACTIVE.name) and
@@ -516,7 +506,7 @@ class R2dbcWatchStore(
     ): Watch? =
         suspendTransaction(db) {
             val updated = WatchTable.update(where = {
-                (WatchTable.id eq watch.id) and ownedByThisHost() and
+                (WatchTable.id eq watch.id) and
                     UserScope.filterStrict(WatchTable.userId, watch.userId) and
                     (WatchTable.version eq expectedVersion) and
                     (WatchTable.status eq expectedStatus.name)
@@ -565,7 +555,7 @@ class R2dbcWatchStore(
         } else {
             (WatchTable.id eq id) and (WatchTable.status eq expectedStatus.name)
         }
-        val updated = WatchTable.update(where = { condition and ownedByThisHost() }) {
+        val updated = WatchTable.update(where = { condition }) {
             it[WatchTable.status] = status.name
             it[WatchTable.statusReason] = statusReason
             if (pendingAction != null) it[WatchTable.pendingAction] = pendingAction.name
@@ -581,9 +571,9 @@ class R2dbcWatchStore(
 
     override suspend fun delete(id: String): Boolean = suspendTransaction(db) {
         val row = WatchTable.select(WatchTable.userId)
-            .where { (WatchTable.id eq id) and ownedByThisHost() }.forUpdate().toList().firstOrNull()
+            .where { WatchTable.id eq id }.forUpdate().toList().firstOrNull()
             ?: return@suspendTransaction false
-        val deleted = WatchTable.deleteWhere { (WatchTable.id eq id) and ownedByThisHost() } > 0
+        val deleted = WatchTable.deleteWhere { WatchTable.id eq id } > 0
         if (deleted) publishChanged(this, id, row[WatchTable.userId])
         deleted
     }
@@ -596,7 +586,7 @@ class R2dbcWatchStore(
     }
 
     private fun publishChanged(transaction: R2dbcTransaction, watchId: String, userId: String) {
-        val event = WatchScheduleChanged(host.appName, watchId, userId)
+        val event = WatchScheduleChanged(watchId, userId)
         TransactionEvents.afterCommit(transaction) {
             runCatching { onChanged(event) }.onFailure {
                 logger.warn("Failed to publish schedule change for watch {}", watchId, it)
@@ -663,7 +653,6 @@ class R2dbcWatchStore(
                 consecutiveFailures = this[WatchTable.consecutiveFailures],
                 lastError = this[WatchTable.lastError],
                 statusReason = this[WatchTable.statusReason],
-                ownerApp = this[WatchTable.ownerApp],
                 createdAt = this[WatchTable.createdAt],
                 updatedAt = this[WatchTable.updatedAt]
             )

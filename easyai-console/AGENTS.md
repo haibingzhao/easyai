@@ -50,6 +50,7 @@ easyai-console/src/
 - Zustand selective subscriptions: `useChatStore((state) => state.field)`
 - TailwindCSS v4 utility classes, lucide-react icons
 - i18n: manual en/zh selection via `useTranslation()` hook
+- Host-owned vocabulary goes through the registration entry points, never into this package: `registerTranslations(language, entries)` for labels, `registerKnowledgeCategories(specs)` for the knowledge picker. Memory categories come from the backend (`/api/system/categories`, one `DomainCatalogContributor` per host app); article `category` is a free-form tag the backend neither validates nor enumerates, so this console carries only the coding defaults
 - Functional components with hooks
 - ESLint: `typescript-eslint.configs.recommended`
 

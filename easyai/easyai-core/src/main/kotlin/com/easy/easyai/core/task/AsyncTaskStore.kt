@@ -7,8 +7,8 @@ package com.easy.easyai.core.task
  *
  * Ownership is `user_id` strict (no `system` fold-in): a caller sees only its own tasks. Methods
  * that mutate by id are user-unscoped internally — the controller verifies ownership via [findById]
- * before delegating — while list/delete-by-user methods scope in SQL. [markRunning] additionally
- * requires this application's host ownership.
+ * before delegating — while list/delete-by-user methods scope in SQL. Cross-user background passes
+ * ([findOrphans]) are scoped to accounts of this application through `app_user.owner_app`.
  *
  * State transitions are SQL-guarded so a terminal row is never overwritten: [markRunning] only fires
  * from PENDING, and [complete]/[fail]/[markTimedOut]/[cancel]/[markInterrupted]/[updateSessionId]
@@ -21,9 +21,9 @@ interface AsyncTaskStore {
     suspend fun create(task: AsyncTask): AsyncTask
 
     /**
-     * Atomically claim this host's PENDING row as RUNNING, stamping `started_at`.
+     * Atomically claim a PENDING row as RUNNING, stamping `started_at`.
      * Returns the authoritative running task only if the update won; otherwise null, including
-     * when the row is already RUNNING, belongs to another host, has no owner, or does not exist.
+     * when the row is already RUNNING or does not exist.
      */
     suspend fun markRunning(id: String): AsyncTask?
 
@@ -80,23 +80,20 @@ interface AsyncTaskStore {
     suspend fun delete(id: String): Boolean
 
     /**
-     * Bulk manual cleanup of one application's tasks for a user, optionally only those in [status].
-     * Returns rows removed.
-     *
-     * Scoped by [ownerApp] as well as user: rows another application is running have a live worker
-     * that deleting them would strand (its terminal write then matches no row), so a host may only
-     * clear its own.
+     * Bulk manual cleanup of one user's tasks, optionally only those in [status]. Returns rows
+     * removed. The caller is request-scoped, so the user id already identifies one application's
+     * account.
      */
-    suspend fun deleteByUser(userId: String, ownerApp: String, status: AsyncTaskStatus? = null): Int
+    suspend fun deleteByUser(userId: String, status: AsyncTaskStatus? = null): Int
 
     /**
-     * Every task **this application** left non-terminal (PENDING or RUNNING) when its process went
-     * away — called once at startup. SCHEDULE PENDING rows are dispatched after the other orphans
-     * have been parked as INTERRUPTED; RUNNING rows are never automatically replayed.
+     * Every task **belonging to this application's accounts** that was left non-terminal (PENDING
+     * or RUNNING) when a process went away — called once at startup. SCHEDULE PENDING rows are
+     * dispatched after the other orphans have been parked as INTERRUPTED; RUNNING rows are never
+     * automatically replayed.
      *
-     * Rows another application on the same database owns are excluded: their workers may well be
-     * alive. Rows with no owner at all are excluded too — nothing can tell whose they were, so
-     * parking them would guess, and leaving them is reported instead.
+     * Tasks of another application's accounts, of `system`, or of a user that no longer exists are
+     * excluded: no process is responsible for executing them.
      */
     suspend fun findOrphans(): List<AsyncTask>
 }

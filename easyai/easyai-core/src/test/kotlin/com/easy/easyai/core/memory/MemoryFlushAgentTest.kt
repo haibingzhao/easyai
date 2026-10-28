@@ -1,6 +1,8 @@
 package com.easy.easyai.core.memory
 
 import com.easy.easyai.core.agent.AgentContext
+import com.easy.easyai.core.domain.CodingDomainCatalog
+import com.easy.easyai.core.domain.MemoryCategorySpec
 import com.easy.easyai.core.model.ProjectKind
 import com.easy.easyai.core.model.UserMessage
 import io.mockk.coEvery
@@ -31,6 +33,9 @@ import kotlin.test.assertTrue
 class MemoryFlushAgentTest {
 
     private val store = mockk<MemoryStore>(relaxed = true)
+
+    /** The taxonomy a flush is told to use; the framework's own coding domain is the fixture. */
+    private val memoryCategories = CodingDomainCatalog.memoryCategories
 
     private val agentContext = AgentContext(
         agentId = "agent",
@@ -100,7 +105,7 @@ class MemoryFlushAgentTest {
         val scopeSlot = slot<MemoryScope>()
         coEvery { store.write(capture(entries), capture(scopeSlot), any()) } returns Path.of("x")
 
-        val result = MemoryFlushAgent(store).maybeFlush(
+        val result = MemoryFlushAgent(store, memoryCategories).maybeFlush(
             agentContext = agentContext,
             messages = messages,
             modelContextLength = 100_000,
@@ -130,7 +135,7 @@ class MemoryFlushAgentTest {
         val json = """{"memories": [{"title": "big fact", "description": "$longDesc", """ +
             """"category": "experience_lessons", "content": "$longBody"}]}"""
 
-        val result = MemoryFlushAgent(store).maybeFlush(
+        val result = MemoryFlushAgent(store, memoryCategories).maybeFlush(
             agentContext = agentContext,
             messages = messages,
             modelContextLength = 100_000,
@@ -153,7 +158,7 @@ class MemoryFlushAgentTest {
         val scopeSlot = slot<MemoryScope>()
         coEvery { store.write(capture(entries), capture(scopeSlot), any()) } returns Path.of("x")
 
-        val result = MemoryFlushAgent(store).maybeFlush(
+        val result = MemoryFlushAgent(store, memoryCategories).maybeFlush(
             agentContext = agentContext.copy(projectKind = ProjectKind.TEMP),
             messages = messages,
             modelContextLength = 100_000,
@@ -179,7 +184,7 @@ class MemoryFlushAgentTest {
             ]}
         """.trimIndent()
 
-        val result = MemoryFlushAgent(store).maybeFlush(
+        val result = MemoryFlushAgent(store, memoryCategories).maybeFlush(
             agentContext = agentContext,
             messages = messages,
             modelContextLength = 100_000,
@@ -194,7 +199,7 @@ class MemoryFlushAgentTest {
 
     @Test
     fun `flush skips without writing when response is not JSON`() = runTest {
-        val result = MemoryFlushAgent(store).maybeFlush(
+        val result = MemoryFlushAgent(store, memoryCategories).maybeFlush(
             agentContext = agentContext,
             messages = messages,
             modelContextLength = 100_000,
@@ -212,7 +217,7 @@ class MemoryFlushAgentTest {
         val chatModel = mockk<ChatModel>()
         every { chatModel.call(capture(promptSlot)) } returns chatResponse("prose again")
 
-        val result = MemoryFlushAgent(store).maybeFlush(
+        val result = MemoryFlushAgent(store, memoryCategories).maybeFlush(
             agentContext = agentContext,
             messages = messages,
             modelContextLength = 100_000,
@@ -233,7 +238,7 @@ class MemoryFlushAgentTest {
         // path and claim a parse failure that never happened.
         val chatModel = chatModelReturning("""{"memories": []}""")
 
-        val result = MemoryFlushAgent(store).maybeFlush(
+        val result = MemoryFlushAgent(store, memoryCategories).maybeFlush(
             agentContext = agentContext,
             messages = messages,
             modelContextLength = 100_000,
@@ -248,7 +253,7 @@ class MemoryFlushAgentTest {
 
     @Test
     fun `flush returns null below threshold`() = runTest {
-        val result = MemoryFlushAgent(store).maybeFlush(
+        val result = MemoryFlushAgent(store, memoryCategories).maybeFlush(
             agentContext = agentContext,
             messages = messages,
             modelContextLength = 100_000,
@@ -264,7 +269,7 @@ class MemoryFlushAgentTest {
     fun `flush does not deduplicate a second flush of the same context`() = runTest {
         coEvery { store.write(any(), any(), any()) } returns Path.of("x")
 
-        val agent = MemoryFlushAgent(store)
+        val agent = MemoryFlushAgent(store, memoryCategories)
         val chatModel = chatModelReturning(sampleJson())
 
         val first = agent.maybeFlush(agentContext, messages, 100_000, 90_000, chatModel)
@@ -286,7 +291,7 @@ class MemoryFlushAgentTest {
             allowRemovals: Boolean = false
         ): MemoryFlushAgent.FlushResult? {
             coEvery { store.list(any(), any(), any()) } returns existing
-            return MemoryFlushAgent(store, allowRemovals = allowRemovals).maybeFlush(
+            return MemoryFlushAgent(store, memoryCategories, allowRemovals = allowRemovals).maybeFlush(
                 agentContext = agentContext,
                 messages = messages,
                 modelContextLength = 100_000,
@@ -388,7 +393,7 @@ class MemoryFlushAgentTest {
             coEvery { store.list(any(), any(), any()) } throws RuntimeException("rag unavailable")
             coEvery { store.write(any(), any(), any()) } returns Path.of("x")
 
-            val result = MemoryFlushAgent(store, allowRemovals = true).maybeFlush(
+            val result = MemoryFlushAgent(store, memoryCategories, allowRemovals = true).maybeFlush(
                 agentContext = agentContext,
                 messages = messages,
                 modelContextLength = 100_000,
@@ -413,7 +418,7 @@ class MemoryFlushAgentTest {
             val chatModel = mockk<ChatModel>()
             every { chatModel.call(capture(promptSlot)) } returns chatResponse("""{"memories": []}""")
 
-            MemoryFlushAgent(store).maybeFlush(
+            MemoryFlushAgent(store, memoryCategories).maybeFlush(
                 agentContext = agentContext,
                 messages = messages,
                 modelContextLength = 100_000,
@@ -426,6 +431,75 @@ class MemoryFlushAgentTest {
             assertContains(prompt, "experience_lessons/frp-tunnel-setup")
             // Bodies stay out of the prompt: a flush runs when the window is nearly full
             assertFalse(prompt.contains("stored body"), prompt)
+        }
+    }
+
+    /**
+     * Which categories a flush may assign is the deployment's own decision: the prompt offers exactly
+     * the injected taxonomy, and an answer naming a category from another domain must not mint a new
+     * storage directory nobody else can list or curate.
+     */
+    @Nested
+    inner class `domain taxonomy` {
+
+        private val homeCategories = listOf(
+            MemoryCategorySpec("family_preferences", "Family Preferences", "What the household prefers"),
+            MemoryCategorySpec("other", "Other", "Uncategorised memories")
+        )
+
+        private suspend fun flushWritten(json: String, categories: List<MemoryCategorySpec>): MemoryEntry {
+            val entrySlot = slot<MemoryEntry>()
+            coEvery { store.write(capture(entrySlot), any(), any()) } returns Path.of("x")
+            MemoryFlushAgent(store, categories).maybeFlush(
+                agentContext = agentContext,
+                messages = messages,
+                modelContextLength = 100_000,
+                estimatedTokenCount = 90_000,
+                chatModel = chatModelReturning(json)
+            )
+            return entrySlot.captured
+        }
+
+        private fun entryJson(category: String) = """
+            {"memories": [
+              {"title": "Weekly review", "description": "d", "category": "$category",
+               "keywords": [], "scenarios": [], "maturity": "high", "content": "body"}
+            ]}
+        """.trimIndent()
+
+        @Test
+        fun `a category another domain declares falls back to other`() = runTest {
+            val written = flushWritten(entryJson("market_insights"), homeCategories)
+
+            assertEquals(MemoryType.OTHER, written.type)
+            assertEquals("other/weekly-review.md", written.path)
+        }
+
+        @Test
+        fun `a category of the active domain is kept`() = runTest {
+            val written = flushWritten(entryJson("family_preferences"), homeCategories)
+
+            assertEquals(MemoryType("family_preferences"), written.type)
+        }
+
+        @Test
+        fun `the prompt offers the active domain's categories and none other`() = runTest {
+            val promptSlot = slot<Prompt>()
+            val chatModel = mockk<ChatModel>()
+            every { chatModel.call(capture(promptSlot)) } returns chatResponse("""{"memories": []}""")
+
+            MemoryFlushAgent(store, homeCategories).maybeFlush(
+                agentContext = agentContext,
+                messages = messages,
+                modelContextLength = 100_000,
+                estimatedTokenCount = 90_000,
+                chatModel = chatModel
+            )
+
+            val prompt = promptSlot.captured.instructions.joinToString("\n") { it.text.orEmpty() }
+            assertContains(prompt, "\"category\": \"family_preferences|other\"", message = prompt)
+            assertFalse(prompt.contains("development_standards"), prompt)
+            assertFalse(prompt.contains("market_insights"), prompt)
         }
     }
 }

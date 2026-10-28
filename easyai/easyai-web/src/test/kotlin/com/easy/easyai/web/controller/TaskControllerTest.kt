@@ -1,6 +1,5 @@
 package com.easy.easyai.web.controller
 
-import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.task.AsyncTask
 import com.easy.easyai.core.task.AsyncTaskRunner
 import com.easy.easyai.core.task.AsyncTaskStatus
@@ -26,17 +25,14 @@ import kotlin.test.assertTrue
  */
 class TaskControllerTest {
 
-    private val host = HostIdentity("agent-api")
-
-    private fun taskApi(store: AsyncTaskStore?, runner: AsyncTaskRunner?) = TaskController(store, runner, host)
+    private fun taskApi(store: AsyncTaskStore?, runner: AsyncTaskRunner?) = TaskController(store, runner)
 
     private fun task(
         id: String,
         userId: String = "system",
         status: AsyncTaskStatus = AsyncTaskStatus.COMPLETED,
         retryCount: Int = 0,
-        timeoutMs: Long? = null,
-        ownerApp: String? = host.appName
+        timeoutMs: Long? = null
     ) = AsyncTask(
         id = id,
         userId = userId,
@@ -44,7 +40,6 @@ class TaskControllerTest {
         trigger = TaskTrigger.FRONTEND,
         title = "记忆归并",
         status = status,
-        ownerApp = ownerApp,
         timeoutMs = timeoutMs,
         retryCount = retryCount,
         createdAt = 1_000,
@@ -127,31 +122,18 @@ class TaskControllerTest {
     }
 
     @Test
-    fun `a task another application ran is visible but not controllable`() = runTest {
+    fun `control commands refuse another user's task`() = runTest {
         val store = mockk<AsyncTaskStore>()
-        val runner = mockk<AsyncTaskRunner>(relaxed = true)
-        coEvery { store.findById("t1") } returns
-            task("t1", status = AsyncTaskStatus.FAILED, ownerApp = "trading-api")
-        val controller = taskApi(store, runner)
+        coEvery { store.findById("t2") } returns task("t2", userId = "alice", status = AsyncTaskStatus.RUNNING)
+        val controller = taskApi(store, null)
 
-        assertEquals("trading-api", controller.getTask("t1").block()?.ownerApp)
-        listOf(
-            assertFailsWith<ResponseStatusException> { controller.retryTask("t1").block() },
-            assertFailsWith<ResponseStatusException> { controller.cancelTask("t1").block() },
-            assertFailsWith<ResponseStatusException> { controller.deleteTask("t1").block() }
-        ).forEach { assertEquals(HttpStatus.CONFLICT, it.statusCode) }
-    }
+        val cancel = assertFailsWith<ResponseStatusException> { controller.cancelTask("t2").block() }
+        val retry = assertFailsWith<ResponseStatusException> { controller.retryTask("t2").block() }
+        val delete = assertFailsWith<ResponseStatusException> { controller.deleteTask("t2").block() }
 
-    @Test
-    fun `an unowned legacy task is not controllable either`() = runTest {
-        val store = mockk<AsyncTaskStore>()
-        val runner = mockk<AsyncTaskRunner>(relaxed = true)
-        coEvery { store.findById("t1") } returns task("t1", status = AsyncTaskStatus.FAILED, ownerApp = null)
-        val controller = taskApi(store, runner)
-
-        val e = assertFailsWith<ResponseStatusException> { controller.retryTask("t1").block() }
-
-        assertEquals(HttpStatus.CONFLICT, e.statusCode)
+        assertEquals(HttpStatus.NOT_FOUND, cancel.statusCode)
+        assertEquals(HttpStatus.NOT_FOUND, retry.statusCode)
+        assertEquals(HttpStatus.NOT_FOUND, delete.statusCode)
     }
 
     @Test
@@ -220,7 +202,7 @@ class TaskControllerTest {
     @Test
     fun `clear deletes by status for the current user`() = runTest {
         val store = mockk<AsyncTaskStore>()
-        coEvery { store.deleteByUser("system", host.appName, AsyncTaskStatus.COMPLETED) } returns 3
+        coEvery { store.deleteByUser("system", AsyncTaskStatus.COMPLETED) } returns 3
         val controller = taskApi(store, null)
 
         val result = controller.clearTasks("completed").block()
@@ -231,7 +213,7 @@ class TaskControllerTest {
     @Test
     fun `clear accepts the timed-out status`() = runTest {
         val store = mockk<AsyncTaskStore>()
-        coEvery { store.deleteByUser("system", host.appName, AsyncTaskStatus.TIMED_OUT) } returns 1
+        coEvery { store.deleteByUser("system", AsyncTaskStatus.TIMED_OUT) } returns 1
         val controller = taskApi(store, null)
 
         val result = controller.clearTasks("timed_out").block()
@@ -240,20 +222,20 @@ class TaskControllerTest {
     }
 
     @Test
-    fun `clear only cancels rows this application owns`() = runTest {
+    fun `clear cancels every in-flight task it is about to delete`() = runTest {
         val store = mockk<AsyncTaskStore>()
         val runner = mockk<AsyncTaskRunner>(relaxed = true)
         coEvery { store.listByUser("system", null, null, null, 500) } returns listOf(
-            task("mine", status = AsyncTaskStatus.RUNNING),
-            task("theirs", status = AsyncTaskStatus.RUNNING, ownerApp = "trading-api")
+            task("first", status = AsyncTaskStatus.RUNNING),
+            task("second", status = AsyncTaskStatus.RUNNING)
         )
-        coEvery { store.deleteByUser("system", host.appName, null) } returns 1
+        coEvery { store.deleteByUser("system", null) } returns 2
         val controller = taskApi(store, runner)
 
         val result = controller.clearTasks(null).block()
 
-        assertEquals(1, result?.get("deleted"))
-        coVerify(exactly = 1) { runner.cancel("mine") }
-        coVerify(exactly = 0) { runner.cancel("theirs") }
+        assertEquals(2, result?.get("deleted"))
+        coVerify(exactly = 1) { runner.cancel("first") }
+        coVerify(exactly = 1) { runner.cancel("second") }
     }
 }

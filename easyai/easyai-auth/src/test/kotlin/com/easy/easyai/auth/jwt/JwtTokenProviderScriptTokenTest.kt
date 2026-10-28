@@ -10,7 +10,8 @@ class JwtTokenProviderScriptTokenTest {
     private val keyPair = JwtTokenProvider.generateDevKeyPair()
     private val provider = JwtTokenProvider(
         privateKey = keyPair.private,
-        publicKey = keyPair.public
+        publicKey = keyPair.public,
+        appName = APP
     )
 
     @Test
@@ -73,11 +74,16 @@ class JwtTokenProviderScriptTokenTest {
         val otherKeyPair = JwtTokenProvider.generateDevKeyPair()
         val otherProvider = JwtTokenProvider(
             privateKey = otherKeyPair.private,
-            publicKey = otherKeyPair.public
+            publicKey = otherKeyPair.public,
+            appName = APP
         )
 
         val token = otherProvider.generateScriptToken("user-1", "sess-1", "cfg-1")
         val claims = provider.validateScriptToken(token)
         assertNull(claims, "Token signed with different key should be rejected")
+    }
+
+    private companion object {
+        const val APP = "test-app"
     }
 }

@@ -1,6 +1,6 @@
 package com.easy.easyai.web.controller
 
-import com.easy.easyai.core.host.HostIdentity
+import com.easy.easyai.core.domain.DomainCatalog
 import com.easy.easyai.core.memory.MemoryEntry
 import com.easy.easyai.core.memory.MemoryMaturity
 import com.easy.easyai.core.memory.MemoryOwnerContext
@@ -36,7 +36,9 @@ import kotlin.test.assertTrue
  */
 class MemoryControllerTest {
 
-    private val controller = MemoryController(null)
+    private val domainCatalog = DomainCatalog(emptyList(), DomainCatalog.CODING_DOMAIN)
+
+    private val controller = MemoryController(null, domainCatalog = domainCatalog)
 
     @Test
     fun `list returns empty when memory not enabled`() {
@@ -115,7 +117,7 @@ class MemoryControllerTest {
     @Test
     fun `create parses maturity and scenarios into the entry`() = runTest {
         val store = mockk<MemoryStore>()
-        val controller = MemoryController(store)
+        val controller = MemoryController(store, domainCatalog = domainCatalog)
         coEvery { store.findByName(any(), any(), any(), any(), any()) } returns null
         coEvery { store.write(any(), any(), any()) } returns Path.of("experience_lessons/frp.md")
 
@@ -137,9 +139,31 @@ class MemoryControllerTest {
     }
 
     @Test
+    fun `create rejects a type another domain declares`() = runTest {
+        // Categories live in the host's own catalog, so a request naming a trading category must not
+        // create a `market_insights/` directory in a coding deployment's memory store.
+        val store = mockk<MemoryStore>(relaxed = true)
+        val controller = MemoryController(store, domainCatalog = domainCatalog)
+
+        val e = assertFailsWith<IllegalArgumentException> {
+            controller.createOrUpdateMemory(
+                CreateMemoryRequest(
+                    name = "macro",
+                    description = "d",
+                    type = "market_insights",
+                    scope = "global",
+                    content = "body"
+                )
+            ).block()
+        }
+        assertTrue(e.message!!.contains("experience_lessons"), e.message!!)
+        coVerify(exactly = 0) { store.write(any(), any(), any()) }
+    }
+
+    @Test
     fun `create ignores invalid maturity`() = runTest {
         val store = mockk<MemoryStore>()
-        val controller = MemoryController(store)
+        val controller = MemoryController(store, domainCatalog = domainCatalog)
         coEvery { store.findByName(any(), any(), any(), any(), any()) } returns null
         coEvery { store.write(any(), any(), any()) } returns Path.of("x")
 
@@ -162,7 +186,7 @@ class MemoryControllerTest {
         // The manual edit form carries none of these, and the write replaces the whole stored document:
         // dropping them would erase the "merged from N entries" drill-down the entry was built with.
         val store = mockk<MemoryStore>()
-        val controller = MemoryController(store)
+        val controller = MemoryController(store, domainCatalog = domainCatalog)
         val merged = MemoryEntry(
             name = "frp",
             description = "old",
@@ -200,7 +224,7 @@ class MemoryControllerTest {
         // Reviving an absorbed source as an active entry would put a live duplicate under the merged
         // entry that references it — the exact state consolidation exists to remove.
         val store = mockk<MemoryStore>()
-        val controller = MemoryController(store)
+        val controller = MemoryController(store, domainCatalog = domainCatalog)
         coEvery { store.findByName(any(), any(), any(), any(), any()) } returns MemoryEntry(
             name = "frp",
             description = "old",
@@ -230,7 +254,7 @@ class MemoryControllerTest {
     @Test
     fun `update applies partial fields and preserves others`() = runTest {
         val store = mockk<MemoryStore>()
-        val controller = MemoryController(store)
+        val controller = MemoryController(store, domainCatalog = domainCatalog)
         val existing = MemoryEntry(
             name = "frp",
             description = "old desc",
@@ -271,7 +295,7 @@ class MemoryControllerTest {
     @Test
     fun `list filters by maturity`() = runTest {
         val store = mockk<MemoryStore>()
-        val controller = MemoryController(store)
+        val controller = MemoryController(store, domainCatalog = domainCatalog)
         fun entry(name: String, maturity: MemoryMaturity?) = MemoryEntry(
             name = name,
             description = "d",
@@ -296,7 +320,7 @@ class MemoryControllerTest {
     fun `project scope write is rejected inside a temporary workspace`() = runTest {
         val store = mockk<MemoryStore>(relaxed = true)
         val projectStore = mockk<AsyncProjectStore>(relaxed = true)
-        val controller = MemoryController(store, projectStore)
+        val controller = MemoryController(store, projectStore, domainCatalog = domainCatalog)
         val scratch = "/home/test/.easyai/project/system/session-1"
         coEvery { projectStore.findByPath(scratch, any()) } returns ProjectInfo(
             id = "tmp-session-1", name = "temp", path = scratch, kind = ProjectKind.TEMP
@@ -319,7 +343,7 @@ class MemoryControllerTest {
     fun `project scope write is allowed for a user project`() = runTest {
         val store = mockk<MemoryStore>(relaxed = true)
         val projectStore = mockk<AsyncProjectStore>(relaxed = true)
-        val controller = MemoryController(store, projectStore)
+        val controller = MemoryController(store, projectStore, domainCatalog = domainCatalog)
         val repo = "/home/test/repo"
         coEvery { projectStore.findByPath(repo, any()) } returns ProjectInfo(
             id = "p-1", name = "repo", path = repo, kind = ProjectKind.USER
@@ -341,10 +365,8 @@ class MemoryControllerTest {
     ) = runTest {
         val store = mockk<MemoryStore>(relaxed = true)
         val projectStore = mockk<AsyncProjectStore>(relaxed = true)
-        val workspaceService = DefaultWorkspaceService(
-            projectStore, dataDir = tempDir.toString(), host = HostIdentity("agent-api")
-        )
-        val controller = MemoryController(store, projectStore, workspaceService)
+        val workspaceService = DefaultWorkspaceService(projectStore, dataDir = tempDir.toString())
+        val controller = MemoryController(store, projectStore, workspaceService, domainCatalog = domainCatalog)
         val scratch = tempDir.resolve(".temp-workspaces").resolve("system").resolve("session-1").toString()
         coEvery { projectStore.findByPath(scratch, any()) } returns null
 

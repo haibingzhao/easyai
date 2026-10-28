@@ -19,7 +19,6 @@ import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.inList
-import org.jetbrains.exposed.v1.core.isNull
 import org.jetbrains.exposed.v1.core.neq
 import org.jetbrains.exposed.v1.core.or
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
@@ -41,9 +40,9 @@ import tools.jackson.databind.ObjectMapper
  * text. Mutators re-read the row inside the same transaction so callers get the authoritative
  * post-transition [AsyncTask] (used for `durationMs` and event payloads).
  *
- * A second axis is the host: [host] stamps every inserted row; [markRunning] and [findOrphans]
- * enforce that ownership for execution and recovery. Reads remain host-agnostic so a global task
- * list and cross-host duplicate suppression still work.
+ * Application isolation is a property of the account, not the row: [findOrphans] only loads tasks
+ * whose user belongs to [host]'s application. Request-scoped reads and mutations are already
+ * user-strict, and an account cannot belong to two applications.
  */
 class R2dbcAsyncTaskStore(
     private val db: R2dbcDatabase,
@@ -59,7 +58,7 @@ class R2dbcAsyncTaskStore(
         private val NON_TERMINAL_STATUSES = listOf(AsyncTaskStatus.PENDING.name, AsyncTaskStatus.RUNNING.name)
 
         /** Insert in the caller's transaction, including an atomic schedule advance and batch enqueue. */
-        internal suspend fun insertRow(task: AsyncTask, ownerApp: String, objectMapper: ObjectMapper): AsyncTask {
+        internal suspend fun insertRow(task: AsyncTask, objectMapper: ObjectMapper): AsyncTask {
             AsyncTaskTable.insert {
                 it[id] = task.id
                 it[userId] = task.userId
@@ -67,8 +66,6 @@ class R2dbcAsyncTaskStore(
                 it[status] = task.status.name
                 it[triggerSource] = task.trigger.name
                 it[sessionId] = task.sessionId
-                // Stamped by the persisting host, never copied from caller-supplied task ownership.
-                it[AsyncTaskTable.ownerApp] = ownerApp
                 it[title] = task.title
                 it[payload] = task.payload.takeIf { p -> p.isNotEmpty() }?.let { p -> objectMapper.writeValueAsString(p) }
                 it[result] = task.result?.let { r -> objectMapper.writeValueAsString(r) }
@@ -81,19 +78,18 @@ class R2dbcAsyncTaskStore(
                 it[completedAt] = task.completedAt
                 it[updatedAt] = task.updatedAt
             }
-            return task.copy(ownerApp = ownerApp)
+            return task
         }
     }
 
     override suspend fun create(task: AsyncTask): AsyncTask = suspendTransaction(db) {
-        insertRow(task, host.appName, objectMapper)
+        insertRow(task, objectMapper)
     }
 
     override suspend fun markRunning(id: String): AsyncTask? = suspendTransaction(db) {
         val now = System.currentTimeMillis()
         val claimed = AsyncTaskTable.update(where = {
-            (AsyncTaskTable.id eq id) and (AsyncTaskTable.ownerApp eq host.appName) and
-                (AsyncTaskTable.status eq AsyncTaskStatus.PENDING.name)
+            (AsyncTaskTable.id eq id) and (AsyncTaskTable.status eq AsyncTaskStatus.PENDING.name)
         }) {
             it[status] = AsyncTaskStatus.RUNNING.name
             it[startedAt] = now
@@ -206,10 +202,9 @@ class R2dbcAsyncTaskStore(
         deleteRows(this, AsyncTaskTable.id eq id) > 0
     }
 
-    override suspend fun deleteByUser(userId: String, ownerApp: String, status: AsyncTaskStatus?): Int =
+    override suspend fun deleteByUser(userId: String, status: AsyncTaskStatus?): Int =
         suspendTransaction(db) {
-            var condition = UserScope.filterStrict(AsyncTaskTable.userId, userId) and
-                (AsyncTaskTable.ownerApp eq ownerApp)
+            var condition: Op<Boolean> = UserScope.filterStrict(AsyncTaskTable.userId, userId)
             status?.let { wanted -> condition = condition and (AsyncTaskTable.status eq wanted.name) }
             deleteRows(this, condition)
         }
@@ -236,25 +231,12 @@ class R2dbcAsyncTaskStore(
     }
 
     /**
-     * Non-terminal rows this host is responsible for. Another host sharing the database has live
-     * workers behind its own rows, so the query never even loads them; rows with no owner at all are
-     * counted separately and reported, because "nobody will ever park these" is the one part of the
-     * result a human has to act on.
+     * Non-terminal rows belonging to this application's accounts. Tasks of another application's
+     * users, of `system`, or of a deleted account have no executor here and are not loaded.
      */
     override suspend fun findOrphans(): List<AsyncTask> = suspendTransaction(db) {
-        val unclaimed = AsyncTaskTable.selectAll()
-            .where { nonTerminal() and AsyncTaskTable.ownerApp.isNull() }
-            .count()
-            .toInt()
-        if (unclaimed > 0) {
-            logger.warn(
-                "{} non-terminal task(s) have no owner_app; no host will reconcile them. " +
-                    "Assign them with: UPDATE async_task SET owner_app = '<app>' WHERE status IN ('PENDING','RUNNING') AND owner_app IS NULL",
-                unclaimed
-            )
-        }
         AsyncTaskTable.selectAll()
-            .where { nonTerminal() and (AsyncTaskTable.ownerApp eq host.appName) }
+            .where { nonTerminal() and UserScope.ownedByApp(AsyncTaskTable.userId, host.appName) }
             .mapNotNull { mapRow(it) }
             .toList()
     }
@@ -302,7 +284,6 @@ class R2dbcAsyncTaskStore(
             title = row[AsyncTaskTable.title],
             status = status,
             sessionId = row[AsyncTaskTable.sessionId],
-            ownerApp = row[AsyncTaskTable.ownerApp],
             payload = row[AsyncTaskTable.payload]?.let { json -> parseJsonObject(taskId, "payload", json) }
                 ?: emptyMap(),
             result = row[AsyncTaskTable.result]?.let { json -> parseJsonObject(taskId, "result", json) },

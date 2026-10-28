@@ -1,6 +1,5 @@
 package com.easy.easyai.core.watch
 
-import com.easy.easyai.core.host.HostIdentity
 import com.easy.easyai.core.task.TaskOutcome
 import io.mockk.coEvery
 import kotlinx.coroutines.test.runTest
@@ -30,7 +29,6 @@ class WatchExpiryReviewTest {
         properties: WatchProperties = WatchProperties()
     ) = WatchTaskHandler(
         store = store,
-        host = HostIdentity(TEST_APP),
         properties = properties,
         sessionManager = model?.sessionManager,
         agentService = model?.agentService,

@@ -8,6 +8,7 @@ import com.easy.easyai.auth.group.GroupClaims
 import com.easy.easyai.auth.jwt.JwtTokenProvider
 import com.easy.easyai.auth.model.RefreshToken
 import com.easy.easyai.auth.model.User
+import com.easy.easyai.core.host.HostIdentity
 import io.mockk.CapturingSlot
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -32,8 +33,10 @@ class AuthServiceGroupClaimsTest {
     private val jwtTokenProvider = mockk<JwtTokenProvider>()
 
     private val password = "secret123"
+    private val host = HostIdentity(APP)
     private val alice = User(
         id = "alice-id",
+        ownerApp = APP,
         username = "alice",
         displayName = "Alice",
         passwordHash = String(BCrypt.withDefaults().hashToChar(12, password.toCharArray()))
@@ -76,7 +79,7 @@ class AuthServiceGroupClaimsTest {
         every {
             jwtTokenProvider.validateRefreshToken("refresh-token")
         } returns JwtTokenProvider.JwtClaims(
-            userId = "alice-id", username = null, tokenId = "tid", groupId = "fam-1"
+            userId = "alice-id", app = APP, username = null, tokenId = "tid", groupId = "fam-1"
         )
         coEvery {
             refreshTokenStore.findByTokenHash(any())
@@ -84,15 +87,15 @@ class AuthServiceGroupClaimsTest {
             id = "rt-1", userId = "alice-id", tokenHash = "h",
             expiresAt = System.currentTimeMillis() + 60_000
         )
-        coEvery { userStore.findById("alice-id") } returns alice
+        coEvery { userStore.findById("alice-id", APP) } returns alice
     }
 
     @Test
     fun `login hands the requested group to the contributor and mints its claims`() = runTest {
         val contributor = RecordingContributor(group)
-        coEvery { userStore.findByUsername("alice") } returns alice
+        coEvery { userStore.findByUsername("alice", APP) } returns alice
         stubMint()
-        val service = AuthService(userStore, refreshTokenStore, jwtTokenProvider, AuthProperties(), contributor)
+        val service = AuthService(userStore, refreshTokenStore, jwtTokenProvider, AuthProperties(), host, contributor)
 
         service.login("alice", password, "fam-1")
 
@@ -107,7 +110,7 @@ class AuthServiceGroupClaimsTest {
         val contributor = RecordingContributor(group)
         stubRefreshSession()
         stubMint()
-        val service = AuthService(userStore, refreshTokenStore, jwtTokenProvider, AuthProperties(), contributor)
+        val service = AuthService(userStore, refreshTokenStore, jwtTokenProvider, AuthProperties(), host, contributor)
 
         service.refresh("refresh-token")
 
@@ -123,7 +126,7 @@ class AuthServiceGroupClaimsTest {
         val contributor = MapContributor(mapOf("fam-2" to fam2))
         stubRefreshSession()
         stubMint()
-        val service = AuthService(userStore, refreshTokenStore, jwtTokenProvider, AuthProperties(), contributor)
+        val service = AuthService(userStore, refreshTokenStore, jwtTokenProvider, AuthProperties(), host, contributor)
 
         service.switchGroup("refresh-token", "fam-2")
 
@@ -138,7 +141,7 @@ class AuthServiceGroupClaimsTest {
         val contributor = MapContributor(emptyMap())
         stubRefreshSession()
         stubMint()
-        val service = AuthService(userStore, refreshTokenStore, jwtTokenProvider, AuthProperties(), contributor)
+        val service = AuthService(userStore, refreshTokenStore, jwtTokenProvider, AuthProperties(), host, contributor)
 
         val error = assertFailsWith<AuthException> { service.switchGroup("refresh-token", "fam-9") }
 
@@ -154,7 +157,7 @@ class AuthServiceGroupClaimsTest {
         val contributor = MapContributor(emptyMap())
         stubRefreshSession()
         stubMint()
-        val service = AuthService(userStore, refreshTokenStore, jwtTokenProvider, AuthProperties(), contributor)
+        val service = AuthService(userStore, refreshTokenStore, jwtTokenProvider, AuthProperties(), host, contributor)
 
         service.switchGroup("refresh-token", null)
 
@@ -167,15 +170,19 @@ class AuthServiceGroupClaimsTest {
     fun `a contributor failure degrades to a personal session, never a guessed group`() = runTest {
         val contributor = AccessTokenClaimsContributor { _, _ -> error("group tables unreachable") }
         val minted: CapturingSlot<GroupClaims> = slot()
-        coEvery { userStore.findByUsername("alice") } returns alice
+        coEvery { userStore.findByUsername("alice", APP) } returns alice
         every { jwtTokenProvider.generateAccessToken(any(), any(), capture(minted)) } returns "access"
         every { jwtTokenProvider.generateRefreshToken(any(), any()) } returns "refresh"
-        val service = AuthService(userStore, refreshTokenStore, jwtTokenProvider, AuthProperties(), contributor)
+        val service = AuthService(userStore, refreshTokenStore, jwtTokenProvider, AuthProperties(), host, contributor)
 
         service.login("alice", password, "fam-1")
 
         // No owners claim at all: the caller's own id is the token subject and is unioned in at read
         // time, so the degraded token stays small and grants nothing beyond self + system.
         assertEquals(GroupClaims(), minted.captured)
+    }
+
+    private companion object {
+        const val APP = "agent-api"
     }
 }

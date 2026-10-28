@@ -1,102 +1,122 @@
 package com.easy.easyai.core.domain
 
+import com.easy.easyai.core.memory.MemoryType
+import org.slf4j.LoggerFactory
+
 /**
- * Describes a single category within a domain (knowledge or memory).
+ * One memory category declared by a domain catalog.
  *
- * @param code machine-readable identifier (e.g. "architecture")
- * @param labelKey i18n dictionary key for the display label (e.g. "Architecture");
- *                 must match the frontend i18n key space
+ * @param code storage directory name and stable API value (e.g. "experience_lessons")
+ * @param labelKey i18n dictionary key for the display label; host consoles translate it
  * @param description human-readable description of the category
  */
-data class CategorySpec(
+data class MemoryCategorySpec(
     val code: String,
     val labelKey: String,
     val description: String
 )
 
 /**
- * The full set of categories available for a given domain.
+ * Host-provided memory taxonomy of one application domain.
  *
- * @param domain domain identifier (e.g. "coding", "trading")
- * @param knowledge categories for knowledge base documents
- * @param memory categories for agent memory entries
+ * The framework only ships the [CodingDomainCatalog] default. Every other deployment
+ * (`easyai.domain=trading|home|...`) must declare its own Spring bean implementing this
+ * interface; a domain the active deployment cannot resolve fails startup instead of
+ * silently falling back to coding categories.
  */
-data class DomainCategories(
-    val domain: String,
-    val knowledge: List<CategorySpec>,
-    val memory: List<CategorySpec>
-)
+interface DomainCatalogContributor {
+    /** Domain identifier this host answers for (e.g. "trading", "home"). */
+    val domain: String
+
+    /** Memory categories available to the LLM, the REST API and the UI in this domain. */
+    val memoryCategories: List<MemoryCategorySpec>
+}
 
 /**
- * Global registry of domain-specific categories. Set-once at application startup
- * via [activeDomain]; unknown domain values fall back to "coding".
+ * Resolved memory taxonomy for the active domain.
  *
- * This is a lightweight global object (similar to SharedObjectMapper) — no Spring
- * dependency, no DI needed. The [activeDomain] field is `@Volatile` for safe
- * cross-thread reads after startup initialisation.
+ * Set-once at application startup; the instance is immutable afterwards. Memory writes
+ * validate their `type` against [memoryCodes], while parsing stored entries stays tolerant
+ * ([MemoryType.of]) so history written under another domain remains readable.
  */
-object DomainCatalog {
+class DomainCatalog(
+    contributors: Collection<DomainCatalogContributor>,
+    activeDomain: String
+) {
 
-    /** The currently active domain. Defaults to "coding"; set once at startup. */
-    @Volatile
-    var activeDomain: String = "coding"
+    private val logger = LoggerFactory.getLogger(DomainCatalog::class.java)
 
-    // ---- Knowledge categories per domain ----
+    private val catalogs: Map<String, List<MemoryCategorySpec>>
 
-    private val CODING_KNOWLEDGE = listOf(
-        CategorySpec("overview", "Overview", "General project overview"),
-        CategorySpec("architecture", "Architecture", "Architecture design and module layout"),
-        CategorySpec("tech_stack", "Tech Stack", "Technology stack and dependencies"),
-        CategorySpec("conventions", "Conventions", "Coding conventions and standards"),
-        CategorySpec("setup_commands", "Setup & Commands", "Environment setup and build commands"),
-        CategorySpec("other", "Other", "Uncategorised documents")
-    )
+    /** The active domain, lowercased. */
+    val activeDomain: String
 
-    private val TRADING_KNOWLEDGE = listOf(
-        CategorySpec("overview", "Overview", "General project overview"),
-        CategorySpec("architecture", "Architecture", "Architecture design and module layout"),
-        CategorySpec("market_data", "Market Data", "Market data sources and feeds"),
-        CategorySpec("broker_connectors", "Broker Connectors", "Broker connectivity and order routing"),
-        CategorySpec("strategy", "Strategy & Research", "Strategy research and development"),
-        CategorySpec("risk_compliance", "Risk & Compliance", "Risk management and compliance rules"),
-        CategorySpec("other", "Other", "Uncategorised documents")
-    )
+    init {
+        this.activeDomain = activeDomain.trim().lowercase()
+        val byDomain = LinkedHashMap<String, List<MemoryCategorySpec>>()
+        for (contributor in listOf(CodingDomainCatalog) + contributors) {
+            val domain = contributor.domain.trim().lowercase()
+            check(domain.isNotEmpty()) {
+                "DomainCatalogContributor ${contributor.javaClass.name} declares a blank domain"
+            }
+            val categories = contributor.memoryCategories
+            check(categories.isNotEmpty()) {
+                "Domain '$domain' declares no memory categories; at least '${OTHER_CODE}' is required"
+            }
+            categories.forEach { spec ->
+                require(CODE_PATTERN.matches(spec.code)) {
+                    "Domain '$domain' declares invalid memory category code '${spec.code}': " +
+                        "codes must match ${CODE_PATTERN.pattern}"
+                }
+                require(spec.labelKey.isNotBlank()) {
+                    "Domain '$domain' declares memory category '${spec.code}' without a labelKey"
+                }
+            }
+            val duplicates = categories.groupingBy { it.code }.eachCount().filterValues { it > 1 }.keys
+            check(duplicates.isEmpty()) {
+                "Domain '$domain' declares duplicate memory categories: ${duplicates.joinToString()}"
+            }
+            check(categories.any { it.code == OTHER_CODE }) {
+                "Domain '$domain' must declare the '$OTHER_CODE' memory category: it is the " +
+                    "fallback used by memory flush and by parsing entries whose stored type is unknown"
+            }
+            check(byDomain.put(domain, categories) == null) {
+                "Domain '$domain' is declared twice (${contributor.javaClass.name} collides with an " +
+                    "earlier contributor); only one DomainCatalogContributor may own a domain"
+            }
+        }
+        catalogs = byDomain
+        check(this.activeDomain in byDomain) {
+            "Unknown easyai.domain '${this.activeDomain}': no DomainCatalogContributor declares it. " +
+                "Registered domains: ${byDomain.keys.joinToString()}. Add a @Component implementing " +
+                "DomainCatalogContributor for '${this.activeDomain}' in this application, or change easyai.domain."
+        }
+        logger.info(
+            "Memory domain catalog active: domain={}, categories={}",
+            this.activeDomain,
+            byDomain.getValue(this.activeDomain).size
+        )
+    }
 
-    // ---- Memory categories per domain ----
+    /** Memory categories of the active domain. */
+    fun active(): List<MemoryCategorySpec> = catalogs.getValue(activeDomain)
 
-    private val CODING_MEMORY = listOf(
-        CategorySpec("user_preferences", "User Preferences", "User preferences and personal settings"),
-        CategorySpec("project_information", "Project Information", "Active project context and decisions"),
-        CategorySpec("development_standards", "Development Standards", "Coding and process standards"),
-        CategorySpec("task_summary", "Task Summary", "Completed task retrospectives"),
-        CategorySpec("experience_lessons", "Experience & Lessons", "Reusable experience and lessons"),
-        CategorySpec("other", "Other", "Uncategorised memories")
-    )
+    /** Strict lookup for input validation: only categories of the active domain resolve. */
+    fun memoryType(code: String): MemoryType? {
+        val normalized = code.trim().lowercase()
+        return active().firstOrNull { it.code == normalized }?.let { MemoryType(normalized) }
+    }
 
-    private val TRADING_MEMORY = listOf(
-        CategorySpec("user_preferences", "User Preferences", "User preferences and personal settings"),
-        CategorySpec("project_information", "Project Information", "Active project context and decisions"),
-        CategorySpec("task_summary", "Task Summary", "Completed task retrospectives"),
-        CategorySpec("experience_lessons", "Experience & Lessons", "Reusable experience and lessons"),
-        CategorySpec("other", "Other", "Uncategorised memories"),
-        CategorySpec("market_insights", "Market Insights", "Market observations and macro views"),
-        CategorySpec("strategy_lessons", "Strategy Lessons", "Strategy back-test lessons and insights"),
-        CategorySpec("risk_rules", "Risk Rules", "Risk management red lines and rules")
-    )
+    /** Storage codes of the active domain's memory categories, in declaration order. */
+    fun memoryCodes(): List<String> = active().map { it.code }
 
-    private val DOMAINS: Map<String, DomainCategories> = mapOf(
-        "coding" to DomainCategories("coding", CODING_KNOWLEDGE, CODING_MEMORY),
-        "trading" to DomainCategories("trading", TRADING_KNOWLEDGE, TRADING_MEMORY)
-    )
+    companion object {
+        const val CODING_DOMAIN = "coding"
 
-    private val DEFAULT = DOMAINS.getValue("coding")
+        /** Fallback category every domain must declare. */
+        const val OTHER_CODE = "other"
 
-    /** Return the categories for the given [domain], falling back to "coding" if unknown. */
-    @JvmStatic
-    fun forDomain(domain: String): DomainCategories =
-        DOMAINS[domain.lowercase()] ?: DEFAULT
-
-    /** Return the categories for the currently active domain. */
-    @JvmStatic
-    fun active(): DomainCategories = forDomain(activeDomain)
+        /** Code shape shared with the memory storage directory names. */
+        val CODE_PATTERN: Regex = Regex("^[a-z0-9_]+$")
+    }
 }
