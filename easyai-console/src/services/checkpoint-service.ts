@@ -1,14 +1,17 @@
-import type { FileDiff, RevertResponse, UnrevertResponse, RevertStateInfo, CheckpointInfo, FileReviewResponse, FileReviewStateResponse, EditMessageResponse, BatchFileReviewResponse, CommitChangeInfo } from '../types/checkpoint';
+import type { FileDiff, RevertResponse, UnrevertResponse, RevertStateInfo, CheckpointListResponse, FileReviewResponse, FileReviewStateResponse, EditMessageResponse, BatchFileReviewResponse, CommitChangeInfo } from '../types/checkpoint';
 import { authFetch, fetchJson, JSON_HEADERS } from '@/services/api-client';
 
 const API_BASE = '/api/chat';
 
 /**
- * Get checkpoint summaries for a session.
- * Used to restore file change information when loading a historical session.
+ * Checkpoint summaries for a session.
+ *
+ * Returns `{status, checkpoints, error}` instead of a bare array: "snapshots disabled" and
+ * "the query failed" must not look like "there is nothing to roll back", because that is what
+ * decides whether an edit may skip its file-rollback confirmation.
  */
-export async function getCheckpoints(sessionId: string): Promise<CheckpointInfo[]> {
-  return fetchJson<CheckpointInfo[]>(`${API_BASE}/session/${sessionId}/checkpoints`);
+export async function getCheckpoints(sessionId: string): Promise<CheckpointListResponse> {
+  return fetchJson<CheckpointListResponse>(`${API_BASE}/session/${sessionId}/checkpoints`);
 }
 
 /**

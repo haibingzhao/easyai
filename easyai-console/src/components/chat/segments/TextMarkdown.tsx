@@ -1,8 +1,15 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { CodeBlock } from '../CodeBlock';
 import { markdownCodeComponents } from '../markdownCodeComponents';
+
+/**
+ * Hoisted so `ReactMarkdown` sees the same array on every render. An inline `[remarkGfm]` is a new
+ * identity each time, which its memo comparison treats as "plugins changed" and re-parses the
+ * markdown — for a long transcript that is the whole cost of the component.
+ */
+const REMARK_PLUGINS = [remarkGfm];
 
 interface ContentSegment {
   type: 'code' | 'text';
@@ -54,8 +61,10 @@ interface TextMarkdownProps {
 }
 
 /** Shared markdown renderer for text segments (live and committed). */
-export const TextMarkdown: React.FC<TextMarkdownProps> = ({ content }) => {
-  const segments = parseContentSegments(content);
+const TextMarkdownImpl: React.FC<TextMarkdownProps> = ({ content }) => {
+  // Keyed on the string, so a re-render caused by anything other than new text (window change,
+  // hover, selection) skips the regex sweep entirely.
+  const segments = useMemo(() => parseContentSegments(content), [content]);
   return (
     <div className="prose prose-sm dark:prose-invert max-w-none">
       {segments.map((seg, segIndex) => {
@@ -71,7 +80,7 @@ export const TextMarkdown: React.FC<TextMarkdownProps> = ({ content }) => {
         return (
           <ReactMarkdown
             key={`text-${segIndex}`}
-            remarkPlugins={[remarkGfm]}
+            remarkPlugins={REMARK_PLUGINS}
             components={markdownCodeComponents}
           >
             {seg.content}
@@ -81,3 +90,9 @@ export const TextMarkdown: React.FC<TextMarkdownProps> = ({ content }) => {
     </div>
   );
 };
+
+/**
+ * Memoized: `content` is the only prop and it is a string, so a parent re-render with unchanged
+ * text can be skipped outright rather than re-rendering the markdown subtree.
+ */
+export const TextMarkdown = React.memo(TextMarkdownImpl);

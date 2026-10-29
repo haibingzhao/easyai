@@ -11,7 +11,8 @@ import { sendMessageToBackend, getCurrentSendService, type ChatService } from '.
 import { sessionService } from '../../services/session-service';
 import { storageService } from '@/services/storage-service';
 import { editMessage, getCheckpoints } from '@/services/checkpoint-service';
-import type { CheckpointInfo } from '@/types/checkpoint';
+import { ensureCheckpointsReady, evaluateEditGate, getEditRevertFiles, type EditGateResult } from '@/services/checkpoint-gate';
+import { currentEpoch, isCurrentEpoch } from '@/services/session-epoch';
 import { ModelSelector } from './ModelSelector';
 import { AgentSelector } from './AgentSelector';
 import { SlashCommandPopover } from './SlashCommandPopover';
@@ -57,8 +58,6 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
 
   const {
     sessionId,
-    messages,
-    checkpointsByMessageId,
     setStreaming,
     addMessage,
     handleEvent,
@@ -67,8 +66,6 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     isAwaitingPermission,
   } = useChatStore((state) => ({
     sessionId: state.sessionId,
-    messages: state.messages,
-    checkpointsByMessageId: state.checkpointsByMessageId,
     setStreaming: state.setStreaming,
     addMessage: state.addMessage,
     handleEvent: state.handleEvent,
@@ -538,27 +535,16 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onCancel, showConfirmDialog]);
 
-  // --- Revert file calculation ---
-
-  /** Compute files that will be reverted if this message is edited */
-  const getRevertFiles = useCallback((): { path: string; additions: number }[] => {
-    const fileMap = new Map<string, number>();
-    for (let i = messageIndex + 1; i < messages.length; i++) {
-      const msg = messages[i];
-      const msgId = (msg as { messageId?: string }).messageId;
-      if (!msgId) continue;
-      const checkpoint = checkpointsByMessageId[msgId];
-      if (!checkpoint) continue;
-      for (const fc of checkpoint.filesChanged) {
-        fileMap.set(fc.path, (fileMap.get(fc.path) || 0) + fc.additions);
-      }
+  const checkEditGate = useCallback(async (): Promise<EditGateResult> => {
+    if (!sessionId) return { allowed: false, reason: i18n('Session is not ready yet.') };
+    const epoch = currentEpoch();
+    const state = await ensureCheckpointsReady(sessionId);
+    const store = useChatStore.getState();
+    if (!isCurrentEpoch(epoch) || store.sessionId !== sessionId) {
+      return { allowed: false, reason: i18n('Session is not ready yet.') };
     }
-    return Array.from(fileMap.entries())
-      .map(([path, additions]) => ({ path, additions }))
-      .sort((a, b) => a.path.localeCompare(b.path));
-  }, [messageIndex, messages, checkpointsByMessageId]);
-
-  // --- Submit flow (two-phase: validate → confirm dialog → execute) ---
+    return evaluateEditGate(state, store.checkpointList, message.messageId);
+  }, [sessionId, message.messageId]);
 
   /** Shared execute logic: call edit-message API, truncate, send new message */
   const executeEdit = useCallback(async (messageText: string, messageId: string) => {
@@ -637,13 +623,32 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
         handleEvent(event);
         // Full reconciliation after stream ends: recover any SSE events that may
         // have been lost (e.g., compaction indicators).
+        const epoch = currentEpoch();
         Promise.all([
           sessionService.getSessionDetail(sid),
-          getCheckpoints(sid).catch(() => [] as CheckpointInfo[]),
-        ]).then(([detail, checkpoints]) => {
-          useChatStore.getState().loadSessionMessages(
-            detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, sid
+          // `null` = the request failed; that is `failed`, not an empty list.
+          getCheckpoints(sid).catch(() => null),
+        ]).then(([detail, checkpointResponse]) => {
+          const store = useChatStore.getState();
+          if (!isCurrentEpoch(epoch) || store.sessionId !== sid) return;
+          store.loadSessionMessages(
+            detail.messages,
+            detail.pendingPermission,
+            checkpointResponse?.status === 'ok' ? checkpointResponse.checkpoints : undefined,
+            detail.endReason,
+            detail.variables,
+            detail.modelContextLength,
+            sid,
           );
+          store.applySessionCursors({
+            newestSeq: detail.newestMessageSeq,
+            contentRevision: detail.contentRevision,
+          });
+          if (checkpointResponse) {
+            store.applyCheckpointResponse(checkpointResponse);
+          } else {
+            store.setCheckpointState('failed', 'Failed to load checkpoints');
+          }
         }).catch(() => { /* best-effort */ });
       },
       onError: (event) => { if (!isStaleStream()) handleEvent(event); },
@@ -675,8 +680,16 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
     setError(null);
 
     try {
-      // 1. Check if there are files that will be reverted
-      const revertFiles = getRevertFiles();
+      // 1. Refuse when the rollback scope cannot be verified (checkpoints unknown/loading/failed)
+      const gate = await checkEditGate();
+      if (!gate.allowed) {
+        setError(gate.reason ?? i18n('Cannot edit this message right now.'));
+        setIsSubmitting(false);
+        return;
+      }
+
+      // 2. Check if there are files that will be reverted
+      const revertFiles = getEditRevertFiles(useChatStore.getState().checkpointList, messageId);
       if (revertFiles.length > 0) {
         // Show confirm dialog instead of proceeding
         setPendingRevertFiles(revertFiles);
@@ -685,7 +698,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
         return;
       }
 
-      // 2. No files to revert — proceed directly
+      // 3. No files to revert — proceed directly
       await executeEdit(messageText, messageId);
     } catch (err) {
       console.error('Failed to edit message:', err);
@@ -695,7 +708,7 @@ export const InlineEditMessage: React.FC<InlineEditMessageProps> = ({ message, m
       submittingRef.current = false;
       setIsSubmitting(false);
     }
-  }, [editorValue, isSubmitting, sessionId, message, isModelLoading, currentModelId, selectedCommand, getEditorText, getRevertFiles, executeEdit, isProcessingFiles, showConfirmDialog, isAwaitingPermission, setStreaming]);
+  }, [editorValue, isSubmitting, sessionId, message, isModelLoading, currentModelId, selectedCommand, getEditorText, checkEditGate, executeEdit, isProcessingFiles, showConfirmDialog, isAwaitingPermission, setStreaming]);
 
   /** Phase 2: User confirmed — execute the actual edit */
   const handleConfirmEdit = useCallback(async () => {

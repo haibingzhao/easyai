@@ -40,7 +40,7 @@ import { i18n } from '../../utils/i18n';
 import { addQueueMessage, removeQueueMessage, getQueueMessages } from '../../services/chat-service';
 import { QueuedMessagesPanel } from './QueuedMessagesPanel';
 import { getCheckpoints } from '@/services/checkpoint-service';
-import type { CheckpointInfo } from '@/types/checkpoint';
+import { currentEpoch, isCurrentEpoch } from '@/services/session-epoch';
 import { createRoot, type Root } from 'react-dom/client';
 
 /**
@@ -629,13 +629,32 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
             // have been lost (e.g., compaction indicators). Mirrors the watch path's
             // finalReconciliation in ChatPanel.
             if (sid) {
+              const epoch = currentEpoch();
               Promise.all([
                 sessionService.getSessionDetail(sid),
-                getCheckpoints(sid).catch(() => [] as CheckpointInfo[]),
-              ]).then(([detail, checkpoints]) => {
-                useChatStore.getState().loadSessionMessages(
-                  detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, sid
+                // `null` = the request failed; that is `failed`, not an empty list.
+                getCheckpoints(sid).catch(() => null),
+              ]).then(([detail, checkpointResponse]) => {
+                const store = useChatStore.getState();
+                if (!isCurrentEpoch(epoch) || store.sessionId !== sid) return;
+                store.loadSessionMessages(
+                  detail.messages,
+                  detail.pendingPermission,
+                  checkpointResponse?.status === 'ok' ? checkpointResponse.checkpoints : undefined,
+                  detail.endReason,
+                  detail.variables,
+                  detail.modelContextLength,
+                  sid,
                 );
+                store.applySessionCursors({
+                  newestSeq: detail.newestMessageSeq,
+                  contentRevision: detail.contentRevision,
+                });
+                if (checkpointResponse) {
+                  store.applyCheckpointResponse(checkpointResponse);
+                } else {
+                  store.setCheckpointState('failed', 'Failed to load checkpoints');
+                }
               }).catch(() => { /* best-effort */ });
             }
           },

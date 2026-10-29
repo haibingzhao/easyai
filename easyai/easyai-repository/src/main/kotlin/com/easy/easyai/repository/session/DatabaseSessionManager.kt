@@ -676,7 +676,9 @@ class DatabaseSessionManager(
         userId: String,
         owners: Collection<String>
     ): AgentContext? {
-        val persistedSession = sessionStore.findById(sessionId, userId)
+        // Metadata only: this method needs the project association, not the transcript.
+        // findById here would deserialize every message of the session on each context resolve.
+        val persistedSession = sessionStore.findSessionMeta(sessionId, userId)
             ?: return null
 
         val lastConfig = (sessionStore as? R2dbcAsyncSessionStore)?.getLastMessageConfig(sessionId)

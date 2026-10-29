@@ -105,6 +105,65 @@ class R2dbcAsyncSessionStore(
     }
 
     /**
+     * Session row without its messages. Same ownership filter as [findById], but a single-row
+     * read of six columns instead of a full message-table scan + deserialization.
+     */
+    override suspend fun findSessionMeta(id: String, userId: String): SessionMeta? {
+        return suspendTransaction(db) {
+            Tables.Session
+                .select(
+                    Tables.Session.id,
+                    Tables.Session.projectId,
+                    Tables.Session.createdAt,
+                    Tables.Session.updatedAt,
+                    Tables.Session.systemKind,
+                    Tables.Session.sessionScope,
+                )
+                .where { (Tables.Session.id eq id) and UserScope.filterStrict(Tables.Session.userId, userId) }
+                .limit(1)
+                .firstOrNull()
+                ?.let {
+                    SessionMeta(
+                        id = it[Tables.Session.id],
+                        projectId = it[Tables.Session.projectId],
+                        createdAt = it[Tables.Session.createdAt],
+                        updatedAt = it[Tables.Session.updatedAt],
+                        systemKind = it[Tables.Session.systemKind],
+                        sessionScope = it[Tables.Session.sessionScope],
+                    )
+                }
+        }
+    }
+
+    /** id + role of every row, oldest first — no content deserialization. */
+    override suspend fun findMessageRefs(sessionId: String): List<MessageRef> {
+        return suspendTransaction(db) {
+            Tables.Message
+                .select(Tables.Message.id, Tables.Message.role)
+                .where { Tables.Message.sessionId eq sessionId }
+                // created_at, not seq: a compaction summary is inserted later but backdated to its
+                // logical position, so insertion order would put it after the rows it summarizes.
+                .orderBy(Tables.Message.createdAt to SortOrder.ASC, Tables.Message.id to SortOrder.ASC)
+                .toList()
+                .map { MessageRef(it[Tables.Message.id], it[Tables.Message.role]) }
+        }
+    }
+
+    override suspend fun findSessionCursor(sessionId: String, userId: String): SessionCursor? {
+        return suspendTransaction(db) {
+            val row = Tables.Session
+                .select(Tables.Session.messageSeq, Tables.Session.contentRevision)
+                .where { (Tables.Session.id eq sessionId) and UserScope.filterStrict(Tables.Session.userId, userId) }
+                .limit(1)
+                .firstOrNull() ?: return@suspendTransaction null
+            SessionCursor(
+                newestSeq = row[Tables.Session.messageSeq],
+                contentRevision = row[Tables.Session.contentRevision],
+            )
+        }
+    }
+
+    /**
      * Condition excluding Team Agent member sub-sessions from session listings.
      * A session is a member sub-session when its ID is referenced as
      * `member_session_id` in the team member execution table. Such sessions are
@@ -464,34 +523,111 @@ class R2dbcAsyncSessionStore(
     override suspend fun upsertMessages(context: AgentContext, sessionId: String, messages: List<EasyAiMessage>, parentMessageId: String?, parentToolCallId: String?) {
         if (messages.isEmpty()) return
         suspendTransaction(db) {
-            messages.forEach { message ->
-                val contentJson = serializeContentBlocks(message.content)
-                val metadataJson = serializeMetadata(message)
-                val tokenCounts = extractTokenCounts(message)
-                val stopReasonStr = extractStopReason(message)
+            // Reserve ordinals only for rows that are actually new. Reserving for the whole batch
+            // would burn ordinals whenever the streaming listener re-sends a message it already
+            // wrote, leaving the session counter ahead of the rows it names.
+            val existingIds = Tables.Message
+                .select(Tables.Message.id)
+                .where {
+                    (Tables.Message.sessionId eq sessionId) and
+                        (Tables.Message.id inList messages.map { it.id })
+                }
+                .toList()
+                .mapTo(HashSet()) { it[Tables.Message.id] }
+            val newMessages = messages.filterNot { it.id in existingIds }
 
-                Tables.Message.insertIgnore {
-                    it[Tables.Message.id] = message.id
-                    it[Tables.Message.sessionId] = sessionId
-                    it[Tables.Message.agentId] = context.agentId
-                    it[Tables.Message.configId] = context.configId.takeIf { it.isNotEmpty() }
-                    it[Tables.Message.modelId] = context.modelId.takeIf { it.isNotEmpty() }
-                    it[Tables.Message.role] = message.role.name
-                    it[Tables.Message.contentBlocks] = contentJson
-                    it[Tables.Message.metadata] = metadataJson
-                    it[Tables.Message.inputTokenCount] = tokenCounts.inputTokens
-                    it[Tables.Message.outputTokenCount] = tokenCounts.outputTokens
-                    it[Tables.Message.cacheReadTokenCount] = tokenCounts.cacheReadTokens
-                    it[Tables.Message.cacheWriteTokenCount] = tokenCounts.cacheWriteTokens
-                    it[Tables.Message.durationMs] = tokenCounts.durationMs
-                    it[Tables.Message.stopReason] = stopReasonStr
-                    it[Tables.Message.parentMessageId] = parentMessageId
-                    it[Tables.Message.parentToolCallId] = parentToolCallId
-                    it[Tables.Message.createdAt] = System.currentTimeMillis()
+            if (newMessages.isNotEmpty()) {
+                // Same transaction as the inserts: two writers (main agent + sub-agent listener)
+                // can never be handed overlapping numbers, and no MAX(seq)+1 race exists.
+                val start = allocateSeqBlock(sessionId, newMessages.size)
+                newMessages.forEachIndexed { index, message ->
+                    val contentJson = serializeContentBlocks(message.content)
+                    val metadataJson = serializeMetadata(message)
+                    val tokenCounts = extractTokenCounts(message)
+                    val stopReasonStr = extractStopReason(message)
+
+                    Tables.Message.insertIgnore {
+                        it[Tables.Message.id] = message.id
+                        it[Tables.Message.sessionId] = sessionId
+                        it[Tables.Message.agentId] = context.agentId
+                        it[Tables.Message.configId] = context.configId.takeIf { it.isNotEmpty() }
+                        it[Tables.Message.modelId] = context.modelId.takeIf { it.isNotEmpty() }
+                        it[Tables.Message.role] = message.role.name
+                        it[Tables.Message.contentBlocks] = contentJson
+                        it[Tables.Message.metadata] = metadataJson
+                        it[Tables.Message.inputTokenCount] = tokenCounts.inputTokens
+                        it[Tables.Message.outputTokenCount] = tokenCounts.outputTokens
+                        it[Tables.Message.cacheReadTokenCount] = tokenCounts.cacheReadTokens
+                        it[Tables.Message.cacheWriteTokenCount] = tokenCounts.cacheWriteTokens
+                        it[Tables.Message.durationMs] = tokenCounts.durationMs
+                        it[Tables.Message.stopReason] = stopReasonStr
+                        it[Tables.Message.parentMessageId] = parentMessageId
+                        it[Tables.Message.parentToolCallId] = parentToolCallId
+                        it[Tables.Message.createdAt] = System.currentTimeMillis()
+                        it[Tables.Message.seq] = start + index
+                    }
                 }
             }
         }
         logger.debug("Upserted {} messages for session {}", messages.size, sessionId)
+    }
+
+    /** Current value of `session.message_seq` (the last ordinal handed out). */
+    private suspend fun currentMessageSeq(sessionId: String): Long =
+        Tables.Session
+            .select(Tables.Session.messageSeq)
+            .where { Tables.Session.id eq sessionId }
+            .firstOrNull()
+            ?.get(Tables.Session.messageSeq)
+            ?: 0L
+
+    /**
+     * Reserve [count] consecutive ordinals for [sessionId] and return the first one.
+     *
+     * Must run inside the transaction that inserts those rows. The increment happens on the
+     * session row itself, so concurrent writers serialize on one row update instead of racing
+     * on `MAX(seq)+1` (which can hand the same number to both).
+     */
+    private suspend fun allocateSeqBlock(sessionId: String, count: Int): Long {
+        val updated = Tables.Session.update({ Tables.Session.id eq sessionId }) {
+            it.update(Tables.Session.messageSeq, Tables.Session.messageSeq + count.toLong())
+        }
+        if (updated == 0) {
+            // The session row is written by ensureSessionExists/save before any message insert, so
+            // reaching here means a caller persisted a message for an unknown session. Deriving the
+            // block from the counter anyway would return 0 (or a negative), every insert in the
+            // session would collide on `uq_message_session_seq`, and `insertIgnore` would silently
+            // drop them. Fall back to MAX(seq)+1 — racy in theory, but this is already a bug state
+            // and a lost message is worse than a rare duplicate ordinal.
+            logger.warn(
+                "Allocating message seq for session {} without a session row — falling back to MAX(seq)+1",
+                sessionId
+            )
+            // `MAX()` rather than `ORDER BY seq DESC LIMIT 1`: PostgreSQL sorts NULLs first in a
+            // DESC scan, so a single row with a NULL seq (a migration that has not run yet) would
+            // hand back NULL and the allocation would restart from 1, colliding with live rows.
+            val maxSeq = Tables.Message
+                .select(Tables.Message.seq.max())
+                .where { Tables.Message.sessionId eq sessionId }
+                .firstOrNull()
+                ?.get(Tables.Message.seq.max())
+                ?: 0L
+            return maxSeq + 1
+        }
+        return currentMessageSeq(sessionId) - count + 1
+    }
+
+    /**
+     * Bump the history-rewrite counter. Must be called inside the transaction that performs the
+     * rewrite, so a reader can never observe the new content with the old revision (or vice versa).
+     *
+     * Appends deliberately do NOT bump: they are covered by [Tables.Session.messageSeq], and
+     * bumping on every streamed message would invalidate every cache on every token.
+     */
+    private suspend fun bumpContentRevision(sessionId: String) {
+        Tables.Session.update({ Tables.Session.id eq sessionId }) {
+            it.update(Tables.Session.contentRevision, Tables.Session.contentRevision + 1L)
+        }
     }
 
     /**
@@ -521,6 +657,7 @@ class R2dbcAsyncSessionStore(
                 Tables.Session.update({ Tables.Session.id eq sessionId }) {
                     it[Tables.Session.contentUpdatedAt] = System.currentTimeMillis()
                 }
+                bumpContentRevision(sessionId)
                 logger.debug("Updated message {} for session {}", messageId, sessionId)
             } else {
                 // Partial update: only specified fields, no contentUpdatedAt bump
@@ -544,6 +681,13 @@ class R2dbcAsyncSessionStore(
                         it[Tables.Message.stopReason] = extractStopReason(message)
                     }
                 }
+                // Only a content rewrite invalidates a cached transcript. `stopReason`/token-count
+                // updates land on the same row after every round and used to bump this counter,
+                // which made every client cache miss at least once per turn for no reason. The
+                // in-flight client is protected by `messageSeq` (a new turn always appends rows).
+                if (MessageUpdateField.CONTENT_BLOCKS in fields) {
+                    bumpContentRevision(sessionId)
+                }
                 logger.debug("Updated fields {} for message {} in session {}", fields, messageId, sessionId)
             }
         }
@@ -554,6 +698,7 @@ class R2dbcAsyncSessionStore(
             Tables.Message.deleteWhere {
                 (Tables.Message.id eq messageId) and (Tables.Message.sessionId eq sessionId)
             }
+            bumpContentRevision(sessionId)
         }
         logger.debug("Deleted message {} from session {}", messageId, sessionId)
     }
@@ -639,10 +784,32 @@ class R2dbcAsyncSessionStore(
             val messageRows = Tables.Message
                 .selectAll()
                 .where { Tables.Message.sessionId eq sessionId }
-                .orderBy(Tables.Message.createdAt to SortOrder.ASC)
+                // Logical history order, not insertion order: a compaction summary is written
+                // late but backdated to the position of the prefix it replaces, so ordering by
+                // seq would strand it after the messages it summarizes. `id` is the millisecond
+                // tie-break, which keeps same-timestamp rows in a deterministic order.
+                .orderBy(Tables.Message.createdAt to SortOrder.ASC, Tables.Message.id to SortOrder.ASC)
                 .toList()
 
             messageRows.mapNotNull { row -> parseMessageRow(row) }
+        }
+    }
+
+    /**
+     * Load messages with `seq > afterSeq`.
+     *
+     * Replaces the timestamp cursor for incremental recovery: `created_at` has millisecond
+     * resolution, so several rows of one round share a value and a strict `>` skip dropped them
+     * permanently (the next poll could never see them again).
+     */
+    override suspend fun loadMessagesAfter(sessionId: String, afterSeq: Long): List<MessageWithTimestamp> {
+        return suspendTransaction(db) {
+            Tables.Message
+                .selectAll()
+                .where { (Tables.Message.sessionId eq sessionId) and (Tables.Message.seq greater afterSeq) }
+                .orderBy(Tables.Message.seq to SortOrder.ASC)
+                .toList()
+                .mapNotNull { row -> parseMessageRow(row) }
         }
     }
 
@@ -816,6 +983,8 @@ class R2dbcAsyncSessionStore(
                 "Deleted {} compaction artifacts ({} summaries, {} indicators), preserved {} indicators for session {}",
                 toDelete.size, summaryIdsToUndo.size, indicatorIdsToDelete.size, preservedIndicatorIds.size, sessionId
             )
+            // Restoring the compacted prefix is a history rewrite like any other.
+            bumpContentRevision(sessionId)
 
             preservedIndicatorIds
         }
@@ -992,6 +1161,7 @@ class R2dbcAsyncSessionStore(
             ) {
                 it[Tables.Message.compactedAt] = compactedAt
             }
+            bumpContentRevision(sessionId)
             logger.info("Marked {} messages as compacted for session {}", messageIds.size, sessionId)
         }
     }
@@ -1044,25 +1214,21 @@ class R2dbcAsyncSessionStore(
     override suspend fun saveCompactionSummary(agentContext: AgentContext, summary: UserMessage, createdAt: Long, usage: Usage) {
         val sessionId = agentContext.sessionId ?: error("agentContext.sessionId must not be null for compaction summary")
         suspendTransaction(db) {
-            val contentJson = serializeContentBlocks(summary.content)
-            val metadataJson = serializeMetadata(summary)
-
-            Tables.Message.upsert {
-                it[Tables.Message.id] = summary.id
-                it[Tables.Message.sessionId] = sessionId
-                it[Tables.Message.agentId] = agentContext.agentId
-                it[Tables.Message.configId] = agentContext.configId.takeIf { it.isNotEmpty() }
-                it[Tables.Message.modelId] = agentContext.modelId.takeIf { it.isNotEmpty() }
-                it[Tables.Message.role] = Role.USER.name
-                it[Tables.Message.contentBlocks] = contentJson
-                it[Tables.Message.metadata] = metadataJson
-                it[Tables.Message.inputTokenCount] = usage.inputTokens
-                it[Tables.Message.outputTokenCount] = usage.outputTokens
-                it[Tables.Message.cacheReadTokenCount] = usage.cacheReadTokens
-                it[Tables.Message.cacheWriteTokenCount] = usage.cacheWriteTokens
-                it[Tables.Message.createdAt] = createdAt
-                // compactedAt is null — summary is an active message
-            }
+            writeCompactionRow(
+                sessionId = sessionId,
+                messageId = summary.id,
+                role = Role.USER.name,
+                agentContext = agentContext,
+                contentJson = serializeContentBlocks(summary.content),
+                metadataJson = serializeMetadata(summary),
+                tokens = TokenCounts(
+                    inputTokens = usage.inputTokens,
+                    outputTokens = usage.outputTokens,
+                    cacheReadTokens = usage.cacheReadTokens,
+                    cacheWriteTokens = usage.cacheWriteTokens
+                ),
+                createdAt = createdAt
+            )
         }
         logger.debug("Saved compaction summary for session {} at t={}", sessionId, createdAt)
     }
@@ -1074,23 +1240,75 @@ class R2dbcAsyncSessionStore(
     override suspend fun saveCompactionIndicator(agentContext: AgentContext, indicator: UserMessage, createdAt: Long) {
         val sessionId = agentContext.sessionId ?: error("agentContext.sessionId must not be null for compaction indicator")
         suspendTransaction(db) {
-            val contentJson = serializeContentBlocks(indicator.content)
-            val metadataJson = serializeMetadata(indicator)
-
-            Tables.Message.upsert {
-                it[Tables.Message.id] = indicator.id
-                it[Tables.Message.sessionId] = sessionId
-                it[Tables.Message.agentId] = agentContext.agentId
-                it[Tables.Message.configId] = agentContext.configId.takeIf { it.isNotEmpty() }
-                it[Tables.Message.modelId] = agentContext.modelId.takeIf { it.isNotEmpty() }
-                it[Tables.Message.role] = Role.CUSTOM.name
-                it[Tables.Message.contentBlocks] = contentJson
-                it[Tables.Message.metadata] = metadataJson
-                it[Tables.Message.createdAt] = createdAt
-                // compactedAt is null — indicator is an active message (for frontend display)
-            }
+            writeCompactionRow(
+                sessionId = sessionId,
+                messageId = indicator.id,
+                role = Role.CUSTOM.name,
+                agentContext = agentContext,
+                contentJson = serializeContentBlocks(indicator.content),
+                metadataJson = serializeMetadata(indicator),
+                tokens = TokenCounts(),
+                createdAt = createdAt
+            )
         }
         logger.debug("Saved compaction indicator for session {} at t={}", sessionId, createdAt)
+    }
+
+    /**
+     * Insert (or re-write) a compaction row, keeping its ordinal stable across re-saves.
+     *
+     * Explicit insert/update branches instead of `upsert`: an upsert either nulls out `seq` on
+     * the update path or consumes a fresh ordinal each time the same summary is persisted twice,
+     * leaving holes in the sequence.
+     */
+    private suspend fun writeCompactionRow(
+        sessionId: String,
+        messageId: String,
+        role: String,
+        agentContext: AgentContext,
+        contentJson: String,
+        metadataJson: String?,
+        tokens: TokenCounts,
+        createdAt: Long
+    ) {
+        val existing = Tables.Message
+            .select(Tables.Message.id)
+            .where { (Tables.Message.sessionId eq sessionId) and (Tables.Message.id eq messageId) }
+            .count() > 0
+
+        // Compaction soft-deletes a prefix — a history rewrite, so caches must be dropped.
+        bumpContentRevision(sessionId)
+
+        if (existing) {
+            Tables.Message.update({ (Tables.Message.sessionId eq sessionId) and (Tables.Message.id eq messageId) }) {
+                it[Tables.Message.contentBlocks] = contentJson
+                it[Tables.Message.metadata] = metadataJson
+                it[Tables.Message.inputTokenCount] = tokens.inputTokens
+                it[Tables.Message.outputTokenCount] = tokens.outputTokens
+                it[Tables.Message.cacheReadTokenCount] = tokens.cacheReadTokens
+                it[Tables.Message.cacheWriteTokenCount] = tokens.cacheWriteTokens
+            }
+            return
+        }
+
+        val seq = allocateSeqBlock(sessionId, 1)
+        Tables.Message.insert {
+            it[Tables.Message.id] = messageId
+            it[Tables.Message.sessionId] = sessionId
+            it[Tables.Message.agentId] = agentContext.agentId
+            it[Tables.Message.configId] = agentContext.configId.takeIf { c -> c.isNotEmpty() }
+            it[Tables.Message.modelId] = agentContext.modelId.takeIf { m -> m.isNotEmpty() }
+            it[Tables.Message.role] = role
+            it[Tables.Message.contentBlocks] = contentJson
+            it[Tables.Message.metadata] = metadataJson
+            it[Tables.Message.inputTokenCount] = tokens.inputTokens
+            it[Tables.Message.outputTokenCount] = tokens.outputTokens
+            it[Tables.Message.cacheReadTokenCount] = tokens.cacheReadTokens
+            it[Tables.Message.cacheWriteTokenCount] = tokens.cacheWriteTokens
+            it[Tables.Message.createdAt] = createdAt
+            it[Tables.Message.seq] = seq
+            // compactedAt is null — summary and indicator are active messages
+        }
     }
 
     /**
@@ -1199,7 +1417,19 @@ class R2dbcAsyncSessionStore(
         val compactedAt = row[Tables.Message.compactedAt]
         val parentMessageId = row[Tables.Message.parentMessageId]
         val parentToolCallId = row[Tables.Message.parentToolCallId]
-        return message?.let { MessageWithTimestamp(it, timestamp, compactedAt = compactedAt, parentMessageId = parentMessageId, parentToolCallId = parentToolCallId) }
+        val seq = row[Tables.Message.seq]
+        return message?.let {
+            MessageWithTimestamp(
+                message = it,
+                timestamp = timestamp,
+                compactedAt = compactedAt,
+                parentMessageId = parentMessageId,
+                parentToolCallId = parentToolCallId,
+                // Rows written before V43 were backfilled by V44; a null here means the row
+                // predates the backfill run, so fall back to 0 rather than failing the load.
+                seq = seq ?: 0L
+            )
+        }
     }
 
     private fun extractStopReason(message: EasyAiMessage): String? {
@@ -1226,6 +1456,7 @@ class R2dbcAsyncSessionStore(
                 }
             }
             logger.info("Deleted {} messages from createdAt >= {} for session {} (excluded {})", deleted, fromTimestamp, sessionId, excludeIds.size)
+            if (deleted > 0) bumpContentRevision(sessionId)
             deleted
         }
     }
@@ -1387,6 +1618,8 @@ class R2dbcAsyncSessionStore(
             val rows = Tables.Message
                 .selectAll()
                 .where { Tables.Message.sessionId eq sourceSessionId }
+                // Same logical order the transcript is read in — the copied prefix must match what
+                // the user saw, including a backdated compaction summary.
                 .orderBy(Tables.Message.createdAt to SortOrder.ASC, Tables.Message.id to SortOrder.ASC)
                 .toList()
 
@@ -1435,6 +1668,9 @@ class R2dbcAsyncSessionStore(
             }
 
             var skippedIndicators = 0
+            // Fork re-assigns ordinals: the copied rows get 1..n in source order, so the branch
+            // keeps the causal order it had even though every id was regenerated.
+            var nextSeq = 1L
             for (row in copied) {
                 val oldId = row[Tables.Message.id]
                 val meta = parseMetadata(row[Tables.Message.metadata])
@@ -1466,7 +1702,14 @@ class R2dbcAsyncSessionStore(
                     it[Tables.Message.parentMessageId] = row[Tables.Message.parentMessageId]?.let { newIdOf[it] }
                     it[Tables.Message.parentToolCallId] = row[Tables.Message.parentToolCallId]
                     it[Tables.Message.createdAt] = row[Tables.Message.createdAt]
+                    it[Tables.Message.seq] = nextSeq++
                 }
+            }
+
+            // The counter must end at the last ordinal handed out, otherwise the first message
+            // appended to the fork would collide with a copied row.
+            Tables.Session.update({ Tables.Session.id eq newSessionId }) {
+                it[Tables.Session.messageSeq] = nextSeq - 1
             }
 
             logger.info(

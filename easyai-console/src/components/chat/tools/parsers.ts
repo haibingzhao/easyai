@@ -3,6 +3,7 @@
  */
 
 import type { GrepMatch, FileEntry, ParsedToolParams, ToolMessageProps } from './types';
+import { blocksOf } from '@/services/tool-blocks';
 
 export function parseBashArgs(args: string | Record<string, unknown> | undefined): NonNullable<ParsedToolParams['bash']> {
   const fallbackCommand = typeof args === 'string' ? args : '';
@@ -60,8 +61,9 @@ export function extractOutput(props: Pick<ToolMessageProps, 'result' | 'streamin
   if (!result) return '';
   
   // Use parsed content blocks
-  if (result.contentBlocks && result.contentBlocks.length > 0) {
-    return result.contentBlocks
+  const blocks = blocksOf(result);
+  if (blocks && blocks.length > 0) {
+    return blocks
       .map((block) => {
         if (block.type === 'toolResult') return block.output;
         if (block.type === 'text') return block.text;

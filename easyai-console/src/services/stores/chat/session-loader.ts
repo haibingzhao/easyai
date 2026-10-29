@@ -1,7 +1,7 @@
 import type { Message, ToolCall, ToolResult, SubAgentMessageGroup, ContextReferences, QueuedMessage } from '@/types/message';
 import type { MessageSegment } from '@/types/message-segment';
 import type { PermissionRequestEvent } from '@/types/socket-event';
-import type { CheckpointInfo } from '@/types/checkpoint';
+import type { CheckpointInfo, CheckpointState } from '@/types/checkpoint';
 import type {
   MessageSnapshot,
   PendingPermissionInfo,
@@ -227,6 +227,8 @@ interface LoadSessionStateShape {
   contextTokens: number;
   contextWindow: number;
   checkpointsByMessageId: Record<string, CheckpointInfo>;
+  checkpointList: CheckpointInfo[];
+  checkpointState: CheckpointState;
   revertState: null;
   fileReviewOverrides: Record<string, 'accepted' | 'rejected'>;
   pendingPermission: PermissionRequestEvent | null;
@@ -254,7 +256,7 @@ export function loadSessionMessagesImpl(
   endReason?: string | null,
   variables?: Record<string, string>,
   modelContextLength?: number | null,
-  localMessages?: Message[]
+  localMessages?: Message[],
 ): void {
   // Separate sub-agent messages (parentToolCallId != null) from parent-level messages
   const subAgentSnapshots = messages.filter((msg) => msg.parentToolCallId != null);
@@ -299,6 +301,22 @@ export function loadSessionMessagesImpl(
   // Build checkpoint map
   const checkpointsByMessageId = buildCheckpointMap(checkpoints, mergedMessages);
 
+  /**
+   * Only touch the checkpoint fields when a list was actually passed.
+   *
+   * `undefined` means "this caller did not query them", not "there are none": wiping a loaded
+   * `ok` answer on every incremental merge would turn the edit gate back into "still loading"
+   * for no reason, and an empty array from a *failed* fetch must never look like `ok` either.
+   */
+  const checkpointPatch = checkpoints
+    ? {
+        checkpointsByMessageId,
+        checkpointList: checkpoints,
+        checkpointState: 'ok' as const,
+        checkpointError: null,
+      }
+    : null;
+
   // A snapshot load must not drop the optimistic user message of an in-flight send:
   // the snapshot may have been fetched before the backend persisted it (stale-stream
   // reconciliation, session-switch race). Re-append such local-only messages.
@@ -318,7 +336,9 @@ export function loadSessionMessagesImpl(
     cancelReason,
     cumulativeUsage,
     contextTokens,
-    checkpointsByMessageId,
+    // A caller that passes a list did load it successfully, so an empty one means "no turn
+    // changed files" — `ok`, not `unknown`. Callers that failed leave it undefined.
+    ...(checkpointPatch ?? {}),
     revertState: null,
     fileReviewOverrides: {},
     // A snapshot load replaces the whole transcript with the DB truth; any live
@@ -352,34 +372,45 @@ export function loadSessionMessagesImpl(
 }
 
 /**
- * Merge tool result messages into preceding assistant messages.
+ * Merge tool result messages into the assistant messages that called them.
+ *
+ * Association is by `toolCallId`, not by adjacency: a fork re-generates message ids and can
+ * reorder rows that share a millisecond, which made the old look-ahead attach a result to the
+ * wrong turn. Results that no assistant claims are left out of `messages` — no component renders
+ * a standalone TOOL row, and the app reads this list positionally.
  */
 export function mergeToolResults(convertedMessages: Message[]): Message[] {
-  const mergedMessages: Message[] = [];
-  for (let i = 0; i < convertedMessages.length; i++) {
-    const msg = convertedMessages[i];
-
-    if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
-      // Look ahead for following tool result messages
-      const toolResults: ToolResult[] = [];
-      while (i + 1 < convertedMessages.length && convertedMessages[i + 1].role === 'tool') {
-        const toolMsg = convertedMessages[i + 1] as Extract<Message, { role: 'tool' }>;
-        if (toolMsg.toolResults) {
-          toolResults.push(...toolMsg.toolResults);
-        }
-        i++;
-      }
-
-      // Merge tool results into assistant message
-      mergedMessages.push({
-        ...msg,
-        toolResults: toolResults.length > 0 ? toolResults : undefined,
-      } as Message);
-    } else if (msg.role !== 'tool') {
-      mergedMessages.push(msg);
+  // 1) index every tool result by the call it answers
+  const resultsByCallId = new Map<string, ToolResult[]>();
+  convertedMessages.forEach((msg) => {
+    if (msg.role !== 'tool') return;
+    for (const result of msg.toolResults ?? []) {
+      const bucket = resultsByCallId.get(result.id);
+      if (bucket) bucket.push(result);
+      else resultsByCallId.set(result.id, [result]);
     }
-    // Skip standalone tool messages (already merged)
+  });
+
+  const mergedMessages: Message[] = [];
+
+  for (const msg of convertedMessages) {
+    if (msg.role === 'tool') continue;
+    if (msg.role !== 'assistant' || !msg.toolCalls || msg.toolCalls.length === 0) {
+      mergedMessages.push(msg);
+      continue;
+    }
+    const toolResults: ToolResult[] = [];
+    for (const call of msg.toolCalls) {
+      const results = resultsByCallId.get(call.id);
+      if (!results) continue;
+      toolResults.push(...results);
+    }
+    mergedMessages.push({
+      ...msg,
+      toolResults: toolResults.length > 0 ? toolResults : undefined,
+    } as Message);
   }
+
   return mergedMessages;
 }
 
@@ -452,6 +483,8 @@ function detectInterruptedSession(
   endReason?: string | null
 ): string | null {
   const originalLastMsg = convertedMessages[convertedMessages.length - 1];
+  // mergedMessages never carries a standalone TOOL row (mergeToolResults folds them into their
+  // assistant), so the last entry is always a real turn boundary.
   const mergedLastMsg = mergedMessages[mergedMessages.length - 1];
   let cancelReason: string | null = null;
 
@@ -475,8 +508,9 @@ function detectInterruptedSession(
     }
   }
 
-  // Scenario 2: Last message in DB is a tool result message.
-  if (!cancelReason && originalLastMsg?.role === 'tool' && mergedLastMsg?.role !== 'tool' && !pendingPermission) {
+  // Scenario 2: Last message in DB is a tool result message — the run stopped between the tool
+  // call and its answer.
+  if (!cancelReason && originalLastMsg?.role === 'tool' && !pendingPermission) {
     cancelReason = 'Session Interrupted';
   }
 
@@ -584,9 +618,9 @@ function computeContextTokens(filteredSnapshots: MessageSnapshot[]): number {
 /**
  * Build checkpoint map from provided checkpoints.
  */
-function buildCheckpointMap(
+export function buildCheckpointMap(
   checkpoints: CheckpointInfo[] | undefined,
-  mergedMessages: Message[]
+  mergedMessages?: Message[]
 ): Record<string, CheckpointInfo> {
   const checkpointsByMessageId: Record<string, CheckpointInfo> = {};
   if (checkpoints && checkpoints.length > 0) {
@@ -594,16 +628,17 @@ function buildCheckpointMap(
       const key = cp.assistantMessageId || cp.messageId;
       if (key) checkpointsByMessageId[key] = cp;
     }
-    console.debug('[loadSessionMessages] Checkpoint map built:', {
-      checkpointCount: checkpoints.length,
-      keys: Object.keys(checkpointsByMessageId),
-      assistantMessageIds: checkpoints.map(cp => cp.assistantMessageId),
-      messageIds: checkpoints.map(cp => cp.messageId),
-    });
-    const assistantMsgIds = mergedMessages
-      .filter(m => m.role === 'assistant')
-      .map(m => (m as { messageId?: string }).messageId);
-    console.debug('[loadSessionMessages] Assistant message IDs in loaded messages:', assistantMsgIds);
+    if (import.meta.env.DEV) {
+      console.debug('[loadSessionMessages] Checkpoint map built:', {
+        checkpointCount: checkpoints.length,
+        keys: Object.keys(checkpointsByMessageId),
+        assistantMessageIds: checkpoints.map(cp => cp.assistantMessageId),
+        messageIds: checkpoints.map(cp => cp.messageId),
+        assistantMsgIds: mergedMessages
+          ?.filter(m => m.role === 'assistant')
+          .map(m => (m as { messageId?: string }).messageId),
+      });
+    }
   }
   return checkpointsByMessageId;
 }

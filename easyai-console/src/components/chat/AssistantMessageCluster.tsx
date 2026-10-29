@@ -15,7 +15,7 @@ interface AssistantMessageClusterProps {
  * messages render as one block: their segments are concatenated and folded into
  * shared process groups instead of one group per round.
  */
-export const AssistantMessageCluster: React.FC<AssistantMessageClusterProps> = ({ messages }) => {
+const AssistantMessageClusterImpl: React.FC<AssistantMessageClusterProps> = ({ messages }) => {
   const workDir = useProjectStore((s) => s.currentProject?.path || '');
 
   const segments = useMemo(
@@ -32,3 +32,14 @@ export const AssistantMessageCluster: React.FC<AssistantMessageClusterProps> = (
     </div>
   );
 };
+
+/**
+ * Memoized because the alternation between "user typing" renders and "assistant streaming" renders
+ * otherwise rebuilds every segment of every finished turn: a single delta re-renders the list, and
+ * without this each committed cluster re-runs `segmentsForMessage` and re-mounts its tool cards.
+ *
+ * `messages` is a slice held inside `MessageList`'s memoized render items, so its identity changes
+ * exactly when that turn's messages do — which is what makes the default shallow comparison usable
+ * here. `workDir` is read from the store inside the component, so a project change still re-renders.
+ */
+export const AssistantMessageCluster = React.memo(AssistantMessageClusterImpl);

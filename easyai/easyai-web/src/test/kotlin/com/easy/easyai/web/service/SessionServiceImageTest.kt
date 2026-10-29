@@ -4,8 +4,8 @@ import com.easy.easyai.api.config.ModelProviderConfigStore
 import com.easy.easyai.api.model.ModelOptions
 import com.easy.easyai.api.model.ModelProviderConfig
 import com.easy.easyai.api.model.ModelProviderInfo.Protocol
-import com.easy.easyai.core.agent.PersistedSession
 import com.easy.easyai.core.agent.SessionManager
+import com.easy.easyai.core.model.AssistantMessage
 import com.easy.easyai.core.model.FileRefContent
 import com.easy.easyai.core.model.TextContent
 import com.easy.easyai.core.model.UserMessage
@@ -13,12 +13,15 @@ import com.easy.easyai.core.storage.StoredFileReference
 import com.easy.easyai.repository.session.AsyncSessionStore
 import com.easy.easyai.repository.session.LastMessageConfig
 import com.easy.easyai.repository.session.MessageWithTimestamp
+import com.easy.easyai.repository.session.SessionCursor
+import com.easy.easyai.repository.session.SessionMeta
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import java.time.Instant
 import kotlin.test.assertEquals
@@ -53,9 +56,13 @@ class SessionServiceImageTest {
 
     @BeforeEach
     fun setup() {
-        coEvery { manager.getSessionDetail("session-1", "alice") } returns PersistedSession(
-            "session-1", messages.map { it.message }, createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH
+        coEvery { store.findSessionMeta("session-1", "alice") } returns SessionMeta(
+            id = "session-1",
+            projectId = null,
+            createdAt = Instant.EPOCH.toEpochMilli(),
+            updatedAt = Instant.EPOCH.toEpochMilli(),
         )
+        coEvery { store.findSessionCursor(any(), any()) } returns null
         coEvery { store.loadMessagesWithTimestamps("session-1") } returns messages
         coEvery { store.loadMessagesWithTimestampsAfter("session-1", 0L) } returns messages
         coEvery { store.findContentUpdatedAt("session-1", "alice") } returns 200L
@@ -92,11 +99,13 @@ class SessionServiceImageTest {
 
     @Test
     fun `does not sign inaccessible session images`() = runTest {
-        coEvery { manager.getSessionDetail("session-1", "bob") } returns null
+        coEvery { store.findSessionMeta("session-1", "bob") } returns null
         coEvery { store.findContentUpdatedAt("session-1", "bob") } returns null
         assertNull(service.getSessionDetail("session-1", "bob", bobOwners))
         assertNull(service.getSessionMessagesAfter("session-1", 0L, "bob", bobOwners))
         coVerify(exactly = 0) { files.resolveImageUrl(any(), any(), any()) }
+        coVerify(exactly = 0) { store.findSessionCursor(any(), any()) }
+        Unit
     }
 
     @Test
@@ -129,5 +138,60 @@ class SessionServiceImageTest {
 
         assertEquals(128_000, detail.modelContextLength)
         coVerify(exactly = 1) { configStore.getConfig("cfg-1", setOf("alice", "system")) }
+    }
+
+    @Nested
+    inner class `session cursors and titles` {
+        @Test
+        fun `detail and seq incremental reads pass the caller to the cursor lookup`() = runTest {
+            coEvery { store.findSessionCursor("session-1", "alice") } returns SessionCursor(12L, 3L)
+            coEvery { store.loadMessagesAfter("session-1", 12L) } returns emptyList()
+            val detail = assertNotNull(service.getSessionDetail("session-1", "alice", aliceOwners))
+            val incremental = assertNotNull(service.getSessionMessages("session-1", "alice", aliceOwners, afterSeq = 12L))
+
+            assertEquals(12L, detail.newestMessageSeq)
+            assertEquals(3L, detail.contentRevision)
+            assertEquals(12L, incremental.newestSeq)
+            assertEquals(3L, incremental.revision)
+            coVerify(exactly = 2) { store.findSessionCursor("session-1", "alice") }
+            coVerify(exactly = 0) { store.findSessionCursor("session-1", "system") }
+            Unit
+        }
+
+        @Test
+        fun `title joins only first user text blocks without trimming and truncates to fifty characters`() = runTest {
+            val prefix = "  first "
+            val suffix = "x".repeat(60)
+            val firstUser = UserMessage(content = listOf(
+                TextContent(prefix), FileRefContent(reference, "note.txt", "text/plain", displayOffset = prefix.length), TextContent(suffix)
+            ))
+            coEvery { store.loadMessagesWithTimestamps("session-1") } returns listOf(
+                MessageWithTimestamp(AssistantMessage(content = listOf(TextContent("not the title"))), 1L),
+                MessageWithTimestamp(firstUser, 2L),
+                MessageWithTimestamp(message, 3L)
+            )
+            val detail = assertNotNull(service.getSessionDetail("session-1", "alice", aliceOwners))
+            assertEquals((prefix + suffix).take(50), detail.title)
+            Unit
+        }
+
+        @Test
+        fun `blank first user title does not fall through to a later user`() = runTest {
+            coEvery { store.loadMessagesWithTimestamps("session-1") } returns listOf(
+                MessageWithTimestamp(UserMessage(content = listOf(TextContent("  \n"))), 1L),
+                MessageWithTimestamp(message, 2L)
+            )
+            assertNull(assertNotNull(service.getSessionDetail("session-1", "alice", aliceOwners)).title)
+            Unit
+        }
+
+        @Test
+        fun `missing user message leaves the title null`() = runTest {
+            coEvery { store.loadMessagesWithTimestamps("session-1") } returns listOf(
+                MessageWithTimestamp(AssistantMessage(content = listOf(TextContent("assistant only"))), 1L)
+            )
+            assertNull(assertNotNull(service.getSessionDetail("session-1", "alice", aliceOwners)).title)
+            Unit
+        }
     }
 }

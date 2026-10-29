@@ -3,6 +3,7 @@ package com.easy.easyai.snapshot
 import com.easy.easyai.common.util.ProcessExecutor
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.snapshot.model.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -169,6 +170,98 @@ class GitSnapshotService(
 
             diffWithPatches(snapshotRepoDir, projectPath, commitHash)
         }
+
+    /**
+     * [diff] without the patch body: `--numstat` + `--name-status -z` only.
+     *
+     * The checkpoint API reads `path / additions / deletions / status` and nothing else, so the
+     * third `git diff` that produces the full patch text was pure cost per checkpoint.
+     * `-z` also removes the quoting rules `parseNumstat` has to guess at (`dir/{a => b}/f`).
+     */
+    override suspend fun diffStats(projectPath: Path, fromCommitHash: String, toCommitHash: String): List<FileDiff> =
+        withContext(Dispatchers.IO) {
+            val snapshotRepoDir = getSnapshotRepoDir(projectPath)
+            if (!isRepoInitialized(snapshotRepoDir)) return@withContext emptyList()
+
+            // `runGit`, not `runGitQuiet`: the quiet variant swallows a failed command into "" and
+            // the caller then reports an empty-but-complete file list — i.e. "this turn changed
+            // nothing" — which is exactly the answer that lets an edit skip its rollback
+            // confirmation. A failure has to reach the caller so it can mark the entry incomplete.
+            val numstatOutput = runGit(
+                snapshotRepoDir, projectPath,
+                "diff", "-M", "--numstat", "-z", fromCommitHash, toCommitHash, "--"
+            )
+            if (numstatOutput.isEmpty()) return@withContext emptyList()
+            val nameStatusOutput = runGit(
+                snapshotRepoDir, projectPath,
+                "diff", "-M", "--name-status", "-z", fromCommitHash, toCommitHash, "--"
+            )
+            parseNumstatZ(numstatOutput, nameStatusOutput)
+                .filter { it.path.substringBefore('/') !in EXCLUDED_DIRS }
+        }
+
+    /**
+     * Parse `git diff --numstat -z` (path-NUL separated) into [FileDiff]s.
+     *
+     * With `-z` a plain entry is `added \t deleted \t path \0`; a rename entry leaves the path
+     * field empty and appends `old \0 new \0` as separate tokens. Status comes from the
+     * `--name-status -z` stream, which uses the same token shape (`R100 \0 old \0 new \0`).
+     */
+    private fun parseNumstatZ(numstatZ: String, nameStatusZ: String): List<FileDiff> {
+        val statusByPath = mutableMapOf<String, Char>()
+        run {
+            val tokens = nameStatusZ.split('\u0000')
+            var i = 0
+            while (i < tokens.size) {
+                val token = tokens[i]
+                if (token.isBlank()) { i++; continue }
+                val statusChar = token.first()
+                when (statusChar) {
+                    'R', 'C' -> {
+                        val newPath = tokens.getOrNull(i + 2)
+                        if (newPath != null) statusByPath[newPath] = statusChar
+                        i += 3
+                    }
+                    else -> {
+                        val path = tokens.getOrNull(i + 1)
+                        if (path != null) statusByPath[path] = statusChar
+                        i += 2
+                    }
+                }
+            }
+        }
+
+        val result = mutableListOf<FileDiff>()
+        val tokens = numstatZ.split('\u0000')
+        var i = 0
+        while (i < tokens.size) {
+            val token = tokens[i]
+            if (token.isEmpty()) { i++; continue }
+            val parts = token.split('\t', limit = 3)
+            if (parts.size < 3) { i++; continue }
+            // "-" marks a binary file; it contributes no line counts.
+            val additions = parts[0].toIntOrNull() ?: 0
+            val deletions = parts[1].toIntOrNull() ?: 0
+            val inlinePath = parts[2]
+            val path: String
+            if (inlinePath.isEmpty()) {
+                path = tokens.getOrNull(i + 2) ?: ""
+                i += 3
+            } else {
+                path = inlinePath
+                i += 1
+            }
+            if (path.isEmpty()) continue
+            val status = when (statusByPath[path]) {
+                'A' -> FileChangeStatus.ADDED
+                'D' -> FileChangeStatus.DELETED
+                'R' -> FileChangeStatus.RENAMED
+                else -> FileChangeStatus.MODIFIED
+            }
+            result += FileDiff(path = path, additions = additions, deletions = deletions, status = status)
+        }
+        return result
+    }
 
     override suspend fun restore(projectPath: Path, commitHash: String, sessionId: String?) =
         mutexFor(projectPath).withLock {
@@ -658,6 +751,99 @@ class GitSnapshotService(
 
             result
         }
+
+    /**
+     * Author attribution for a whole chain of ranges in one `git log`.
+     *
+     * Same rule as [determineFileAuthors] — the **last** commit touching a path inside the range
+     * wins — replayed over one commit list. `hash -> index` replaces a hash-string binary search,
+     * which is meaningless because hashes carry no ordering.
+     *
+     * Ranges are expected newest-first (the order the checkpoint list produces them), so the
+     * walk covers `oldestFrom..newestTo` where `oldestFrom` is the last range's start.
+     */
+    override suspend fun fileAuthorsInChain(
+        projectPath: Path,
+        ranges: List<Pair<String, String>>
+    ): List<Map<String, String>> =
+        withContext(Dispatchers.IO) {
+            if (ranges.isEmpty()) return@withContext emptyList()
+            val snapshotRepoDir = getSnapshotRepoDir(projectPath)
+            if (!isRepoInitialized(snapshotRepoDir)) return@withContext ranges.map { emptyMap() }
+
+            val oldestFrom = ranges.last().first
+            val newestTo = ranges.first().second
+            val entries = try {
+                val output = runGit(
+                    snapshotRepoDir, projectPath,
+                    "log", "--format=%x00%H%x00%ae", "--name-only", "-M", "-z", "--reverse",
+                    "$oldestFrom..$newestTo", "--"
+                )
+                parseCommitChain(output)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger.debug("Failed to read commit chain, falling back to individual ranges: {}", e.message)
+                return@withContext ranges.map { (from, to) -> determineFileAuthors(projectPath, from, to) }
+            }
+            if (entries.isEmpty()) return@withContext ranges.map { emptyMap() }
+            val indexOf = HashMap<String, Int>(entries.size * 2)
+            entries.forEachIndexed { index, entry -> indexOf[entry.hash] = index }
+
+            ranges.map { (from, to) ->
+                val endExclusive = indexOf[to]
+                if (endExclusive == null) {
+                    // The end commit is not in the walked chain — nothing trustworthy to replay.
+                    determineFileAuthors(projectPath, from, to)
+                } else {
+                    // A start commit outside the walk is the range's own root (the session
+                    // baseline): replaying from the first entry of the range is exactly (from, to].
+                    val startExclusive = indexOf[from] ?: -1
+                    val authors = mutableMapOf<String, String>()
+                    for (index in (startExclusive + 1)..endExclusive) {
+                        val entry = entries[index]
+                        for (path in entry.paths) authors[path] = entry.author
+                    }
+                    authors
+                }
+            }
+        }
+
+    /** One commit of the chain: hash, normalized author ("llm"/"user") and touched paths. */
+    private data class ChainCommit(val hash: String, val author: String, val paths: List<String>)
+
+    /** NUL tokens: empty boundary, hash, email, paths. A Git path cannot be empty or contain NUL. */
+    private fun parseCommitChain(output: String): List<ChainCommit> {
+        if (output.isEmpty()) return emptyList()
+        require(output.endsWith('\u0000')) { "Unterminated commit chain" }
+        val tokens = output.split('\u0000')
+        val entries = mutableListOf<ChainCommit>()
+        var i = 0
+        while (i < tokens.lastIndex) {
+            require(tokens[i].isEmpty() && i + 2 < tokens.lastIndex) { "Invalid commit boundary" }
+            val hash = tokens[i + 1]
+            val email = tokens[i + 2]
+            require(hash.isNotEmpty()) { "Missing commit hash" }
+            i += 3
+            val paths = mutableListOf<String>()
+            while (i < tokens.lastIndex && tokens[i].isNotEmpty()) {
+                val raw = tokens[i++]
+                // Git adds exactly one LF before the first path, not before subsequent paths.
+                val path = if (paths.isEmpty()) {
+                    require(raw.startsWith('\n')) { "Missing commit file separator" }
+                    raw.substring(1)
+                } else raw
+                require(path.isNotEmpty()) { "Empty commit path" }
+                paths += path
+            }
+            entries += ChainCommit(
+                hash = hash,
+                author = if (email == ChangeAuthor.LLM_AGENT.gitAuthorEmail) "llm" else "user",
+                paths = paths
+            )
+        }
+        return entries
+    }
 
     override suspend fun extractFileContent(
         projectPath: Path,

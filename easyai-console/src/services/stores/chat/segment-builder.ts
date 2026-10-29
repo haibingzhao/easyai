@@ -138,13 +138,37 @@ export function resolveSegments(message: AssistantMessage, resultMap: Map<string
  * Convenience wrapper: resolve a message's own tool results into its segments.
  * `extraResults` lets callers supply results that live outside the message.
  */
+/**
+ * Cache of resolved segments per message object.
+ *
+ * `AssistantMessage` is memoised, but a parent re-render (a tool result arriving, the window
+ * widening) still calls back into here for every mounted turn. The message object is rebuilt only
+ * when its snapshot is, so object identity is a sound key; `extraResults` is remembered alongside
+ * it because `mergeToolResults` hands over a fresh array on each load.
+ */
+const segmentCache = new WeakMap<AssistantMessage, { results: ToolResult[]; segments: MessageSegment[] }>();
+
+/**
+ * Shared empty default.
+ *
+ * A literal `= []` default would allocate a fresh array per call, so `cached.results === extraResults`
+ * could never hold and every call — including the cluster path, which passes no extra results at
+ * all — would rebuild its segments and overwrite the cache.
+ */
+const NO_EXTRA_RESULTS: ToolResult[] = [];
+
 export function segmentsForMessage(
   message: AssistantMessage,
-  extraResults: ToolResult[] = [],
+  extraResults: ToolResult[] = NO_EXTRA_RESULTS,
 ): MessageSegment[] {
+  const cached = segmentCache.get(message);
+  if (cached && cached.results === extraResults) return cached.segments;
+
   const resultMap = new Map<string, ToolResult>();
   for (const result of [...(message.toolResults ?? []), ...extraResults]) {
     resultMap.set(result.id, result);
   }
-  return resolveSegments(message, resultMap);
+  const segments = resolveSegments(message, resultMap);
+  segmentCache.set(message, { results: extraResults, segments });
+  return segments;
 }

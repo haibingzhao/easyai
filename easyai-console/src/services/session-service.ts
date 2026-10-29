@@ -172,6 +172,13 @@ export interface SessionDetail {
   workspaceKind?: 'user' | 'temp' | null;
   /** Tags attached to this session (empty/absent when none). */
   tags?: string[];
+  /** Seq of the newest message in this response — the cursor for incremental polling. */
+  newestMessageSeq?: number | null;
+  /**
+   * History fingerprint: moves only when a rewrite happened (edit/delete/truncate/compact/revert).
+   * A cached transcript may only be stitched with a delta reporting the same revision.
+   */
+  contentRevision?: number | null;
 }
 
 /** One fork branch entry for the Summary panel branch list. */
@@ -201,6 +208,10 @@ export interface SessionMessagesAfterResponse {
   pendingPermission?: PendingPermissionInfo | null;
   /** Why the last agent execution ended (e.g. "max_iterations"). Absent = normal. */
   endReason?: string | null;
+  /** Seq of the newest row in this response — the cursor for the next incremental call. */
+  newestSeq?: number | null;
+  /** History revision at read time; a delta may only be appended when it matches the cache. */
+  revision?: number | null;
 }
 
 export interface PendingPermissionInfo {
@@ -254,16 +265,24 @@ export class SessionService {
     return fetchJson<string[]>(`${API_BASE}/sessions/tags${qs ? `?${qs}` : ''}`);
   }
 
+  /**
+   * Session detail.
+   *
+   * Returns the whole transcript in one response.
+   */
   async getSessionDetail(id: string): Promise<SessionDetail> {
     return fetchJson<SessionDetail>(`${API_BASE}/session/${id}`);
   }
 
   /**
-   * Fetch messages created after [afterTimestamp] for incremental recovery.
-   * Also returns compaction/dirty-marker metadata for fallback decisions.
+   * Incremental load by seq — the loss-free cursor.
+   * A millisecond timestamp drops rows that share a millisecond, which the next poll can never
+   * pick up again; `afterSeq` has no such gap.
    */
-  async getSessionMessagesAfter(id: string, afterTimestamp: number): Promise<SessionMessagesAfterResponse> {
-    return fetchJson<SessionMessagesAfterResponse>(`${API_BASE}/session/${id}/messages?after=${afterTimestamp}`);
+  async getSessionMessagesAfterSeq(id: string, afterSeq: number): Promise<SessionMessagesAfterResponse> {
+    return fetchJson<SessionMessagesAfterResponse>(
+      `${API_BASE}/session/${id}/messages?afterSeq=${afterSeq}`,
+    );
   }
 
   async deleteSession(sessionId: string): Promise<void> {

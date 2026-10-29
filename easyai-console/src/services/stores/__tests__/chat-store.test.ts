@@ -23,6 +23,8 @@ vi.mock('../chat/message-converter', () => ({
 }));
 
 import { useChatStore } from '../chat-store';
+import { loadSessionMessagesImpl } from '../chat/session-loader';
+import type { MessageSnapshot } from '@/services/session-service';
 import type { Message } from '@/types/message';
 
 describe('useChatStore', () => {
@@ -272,6 +274,73 @@ describe('useChatStore', () => {
       const state = useChatStore.getState();
       expect(state.isStreaming).toBe(true);
       expect(state.streamingBlocks).toHaveLength(1);
+    });
+  });
+
+  describe('session snapshot ownership', () => {
+    const first: MessageSnapshot = { id: 'A-1', role: 'USER', content: [{ type: 'text', text: 'A' }], timestamp: 1 };
+    const second: MessageSnapshot = { id: 'B-1', role: 'USER', content: [{ type: 'text', text: 'B' }], timestamp: 2 };
+
+    it('clears the snapshot baseline on an identity change before recovery', () => {
+      const store = useChatStore.getState();
+      store.applySessionLoad({ sessionId: 'A', ownerSessionId: 'A', messages: [first], newestSeq: 4 });
+      store.setSessionId('B');
+      expect(useChatStore.getState()._lastSnapshots).toEqual([]);
+      expect(useChatStore.getState().messageCursor).toBeNull();
+      store.setRunningSessionId('B');
+      store.loadSessionMessagesIncremental([second], null, undefined, undefined, undefined, undefined, 'B');
+      expect(useChatStore.getState()._lastSnapshots).toEqual([second]);
+      expect(useChatStore.getState()._snapshotSessionId).toBe('B');
+    });
+
+    it('discards a baseline whose owner differs even if identity was assigned directly', () => {
+      const store = useChatStore.getState();
+      store.applySessionLoad({ sessionId: 'A', ownerSessionId: 'A', messages: [first] });
+      useChatStore.setState({ sessionId: 'B' });
+      store.loadSessionMessagesIncremental([second], null, undefined, undefined, undefined, undefined, 'B');
+      expect(useChatStore.getState()._lastSnapshots).toEqual([second]);
+    });
+
+    it('rejects full and incremental responses for another session', () => {
+      const store = useChatStore.getState();
+      store.applySessionLoad({ sessionId: 'B', ownerSessionId: 'B', messages: [second] });
+      vi.mocked(loadSessionMessagesImpl).mockClear();
+      store.loadSessionMessages([first], null, undefined, undefined, undefined, undefined, 'A');
+      store.loadSessionMessagesIncremental([first], null, undefined, undefined, undefined, undefined, 'A');
+      expect(useChatStore.getState()._lastSnapshots).toEqual([second]);
+      expect(loadSessionMessagesImpl).not.toHaveBeenCalled();
+    });
+
+    it('preserves the same-session baseline and cursor when recovery starts', () => {
+      const store = useChatStore.getState();
+      store.applySessionLoad({ sessionId: 'A', ownerSessionId: 'A', messages: [first], newestSeq: 4, contentRevision: 2 });
+      store.setRunningSessionId('A');
+      expect(useChatStore.getState()._lastSnapshots).toEqual([first]);
+      expect(useChatStore.getState().messageCursor).toBe(4);
+      expect(useChatStore.getState().contentRevision).toBe(2);
+    });
+
+    it('does not reload over live streaming blocks when reselecting the same session', () => {
+      const store = useChatStore.getState();
+      store.applySessionLoad({ sessionId: 'A', ownerSessionId: 'A', messages: [first], newestSeq: 4 });
+      store.appendToTextBlock('in flight', 'live');
+      store.appendToolOutput('tool', 'partial');
+      store.setStreaming(true);
+      vi.mocked(loadSessionMessagesImpl).mockClear();
+      store.applySessionLoad({ sessionId: 'A', ownerSessionId: 'A', messages: [], newestSeq: 3 });
+      expect(loadSessionMessagesImpl).not.toHaveBeenCalled();
+      expect(useChatStore.getState().streamingBlocks).toHaveLength(1);
+      expect(useChatStore.getState().streamingToolOutputs.tool).toBe('partial');
+      expect(useChatStore.getState().isStreaming).toBe(true);
+      expect(useChatStore.getState().messageCursor).toBe(4);
+    });
+
+    it('clears both the baseline and its owner when closing a session', () => {
+      const store = useChatStore.getState();
+      store.applySessionLoad({ sessionId: 'A', ownerSessionId: 'A', messages: [first] });
+      store.clearChat();
+      expect(useChatStore.getState()._lastSnapshots).toEqual([]);
+      expect(useChatStore.getState()._snapshotSessionId).toBeNull();
     });
   });
 });

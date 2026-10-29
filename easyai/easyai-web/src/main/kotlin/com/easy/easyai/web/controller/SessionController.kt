@@ -9,7 +9,9 @@ import com.easy.easyai.web.security.currentOwners
 import com.easy.easyai.web.security.getCurrentUserId
 import com.easy.easyai.web.service.SessionService
 import kotlinx.coroutines.reactor.mono
+import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.*
+import org.springframework.web.server.ResponseStatusException
 import reactor.core.publisher.Mono
 
 @RestController
@@ -45,11 +47,13 @@ class SessionController(
         }
     }
 
+    /** Session detail — the whole transcript in one response. */
     @GetMapping("/session/{id}")
     fun getSessionDetail(@PathVariable id: String): Mono<SessionDetail> {
         return mono {
             val userId = getCurrentUserId()
-            sessionService.getSessionDetail(id, userId, currentOwners()) ?: throw IllegalArgumentException("Session not found")
+            sessionService.getSessionDetail(id, userId, currentOwners())
+                ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found: $id")
         }
     }
 

@@ -77,13 +77,47 @@ data class SessionForkInfo(
 /**
  * Message with metadata including timestamp.
  * Used for loading messages with their original creation time.
+ *
+ * [seq] is the session-scoped ordinal (see `message.seq`): the incremental-polling cursor and
+ * the order a fork copies rows in. Display order stays `(created_at, id)` — a compaction summary
+ * is written late but backdated, so insertion order would strand it after the rows it replaces.
  */
 data class MessageWithTimestamp(
     val message: EasyAiMessage,
     val timestamp: Long,
     val compactedAt: Long? = null,
     val parentMessageId: String? = null,
-    val parentToolCallId: String? = null
+    val parentToolCallId: String? = null,
+    val seq: Long = 0
+)
+
+/**
+ * Lightweight session row — everything a session detail load needs *except* the messages.
+ *
+ * [AsyncSessionStore.findById] loads and deserializes the whole message table just to reach
+ * these six fields; callers that only need the project (e.g. `getSessionContext`) must use
+ * [AsyncSessionStore.findSessionMeta] instead.
+ */
+data class SessionMeta(
+    val id: String,
+    val projectId: String?,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val systemKind: String? = null,
+    val sessionScope: String? = null
+)
+
+/** Identity + role of a message row, without its content blocks. */
+data class MessageRef(val id: String, val role: String)
+
+/**
+ * Cheap session-level cursor pair, read in one transaction so both values describe the same
+ * moment: `newestSeq` continues incremental loads, `contentRevision` invalidates a cached
+ * transcript after any history rewrite.
+ */
+data class SessionCursor(
+    val newestSeq: Long,
+    val contentRevision: Long,
 )
 
 /**
@@ -242,6 +276,50 @@ interface AsyncSessionStore {
      * Returns messages ordered by creation time (oldest first).
      */
     suspend fun loadMessagesWithTimestamps(sessionId: String): List<MessageWithTimestamp>
+
+    /**
+     * Load a session row's metadata **without** touching the message table.
+     *
+     * Ownership uses the exact same strict filter as [findById], so this is a drop-in
+     * replacement wherever only the project/timestamps are needed.
+     *
+     * The default implementation delegates to [findById] — correct but slow (it deserializes
+     * every message). Stores backed by a real database must override it.
+     */
+    suspend fun findSessionMeta(id: String, userId: String = "system"): SessionMeta? =
+        findById(id, userId)?.let {
+            SessionMeta(
+                id = it.id,
+                projectId = it.projectId,
+                createdAt = it.createdAt.toEpochMilli(),
+                updatedAt = it.updatedAt.toEpochMilli(),
+                systemKind = it.systemKind,
+                sessionScope = it.sessionScope,
+            )
+        }
+
+    /**
+     * Identity + role of every message row, ordered oldest first.
+     * Used where the caller only needs to know which messages still exist (checkpoint filtering,
+     * locating the assistant reply that follows a user message) — never their content.
+     */
+    suspend fun findMessageRefs(sessionId: String): List<MessageRef> =
+        loadMessagesWithTimestamps(sessionId).map { MessageRef(it.message.id, it.message.role.name) }
+
+    /**
+     * Load messages with `seq > afterSeq`, ordered by seq ascending.
+     * The incremental counterpart of [loadMessagesWithTimestampsAfter], but keyed on the stable
+     * ordinal instead of a millisecond timestamp (which silently dropped same-millisecond rows).
+     */
+    suspend fun loadMessagesAfter(sessionId: String, afterSeq: Long): List<MessageWithTimestamp> =
+        loadMessagesWithTimestamps(sessionId).filter { it.seq > afterSeq }
+
+    /**
+     * Cursor state of a session, or null when it does not exist or is not owned by [userId].
+     * Uses the same strict ownership filter as [findById]. Read in one transaction so an
+     * incremental load and cache invalidation observe one consistent snapshot.
+     */
+    suspend fun findSessionCursor(sessionId: String, userId: String = "system"): SessionCursor? = null
 
     /**
      * Load messages created after the given timestamp for a session.

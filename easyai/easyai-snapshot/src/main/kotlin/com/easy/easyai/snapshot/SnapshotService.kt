@@ -301,6 +301,40 @@ interface SnapshotService {
     ): Map<String, String>
 
     /**
+     * Same range and semantics as [diff], but **without generating patches**.
+     *
+     * [diff] runs a third `git diff` (the full patch body) that the checkpoint API never reads:
+     * it only needs `path / additions / deletions / status`. Two processes per call instead of
+     * three, which matters because the checkpoint list calls this once per checkpoint.
+     *
+     * Implementations must apply the same `EXCLUDED_DIRS` filter and status classification as
+     * [diff]; the default delegates so a non-git implementation stays correct.
+     */
+    suspend fun diffStats(
+        projectPath: Path,
+        fromCommitHash: String,
+        toCommitHash: String
+    ): List<FileDiff> = diff(projectPath, fromCommitHash, toCommitHash)
+
+    /**
+     * [determineFileAuthors] for a whole chain of ranges in a **single** git invocation.
+     *
+     * The checkpoint list needs one author map per checkpoint; calling [determineFileAuthors]
+     * per checkpoint spawns one `git log` each. This reads the commit chain once and replays it
+     * per range.
+     *
+     * @param ranges `(from, to)` pairs, newest first — the pairs the caller actually diffed, so
+     *   authors and file lists always describe the same commit range.
+     * @return one author map per range, in input order (empty map when a range cannot be resolved)
+     */
+    suspend fun fileAuthorsInChain(
+        projectPath: Path,
+        ranges: List<Pair<String, String>>
+    ): List<Map<String, String>> = ranges.map { (from, to) ->
+        determineFileAuthors(projectPath, from, to)
+    }
+
+    /**
      * Extract the content of a single file at a given commit.
      * Used for 3-way merge during cross-session reject.
      *

@@ -3,7 +3,8 @@ import type { SocketEvent, PermissionRequestEvent, GoalStatusEvent, BackgroundTa
 import type { TodoInfo, SubAgentTodoGroup } from '@/types/todo';
 import type { TaskSummary } from '@/services/swarm-service';
 import type { Message, ToolResult, ToolResultContentBlock, ContextReferences, QueuedMessage } from '@/types/message';
-import type { CheckpointInfo, RevertStateInfo } from '@/types/checkpoint';
+import type { CheckpointInfo, CheckpointListResponse, CheckpointState, RevertStateInfo } from '@/types/checkpoint';
+import { bumpSessionEpoch } from '@/services/session-epoch';
 import type {
   MessageSnapshot,
   PendingPermissionInfo,
@@ -19,7 +20,7 @@ import {
   type LivePreview,
 } from './chat/types';
 import { handleChatEvent, setLastRespondedPermissionToolCallId } from './chat/event-handler';
-import { commitStreamingMessageImpl, loadSessionMessagesImpl } from './chat/session-loader';
+import { commitStreamingMessageImpl, loadSessionMessagesImpl, buildCheckpointMap } from './chat/session-loader';
 import { getGoal } from '@/services/goal-service';
 import { useTeamStore } from './team-store';
 
@@ -67,6 +68,24 @@ interface ChatState {
   retryInfo: RetryInfo | null;
   /** Checkpoint data keyed by messageId */
   checkpointsByMessageId: Record<string, CheckpointInfo>;
+  /**
+   * The same checkpoints in the order the server returned them (newest first).
+   *
+   * The map loses that order and [evaluateEditGate] needs it: an edit rolls back every turn from
+   * the edited message to the newest one, so "is any entry in that range incomplete?" has to be
+   * answered against a sequence, not a dictionary.
+   */
+  checkpointList: CheckpointInfo[];
+  /**
+   * Freshness of [checkpointsByMessageId]. `unknown` (not loaded) and `failed` are NOT the same
+   * as `ok` with an empty list: the edit path must not read "no files to roll back" out of them.
+   */
+  checkpointState: CheckpointState;
+  checkpointError: string | null;
+  /** True once the run-state probe for the current session succeeded (or was not needed). */
+  runStateResolved: boolean;
+  /** True when the run-state probe failed — the UI offers a retry instead of locking forever. */
+  runStateFailed: boolean;
   /** Current revert state for the session */
   revertState: RevertStateInfo | null;
   /** Per-file review overrides (accepted/rejected) for file changes panel */
@@ -87,6 +106,11 @@ interface ChatState {
   liveStreamDropped: boolean;
   /** Internal: raw MessageSnapshot[] from last full/incremental load, used for incremental merge. */
   _lastSnapshots: MessageSnapshot[];
+  _snapshotSessionId: string | null;
+  /** Newest message seq the client holds — the incremental polling cursor. */
+  messageCursor: number | null;
+  /** History revision of the loaded transcript; a delta may only be stitched at the same value. */
+  contentRevision: number | null;
   /** Root main session the currently viewed session belongs to (own id for a main session; null before a session exists) */
   forkRootId: string | null;
   /**
@@ -152,6 +176,49 @@ interface ChatState {
   /** Drop the watch-tap live preview (round committed, watch detached, or session changed). */
   clearLivePreview: () => void;
   loadSessionMessages: (messages: MessageSnapshot[], pendingPermission?: PendingPermissionInfo | null, checkpoints?: CheckpointInfo[], endReason?: string | null, variables?: Record<string, string> | null, modelContextLength?: number | null, ownerSessionId?: string) => void;
+  /**
+   * Replace session identity AND messages in one `set()`.
+   *
+   * Setting the id first and loading afterwards is a bug: the loader keeps "local messages that
+   * have not been persisted yet" when `ownerSessionId === sessionId`, which is then true for the
+   * *previous* session's optimistic messages, and they get appended to the new transcript.
+   */
+  applySessionLoad: (payload: {
+    sessionId: string;
+    messages: MessageSnapshot[];
+    ownerSessionId: string;
+    pendingPermission?: PendingPermissionInfo | null;
+    checkpoints?: CheckpointInfo[];
+    endReason?: string | null;
+    variables?: Record<string, string> | null;
+    modelContextLength?: number | null;
+    newestSeq?: number | null;
+    contentRevision?: number | null;
+  }) => void;
+  setCheckpointState: (state: CheckpointState, error?: string | null) => void;
+  /** Apply a checkpoint listing, keeping `status` as the state (never "ok with []"). */
+  applyCheckpointResponse: (response: CheckpointListResponse) => void;
+  /**
+   * Advance the transcript cursors after an incremental fetch or a reload.
+   *
+   * Separate from `loadSessionMessages*` because the cursor belongs to the *request* that
+   * succeeded, not to the message list: a delta that carried no new rows still moves the server's
+   * newest seq, and re-asking from the old cursor would re-read the same rows every poll.
+   */
+  applySessionCursors: (cursors: {
+    newestSeq?: number | null;
+    contentRevision?: number | null;
+  }) => void;
+  setRunStateResolved: (resolved: boolean) => void;
+  setRunStateFailed: (failed: boolean) => void;
+  /**
+   * Apply a streaming-status probe. A pending permission wins: while the user is being asked to
+   * approve, `isStreaming` must stay false or PermissionBar disables its own buttons.
+   *
+   * Accepts the snapshot shape as well as the SSE event: a session being *recovered* knows about
+   * the pending request only through `GET /session/{id}`, and only its non-nullness matters here.
+   */
+  applyRunState: (status: { streaming?: boolean; local?: boolean }, pendingPermission: PermissionRequestEvent | PendingPermissionInfo | null) => void;
   /** Merge delta snapshots into _lastSnapshots and re-process. Used for incremental recovery after streaming. */
   loadSessionMessagesIncremental: (deltaSnapshots: MessageSnapshot[], pendingPermission?: PendingPermissionInfo | null, checkpoints?: CheckpointInfo[], endReason?: string | null, variables?: Record<string, string> | null, modelContextLength?: number | null, ownerSessionId?: string) => void;
   /** Refresh goal state from backend for the given session. Sets currentGoal to null if no goal exists. */
@@ -190,6 +257,11 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   backgroundTasks: {},
   toolFoldInfo: null,
   checkpointsByMessageId: {},
+  checkpointList: [],
+  checkpointState: 'unknown',
+  checkpointError: null,
+  runStateResolved: false,
+  runStateFailed: false,
   revertState: null,
   fileReviewOverrides: {},
   currentGoal: null,
@@ -197,6 +269,9 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   runningSessionId: null,
   liveStreamDropped: false,
   _lastSnapshots: [],
+  _snapshotSessionId: null,
+  messageCursor: null,
+  contentRevision: null,
   forkRootId: null,
   transcriptMode: false,
   snapshotEnabled: true,
@@ -208,20 +283,40 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   // Same-id calls (e.g. re-selecting the current session) keep live streaming untouched.
   // snapshotEnabled resets to the optimistic default here; detail-loading paths
   // (switchToSession, NewSessionDialog) must apply the backend value AFTER setSessionId.
-  setSessionId: (id) => set((state) => (id === state.sessionId ? { sessionId: id } : {
-    sessionId: id,
-    streamingBlocks: [],
-    streamingToolOutputs: {},
-    livePreview: null,
-    isStreaming: false,
-    isFileWriting: false,
-    isCompacting: false,
-    retryInfo: null,
-    pendingMessageData: {},
-    backgroundTasks: {},
-    snapshotEnabled: true,
-  })),
-  setRunningSessionId: (id) => set({ runningSessionId: id, liveStreamDropped: false, ...(id !== null ? { _lastSnapshots: [] } : { livePreview: null }) }),
+  setSessionId: (id) => {
+    if (id === get().sessionId) return;
+    bumpSessionEpoch();
+    set({
+      sessionId: id,
+      _lastSnapshots: [],
+      _snapshotSessionId: null,
+      streamingBlocks: [],
+      streamingToolOutputs: {},
+      livePreview: null,
+      isStreaming: false,
+      isFileWriting: false,
+      isCompacting: false,
+      retryInfo: null,
+      pendingMessageData: {},
+      backgroundTasks: {},
+      snapshotEnabled: true,
+      checkpointState: 'unknown' as CheckpointState,
+      checkpointError: null,
+      checkpointsByMessageId: {},
+      checkpointList: [],
+      runStateResolved: false,
+      runStateFailed: false,
+      runningSessionId: null,
+      todos: [],
+      subAgentTodos: {},
+      messageCursor: null,
+      contentRevision: null,
+    });
+  },
+  // Deliberately does NOT clear `_lastSnapshots`: the recovery poll continues from
+  // `messageCursor` (initialised by the detail load), and wiping the snapshots here forced a
+  // full `after=0` reload.
+  setRunningSessionId: (id) => set({ runningSessionId: id, liveStreamDropped: false, ...(id === null ? { livePreview: null } : {}) }),
   setForkRootId: (id) => set({ forkRootId: id }),
   setTranscriptMode: (on) => set({ transcriptMode: on }),
   setSnapshotEnabled: (enabled) => set({ snapshotEnabled: enabled }),
@@ -455,13 +550,44 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     return {
       messages: state.messages.slice(0, fromIndex),
       checkpointsByMessageId: newCheckpoints,
+      /**
+       * The flattened listing has to lose the same rows.
+       *
+       * The map is looked up by anchor message id, so a removed message simply stops being found.
+       * The listing is different: the edit gate scans it as a whole and refuses when *any* entry
+       * is incomplete, so an entry left behind for a deleted message keeps blocking edits until
+       * the next full listing arrives.
+       */
+      checkpointList: state.checkpointList.filter(
+        (cp) =>
+          !(cp.assistantMessageId && removedMessageIds.has(cp.assistantMessageId)) &&
+          !(cp.messageId && removedMessageIds.has(cp.messageId)),
+      ),
       fileReviewOverrides: {},
       revertState: null,
     };
   }),
 
+  /**
+   * Record a checkpoint that just arrived mid-stream.
+   *
+   * Writes both stores, because they are read by different code and neither can be derived from
+   * the other: `checkpointsByMessageId` is a lookup by anchor, while `checkpointList` is the
+   * ordered listing the edit gate slices (`slice(0, indexOf(anchor) + 1)` over a **newest-first**
+   * array). Appending here would put the new entry last, i.e. outside every range the gate
+   * computes, and the turn that just produced it would be missing from its own rollback scope —
+   * the same asymmetry that made `truncateMessagesFrom` delete from both.
+   */
   addCheckpoint: (messageId, checkpoint) => set((state) => ({
     checkpointsByMessageId: { ...state.checkpointsByMessageId, [messageId]: checkpoint },
+    checkpointList: [
+      checkpoint,
+      ...state.checkpointList.filter((cp) =>
+        checkpoint.assistantMessageId && cp.assistantMessageId
+          ? cp.assistantMessageId !== checkpoint.assistantMessageId
+          : cp.messageId !== checkpoint.messageId,
+      ),
+    ],
   })),
 
   /**
@@ -493,7 +619,11 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     return hasPendingAskQuestion;
   },
 
-  clearChat: () => set({
+  clearChat: () => {
+    // Closing the transcript is an identity change like any other: a detail load or poll that is
+    // still in flight would otherwise land on an empty view and repopulate it.
+    bumpSessionEpoch();
+    set({
     sessionId: null,
     messages: [],
     isStreaming: false,
@@ -517,6 +647,13 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     backgroundTasks: {},
     toolFoldInfo: null,
     checkpointsByMessageId: {},
+    checkpointList: [],
+    checkpointState: 'unknown' as CheckpointState,
+    checkpointError: null,
+    runStateResolved: false,
+    runStateFailed: false,
+    messageCursor: null,
+    contentRevision: null,
     revertState: null,
     fileReviewOverrides: {},
     currentGoal: null,
@@ -524,18 +661,21 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     runningSessionId: null,
     liveStreamDropped: false,
     _lastSnapshots: [],
+    _snapshotSessionId: null,
     forkRootId: null,
     transcriptMode: false,
     snapshotEnabled: true,
-  }),
+    });
+  },
 
   commitStreamingMessage: () => set((state) => commitStreamingMessageImpl(state)),
 
   clearLivePreview: () => set((state) => (state.livePreview === null ? {} : { livePreview: null })),
 
   loadSessionMessages: (messages, pendingPermission, checkpoints, endReason, variables, modelContextLength, ownerSessionId) => {
-    // Store raw snapshots for incremental merge support
-    set({ _lastSnapshots: messages, currentGoal: null, swarmRuns: {} }); // Reset goal + swarm tracking on full session load (session switch)
+    const sessionId = get().sessionId;
+    if (ownerSessionId !== undefined && ownerSessionId !== sessionId) return;
+    set({ _lastSnapshots: messages, _snapshotSessionId: sessionId, currentGoal: null, swarmRuns: {} });
     // Safe cast: Zustand's set (Partial<ChatState>) is structurally compatible with
     // LoadSetFn (Partial<LoadSessionStateShape>) because ChatState extends LoadSessionStateShape.
     // The callback in loadSessionMessagesImpl currently ignores the state parameter.
@@ -546,7 +686,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   },
 
   loadSessionMessagesIncremental: (deltaSnapshots, pendingPermission, checkpoints, endReason, variables, modelContextLength, ownerSessionId) => {
-    const existingSnapshots = get()._lastSnapshots;
+    const state = get();
+    const sessionId = state.sessionId;
+    if (ownerSessionId !== undefined && ownerSessionId !== sessionId) return;
+    const existingSnapshots = state._snapshotSessionId === sessionId ? state._lastSnapshots : [];
     // Pre-compute merged snapshots for _lastSnapshots cache (so future incremental calls chain correctly)
     const snapshotMap = new Map<string, MessageSnapshot>();
     for (const snap of existingSnapshots) {
@@ -560,7 +703,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     const mergedSnapshots = [...snapshotMap.values()]
       .sort((a, b) => a.timestamp - b.timestamp);
     // Update cache and re-run full processing pipeline on merged set
-    set({ _lastSnapshots: mergedSnapshots });
+    set({ _lastSnapshots: mergedSnapshots, _snapshotSessionId: sessionId });
     const localMessages = ownerSessionId !== undefined && ownerSessionId === get().sessionId ? get().messages : undefined;
     loadSessionMessagesImpl(mergedSnapshots, pendingPermission, checkpoints, set as Parameters<typeof loadSessionMessagesImpl>[3], endReason, variables ?? undefined, modelContextLength, localMessages);
   },
@@ -568,6 +711,100 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   refreshGoal: async (sessionId) => {
     const goal = await getGoal(sessionId);
     set({ currentGoal: goal });
+  },
+
+  applySessionLoad: ({ sessionId, messages, ownerSessionId, pendingPermission, checkpoints, endReason, variables, modelContextLength, newestSeq, contentRevision }) => {
+    const state = get();
+    if (sessionId === state.sessionId && !state.transcriptMode && (state.isStreaming || state.streamingBlocks.length > 0 || state.runningSessionId === sessionId)) return;
+    const keepLocal = ownerSessionId === state.sessionId;
+    const localMessages = keepLocal ? state.messages : undefined;
+    set({
+      sessionId,
+      _lastSnapshots: messages,
+      _snapshotSessionId: sessionId,
+      currentGoal: null,
+      swarmRuns: {},
+      // Identity change clears render state left over from the previous session, exactly as
+      // setSessionId does — here it happens in the same update as the message swap.
+      streamingBlocks: [],
+      streamingToolOutputs: {},
+      livePreview: null,
+      isStreaming: false,
+      isFileWriting: false,
+      isCompacting: false,
+      retryInfo: null,
+      pendingMessageData: {},
+      backgroundTasks: {},
+      snapshotEnabled: true,
+      /**
+       * Drop the previous session's run state.
+       *
+       * Without this the *previous* session's poller stays armed: `useSessionRecovery` keys its
+       * effect on `runningSessionId` and guards writes with `streamingBlocks`, and an old session
+       * id that was still "running" keeps writing deltas into the transcript now on screen. The
+       * caller re-derives the run state from a status probe and sets it again if this one runs.
+       */
+      runningSessionId: null,
+      // Todo lists are per session: carrying them over shows the new session's turns with the old
+      // session's plan until the first poll answers.
+      todos: [],
+      subAgentTodos: {},
+      // Checkpoints were NOT loaded for this payload: unknown, not ok.
+      checkpointState: 'unknown' as CheckpointState,
+      checkpointError: null,
+      checkpointsByMessageId: {},
+      checkpointList: [],
+      runStateResolved: false,
+      runStateFailed: false,
+      messageCursor: newestSeq ?? null,
+      contentRevision: contentRevision ?? null,
+    });
+    loadSessionMessagesImpl(
+      messages,
+      pendingPermission,
+      checkpoints,
+      set as Parameters<typeof loadSessionMessagesImpl>[3],
+      endReason,
+      variables ?? {},
+      modelContextLength,
+      localMessages,
+    );
+  },
+
+  setCheckpointState: (state, error = null) => set({ checkpointState: state, checkpointError: error }),
+
+  applyCheckpointResponse: (response) => {
+    const checkpoints = response.status === 'ok' ? response.checkpoints : [];
+    set({
+      // `disabled` and `failed` stay distinguishable from a successful empty list.
+      checkpointState: response.status as CheckpointState,
+      checkpointError: response.error ?? null,
+      checkpointsByMessageId: buildCheckpointMap(checkpoints, get().messages),
+      checkpointList: checkpoints,
+    });
+  },
+
+  applySessionCursors: ({ newestSeq, contentRevision }) => set((state) => ({
+    // `?? state.x` keeps a field the caller omitted: a rewrite report carries no newest seq.
+    messageCursor: newestSeq ?? state.messageCursor,
+    contentRevision: contentRevision ?? state.contentRevision,
+  })),
+
+  setRunStateResolved: (resolved) => set({ runStateResolved: resolved, ...(resolved ? { runStateFailed: false } : {}) }),
+  setRunStateFailed: (failed) => set({ runStateFailed: failed, ...(failed ? { runStateResolved: false } : {}) }),
+
+  applyRunState: (status, pendingPermission) => {
+    // Waiting for approval is not "streaming": PermissionBar disables its buttons while
+    // isStreaming is true, so marking it here would make the approval unclickable.
+    if (pendingPermission) {
+      set({ isStreaming: false, runStateResolved: true, runStateFailed: false });
+      return;
+    }
+    set({
+      isStreaming: !!(status.streaming || status.local),
+      runStateResolved: true,
+      runStateFailed: false,
+    });
   },
 
   addQueuedMessage: (msg) => set((state) => ({
