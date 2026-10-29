@@ -1,4 +1,4 @@
-import type { Message, ToolCall, ToolResult, ToolResultContentBlock, ContextReferences, Attachment } from '@/types/message';
+import type { Message, ToolCall, ToolResult, ContextReferences, Attachment } from '@/types/message';
 import type { MessageSegment } from '@/types/message-segment';
 import type {
   MessageSnapshot,
@@ -233,16 +233,18 @@ export function convertSnapshot(msg: MessageSnapshot): Message {
     const toolResults = msg.content.filter((block): block is ToolResultContentBlockData => block.type === 'toolResult');
     return {
       role: 'tool',
-      toolResults: toolResults.map((tr) => {
-        let contentBlocks: ToolResultContentBlock[] | undefined;
-        try { const parsed = JSON.parse(tr.output); if (Array.isArray(parsed)) contentBlocks = parsed; } catch { /* ignore */ }
-        return {
-          id: tr.toolCallId, toolName: tr.toolName, result: tr.output, contentBlocks,
-          details: tr.details,
-          isError: tr.isError ?? false, exitCode: tr.exitCode, durationMs: tr.durationMs,
-          mimeType: tr.mimeType, truncated: tr.truncated, usage: tr.usage,
-        };
-      }),
+      toolResults: toolResults.map((tr) => ({
+        id: tr.toolCallId,
+        toolName: tr.toolName,
+        result: tr.output,
+        details: tr.details,
+        isError: tr.isError ?? false,
+        exitCode: tr.exitCode,
+        durationMs: tr.durationMs,
+        mimeType: tr.mimeType,
+        truncated: tr.truncated,
+        usage: tr.usage,
+      })),
       timestamp: msg.timestamp,
     } as Message;
   }

@@ -10,6 +10,7 @@ import com.easy.easyai.core.agent.SessionManager
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.team.TeamExecutionStore
 import com.easy.easyai.repository.session.AsyncSessionStore
+import com.easy.easyai.repository.session.MessageRef
 import com.easy.easyai.repository.session.MessageWithTimestamp
 import com.easy.easyai.skills.team.TeamCoordinationStateRegistry
 import com.easy.easyai.snapshot.SnapshotService
@@ -17,6 +18,11 @@ import com.easy.easyai.snapshot.model.FileDiff
 import com.easy.easyai.tools.background.BackgroundTaskManagerRegistry
 import com.easy.easyai.web.model.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.slf4j.LoggerFactory
 import tools.jackson.core.type.TypeReference
 
@@ -38,6 +44,17 @@ class SessionService(
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper = SharedObjectMapper.instance
+
+    companion object {
+        /**
+         * How many checkpoint diffs may run at once.
+         *
+         * Each one is two `git diff` processes against the shared shadow repo, so this trades
+         * process latency for disk contention. Four keeps a long session's checkpoint list from
+         * taking seconds without turning it into a process storm.
+         */
+        private const val DIFF_CONCURRENCY = 4
+    }
 
     data class SessionListResponse(
         val sessions: List<SessionListItem>,
@@ -81,17 +98,28 @@ class SessionService(
     suspend fun listSessionTags(projectId: String? = null, userId: String = "system", tempWorkspace: Boolean = false): List<String> =
         sessionStore.findAllTags(projectId, userId, tempWorkspaceOnly = tempWorkspace)
 
+    /**
+     * Session detail: the whole transcript in one response.
+     */
     suspend fun getSessionDetail(
         id: String,
         userId: String = "system",
-        owners: Collection<String>
+        owners: Collection<String>,
     ): SessionDetail? {
         // Same fallback as DatabaseSessionManager: an empty visibility set still sees the caller's
         // own rows plus the shared system layer, so the token bar never silently loses its window.
         val readOwners = owners.ifEmpty { setOf(userId, AuthConstants.SYSTEM_USER_ID) }
-        val session = sessionManager.getSessionDetail(id, userId) ?: return null
+        // Metadata + one message load. Previously this method resolved the session twice
+        // (findById loads and deserializes the whole transcript, loadMessagesWithTimestamps
+        // does it again) plus a third time inside getSessionContext, which only needs projectId.
+        val meta = sessionStore.findSessionMeta(id, userId) ?: return null
 
-        // Load messages with their original timestamps from the database
+        // Read the cursor BEFORE the rows: a rewrite landing mid-read then leaves the client with
+        // a revision older than its data, which invalidates rather than silently caches stale text.
+        // `newestSeq` comes from the same counter, not from the last loaded row: a backdated
+        // compaction summary has the highest seq but does not sort last.
+        val cursor = runCatching { sessionStore.findSessionCursor(id, userId) }.getOrNull()
+
         val messagesWithTimestamps = sessionStore.loadMessagesWithTimestamps(id)
 
         val pendingPermission = loadPendingPermission(id)
@@ -136,11 +164,11 @@ class SessionService(
         val context = resolveSessionContext(id, userId, readOwners)
 
         return SessionDetail(
-            id = session.id,
-            title = extractTitle(session.messages),
-            createdAt = session.createdAt.toEpochMilli(),
-            updatedAt = session.updatedAt.toEpochMilli(),
-            messageCount = session.messages.size,
+            id = meta.id,
+            title = extractTitle(messagesWithTimestamps),
+            createdAt = meta.createdAt,
+            updatedAt = meta.updatedAt,
+            messageCount = messagesWithTimestamps.size,
             messages = toMessageSnapshots(messagesWithTimestamps, userId, readOwners),
             pendingPermission = pendingPermission,
             endReason = endReason?.takeIf { it != "normal" },
@@ -154,7 +182,9 @@ class SessionService(
             workspaceProjectId = context?.projectId,
             workspacePath = context?.projectPath?.toString(),
             workspaceKind = context?.projectKind?.value,
-            tags = tags
+            tags = tags,
+            newestMessageSeq = cursor?.newestSeq ?: messagesWithTimestamps.maxOfOrNull { it.seq },
+            contentRevision = cursor?.contentRevision
         )
     }
 
@@ -208,14 +238,34 @@ class SessionService(
     /**
      * Get messages created after [afterTimestamp] for incremental recovery.
      * Returns metadata that allows the frontend to decide whether to fall back to full reload:
-     * - [compactionOccurredAfter]: true if compaction happened after [afterTimestamp]
-     * - [sessionUpdatedAt]: dirty marker bumped by [updateMessage], used to detect in-place updates
+     * - [SessionMessagesAfterResponse.compactionOccurredAfter]: true if compaction happened after
+     * - [SessionMessagesAfterResponse.contentUpdatedAt]: dirty marker bumped by updateMessage()
+     *
+     * Kept for callers that still poll by timestamp (swarm task transcript). New clients use
+     * [getSessionMessages] with the seq cursors.
      */
     suspend fun getSessionMessagesAfter(
         id: String,
         afterTimestamp: Long,
         userId: String = "system",
         owners: Collection<String>
+    ): SessionMessagesAfterResponse? =
+        getSessionMessages(id, userId, owners, afterTimestamp = afterTimestamp)
+
+    /**
+     * Incremental load of a session's messages.
+     *
+     * Exactly one cursor may be supplied (the controller enforces this):
+     * - [afterSeq] — everything newer than the client's cursor (the only loss-free incremental
+     *   cursor; a millisecond timestamp silently skips same-ms rows).
+     * - [afterTimestamp] — legacy cursor, strictly `>` unchanged.
+     */
+    suspend fun getSessionMessages(
+        id: String,
+        userId: String = "system",
+        owners: Collection<String>,
+        afterTimestamp: Long? = null,
+        afterSeq: Long? = null,
     ): SessionMessagesAfterResponse? {
         // Same fallback as getSessionDetail: an empty visibility set still sees the caller's
         // own rows plus the shared system layer.
@@ -223,8 +273,16 @@ class SessionService(
         // Lightweight existence check + contentUpdatedAt in one query (avoids loading all messages)
         val contentUpdatedAt = sessionStore.findContentUpdatedAt(id, userId) ?: return null
 
-        val messagesWithTimestamps = sessionStore.loadMessagesWithTimestampsAfter(id, afterTimestamp)
-        val compactionAt = sessionStore.getFirstCompactionAfter(id, afterTimestamp)
+        // Cursor read before the rows so a concurrent rewrite can only make the reported revision
+        // *older* than the data — which invalidates a cache instead of freezing stale content.
+        val cursor = runCatching { sessionStore.findSessionCursor(id, userId) }.getOrNull()
+
+        val messagesWithTimestamps = when {
+            afterSeq != null -> sessionStore.loadMessagesAfter(id, afterSeq)
+            afterTimestamp != null -> sessionStore.loadMessagesWithTimestampsAfter(id, afterTimestamp)
+            else -> emptyList()
+        }
+        val compactionAt = afterTimestamp?.let { sessionStore.getFirstCompactionAfter(id, it) }
         val sessionStatus = sessionStore.findStatus(id, userId)
 
         val pendingPermission = loadPendingPermission(id)
@@ -240,65 +298,89 @@ class SessionService(
             contentUpdatedAt = contentUpdatedAt,
             streaming = sessionStatus == "streaming",
             pendingPermission = pendingPermission,
-            endReason = endReason
+            endReason = endReason,
+            // An empty delta still advances the cursor: the client must not re-ask the same range.
+            newestSeq = messagesWithTimestamps.lastOrNull()?.seq ?: cursor?.newestSeq,
+            revision = cursor?.contentRevision
         )
     }
 
     /**
      * Get checkpoint summaries for a session.
      * Used to restore file change information when loading a historical session.
+     *
+     * Returns an explicit [CheckpointListResponse.status]: this endpoint is the input to the
+     * edit-time rollback confirmation, so "the query failed" must never look like
+     * "there is nothing to roll back".
      */
     suspend fun getCheckpoints(
         sessionId: String,
         userId: String = "system",
         owners: Collection<String>
-    ): List<CheckpointSummary> {
-        if (snapshotService == null) return emptyList()
-        val context = sessionManager.getSessionContext(sessionId, userId, owners) ?: return emptyList()
-        val projectPath = context.projectPath ?: return emptyList()
-        if (!snapshotService.isEnabled(projectPath)) return emptyList()
+    ): CheckpointListResponse {
+        // No snapshot service, no project, or snapshots switched off for this project: there is
+        // genuinely no rollback semantics here, and editing without a file check is correct.
+        val service = snapshotService ?: return CheckpointListResponse.disabled()
+        val context = try {
+            sessionManager.getSessionContext(sessionId, userId, owners)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn("Failed to resolve context for checkpoints of session {}: {}", sessionId, e.message)
+            return CheckpointListResponse.failed(e.message)
+        } ?: return CheckpointListResponse.disabled()
+        val projectPath = context.projectPath ?: return CheckpointListResponse.disabled()
+        val enabled = try {
+            service.isEnabled(projectPath)
+        } catch (e: Exception) {
+            logger.warn("Failed to read snapshot capability for session {}: {}", sessionId, e.message)
+            return CheckpointListResponse.failed(e.message)
+        }
+        if (!enabled) return CheckpointListResponse.disabled()
 
         val checkpoints = try {
-            snapshotService.listCheckpoints(projectPath, sessionId)
+            service.listCheckpoints(projectPath, sessionId)
         } catch (e: Exception) {
             logger.warn("Failed to list checkpoints for session {}: {}", sessionId, e.message)
-            emptyList()
+            return CheckpointListResponse.failed(e.message)
         }
 
         val result = if (checkpoints.isNotEmpty()) {
-            // Load messages to build userMessageId → assistantMessageId mapping
-            val messagesWithTs = sessionStore.loadMessagesWithTimestamps(sessionId)
-            val messages = messagesWithTs.map { it.message }
+            // Only ids + roles are needed here (existence check + locating the assistant reply).
+            // Loading the transcript just for this cost a full deserialization per request.
+            val messageRefs = sessionStore.findMessageRefs(sessionId)
 
             // Filter out checkpoints whose messageId no longer exists in the message list
             // (e.g., removed by compaction or message editing/truncation)
-            val messageIdSet = messages.map { it.id }.toHashSet()
+            val messageIdSet = messageRefs.mapTo(HashSet()) { it.id }
             val validCheckpoints = checkpoints.filter { it.messageId in messageIdSet }
             if (validCheckpoints.size < checkpoints.size) {
                 logger.debug("getCheckpoints: filtered {} stale checkpoints (messageId not in current messages), {} remaining for session {}",
                     checkpoints.size - validCheckpoints.size, validCheckpoints.size, sessionId)
             }
-            logger.info("getCheckpoints: loaded {} checkpoints ({} valid), {} messages for session {}", checkpoints.size, validCheckpoints.size, messages.size, sessionId)
+            logger.info("getCheckpoints: loaded {} checkpoints ({} valid), {} messages for session {}", checkpoints.size, validCheckpoints.size, messageRefs.size, sessionId)
 
             // Pre-resolve session ref for fallback when checkpoint hashes are all identical
             // (due to tree-dedup in commitAs returning the same hash when no new tree is created).
             // The session ref always points to the latest real commit with actual changes.
             val sessionRefHash = try {
-                snapshotService.resolveSessionRef(projectPath, sessionId)
+                service.resolveSessionRef(projectPath, sessionId)
             } catch (e: Exception) {
                 logger.debug("Failed to resolve session ref for checkpoint fallback: {}", e.message)
                 null
             }
 
-            validCheckpoints.mapIndexed { index, checkpoint ->
-                val assistantMessageId = findAssistantMessageIdAfter(messages, checkpoint.messageId)
+            // Endpoint pairs, computed once so the diff and the author attribution always
+            // describe the SAME commit range (§9 A4: authors must use effectiveTarget).
+            val plans = validCheckpoints.mapIndexed { index, checkpoint ->
+                val assistantMessageId = findAssistantMessageIdAfter(messageRefs, checkpoint.messageId)
                 if (assistantMessageId == null) {
                     logger.debug("getCheckpoints: no assistant message found after user message {} for checkpoint {}", checkpoint.messageId, checkpoint.commitHash)
                 }
                 val baseline = if (index + 1 >= validCheckpoints.size) {
                     // Oldest checkpoint — use session baseline
                     try {
-                        snapshotService.ensureBaseline(projectPath, sessionId)
+                        service.ensureBaseline(projectPath, sessionId)
                     } catch (e: Exception) {
                         logger.warn("Failed to get session baseline for checkpoint diff: {}", e.message)
                         null
@@ -314,38 +396,98 @@ class SessionService(
                 // fall back to diff(baseline, sessionRef) to recover actual file changes.
                 val needsFallback = parent != null && parent == checkpoint.commitHash
                         && sessionRefHash != null && sessionRefHash != parent
-                val effectiveParent = if (needsFallback) baseline else parent
-                val effectiveTarget = if (needsFallback) sessionRefHash else checkpoint.commitHash
+                CheckpointPlan(
+                    checkpoint = checkpoint,
+                    assistantMessageId = assistantMessageId,
+                    effectiveParent = if (needsFallback) baseline else parent,
+                    effectiveTarget = if (needsFallback) sessionRefHash else checkpoint.commitHash,
+                )
+            }
 
-                val diffs = try {
-                    if (effectiveParent != null) {
-                        snapshotService.diff(projectPath, effectiveParent, effectiveTarget)
-                    } else {
-                        emptyList()
+            // Diffs: numstat + name-status only — the patch body is never read by this endpoint.
+            // A failure marks just this checkpoint as incomplete instead of silently claiming
+            // "no files changed" (which used to let an edit skip its rollback confirmation).
+            //
+            // Run with bounded parallelism: each entry is two `git diff` processes, so a 30-turn
+            // session was 60 processes back to back. The cap keeps the shadow repo's object reads
+            // from storming the disk while still overlapping the process latency.
+            val diffPermits = Semaphore(DIFF_CONCURRENCY)
+            val diffsByPlan = coroutineScope {
+                plans.map { plan ->
+                    async {
+                        diffPermits.withPermit {
+                            if (plan.effectiveParent == null) {
+                                // A null parent here means the diff could not be computed at all —
+                                // either the oldest checkpoint's baseline failed to resolve, or the
+                                // tree-dedup fallback had no session ref to fall back to. Marking
+                                // this `complete = true` would report "this turn changed no files"
+                                // and let the edit skip its rollback confirmation, which is the one
+                                // case the whole status contract exists for.
+                                logger.warn(
+                                    "No diff baseline for checkpoint {} of session {} — marking it incomplete",
+                                    plan.checkpoint.messageId, sessionId
+                                )
+                                DiffOutcome(emptyList(), complete = false)
+                            } else {
+                                try {
+                                    DiffOutcome(
+                                        service.diffStats(projectPath, plan.effectiveParent, plan.effectiveTarget),
+                                        complete = true
+                                    )
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    logger.warn(
+                                        "Failed to compute checkpoint diff for message {}: {}",
+                                        plan.checkpoint.messageId, e.message
+                                    )
+                                    DiffOutcome(emptyList(), complete = false)
+                                }
+                            }
+                        }
                     }
+                }.awaitAll()
+            }
+
+            // Authors: one `git log` for the whole chain instead of one per checkpoint.
+            val authorRanges = plans.indices
+                .filter { plans[it].effectiveParent != null && diffsByPlan[it].files.isNotEmpty() }
+                .map { plans[it].effectiveParent!! to plans[it].effectiveTarget }
+            val chainAuthors: List<Map<String, String>> = if (authorRanges.isEmpty()) {
+                emptyList()
+            } else {
+                try {
+                    service.fileAuthorsInChain(projectPath, authorRanges)
                 } catch (e: Exception) {
-                    logger.warn("Failed to compute checkpoint diff for message {}: {}", checkpoint.messageId, e.message)
+                    logger.warn("Failed to determine file authors for session {}: {}", sessionId, e.message)
                     emptyList()
                 }
-                // Determine per-file author attribution from the commit chain
-                val authorMap = if (effectiveParent != null && diffs.isNotEmpty()) {
-                    try {
-                        snapshotService.determineFileAuthors(projectPath, effectiveParent, effectiveTarget)
-                    } catch (e: Exception) {
-                        logger.warn("Failed to determine file authors for checkpoint {}: {}", checkpoint.messageId, e.message)
-                        emptyMap()
-                    }
+            }
+
+            var authorCursor = 0
+            plans.mapIndexed { index, plan ->
+                val outcome = diffsByPlan[index]
+                val diffs = outcome.files
+                val authorMap = if (plan.effectiveParent != null && diffs.isNotEmpty()) {
+                    // A missing entry means the batch could not resolve this range; fall back to
+                    // "unknown author" for the files, but the diff itself stays trustworthy.
+                    val authors = chainAuthors.getOrNull(authorCursor) ?: emptyMap()
+                    authorCursor++
+                    authors
                 } else {
                     emptyMap()
                 }
                 CheckpointSummary(
-                    messageId = checkpoint.messageId,
-                    assistantMessageId = assistantMessageId,
-                    snapshotHash = checkpoint.commitHash,
+                    messageId = plan.checkpoint.messageId,
+                    assistantMessageId = plan.assistantMessageId,
+                    snapshotHash = plan.checkpoint.commitHash,
                     filesChanged = diffs.map { FileChangeInfo(it.path, it.additions, it.deletions, it.status.name.lowercase(), authorMap[it.path]) },
                     additions = diffs.sumOf { it.additions },
                     deletions = diffs.sumOf { it.deletions },
-                    createdAt = checkpoint.timestamp
+                    createdAt = plan.checkpoint.timestamp,
+                    // false = this entry's file list cannot be trusted. The frontend must block
+                    // edits that depend on it rather than treat it as "no files changed".
+                    diffsComplete = outcome.complete,
                 )
             }.toMutableList()
         } else {
@@ -358,7 +500,7 @@ class SessionService(
         // getStagedChanges validates that the baseline belongs to this session to prevent
         // cross-session data leakage via the shared shadow git index.
         try {
-            val stagedDiffs = snapshotService.getStagedChanges(projectPath, sessionId)
+            val stagedDiffs = service.getStagedChanges(projectPath, sessionId)
             if (stagedDiffs.isNotEmpty()) {
                 logger.info("getCheckpoints: found {} staged but uncommitted changes for session {}", stagedDiffs.size, sessionId)
                 // Use a unique synthetic messageId so the frontend won't collide with
@@ -391,16 +533,16 @@ class SessionService(
                 }.distinctBy { it.first }
 
                 for ((memberSessionId, memberId) in memberSessions) {
-                    val memberCheckpoints = snapshotService.listCheckpoints(projectPath, memberSessionId)
+                    val memberCheckpoints = service.listCheckpoints(projectPath, memberSessionId)
                     if (memberCheckpoints.isEmpty()) continue
                     val latestHash = memberCheckpoints.first().commitHash // newest-first ordering
                     val memberBaseline = try {
-                        snapshotService.ensureBaseline(projectPath, memberSessionId)
+                        service.ensureBaseline(projectPath, memberSessionId)
                     } catch (e: Exception) {
                         logger.debug("No baseline for member session {}: {}", memberSessionId, e.message)
                         continue
                     }
-                    val memberDiffs = snapshotService.diff(projectPath, memberBaseline, latestHash)
+                    val memberDiffs = service.diff(projectPath, memberBaseline, latestHash)
                     if (memberDiffs.isEmpty()) continue
                     result.add(
                         CheckpointSummary(
@@ -421,7 +563,7 @@ class SessionService(
             }
         }
 
-        return result
+        return CheckpointListResponse.ok(result)
     }
 
     /**
@@ -481,19 +623,20 @@ class SessionService(
 
     /**
      * Find the assistant message ID that follows a given user message ID in the transcript.
+     * Works on [AsyncSessionStore.findMessageRefs] rows — the content is irrelevant here.
      */
-    private fun findAssistantMessageIdAfter(messages: List<EasyAiMessage>, userMessageId: String): String? {
-        logger.trace("findAssistantMessageIdAfter: searching for userMessageId={}, total messages={}", userMessageId, messages.size)
+    private fun findAssistantMessageIdAfter(messageRefs: List<MessageRef>, userMessageId: String): String? {
+        logger.trace("findAssistantMessageIdAfter: searching for userMessageId={}, total messages={}", userMessageId, messageRefs.size)
         var foundUser = false
-        for (msg in messages) {
-            if (msg.id == userMessageId) {
+        for (ref in messageRefs) {
+            if (ref.id == userMessageId) {
                 foundUser = true
-                logger.trace("findAssistantMessageIdAfter: found user message id={}, role={}", msg.id, msg.role)
+                logger.trace("findAssistantMessageIdAfter: found user message id={}, role={}", ref.id, ref.role)
                 continue
             }
-            if (foundUser && msg is AssistantMessage) {
-                logger.trace("findAssistantMessageIdAfter: found assistant message id={}", msg.id)
-                return msg.id
+            if (foundUser && ref.role == Role.ASSISTANT.name) {
+                logger.trace("findAssistantMessageIdAfter: found assistant message id={}", ref.id)
+                return ref.id
             }
         }
         logger.debug("findAssistantMessageIdAfter: no match found for userMessageId={}", userMessageId)
@@ -709,8 +852,19 @@ class SessionService(
         else -> null
     }
 
-    private fun extractTitle(messages: List<EasyAiMessage>): String? {
-        val firstUserMsg = messages.firstOrNull { it.role == Role.USER }
+    /** One checkpoint's resolved commit endpoints, before any git work is done. */
+    private data class CheckpointPlan(
+        val checkpoint: com.easy.easyai.snapshot.model.GitCheckpoint,
+        val assistantMessageId: String?,
+        val effectiveParent: String?,
+        val effectiveTarget: String,
+    )
+
+    /** Result of diffing one plan: the files, plus whether the computation actually succeeded. */
+    private data class DiffOutcome(val files: List<FileDiff>, val complete: Boolean)
+
+    private fun extractTitle(messages: List<MessageWithTimestamp>): String? {
+        val firstUserMsg = messages.firstOrNull { it.message.role == Role.USER }?.message
         val text = firstUserMsg?.content?.filterIsInstance<TextContent>()?.joinToString("") { it.text }
         return if (text.isNullOrBlank()) null else text.take(50)
     }
@@ -718,7 +872,7 @@ class SessionService(
     private suspend fun toMessageSnapshots(
         messages: List<MessageWithTimestamp>,
         userId: String,
-        owners: Collection<String>
+        owners: Collection<String>,
     ): List<MessageSnapshot> {
         val urls = mutableMapOf<String, String?>()
         return messages.map { message ->

@@ -320,19 +320,34 @@ class ChatController(
     }
 
     /**
-     * Get messages created after [after] timestamp for incremental recovery.
-     * Used by frontend after streaming ends to fetch only new messages instead of full session detail.
-     * Returns compaction/dirty-marker metadata so the frontend can fall back to full reload when needed.
+     * Incremental load of a session's messages.
+     *
+     * Exactly one cursor may be given:
+     * - `after` (milliseconds, legacy) — strictly `>`, unchanged for existing clients.
+     * - `afterSeq` — the loss-free incremental cursor; a millisecond timestamp drops rows that
+     *   share a millisecond, which the next poll can then never pick up.
      */
     @GetMapping("/session/{sessionId}/messages")
-    fun getSessionMessagesAfter(
+    fun getSessionMessages(
         @PathVariable sessionId: String,
-        @RequestParam after: Long
+        @RequestParam(required = false) after: Long?,
+        @RequestParam(required = false) afterSeq: Long?,
     ): Mono<SessionMessagesAfterResponse> {
         return mono {
+            if (after != null && afterSeq != null) {
+                throw ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Only one of 'after', 'afterSeq' may be supplied"
+                )
+            }
+            if (afterSeq != null && afterSeq < 0) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "'afterSeq' must not be negative")
+            }
             val userId = verifyOwnership(sessionId)
-            sessionService.getSessionMessagesAfter(sessionId, after, userId, currentOwners())
-                ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found: $sessionId")
+            sessionService.getSessionMessages(
+                sessionId, userId, currentOwners(),
+                afterTimestamp = after, afterSeq = afterSeq,
+            ) ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found: $sessionId")
         }
     }
 
@@ -620,9 +635,12 @@ class ChatController(
     /**
      * Get checkpoint summaries for a session.
      * Used by the frontend to restore file change information when loading a historical session.
+     *
+     * Responds with `{status, checkpoints, error}` rather than a bare list: `status` separates
+     * "snapshots disabled" from "listing failed", which the edit-time rollback confirmation needs.
      */
     @GetMapping("/session/{sessionId}/checkpoints")
-    fun getCheckpoints(@PathVariable sessionId: String): Mono<List<CheckpointSummary>> {
+    fun getCheckpoints(@PathVariable sessionId: String): Mono<CheckpointListResponse> {
         return mono {
             val userId = verifyOwnership(sessionId)
             sessionService.getCheckpoints(sessionId, userId, currentOwners())

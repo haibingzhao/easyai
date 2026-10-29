@@ -6,6 +6,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import type { ToolMessageProps } from './types';
+import { blocksOf } from '@/services/tool-blocks';
 import { getToolRowSummary } from './parsers';
 import { ToolRowHeader } from './ToolRowHeader';
 import { ToolSection } from './ToolSection';
@@ -25,8 +26,9 @@ export function McpToolCard({ toolCall, result, status, streamingOutput, compact
 
   const output = streamingOutput ?? (() => {
     if (!result) return '';
-    if (result.contentBlocks?.length) {
-      return result.contentBlocks
+    const blocks = blocksOf(result);
+    if (blocks?.length) {
+      return blocks
         .map(b => (b.type === 'toolResult' ? b.output : b.type === 'text' ? b.text : ''))
         .join('');
     }

@@ -1,6 +1,7 @@
 package com.easy.easyai.autoconfigure.r2dbc
 
 import com.easy.easyai.repository.database.Tables
+import com.easy.easyai.repository.session.SessionCursor
 import org.flywaydb.core.Flyway
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test
 import java.sql.Connection
 import java.sql.DriverManager
 import java.sql.SQLException
+import java.util.UUID
 
 class FlywayMigrationRunnerTest {
 
@@ -250,6 +252,99 @@ class FlywayMigrationRunnerTest {
                     }
                 }
             }
+        }
+
+        @Test
+        fun `V43 and V44 backfill legacy message order and counters before new writes`() {
+            val dbName = "flyway_message_seq_${UUID.randomUUID()}"
+            val jdbcUrl = "jdbc:h2:mem:$dbName;MODE=MYSQL;DB_CLOSE_DELAY=-1"
+            val baseline = Flyway.configure()
+                .dataSource(jdbcUrl, "sa", "")
+                .locations("classpath:db/migration")
+                .target("42")
+                .load()
+                .migrate()
+            assertEquals("42", baseline.targetSchemaVersion)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.executeUpdate(
+                        "INSERT INTO session (id, created_at, updated_at) VALUES " +
+                            "('legacy-a', 100, 200), ('legacy-b', 100, 200), ('legacy-empty', 100, 200)"
+                    )
+                    // Deliberately shuffled inserts: created_at first, id only as a same-ms tie-break.
+                    statement.executeUpdate(
+                        "INSERT INTO message (id, session_id, role, content_blocks, compacted_at, created_at) VALUES " +
+                            "('a-z', 'legacy-a', 'USER', '[]', NULL, 100), " +
+                            "('b-z', 'legacy-b', 'USER', '[]', NULL, 100), " +
+                            "('a-a', 'legacy-a', 'CUSTOM', '[]', NULL, 200), " +
+                            "('a-m', 'legacy-a', 'ASSISTANT', '[]', 300, 100), " +
+                            "('b-a', 'legacy-b', 'USER', '[]', NULL, 100), " +
+                            "('a-y', 'legacy-a', 'USER', '[]', NULL, 50)"
+                    )
+                }
+            }
+
+            val flyway = Flyway.configure()
+                .dataSource(jdbcUrl, "sa", "")
+                .locations("classpath:db/migration")
+                .load()
+            val result = flyway.migrate()
+            assertTrue(result.migrationsExecuted >= 2)
+            assertEquals(maxVersionOnClasspath(flyway), result.targetSchemaVersion)
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use { statement ->
+                    val seqById = mutableMapOf<String, Long>()
+                    statement.executeQuery("SELECT id, seq FROM message").use { rows ->
+                        while (rows.next()) {
+                            val seq = rows.getLong("seq")
+                            assertTrue(!rows.wasNull(), "Every legacy row must receive a seq")
+                            seqById[rows.getString("id")] = seq
+                        }
+                    }
+                    assertEquals(mapOf("a-y" to 1L, "a-m" to 2L, "a-z" to 3L, "a-a" to 4L, "b-a" to 1L, "b-z" to 2L), seqById)
+                    val cursors = mutableMapOf<String, SessionCursor>()
+                    statement.executeQuery("SELECT id, message_seq, content_revision FROM session").use { rows ->
+                        while (rows.next()) {
+                            cursors[rows.getString("id")] = SessionCursor(rows.getLong("message_seq"), rows.getLong("content_revision"))
+                        }
+                    }
+                    assertEquals(
+                        mapOf("legacy-a" to SessionCursor(4L, 0L), "legacy-b" to SessionCursor(2L, 0L), "legacy-empty" to SessionCursor(0L, 0L)),
+                        cursors
+                    )
+                    val indexColumns = mutableListOf<String>()
+                    statement.executeQuery(
+                        "SELECT COLUMN_NAME, IS_UNIQUE FROM INFORMATION_SCHEMA.INDEX_COLUMNS " +
+                            "WHERE UPPER(TABLE_NAME) = 'MESSAGE' AND UPPER(INDEX_NAME) = 'UQ_MESSAGE_SESSION_SEQ' " +
+                            "ORDER BY ORDINAL_POSITION"
+                    ).use { columns ->
+                        while (columns.next()) {
+                            indexColumns += columns.getString("COLUMN_NAME").lowercase()
+                            assertTrue(columns.getBoolean("IS_UNIQUE"))
+                        }
+                    }
+                    assertEquals(listOf("session_id", "seq"), indexColumns)
+                    val duplicate = assertThrows(SQLException::class.java) {
+                        statement.executeUpdate(
+                            "INSERT INTO message (id, session_id, role, created_at, seq) " +
+                                "VALUES ('duplicate-seq', 'legacy-a', 'USER', 400, 1)"
+                        )
+                    }
+                    assertTrue("UQ_MESSAGE_SESSION_SEQ" in duplicate.message!!.uppercase())
+                }
+            }
+
+            DriverManager.getConnection(jdbcUrl, "sa", "").use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.executeUpdate("INSERT INTO session (id, created_at, updated_at) VALUES ('new-session', 400, 400)")
+                    statement.executeQuery("SELECT message_seq, content_revision FROM session WHERE id = 'new-session'").use { row ->
+                        assertTrue(row.next())
+                        assertEquals(0L, row.getLong("message_seq"), "New sessions must allocate their first message from seq 1")
+                        assertEquals(0L, row.getLong("content_revision"))
+                    }
+                }
+            }
+            Unit
         }
 
         @Test

@@ -2,17 +2,27 @@ package com.easy.easyai.repository.session
 
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.PersistedSession
+import com.easy.easyai.core.event.MessageUpdateField
 import com.easy.easyai.core.model.*
 import com.easy.easyai.repository.database.DatabaseMigration
+import com.easy.easyai.repository.database.Tables
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
+import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
 import org.jetbrains.exposed.v1.r2dbc.transactions.TransactionManager
+import org.jetbrains.exposed.v1.r2dbc.transactions.suspendTransaction
+import org.jetbrains.exposed.v1.r2dbc.update
 import org.junit.jupiter.api.*
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -235,6 +245,152 @@ class R2dbcAsyncSessionStoreCompactionTest {
             val recentIndex = activeMessages.indexOfFirst { it.id == recent.id }
             assertTrue(summaryIndex < recentIndex,
                 "Summary (index=$summaryIndex) should come before recent (index=$recentIndex)")
+        }
+    }
+
+    @Nested
+    inner class `message sequence and revision` {
+
+        private suspend fun createSession(userId: String = "system"): String {
+            val sessionId = testAgentContext.sessionId!!
+            store.save(PersistedSession(id = sessionId, messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH), userId)
+            return sessionId
+        }
+
+        private val store = createStore()
+
+        @Test
+        fun `seq cursor returns all same-millisecond rows after the cursor without crossing sessions`() = runTest {
+            val sessionId = createSession()
+            val messages = (1..4).map { createUserMessage(id = "$sessionId-${5 - it}", text = "message-$it") }
+            store.upsertMessages(testAgentContext, sessionId, messages)
+            val otherSessionId = "other-${UUID.randomUUID()}"
+            store.save(PersistedSession(id = otherSessionId, messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH))
+            store.upsertMessages(testAgentContext.copy(sessionId = otherSessionId), otherSessionId, listOf(createUserMessage()))
+            suspendTransaction(db) {
+                Tables.Message.update({ Tables.Message.sessionId eq sessionId }) {
+                    it[Tables.Message.createdAt] = 1000L
+                }
+            }
+
+            val all = store.loadMessagesAfter(sessionId, 0L)
+            assertEquals(messages.map { it.id }, all.map { it.message.id })
+            assertEquals(listOf(1L, 2L, 3L, 4L), all.map { it.seq })
+            assertTrue(all.all { it.timestamp == 1000L })
+            assertEquals(messages.drop(1).map { it.id }, store.loadMessagesAfter(sessionId, 1L).map { it.message.id })
+            assertTrue(store.loadMessagesAfter(sessionId, 4L).isEmpty())
+            assertTrue(store.loadMessagesWithTimestampsAfter(sessionId, 1000L).isEmpty(), "Legacy timestamp cursor stays strict")
+            Unit
+        }
+
+        @Test
+        fun `allocation is monotonic across batches replays and deletion`() = runTest {
+            val sessionId = createSession()
+            assertEquals(SessionCursor(0L, 0L), store.findSessionCursor(sessionId, "system"))
+            val first = (1..2).map { createUserMessage() }
+            val second = (1..2).map { createUserMessage() }
+            store.upsertMessages(testAgentContext, sessionId, first)
+            store.upsertMessages(testAgentContext, sessionId, first + second)
+            assertEquals(listOf(1L, 2L, 3L, 4L), store.loadMessagesAfter(sessionId, 0L).map { it.seq })
+            assertEquals(SessionCursor(4L, 0L), store.findSessionCursor(sessionId, "system"))
+
+            store.deleteMessage(sessionId, second.last().id)
+            val next = createUserMessage()
+            store.upsertMessages(testAgentContext, sessionId, listOf(next))
+            assertEquals(listOf(1L, 2L, 3L, 5L), store.loadMessagesAfter(sessionId, 0L).map { it.seq })
+            assertEquals(next.id, store.loadMessagesAfter(sessionId, 4L).single().message.id)
+            assertEquals(SessionCursor(5L, 1L), store.findSessionCursor(sessionId, "system"))
+            Unit
+        }
+
+        @Test
+        fun `concurrent H2 writers allocate unique contiguous seq blocks`() = runTest {
+            val sessionId = createSession()
+            val batches = List(4) { List(3) { createUserMessage() } }
+            val start = CompletableDeferred<Unit>()
+            val ready = List(batches.size) { CompletableDeferred<Unit>() }
+            val writers = batches.mapIndexed { index, batch ->
+                async(Dispatchers.IO) {
+                    ready[index].complete(Unit)
+                    start.await()
+                    createStore().upsertMessages(testAgentContext, sessionId, batch)
+                }
+            }
+            ready.forEach { it.await() }
+            start.complete(Unit)
+            writers.awaitAll()
+
+            val rows = store.loadMessagesAfter(sessionId, 0L)
+            assertEquals(batches.flatten().map { it.id }.toSet(), rows.map { it.message.id }.toSet())
+            assertEquals((1L..12L).toList(), rows.map { it.seq })
+            val seqById = rows.associate { it.message.id to it.seq }
+            batches.forEach { batch ->
+                val seqs = batch.map { seqById.getValue(it.id) }
+                assertEquals((seqs.first()..seqs.first() + 2).toList(), seqs)
+            }
+            assertEquals(SessionCursor(12L, 0L), store.findSessionCursor(sessionId, "system"))
+            Unit
+        }
+
+        @Test
+        fun `full and partial content rewrites retain seq and increment revision`() = runTest {
+            val sessionId = createSession()
+            val original = createUserMessage()
+            store.upsertMessages(testAgentContext, sessionId, listOf(original))
+            val timestamp = store.loadMessagesAfter(sessionId, 0L).single().timestamp
+            val replacement = original.copy(content = listOf(TextContent("rewritten")))
+            store.updateMessage(sessionId, original.id, replacement)
+            assertEquals(replacement, store.loadMessagesAfter(sessionId, 0L).single().message)
+            assertEquals(SessionCursor(1L, 1L), store.findSessionCursor(sessionId, "system"))
+
+            val partial = original.copy(content = listOf(TextContent("partial rewrite")))
+            store.updateMessage(sessionId, original.id, partial, setOf(MessageUpdateField.CONTENT_BLOCKS))
+            val loaded = store.loadMessagesAfter(sessionId, 0L).single()
+            assertEquals(partial, loaded.message)
+            assertEquals(1L, loaded.seq)
+            assertEquals(timestamp, loaded.timestamp)
+            assertEquals(SessionCursor(1L, 2L), store.findSessionCursor(sessionId, "system"))
+            assertTrue(store.loadMessagesAfter(sessionId, 1L).isEmpty())
+            Unit
+        }
+
+        @Test
+        fun `resaving compaction summary and indicator preserves seq and increases revision`() = runTest {
+            val sessionId = createSession()
+            val summary = createUserMessage(metadata = mapOf("isCompactionSummary" to "true"))
+            val indicator = createUserMessage(metadata = mapOf("isCompactionIndicator" to "true"))
+            store.saveCompactionSummary(testAgentContext, summary, createdAt = 100L)
+            store.saveCompactionIndicator(testAgentContext, indicator, createdAt = 200L)
+            val before = store.loadMessagesAfter(sessionId, 0L)
+            assertEquals(listOf(1L, 2L), before.map { it.seq })
+            assertEquals(SessionCursor(2L, 2L), store.findSessionCursor(sessionId, "system"))
+
+            store.saveCompactionSummary(testAgentContext, summary.copy(content = listOf(TextContent("new summary"))), createdAt = 100L)
+            store.saveCompactionIndicator(testAgentContext, indicator.copy(content = listOf(TextContent("new indicator"))), createdAt = 200L)
+            val after = store.loadMessagesAfter(sessionId, 0L)
+            assertEquals(before.map { it.message.id to it.seq }, after.map { it.message.id to it.seq })
+            assertEquals(listOf(listOf(TextContent("new summary")), listOf(TextContent("new indicator"))), after.map { it.message.content })
+            assertEquals(SessionCursor(2L, 4L), store.findSessionCursor(sessionId, "system"))
+            Unit
+        }
+
+        @Test
+        fun `session cursors are visible only to their strict owner including system sessions`() = runTest {
+            val sessionId = createSession("alice")
+            val message = createUserMessage()
+            store.upsertMessages(testAgentContext, sessionId, listOf(message))
+            store.updateMessage(sessionId, message.id, message)
+            val systemSessionId = "system-${UUID.randomUUID()}"
+            store.save(PersistedSession(id = systemSessionId, messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH))
+
+            assertEquals(SessionCursor(1L, 1L), store.findSessionCursor(sessionId, "alice"))
+            assertNull(store.findSessionCursor(sessionId, "bob"))
+            assertNull(store.findSessionCursor(sessionId, "system"))
+            assertNull(store.findSessionCursor(sessionId))
+            assertNull(store.findSessionCursor(systemSessionId, "alice"))
+            assertEquals(SessionCursor(0L, 0L), store.findSessionCursor(systemSessionId, "system"))
+            assertNull(store.findSessionCursor("missing-${UUID.randomUUID()}", "alice"))
+            Unit
         }
     }
 

@@ -6,7 +6,6 @@ import { adoptSessionWorkspace } from '@/services/stores/project-store';
 import { useChatStore } from '@/services/stores/chat-store';
 import { handleWatchEvent } from '@/services/stores/chat/watch-handler';
 import { APP_CONFIG } from '@/constants/navigation';
-import type { CheckpointInfo } from '@/types/checkpoint';
 
 /** Poll cadence while a session is still running. */
 const RUNNING_POLL_MS = 3000;
@@ -76,52 +75,84 @@ export function useSessionRecovery(runningSessionId: string | null): SessionReco
      */
     const fetchMessagesIncremental = async (finalize: boolean): Promise<boolean> => {
       const state = useChatStore.getState();
-      const lastTimestamp = state._lastSnapshots.reduce((max, s) => Math.max(max, s.timestamp), 0);
+      // The cursor is the newest *seq* the store holds, not the newest timestamp: two rows can
+      // share a millisecond, and the one that lost the comparison was never fetched again.
+      const cursor = state.messageCursor ?? 0;
+      const knownRevision = state.contentRevision;
       // No Review tab means no consumer for either payload — don't poll the snapshot system.
-      const workspacePanelsEnabled = APP_CONFIG.showWorkspacePanels;
-      const [checkpoints, groupedTodos, reviewState] = await Promise.all([
-        workspacePanelsEnabled
-          ? getCheckpoints(sid).catch(() => [] as CheckpointInfo[])
-          : Promise.resolve([] as CheckpointInfo[]),
+      //
+      // The tab's visibility is `showWorkspacePanels && snapshotEnabled && snapshotCapability`
+      // (see RightPanel); probing the host flag alone is not enough. Hosts that register a no-op
+      // snapshot service (trading does, in TradingSnapshotConfiguration) keep the host flag true
+      // for the Files tab while the global probe reports false, so this used to fire two requests
+      // every poll for a payload nothing could render.
+      const reviewVisible = APP_CONFIG.showWorkspacePanels && state.snapshotCapability;
+      const [checkpointResponse, groupedTodos, reviewState] = await Promise.all([
+        // `null` = the request failed. Only a real listing may be applied: a failure must not
+        // masquerade as "no files were changed", which is what the edit gate reads.
+        reviewVisible ? getCheckpoints(sid).catch(() => null) : Promise.resolve(null),
         sessionService.getGroupedTodos(sid).catch(() => ({ main: [], subAgents: [] })),
-        workspacePanelsEnabled ? getFileReviewState(sid).catch(() => null) : Promise.resolve(null),
+        reviewVisible ? getFileReviewState(sid).catch(() => null) : Promise.resolve(null),
       ]);
       if (cancelled) return false;
 
+      const checkpoints = checkpointResponse?.status === 'ok' ? checkpointResponse.checkpoints : undefined;
+      /** Publish the listing (including `disabled`/`failed`) after the message load has landed. */
+      const applyCheckpoints = () => {
+        if (checkpointResponse) useChatStore.getState().applyCheckpointResponse(checkpointResponse);
+      };
+
+      /** Full reload — the only safe path once history itself has been rewritten. */
+      const reloadAll = async (): Promise<boolean | null> => {
+        const detail = await sessionService.getSessionDetail(sid);
+        if (cancelled) return null;
+        if (!detail) return null;
+        const s = useChatStore.getState();
+        s.loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, sid);
+        s.setSnapshotEnabled(detail.snapshotEnabled !== false);
+        s.applySessionCursors({
+          newestSeq: detail.newestMessageSeq,
+          contentRevision: detail.contentRevision,
+        });
+        adoptSessionWorkspace(detail);
+        return !!detail.pendingPermission;
+      };
+
       let hasPendingPermission = false;
       try {
-        const afterResponse = await sessionService.getSessionMessagesAfter(sid, lastTimestamp);
+        const afterResponse = await sessionService.getSessionMessagesAfterSeq(sid, cursor);
         if (cancelled) return false;
 
         hasPendingPermission = !!afterResponse.pendingPermission;
 
-        if (afterResponse.compactionOccurredAfter || afterResponse.contentUpdatedAt > lastTimestamp) {
-          // Compaction or in-place message update detected — fall back to full reload
-          const detail = await sessionService.getSessionDetail(sid);
+        // A rewrite (edit / delete / truncate / compact / revert) means the rows we hold are no
+        // longer a prefix of the transcript, so a delta could be stitched onto a lie. The
+        // revision only moves on rewrites, making it the precise test the timestamp stood in for.
+        const rewritten = afterResponse.compactionOccurredAfter
+          || (afterResponse.revision != null && knownRevision != null && afterResponse.revision !== knownRevision);
+
+        if (rewritten) {
+          const reloaded = await reloadAll();
           if (cancelled) return false;
-          hasPendingPermission = !!detail?.pendingPermission;
-          if (detail) {
-            const s = useChatStore.getState();
-            s.loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, sid);
-            s.setSnapshotEnabled(detail.snapshotEnabled !== false);
-            adoptSessionWorkspace(detail);
-          }
+          if (reloaded !== null) hasPendingPermission = reloaded;
         } else {
           // Safe to use incremental merge — pass pendingPermission from backend
-          state.loadSessionMessagesIncremental(afterResponse.messages, afterResponse.pendingPermission ?? null, checkpoints, afterResponse.endReason, undefined, undefined, sid);
+          useChatStore.getState().loadSessionMessagesIncremental(
+            afterResponse.messages, afterResponse.pendingPermission ?? null, checkpoints, afterResponse.endReason, undefined, undefined, sid,
+          );
+          useChatStore.getState().applySessionCursors({
+            newestSeq: afterResponse.newestSeq,
+            contentRevision: afterResponse.revision,
+          });
         }
       } catch {
         // Incremental fetch failed — fall back to full reload
-        const detail = await sessionService.getSessionDetail(sid);
+        const reloaded = await reloadAll();
         if (cancelled) return false;
-        hasPendingPermission = !!detail?.pendingPermission;
-        if (detail) {
-          const s = useChatStore.getState();
-          s.loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, sid);
-          s.setSnapshotEnabled(detail.snapshotEnabled !== false);
-          adoptSessionWorkspace(detail);
-        }
+        if (reloaded !== null) hasPendingPermission = reloaded;
       }
+
+      applyCheckpoints();
 
       state.setTodos(groupedTodos.main);
       state.setAllSubAgentTodos(
@@ -180,14 +211,23 @@ export function useSessionRecovery(runningSessionId: string | null): SessionReco
 
     // Periodic checkpoint refresh — surfaces team member file changes
     // that don't flow through the parent's stream (members use isolated session IDs).
+    //
+    // The capability check lives inside the tick, not around `setInterval`: the probe that fills
+    // `snapshotCapability` is async (useChatBootstrap), so at effect time it still holds the
+    // optimistic default. Checking per tick means a host with a no-op snapshot service stops
+    // issuing requests as soon as the probe lands, without tearing the timer down.
     const checkpointTimer = APP_CONFIG.showWorkspacePanels
       ? setInterval(async () => {
           if (isStalePoll()) return;
+          if (!useChatStore.getState().snapshotCapability) return;
           try {
-            const checkpoints = await getCheckpoints(sid);
+            const response = await getCheckpoints(sid);
             if (cancelled) return;
+            // A disabled or failed listing carries no usable entries; the poll's own load is
+            // what publishes those states, so this best-effort upsert only acts on `ok`.
+            if (response.status !== 'ok') return;
             const state = useChatStore.getState();
-            for (const cp of checkpoints) {
+            for (const cp of response.checkpoints) {
               const key = cp.assistantMessageId || cp.messageId;
               if (!key) continue;
               // Upsert synthetic member checkpoints (their content grows as members write more files);

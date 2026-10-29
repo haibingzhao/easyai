@@ -94,7 +94,10 @@ export interface ToolResult {
   id: string;
   toolName: string;
   result: string;
-  /** Parsed content blocks from JSON result string */
+  /**
+   * Parsed content blocks. Populated on demand via `blocksOf(result)` — never at load time,
+   * so opening a long session does not JSON.parse every historical tool output.
+   */
   contentBlocks?: ToolResultContentBlock[];
   /**
    * Structured render payload from the tool, carried through SSE and the persisted transcript.

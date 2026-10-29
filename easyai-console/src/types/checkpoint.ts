@@ -32,7 +32,26 @@ export interface CheckpointInfo {
   additions: number;
   deletions: number;
   createdAt: number;
+  /**
+   * false = this entry's diff or author attribution failed, so `filesChanged` is not
+   * trustworthy. An empty list then means "unknown", NOT "no files changed" — edits that
+   * depend on the rollback scope must be blocked.
+   */
+  diffsComplete?: boolean;
 }
+
+/** `status` of a checkpoint listing: distinct states, never collapsed into an empty array. */
+export type CheckpointStatus = 'ok' | 'disabled' | 'failed';
+
+export interface CheckpointListResponse {
+  /** ok = query succeeded and the list is complete; disabled = snapshots off; failed = error. */
+  status: CheckpointStatus;
+  checkpoints: CheckpointInfo[];
+  error?: string;
+}
+
+/** Client-side state of the checkpoint data. `unknown` is NOT equivalent to `ok`. */
+export type CheckpointState = 'unknown' | 'loading' | 'ok' | 'disabled' | 'failed';
 
 /** Revert state from the backend */
 export interface RevertStateInfo {

@@ -3,13 +3,7 @@ import { Dialog } from '../ui/Dialog';
 import { SessionItem } from '../ui/SessionItem';
 import { useSessionStore } from '@/services/stores/session-store';
 import { useChatStore } from '@/services/stores/chat-store';
-import { adoptSessionWorkspace } from '@/services/stores/project-store';
-import { useNavStore } from '@/services/stores/nav-store';
-import { sessionService } from '@/services/session-service';
-import { getCheckpoints, getFileReviewState } from '@/services/checkpoint-service';
-import { getStreamingStatus } from '@/services/chat-service';
-import { APP_CONFIG } from '@/constants/navigation';
-import type { CheckpointInfo } from '@/types/checkpoint';
+import { switchToSession } from '@/services/session-switch';
 import { i18n } from '@/utils/i18n';
 import { MessageSquare } from 'lucide-react';
 
@@ -19,8 +13,8 @@ interface NewSessionDialogProps {
 }
 
 export const NewSessionDialog: React.FC<NewSessionDialogProps> = ({ open, onClose }) => {
-  const { remoteSessions, remoteSessionHasMore, remoteSessionLoading, setCurrentSessionId, loadRemoteSessions, loadMoreRemoteSessions } = useSessionStore();
-  const { setSessionId, loadSessionMessages, sessionId: chatSessionId, setFileReviewOverrides, setRunningSessionId, setStreaming, setSnapshotEnabled } = useChatStore();
+  const { remoteSessions, remoteSessionHasMore, remoteSessionLoading, loadRemoteSessions, loadMoreRemoteSessions } = useSessionStore();
+  const chatSessionId = useChatStore((s) => s.sessionId);
 
   useEffect(() => {
     if (open) {
@@ -30,54 +24,10 @@ export const NewSessionDialog: React.FC<NewSessionDialogProps> = ({ open, onClos
 
   const handleSelectSession = async (sessionId: string) => {
     try {
-      // Step 1: Check if session is still streaming on this server
-      const streamingStatus = await getStreamingStatus(sessionId);
-
-      // Load existing messages first (for both running and completed sessions)
-      const workspacePanelsEnabled = APP_CONFIG.showWorkspacePanels;
-      const [detail, checkpoints] = await Promise.all([
-        sessionService.getSessionDetail(sessionId),
-        workspacePanelsEnabled
-          ? getCheckpoints(sessionId).catch((e) => {
-              console.warn('Failed to load checkpoints:', e);
-              return [] as CheckpointInfo[];
-            })
-          : Promise.resolve([] as CheckpointInfo[]),
-      ]);
-      loadSessionMessages(detail.messages, detail.pendingPermission, checkpoints, detail.endReason, detail.variables, detail.modelContextLength, sessionId);
-      adoptSessionWorkspace(detail);
-      // Applied after setSessionId below — the identity-change reset restores the optimistic default.
-      const snapshotEnabled = detail.snapshotEnabled !== false;
-      useNavStore.getState().setSelectedFile(null);
-      // Load file review state (skipped when the backend snapshot system is disabled)
-      const reviewState = snapshotEnabled && workspacePanelsEnabled ? await getFileReviewState(sessionId).catch((e) => {
-        console.warn('Failed to load file review state:', e);
-        return null;
-      }) : null;
-      if (reviewState?.reviews) {
-        setFileReviewOverrides(reviewState.reviews);
-      }
-
-      if (streamingStatus.local || streamingStatus.streaming) {
-        // Session is still running — enter polling mode to get new messages
-        setSessionId(sessionId);
-        setSnapshotEnabled(snapshotEnabled);
-        setRunningSessionId(sessionId);
-        // When there's a pending permission request, loadSessionMessages already
-        // set isStreaming=false so the PermissionBar is interactive. Don't override it.
-        if (!detail.pendingPermission) {
-          setStreaming(true);
-        }
-        setCurrentSessionId(sessionId);
-        onClose();
-        return;
-      }
-
-      // Session completed — stop any running polling and show this session
-      setRunningSessionId(null);
-      setCurrentSessionId(sessionId);
-      setSessionId(sessionId);
-      setSnapshotEnabled(snapshotEnabled);
+      // Delegated: the dialog used to carry its own copy of the load sequence, which drifted from
+      // the History tab's. One path means the checkpoint state machine, the paging window and the
+      // run-state probe behave identically no matter where the user picks a session.
+      await switchToSession(sessionId);
       onClose();
     } catch (e) {
       console.error('Failed to load session:', e);

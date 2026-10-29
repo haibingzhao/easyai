@@ -2,12 +2,11 @@ package com.easy.easyai.web.service
 
 import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.agent.SessionManager
-import com.easy.easyai.core.model.UserMessage
 import com.easy.easyai.core.team.TeamExecutionStore
 import com.easy.easyai.core.team.TeamMemberExecutionEntity
 import com.easy.easyai.core.team.TeamMemberStatus
 import com.easy.easyai.repository.session.AsyncSessionStore
-import com.easy.easyai.repository.session.MessageWithTimestamp
+import com.easy.easyai.repository.session.MessageRef
 import com.easy.easyai.snapshot.SnapshotService
 import com.easy.easyai.snapshot.model.FileChangeStatus
 import com.easy.easyai.snapshot.model.FileDiff
@@ -102,7 +101,7 @@ class SessionServiceMemberAggregationTest {
             // Team execution store returns member execution
             coEvery { teamExecutionStore.getExecutions(sessionId) } returns listOf(createMemberExecution())
 
-            val result = service.getCheckpoints(sessionId, owners = owners)
+            val result = service.getCheckpoints(sessionId, owners = owners).checkpoints
 
             assertEquals(1, result.size)
             val memberCp = result[0]
@@ -126,7 +125,7 @@ class SessionServiceMemberAggregationTest {
             coEvery { snapshotService.listCheckpoints(projectPath, sessionId) } returns emptyList()
             coEvery { snapshotService.getStagedChanges(projectPath, sessionId) } returns emptyList()
 
-            val result = service.getCheckpoints(sessionId, owners = owners)
+            val result = service.getCheckpoints(sessionId, owners = owners).checkpoints
 
             assertTrue(result.isEmpty())
         }
@@ -144,7 +143,7 @@ class SessionServiceMemberAggregationTest {
             coEvery { snapshotService.listCheckpoints(projectPath, memberSessionId) } returns emptyList()
             coEvery { teamExecutionStore.getExecutions(sessionId) } returns listOf(createMemberExecution())
 
-            val result = service.getCheckpoints(sessionId, owners = owners)
+            val result = service.getCheckpoints(sessionId, owners = owners).checkpoints
 
             assertTrue(result.isEmpty())
         }
@@ -163,7 +162,7 @@ class SessionServiceMemberAggregationTest {
             coEvery { snapshotService.ensureBaseline(projectPath, memberSessionId) } throws RuntimeException("no baseline")
             coEvery { teamExecutionStore.getExecutions(sessionId) } returns listOf(createMemberExecution())
 
-            val result = service.getCheckpoints(sessionId, owners = owners)
+            val result = service.getCheckpoints(sessionId, owners = owners).checkpoints
 
             assertTrue(result.isEmpty())
         }
@@ -183,7 +182,7 @@ class SessionServiceMemberAggregationTest {
             coEvery { snapshotService.diff(projectPath, "baseline", "hash1") } returns emptyList()
             coEvery { teamExecutionStore.getExecutions(sessionId) } returns listOf(createMemberExecution())
 
-            val result = service.getCheckpoints(sessionId, owners = owners)
+            val result = service.getCheckpoints(sessionId, owners = owners).checkpoints
 
             assertTrue(result.isEmpty())
         }
@@ -210,7 +209,7 @@ class SessionServiceMemberAggregationTest {
                 createMemberExecution().copy(id = "exec-2", round = 2)
             )
 
-            val result = service.getCheckpoints(sessionId, owners = owners)
+            val result = service.getCheckpoints(sessionId, owners = owners).checkpoints
 
             // Should only produce ONE aggregated checkpoint
             assertEquals(1, result.size)
@@ -234,14 +233,15 @@ class SessionServiceMemberAggregationTest {
             )
             coEvery { snapshotService.determineFileAuthors(projectPath, "parent-baseline", "parent-hash") } returns mapOf("parent.kt" to "llm")
             coEvery { snapshotService.getStagedChanges(projectPath, sessionId) } returns emptyList()
-            coEvery { sessionStore.loadMessagesWithTimestamps(sessionId) } returns listOf(
-                MessageWithTimestamp(message = UserMessage("user-msg-1", "hello"), timestamp = 1000L)
+            // Checkpoint filtering reads ids only — the transcript content is never needed here.
+            coEvery { sessionStore.findMessageRefs(sessionId) } returns listOf(
+                MessageRef("user-msg-1", "USER"), MessageRef("assistant-msg-1", "ASSISTANT")
             )
 
             // Team store throws
             coEvery { teamExecutionStore.getExecutions(sessionId) } throws RuntimeException("DB error")
 
-            val result = service.getCheckpoints(sessionId, owners = owners)
+            val result = service.getCheckpoints(sessionId, owners = owners).checkpoints
 
             // Parent checkpoint still returned
             assertEquals(1, result.size)

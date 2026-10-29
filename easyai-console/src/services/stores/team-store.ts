@@ -16,8 +16,17 @@ interface TeamState {
   selectedMemberSessionId: string | null;
   /** Messages of the selected member's session */
   memberMessages: Message[];
-  /** Raw snapshots of the selected member's session (watermark source for incremental polling). */
+  /** Raw snapshots of the selected member's session (render source + dedup base). */
   memberSnapshots: MessageSnapshot[];
+  /**
+   * Newest seq held for the selected member session — the incremental cursor.
+   *
+   * The timestamp watermark this used to compute needed a `-1ms` overlap hack plus id dedup,
+   * because rows sharing a millisecond were indistinguishable. seq has no such tie.
+   */
+  memberCursor: number | null;
+  /** History revision held with the snapshots; changes require a full reload. */
+  memberRevision: number | null;
   /** Loading state for member messages */
   memberMessagesLoading: boolean;
   /** Active filter tab */
@@ -56,6 +65,8 @@ async function loadFullMessages(
     set({
       memberSnapshots: detail.messages,
       memberMessages: mergeToolResults(detail.messages.map(convertSnapshot)),
+      memberCursor: detail.newestMessageSeq ?? null,
+      memberRevision: detail.contentRevision ?? null,
       memberMessagesLoading: false,
     });
   } catch {
@@ -71,6 +82,8 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   selectedMemberSessionId: null,
   memberMessages: [],
   memberSnapshots: [],
+  memberCursor: null,
+  memberRevision: null,
   memberMessagesLoading: false,
   teamFilter: 'ALL',
   activeSessionId: null,
@@ -99,6 +112,8 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       selectedMemberSessionId: memberSessionId ?? null,
       memberMessages: [],
       memberSnapshots: [],
+      memberCursor: null,
+      memberRevision: null,
       memberMessagesLoading: true,
     });
     if (!memberSessionId) {
@@ -113,37 +128,50 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     if (!memberSessionId) return;
 
     const snapshots = get().memberSnapshots;
-    const watermark = snapshots.reduce((max, s) => Math.max(max, s.timestamp), 0);
+    const cursor = get().memberCursor;
+    const revision = get().memberRevision;
 
-    // No baseline yet (e.g. initial load failed) → full load
-    if (watermark <= 0) {
+    // No baseline yet (e.g. initial load failed or an older backend) → full load
+    if (cursor == null || cursor <= 0) {
       await loadFullMessages(memberSessionId, set, get);
       return;
     }
 
     try {
-      // Overlap by 1ms so same-timestamp messages are never missed; dedup by id below.
-      const resp = await sessionService.getSessionMessagesAfter(memberSessionId, watermark - 1);
+      const resp = await sessionService.getSessionMessagesAfterSeq(memberSessionId, cursor);
       // Guard: selection may have changed during fetch
       if (get().selectedMemberSessionId !== memberSessionId) return;
 
-      if (resp.compactionOccurredAfter || resp.contentUpdatedAt > watermark) {
-        // History may have been rewritten (compaction / in-place edit) → full reload
+      if (resp.compactionOccurredAfter || (resp.revision != null && resp.revision !== revision)) {
+        // Rewrites can leave an empty delta or a backdated summary; check revision first.
         await loadFullMessages(memberSessionId, set, get);
         return;
       }
 
-      if (resp.messages.length === 0) return;
+      const nextCursor = resp.newestSeq ?? cursor;
+      const nextRevision = resp.revision ?? revision;
+      if (resp.messages.length === 0) {
+        // Nothing new, but the server's newest seq still advanced: follow it, or every poll
+        // re-reads the same empty range.
+        set({ memberCursor: nextCursor, memberRevision: nextRevision });
+        return;
+      }
 
-      // Deduplicate by message id (overlap window may return already-known messages)
+      // Deduplicate by message id: the server aligns a delta to a round boundary, so a
+      // consecutive response may repeat rows the previous one already delivered.
       const existingIds = new Set(snapshots.map((s) => s.id).filter(Boolean));
       const newSnapshots = resp.messages.filter((s) => !s.id || !existingIds.has(s.id));
-      if (newSnapshots.length === 0) return;
+      if (newSnapshots.length === 0) {
+        set({ memberCursor: nextCursor, memberRevision: nextRevision });
+        return;
+      }
 
       const merged = [...snapshots, ...newSnapshots];
       set({
         memberSnapshots: merged,
         memberMessages: mergeToolResults(merged.map(convertSnapshot)),
+        memberCursor: nextCursor,
+        memberRevision: nextRevision,
       });
     } catch {
       // Silently ignore — will retry on next poll
@@ -156,6 +184,8 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       selectedMemberSessionId: null,
       memberMessages: [],
       memberSnapshots: [],
+      memberCursor: null,
+      memberRevision: null,
       memberMessagesLoading: false,
     }),
 
@@ -166,6 +196,8 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       selectedMemberSessionId: null,
       memberMessages: [],
       memberSnapshots: [],
+      memberCursor: null,
+      memberRevision: null,
       memberMessagesLoading: false,
       teamFilter: 'ALL',
       activeSessionId: null,

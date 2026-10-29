@@ -15,6 +15,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import type { ToolMessageProps } from './types';
+import { blocksOf } from '@/services/tool-blocks';
 import { getToolRowSummary } from './parsers';
 import { ToolRowHeader } from './ToolRowHeader';
 import { useStreamingRowExpand } from './useStreamingRowExpand';
@@ -67,8 +68,9 @@ function truncate(text: string, maxLen: number): string {
 function extractResultOutput(result?: ToolMessageProps['result'], streamingOutput?: string): string {
   if (streamingOutput !== undefined) return streamingOutput;
   if (!result) return '';
-  if (result.contentBlocks && result.contentBlocks.length > 0) {
-    return result.contentBlocks
+  const blocks = blocksOf(result);
+  if (blocks && blocks.length > 0) {
+    return blocks
       .map((block) => {
         if (block.type === 'toolResult') return block.output;
         if (block.type === 'text') return block.text;

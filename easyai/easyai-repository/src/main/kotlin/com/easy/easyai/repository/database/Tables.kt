@@ -288,6 +288,19 @@ object Tables {
         val sessionScope = varchar("session_scope", 255).nullable()
         /** JSON of the model option overrides actually applied to this session (effort/contextToken). */
         val modelOverrides = text("model_overrides").nullable()
+        /**
+         * Monotonic counter handing out `message.seq`. Incremented in the same transaction that
+         * inserts messages, so concurrent writers (main agent + sub-agent listener) can never
+         * collide and a `MAX(seq)+1` race is impossible.
+         */
+        val messageSeq = long("message_seq").default(0L)
+        /**
+         * Counts **history rewrites** only (in-place update, single delete, truncation, compaction,
+         * revert). Appends do not bump it — those are covered by [messageSeq]. This is the single
+         * cache-invalidation key: a client may only stitch a delta onto a cached transcript while
+         * the revision it read still matches.
+         */
+        val contentRevision = long("content_revision").default(0L)
 
         override val primaryKey = PrimaryKey(id)
 
@@ -338,6 +351,12 @@ object Tables {
         val parentMessageId = varchar("parent_message_id", 255).nullable()
         val parentToolCallId = varchar("parent_tool_call_id", 255).nullable()
         val createdAt = long("created_at")
+        /**
+         * Session-scoped ordinal — the only stable ordering key. `(created_at, id)` is not one:
+         * forking re-generates message ids (`UUID.randomUUID()`), which reshuffles rows that share
+         * a millisecond and breaks any adjacency-based tool-result merge.
+         */
+        val seq = long("seq").nullable()
 
         override val primaryKey = PrimaryKey(id)
 
@@ -345,6 +364,10 @@ object Tables {
             // Composite index for session-scoped queries: loadMessagesWithTimestamps,
             // loadActiveMessages, deleteMessagesFromTimestamp, getFirstCompactionAfter, etc.
             index(false, sessionId, createdAt)
+            // Stable ordering / incremental cursor. Unique instead of a separate plain index: the
+            // unique index also serves the range scans, and it turns a seq-allocation bug into a
+            // loud failure instead of silently duplicated ordinals.
+            uniqueIndex(sessionId, seq)
         }
     }
 
