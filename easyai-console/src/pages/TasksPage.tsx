@@ -143,7 +143,7 @@ export const TasksPage: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-background">
+    <div className="flex flex-col h-full min-h-0 overflow-y-auto bg-background">
       <div className="max-w-4xl mx-auto w-full p-6">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
