@@ -15,7 +15,10 @@ import { fileURLToPath } from 'node:url';
 
 const distDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../dist-lib');
 // Only import/export positions, so a quoted alias path inside a JSDoc comment stays as written.
-const ALIAS_IMPORT = /(from\s+|import\(\s*)'@\/([^']+)'/g;
+// Both quote styles matter: `tsc` emits `import("@/types/x")` for an inferred property type with
+// double quotes while hand-written `from '@/x'` keeps single ones, and a one-sided pattern leaves
+// the inline form in place until a CI grep catches it.
+const ALIAS_IMPORT = /(from\s+|import\(\s*)(['"])@\/([^'"]+)\2/g;
 
 function* declarations(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -36,7 +39,7 @@ let missing = [];
 
 for (const file of declarations(distDir)) {
   const source = readFileSync(file, 'utf8');
-  const output = source.replace(ALIAS_IMPORT, (match, prefix, target) => {
+  const output = source.replace(ALIAS_IMPORT, (match, prefix, quote, target) => {
     const resolved = path.join(distDir, target);
     if (!resolvable(resolved)) {
       missing.push(`${file} -> @/${target}`);
@@ -44,7 +47,7 @@ for (const file of declarations(distDir)) {
     }
     rewritten += 1;
     const relative = path.relative(path.dirname(file), resolved).replaceAll('\\', '/');
-    return `${prefix}'${relative.startsWith('.') ? relative : `./${relative}`}'`;
+    return `${prefix}${quote}${relative.startsWith('.') ? relative : `./${relative}`}${quote}`;
   });
   if (output !== source) {
     writeFileSync(file, output);
