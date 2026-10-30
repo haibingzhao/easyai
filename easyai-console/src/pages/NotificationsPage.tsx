@@ -102,7 +102,7 @@ export const NotificationsPage: React.FC<NotificationsPageProps> = ({
   const handlers = { now, busyId, onOpen: openItem, onRespond: respond, showUrl: openUrlOnClick };
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-col flex-1 h-full min-h-0">
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border shrink-0">
         {heading && <h2 className="text-base font-medium truncate">{heading}</h2>}
         <div className="flex items-center gap-1 text-xs">
