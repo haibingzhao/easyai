@@ -25,7 +25,6 @@ import reactor.core.publisher.Flux
 import reactor.test.StepVerifier
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
@@ -37,6 +36,11 @@ import kotlin.test.assertTrue
  * format choices must not leak into what the browser receives.
  */
 class TtsServiceTest {
+
+    companion object {
+        /** Generous bound for cross-thread hand-offs; the assertions still fail if the signal never comes. */
+        private const val AWAIT_SECONDS = 15L
+    }
 
     private fun config(
         modelType: ModelType = ModelType.SPEECH,
@@ -298,24 +302,27 @@ class TtsServiceTest {
 
         @Test
         fun `cancelling the HTTP stream cancels upstream and releases the owner`() = runTest {
-            val upstreamCancelled = AtomicBoolean(false)
+            val upstreamCancelled = CountDownLatch(1)
             val upstreamSubscribed = CountDownLatch(1)
             val synthesizer = RecordingSynthesizer().apply {
                 streamFactory = {
                     Flux.never<SpeechAudio>()
                         .doOnSubscribe { upstreamSubscribed.countDown() }
-                        .doOnCancel { upstreamCancelled.set(true) }
+                        .doOnCancel { upstreamCancelled.countDown() }
                 }
             }
             val service = TtsService(resolverReturning(config()), synthesizer)
 
+            // Cancellation propagates through the coroutine bridge and the timeout operator before it
+            // reaches the engine subscription, so every wait here is a bounded poll rather than an
+            // instantaneous assertion; a slow shared CI runner must not turn this into a flake.
             StepVerifier.create(service.speakStream(listOf("alice"), "你好"))
                 .expectSubscription()
-                .then { assertTrue(upstreamSubscribed.await(1, TimeUnit.SECONDS)) }
+                .then { assertTrue(upstreamSubscribed.await(AWAIT_SECONDS, TimeUnit.SECONDS), "upstream never subscribed") }
                 .thenCancel()
                 .verify()
 
-            assertTrue(upstreamCancelled.get())
+            assertTrue(upstreamCancelled.await(AWAIT_SECONDS, TimeUnit.SECONDS), "upstream was not cancelled")
             assertEquals("audio/mpeg", service.speak(listOf("alice"), "下一段").mimeType)
         }
     }
