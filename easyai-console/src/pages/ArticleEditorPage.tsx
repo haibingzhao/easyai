@@ -187,7 +187,7 @@ export const ArticleEditorPage: React.FC = () => {
   });
 
   const dictationSink = useTiptapDictationSink(editor);
-  const { asrReady, isRefineEnabled } = useDictationAvailability();
+  const { asrReady, notice: asrNotice, isRefineEnabled } = useDictationAvailability();
   const voice = useVoiceInput({
     sink: dictationSink,
     isRefineEnabled,
@@ -683,15 +683,15 @@ export const ArticleEditorPage: React.FC = () => {
             {i18n('AI Rewrite')}
           </button>
           <div className="w-px h-5 bg-border mx-1" />
-          {voice.phase === 'recording' ? (
+          {voice.phase === 'recording' || voice.phase === 'connecting' ? (
             <>
               <VoiceWaveform analyserRef={voice.analyserRef} />
               <button
                 onClick={() => { void handleVoiceStop(); }}
-                title={i18n('Stop voice input')}
+                title={voice.phase === 'connecting' ? i18n('Connecting to the recognition service…') : i18n('Stop voice input')}
                 className="p-1.5 rounded bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
               >
-                <Square className="size-4" />
+                {voice.phase === 'connecting' ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-4" />}
               </button>
             </>
           ) : (
@@ -699,7 +699,7 @@ export const ArticleEditorPage: React.FC = () => {
               onClick={() => { void voice.start(); }}
               disabled={!asrReady || voice.phase !== 'idle'}
               title={!asrReady
-                ? i18n('Please configure an ASR model in Settings → Task Models')
+                ? asrNotice || i18n('Please configure an ASR model in Settings → Task Models')
                 : i18n('Start voice input')}
               className={`${toolbarBtnClass(false)} disabled:opacity-40 disabled:cursor-not-allowed`}
             >

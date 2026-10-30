@@ -26,6 +26,26 @@ import org.springframework.web.server.ResponseStatusException
 import kotlin.time.Duration.Companion.seconds
 
 /**
+ * Dictation state for the caller: whether the mic should open, which transport the browser must use,
+ * and why not when it must not.
+ *
+ * [transport] is the only routing signal; [capability] and [capabilitySource] exist so the console
+ * can word its hint and so a support ticket can see whether the catalog or the fallback table
+ * answered. [reason] is one of the `AsrCapabilityResolver.REASON_*` values — an old backend answers
+ * 404 on this endpoint, and the console synthesises `BACKEND_TOO_OLD` itself for that case.
+ */
+data class AsrAvailability(
+    val configured: Boolean,
+    val transport: String,
+    val capability: String,
+    val capabilitySource: String,
+    val modelId: String? = null,
+    val reason: String? = null,
+    val hint: String? = null,
+    val refineReady: Boolean = false
+)
+
+/**
  * Backend for chat-input dictation: raw audio-segment transcription plus the post-dictation
  * context-aware rewrite.
  *
@@ -33,15 +53,39 @@ import kotlin.time.Duration.Companion.seconds
  * `asr` task means voice input is off, an unconfigured `dictation_refine` task means the rewrite
  * step is skipped. Choices are resolved over the caller's full owner set (self → group bucket),
  * matching the settings page and every other group-shared consumer. The frontend discovers this
- * through GET /api/aux-models; these endpoints answer 409 as the authoritative backstop.
+ * through GET /api/asr/availability (which also routes between the HTTP and WebSocket transports);
+ * these endpoints answer 409 as the authoritative backstop.
  */
 @Service
 class AsrService(
     @param:Autowired(required = false)
     private val auxModelResolver: AuxModelResolver? = null,
-    private val modelFactories: List<ChatModelFactory> = emptyList()
+    private val modelFactories: List<ChatModelFactory> = emptyList(),
+    @param:Autowired(required = false)
+    private val capabilityResolver: AsrCapabilityResolver? = null
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
+
+    /**
+     * How the caller's configured ASR row is reached, plus whether the polish action should be
+     * offered. Computed locally: no ticket, no upstream connection, no charge — which is why the
+     * console can call it at the start of every dictation round.
+     */
+    suspend fun availability(owners: Collection<String>): AsrAvailability {
+        val config = auxModelResolver?.resolveConfig(owners, AuxModelTask.ASR)
+        val route = (capabilityResolver ?: AsrCapabilityResolver()).resolve(config)
+        val refineReady = auxModelResolver?.resolveConfig(owners, AuxModelTask.DICTATION_REFINE) != null
+        return AsrAvailability(
+            configured = config != null,
+            transport = route.transport.name,
+            capability = route.capability,
+            capabilitySource = route.capabilitySource,
+            modelId = route.modelId ?: config?.modelId,
+            reason = route.reason,
+            hint = route.hint,
+            refineReady = refineReady
+        )
+    }
 
     /** Transcribes one audio segment (16 kHz mono WAV from the browser) via the configured ASR row. */
     suspend fun transcribe(owners: Collection<String>, bytes: ByteArray, language: String?): String {
@@ -141,19 +185,8 @@ class AsrService(
         }
 
     /** The ASR task points at a model_provider_config row; tools speak MediaProviderSettings. */
-    private fun ModelProviderConfig.asAsrSettings(): MediaProviderSettings = MediaProviderSettings(
-        id = id,
-        displayName = name,
-        enabled = true,
-        serviceKind = MediaProviderSettings.SERVICE_KIND_ASR,
-        providerType = protocol.name.lowercase(),
-        baseUrl = baseUrl.orEmpty(),
-        apiKey = apiKey.orEmpty(),
-        defaultModel = modelId,
-        options = mediaOptions.orEmpty(),
-        timeoutSeconds = timeoutSeconds,
-        isDefault = true
-    )
+    private fun ModelProviderConfig.asAsrSettings(): MediaProviderSettings =
+        AsrCapabilityResolver.asSettings(this)
 
     private fun stripCodeFence(text: String): String {
         val trimmed = text.trim()

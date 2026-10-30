@@ -4,12 +4,16 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonInclude
 
 /**
- * Vendor-published speech-synthesis facts for one TTS model, stored as JSON in
+ * Hand-maintained speech facts for one TTS or ASR model, stored as JSON in
  * `model_catalog.speech_capabilities`.
  *
  * Kept out of [CatalogCapabilities] on purpose: that block is chat semantics and is overwritten
  * wholesale by every catalog refresh, while this one is maintained from the vendor's voice list and
  * must survive a refresh untouched.
+ *
+ * One row carries either block: a TTS model fills the synthesis fields, an ASR model fills [asr].
+ * They share the column because both are the same kind of fact (published by hand, preserved by
+ * refreshes), and a new column would need a migration plus a second copy of that preservation rule.
  *
  * Every flag defaults to `false` and every collection to empty so a partially filled row still
  * deserializes; unknown keys are ignored so adding a field to the seed cannot break an older build.
@@ -39,7 +43,9 @@ data class SpeechCapabilities(
     val voiceGroups: List<VoiceGroup> = emptyList(),
     /** The voice a caller should use when it does not choose one. */
     val defaultVoice: String? = null,
-    val voices: List<VoiceSpec> = emptyList()
+    val voices: List<VoiceSpec> = emptyList(),
+    /** Recognition facts for an ASR model; null on TTS rows and on rows seeded before it existed. */
+    val asr: AsrCapabilities? = null
 )
 
 /** One `optgroup` of the vendor's voice table, with the published member count. */

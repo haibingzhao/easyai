@@ -13,10 +13,27 @@ class FakeAudio implements TtsAudioElement {
   onerror: ((this: GlobalEventHandlers, ev: Event | string) => unknown) | null = null;
   playCalls = 0;
   pauseCalls = 0;
+  /** Present only on a "reusable" fake, mirroring a real element the controller keeps across clips. */
+  removeAttribute?: (name: string) => void;
+  load?: () => void;
+  loadCalls = 0;
   private pendingPlay: (() => void) | null = null;
 
-  constructor(private blockPlay: boolean, holdPlay = false, private playFailure: Error | null = null) {
+  constructor(
+    private blockPlay: boolean,
+    holdPlay = false,
+    private playFailure: Error | null = null,
+    reusable = false
+  ) {
     if (holdPlay) this.pendingPlay = () => {};
+    if (reusable) {
+      this.removeAttribute = (name) => {
+        if (name === 'src') this.src = '';
+      };
+      this.load = () => {
+        this.loadCalls++;
+      };
+    }
   }
 
   play(): Promise<void> {
@@ -111,11 +128,20 @@ interface PendingRequest {
   reject(error: unknown): void;
 }
 
-function setup(options: { blocked?: boolean; holdPlay?: boolean; playError?: Error; streaming?: boolean } = {}) {
+function setup(
+  options: {
+    blocked?: boolean;
+    holdPlay?: boolean;
+    playError?: Error;
+    streaming?: boolean;
+    reusable?: boolean;
+  } = {}
+) {
   const requests: PendingRequest[] = [];
   const audios: FakeAudio[] = [];
   const mediaSources: FakeMediaSource[] = [];
   const revoked: string[] = [];
+  const primes: string[] = [];
   let urlSeq = 0;
 
   const deps: TtsPlaybackDeps = {
@@ -134,7 +160,12 @@ function setup(options: { blocked?: boolean; holdPlay?: boolean; playError?: Err
         });
       }),
     createAudio: () => {
-      const audio = new FakeAudio(options.blocked ?? false, options.holdPlay ?? false, options.playError ?? null);
+      const audio = new FakeAudio(
+        options.blocked ?? false,
+        options.holdPlay ?? false,
+        options.playError ?? null,
+        options.reusable ?? false
+      );
       audios.push(audio);
       return audio;
     },
@@ -149,9 +180,10 @@ function setup(options: { blocked?: boolean; holdPlay?: boolean; playError?: Err
       return mediaSource as unknown as MediaSource;
     } : undefined,
     supportsStreaming: options.streaming ? () => true : undefined,
+    primeAudio: () => primes.push('prime'),
   };
 
-  return { controller: new TtsPlaybackController(deps), requests, audios, mediaSources, revoked };
+  return { controller: new TtsPlaybackController(deps), requests, audios, mediaSources, revoked, primes };
 }
 
 const abortError = (): Error => Object.assign(new Error('aborted'), { name: 'AbortError' });
@@ -174,6 +206,35 @@ describe('TtsPlaybackController', () => {
     expect(controller.getSnapshot()).toEqual({ state: 'playing', activeKey: 'm1', error: null });
     expect(audios).toHaveLength(1);
     expect(audios[0].src).toBe('blob:1');
+  });
+
+  it('unlocks the audio element inside the click, not after the first await', async () => {
+    const { controller, requests, primes } = setup();
+    const done = controller.speak('m1', 'hello');
+
+    // iOS drops the gesture at the first `await`; an unlock that runs later would leave the phone
+    // silent while the desktop, which needs no unlock at all, works.
+    expect(primes).toHaveLength(1);
+    expect(requests[0].text).toBe('hello');
+
+    requests[0].resolve(new Blob(['mp3']));
+    await done;
+
+    expect(primes).toHaveLength(1);
+  });
+
+  it('returns a reused element to no source instead of pointing it at the page URL', async () => {
+    const { controller, requests, audios } = setup({ reusable: true });
+    const done = controller.speak('m1', 'hello');
+    requests[0].resolve(new Blob(['mp3']));
+    await done;
+
+    controller.stop();
+
+    // `src = ''` resolves to the page URL, which Safari reports as a failed load on the element the
+    // next clip has to reuse.
+    expect(audios[0].loadCalls).toBe(1);
+    expect(audios[0].src).toBe('');
   });
 
   it('aborts the in-flight request and drops its late response when another message speaks', async () => {

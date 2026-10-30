@@ -1,6 +1,7 @@
 package com.easy.easyai.web.controller
 
 import com.easy.easyai.web.security.currentGroupOwners
+import com.easy.easyai.web.service.AsrAvailability
 import com.easy.easyai.web.service.AsrService
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.mono
@@ -9,6 +10,7 @@ import org.springframework.core.io.buffer.DataBufferUtils
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.codec.multipart.FilePart
+import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
@@ -21,18 +23,28 @@ import reactor.core.publisher.Mono
 /**
  * Speech-input endpoints for the chat composer (frontend dictation mode).
  *
- * - POST /api/asr/transcribe - one WAV segment (multipart `file`) → its transcription text
- * - POST /api/asr/refine     - a dictation round's text + editor context → the context-aware rewrite
+ * - GET  /api/asr/availability - which transport the configured row needs, and why not when it
+ *                               cannot be used (no connection, no ticket, no cost)
+ * - POST /api/asr/transcribe  - one WAV segment (multipart `file`) → its transcription text
+ * - POST /api/asr/refine      - a dictation round's text + editor context → the context-aware rewrite
  *
  * Feature availability is decided by the caller's effective Task Models choices (asr /
  * dictation_refine), read across the same self → group owner set the settings page writes to;
- * both endpoints answer 409 when the backing task is unconfigured.
+ * both write endpoints answer 409 when the backing task is unconfigured.
+ *
+ * The console routes every dictation round on this endpoint's `transport` rather than on the model
+ * name, so the WebSocket and HTTP transports cannot disagree about a row.
  */
 @RestController
 @RequestMapping("/api/asr")
 class AsrController(
     private val asrService: AsrService
 ) {
+
+    @GetMapping("/availability")
+    fun availability(): Mono<AsrAvailability> = mono {
+        asrService.availability(currentGroupOwners())
+    }
 
     @PostMapping("/transcribe", consumes = [MediaType.MULTIPART_FORM_DATA_VALUE])
     fun transcribe(

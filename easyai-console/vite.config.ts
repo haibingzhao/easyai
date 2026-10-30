@@ -36,6 +36,9 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8080',
         changeOrigin: true,
+        // 实时语音识别走 /api/asr/realtime 的 WebSocket Upgrade；不代理 Upgrade 时连不上，
+        // 表现为连接失败（部署问题），前端不会因此降级到 HTTP 分段通道。
+        ws: true,
       },
     },
   },

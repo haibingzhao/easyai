@@ -4,6 +4,8 @@ import { Trash2 } from 'lucide-react';
 import { modelConfigService } from '@/services/model-config-service';
 import { SpeechModelFields } from './SpeechModelFields';
 import { reconcileSpeechOptions } from './speech-options';
+import { AsrModelFields } from './AsrModelFields';
+import { reconcileAsrOptions } from './asr-options';
 import { useSpeechCatalogPrefill } from './useSpeechCatalogPrefill';
 import type {
   ModelConfigGroup,
@@ -95,13 +97,15 @@ export const InlineGenerationModelForm: React.FC<InlineGenerationModelFormProps>
   const [addedCount, setAddedCount] = useState(0);
   const configNameRef = useRef<HTMLInputElement>(null);
 
-  // ─── Speech capability lookup (SPEECH rows only) ──────────────────────────
-  const speechCatalog = useSpeechCatalogPrefill(modelType === 'SPEECH' ? modelId : '');
+  // ─── Speech / recognition capability lookup (SPEECH and ASR rows) ─────────
+  const speechCatalog = useSpeechCatalogPrefill(modelType === 'SPEECH' || modelType === 'ASR' ? modelId : '');
   const speechModel = modelId.trim();
   // Only the capabilities that belong to the current id: on the render where `modelId` changes the
   // hook still holds the previous model's result, and rendering or reconciling against it would
-  // show the wrong voices and mark the new model aligned before its own result arrives.
-  const speech = speechCatalog.forModelId === speechModel ? speechCatalog.speech : null;
+  // show the wrong voices/parameters and mark the new model aligned before its own result arrives.
+  const catalogHit = speechCatalog.forModelId === speechModel;
+  const speech = modelType === 'SPEECH' && catalogHit ? speechCatalog.speech : null;
+  const asr = modelType === 'ASR' && catalogHit ? speechCatalog.asr : null;
   /**
    * Catalog history for this form: the model the options were last aligned with, and the voices
    * that catalog offered. The pair is what tells a stale voice (it belonged to the model we just
@@ -109,6 +113,9 @@ export const InlineGenerationModelForm: React.FC<InlineGenerationModelFormProps>
    */
   const alignedModel = useRef<string | null>(null);
   const alignedVoices = useRef<Set<string> | null>(null);
+  /** Same history for an ASR row: only the previous block can prove a parameter stale. */
+  const alignedAsrModel = useRef<string | null>(null);
+  const alignedAsrCaps = useRef<typeof asr>(null);
 
   // A cleared id ("Save & Add Another", or wiping the field) ends the alignment history: the row's
   // options no longer describe any catalog model, so the next id must reconcile and seed afresh.
@@ -116,6 +123,8 @@ export const InlineGenerationModelForm: React.FC<InlineGenerationModelFormProps>
     if (modelId.trim()) return;
     alignedModel.current = null;
     alignedVoices.current = null;
+    alignedAsrModel.current = null;
+    alignedAsrCaps.current = null;
   }, [modelId]);
 
   useEffect(() => {
@@ -134,6 +143,16 @@ export const InlineGenerationModelForm: React.FC<InlineGenerationModelFormProps>
       })
     );
   }, [speech, modelId]);
+
+  useEffect(() => {
+    if (!asr) return;
+    const model = modelId.trim();
+    if (alignedAsrModel.current === model) return;
+    const previous = alignedAsrCaps.current;
+    alignedAsrModel.current = model;
+    alignedAsrCaps.current = asr;
+    setMediaOptions((prev) => reconcileAsrOptions(prev, asr, { previousCapabilities: previous }));
+  }, [asr, modelId]);
 
   const createdGroup = createsGroup && !!groupId;
   const showConnectionFields = !inheritedGroup;
@@ -414,6 +433,10 @@ export const InlineGenerationModelForm: React.FC<InlineGenerationModelFormProps>
 
           {speech && (
             <SpeechModelFields capabilities={speech} options={mediaOptions} onChange={setMediaOptions} />
+          )}
+
+          {asr && (
+            <AsrModelFields capabilities={asr} options={mediaOptions} onChange={setMediaOptions} />
           )}
 
           <div>

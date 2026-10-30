@@ -276,6 +276,56 @@ export interface SpeechCapabilities {
   voiceGroups: VoiceGroup[];
   defaultVoice?: string;
   voices: VoiceSpec[];
+  /** Recognition facts; present on ASR rows only. */
+  asr?: AsrCapabilities;
+}
+
+/** Which transport an ASR model can be driven over; `none` means it cannot take a microphone. */
+export type AsrChannel = 'websocket' | 'http' | 'none';
+
+/** `enum`/`int`/`bool`/`string`/`string[]`/`map` — selects the control rendered for one parameter. */
+export type AsrParamType = 'enum' | 'int' | 'bool' | 'string' | 'string[]' | 'map';
+
+/**
+ * One settable `run-task` parameter.
+ *
+ * `default` is the value this project sends when the row sets none, which is not always
+ * `vendorDefault` (short chat dictation closes sentences sooner than the vendor default); `note`
+ * explains such a difference in the form.
+ */
+export interface AsrParamSpec {
+  type: AsrParamType;
+  options?: string[];
+  min?: number;
+  max?: number;
+  unit?: string;
+  default?: unknown;
+  vendorDefault?: unknown;
+  note?: string;
+  /** Fixed by the product: shown read-only, never written into `media_options`. */
+  locked?: boolean;
+  /** Documented as affecting the final result only; a form hint, not a data-flow branch. */
+  finalOnly?: boolean;
+  maxItems?: number;
+  maxSuper?: number;
+  maxMerged?: number;
+}
+
+/** Abilities that are not request parameters; recorded so the form can state them without a control. */
+export interface AsrFeatures {
+  context?: string;
+  continueTask?: boolean;
+  speakerDiarization?: boolean;
+  emotion?: boolean;
+}
+
+/** Recognition facts for one ASR model; drives the whole capability form. */
+export interface AsrCapabilities {
+  channel: AsrChannel;
+  docsUrl?: string;
+  audio?: { formats: string[]; sampleRates: number[] };
+  params?: Record<string, AsrParamSpec>;
+  features?: AsrFeatures;
 }
 
 // Object-storage settings types (Settings → Storage)

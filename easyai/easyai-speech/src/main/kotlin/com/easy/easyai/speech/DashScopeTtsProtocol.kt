@@ -174,44 +174,10 @@ internal object DashScopeTtsProtocol {
     }
 
     /**
-     * Derive the duplex endpoint from a configured HTTP base URL.
-     *
-     * Configs are written in HTTP form (`https://{workspace}.cn-beijing.maas.aliyuncs.com/api/v1`),
-     * so the scheme and the `/api/v1` root are rewritten rather than requiring a second, WS-specific
-     * field. All of these collapse to the same URL:
-     * `…/api/v1`, `…/api/v1/services/audio/tts/SpeechSynthesizer`, `…/compatible-mode/v1`,
-     * and an already-complete `wss://…/api-ws/v1/inference`.
-     *
-     * A plaintext `ws://` endpoint is only honoured for a loopback host: an `http://` base URL for a
-     * remote workspace is rewritten to `wss` rather than silently sending the API key in clear.
+     * Derive the duplex endpoint from a configured HTTP base URL; see [DashScopeSpeechEndpoint],
+     * which the recognition transport and the web availability check use as well.
      */
-    fun endpoint(baseUrl: String): String {
-        val raw = baseUrl.trim()
-        require(raw.isNotBlank()) {
-            "DashScope speech needs a base URL, e.g. https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1"
-        }
-        val requested = when {
-            raw.startsWith("wss://", ignoreCase = true) || raw.startsWith("ws://", ignoreCase = true) ->
-                raw.substringBefore("://").lowercase()
-            raw.startsWith("https://", ignoreCase = true) -> "wss"
-            raw.startsWith("http://", ignoreCase = true) -> "ws"
-            else -> "wss"
-        }
-        // Strip any scheme, then keep only the authority.
-        val authority = raw.substringAfter("://").substringBefore('/').substringBefore('?')
-        require(authority.isNotBlank()) { "cannot derive a host from base URL '$baseUrl'" }
-        // A bracketed IPv6 literal contains colons of its own, so the port colon is not the first one.
-        val host = if (authority.startsWith("[")) {
-            authority.substringBefore(']') + "]"
-        } else {
-            authority.substringBefore(':')
-        }.lowercase()
-        val scheme = if (requested == "ws" && !isLoopback(host)) "wss" else requested
-        return "$scheme://$authority$WS_PATH"
-    }
-
-    private fun isLoopback(host: String): Boolean =
-        host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "::1"
+    fun endpoint(baseUrl: String): String = DashScopeSpeechEndpoint.endpoint(baseUrl)
 
     /**
      * Append one binary audio frame to [sink].
@@ -304,7 +270,6 @@ internal object DashScopeTtsProtocol {
     /** How far back to look for a sentence ender before falling back to a hard cut. */
     private const val LOOKBACK_CHARS = 400
 
-    private const val WS_PATH = "/api-ws/v1/inference"
 
     /** Audio formats the duplex protocol accepts; anything else is refused rather than guessed. */
     val SUPPORTED_FORMATS = setOf("mp3", "pcm", "wav", "opus")

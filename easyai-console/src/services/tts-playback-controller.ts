@@ -1,5 +1,6 @@
 import { i18n } from '@/utils/i18n';
 import { TtsError, ttsService, type TtsSpeechResponse } from '@/services/tts-service';
+import { endTtsAudioSession, primeTtsAudio, ttsAudioElement } from '@/services/tts-audio';
 
 /** idle → loading → playing, with `ready` holding a clip the browser refused to autoplay. */
 export type TtsPlaybackState = 'idle' | 'loading' | 'ready' | 'playing';
@@ -25,6 +26,9 @@ export interface TtsAudioElement {
   onerror: ((this: GlobalEventHandlers, ev: Event | string) => unknown) | null;
   play(): Promise<void>;
   pause(): void;
+  /** Real elements only: clearing a source is `removeAttribute` + `load()`, not `src = ''`. */
+  removeAttribute?(name: string): void;
+  load?(): void;
 }
 
 export interface TtsPlaybackDeps {
@@ -35,16 +39,25 @@ export interface TtsPlaybackDeps {
   /** Optional in tests and older browsers: absence selects the Blob fallback. */
   createMediaSource?(): MediaSource;
   supportsStreaming?(mimeType: string): boolean;
+  /**
+   * Called synchronously from the click that starts a clip, before the request is even sent.
+   *
+   * iOS only lets an element start with sound inside a gesture, and the clip cannot exist yet at
+   * that moment, so the element has to be unlocked up front — see `tts-audio.ts`.
+   */
+  primeAudio?(): void;
 }
 
 const browserDeps: TtsPlaybackDeps = {
   speak: (text, signal) => ttsService.speak(text, signal),
-  createAudio: () => new Audio(),
+  // One element for every clip: an iOS unlock is per element and dies with it.
+  createAudio: () => ttsAudioElement(),
   createObjectUrl: (source) => URL.createObjectURL(source),
   revokeObjectUrl: (url) => URL.revokeObjectURL(url),
   createMediaSource: () => new MediaSource(),
   supportsStreaming: (mimeType) =>
     typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(mimeType),
+  primeAudio: () => primeTtsAudio(),
 };
 
 const IDLE: TtsPlaybackSnapshot = { state: 'idle', activeKey: null, error: null };
@@ -71,6 +84,10 @@ const isAutoplayBlocked = (e: unknown): boolean =>
  *    does not pin memory for the life of the tab;
  *  - an autoplay rejection leaves the clip loaded in `ready`: the next click plays it without
  *    paying for a second synthesis.
+ *
+ * Mobile Safari needs one thing this class cannot provide on its own: the gesture-time unlock of the
+ * element it plays through. `createAudio` therefore returns a page-wide element that `primeAudio`
+ * has just unlocked, and `releaseAudio` returns that element to "no source" instead of dropping it.
  */
 export class TtsPlaybackController {
   private snapshot: TtsPlaybackSnapshot = IDLE;
@@ -97,6 +114,11 @@ export class TtsPlaybackController {
     const epoch = ++this.epoch;
     this.cancelActiveRequest();
     this.releaseAudio();
+
+    // Last synchronous step of the click. Everything below is async, and by the time the clip
+    // arrives Safari no longer considers `play()` user-initiated — hence the unlock here rather
+    // than at playback time.
+    this.deps.primeAudio?.();
 
     const controller = new AbortController();
     this.abort = controller;
@@ -307,7 +329,16 @@ export class TtsPlaybackController {
       audio.onended = null;
       audio.onerror = null;
       audio.pause();
-      audio.src = '';
+      // The element outlives the clip (see `createAudio`), so it has to go back to *no source*:
+      // assigning `src = ''` points it at the page URL, which Safari reports as a failed load.
+      // `load()` also detaches a MediaSource from a reused element.
+      if (audio.removeAttribute && audio.load) {
+        audio.removeAttribute('src');
+        audio.load();
+      } else {
+        audio.src = '';
+      }
+      endTtsAudioSession();
     }
     this.audio = null;
     if (this.objectUrl) {
