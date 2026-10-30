@@ -1,5 +1,7 @@
 package com.easy.easyai.repository.config
 
+import com.easy.easyai.api.model.AsrCapabilities
+import com.easy.easyai.api.model.AsrParamSpec
 import com.easy.easyai.api.model.CatalogCapabilities
 import com.easy.easyai.api.model.CatalogOptions
 import com.easy.easyai.api.model.ModelCatalogEntry
@@ -235,6 +237,28 @@ class R2dbcModelCatalogStoreTest {
             val loaded = assertNotNull(store.getByModelId(modelId))
             assertEquals("Renamed by refresh", loaded.displayName)
             assertEquals(speechCaps(), loaded.speechCapabilities, "one refresh must not empty every voice picker")
+        }
+
+        @Test
+        fun `a catalog refresh preserves the asr block that shares the column`() = runTest {
+            val store = createStore()
+            val modelId = "asr-${UUID.randomUUID()}"
+            val asr = AsrCapabilities(
+                channel = AsrCapabilities.CHANNEL_WEBSOCKET,
+                params = mapOf(
+                    "vad_model" to AsrParamSpec(
+                        type = AsrParamSpec.TYPE_ENUM,
+                        options = listOf("near_meeting_16k", "far_field_meeting_16k"),
+                        default = "near_meeting_16k"
+                    )
+                )
+            )
+            store.upsert(entry(modelId, speechCapabilities = SpeechCapabilities(asr = asr)))
+
+            store.upsert(entry(modelId, displayName = "Renamed by refresh", speechCapabilities = null))
+
+            val loaded = assertNotNull(store.getByModelId(modelId))
+            assertEquals(asr, loaded.speechCapabilities?.asr, "the recognition block lives in the same preserved column")
         }
 
         @Test

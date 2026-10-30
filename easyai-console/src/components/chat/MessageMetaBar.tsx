@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from 'react';
-import { GitBranch, Bookmark, Play, Square, Volume2 } from 'lucide-react';
+import { GitBranch, Bookmark, Volume2 } from 'lucide-react';
 import type { AssistantMessage } from '../../types/message';
 import { useChatStore } from '@/services/stores/chat-store';
 import { sessionService } from '@/services/session-service';
 import { switchToSession } from '@/services/session-switch';
 import { SaveToKnowledgeDialog } from '@/components/knowledge/SaveToKnowledgeDialog';
+import { VolumeLoadingIcon } from '@/components/icons/VolumeLoadingIcon';
 import { useTtsAvailability } from '@/hooks/useTtsAvailability';
 import { useTtsPlayback } from '@/hooks/useTtsPlayback';
 import { MAX_SPEECH_CHARS, stripMarkdownForSpeech } from '@/utils/speech-text';
@@ -58,8 +59,15 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
   /** A clip this message owns is loaded: playing, or parked because the browser blocked autoplay. */
   const ttsLoaded = speaking && (tts.state === 'playing' || tts.state === 'ready');
   const ttsLoading = speaking && tts.state === 'loading';
+  const ttsPlaying = speaking && tts.state === 'playing';
+  /**
+   * The clip is still waiting for its audio — either the request is in flight, or the browser parked
+   * a loaded clip behind the autoplay policy and one more tap is needed. Both show the same "not
+   * speaking yet" speaker.
+   */
+  const ttsPending = ttsLoading || (speaking && tts.state === 'ready');
   /** Loading cancels synthesis; playing stops audio and any body still streaming. */
-  const ttsStopping = ttsLoading || (speaking && tts.state === 'playing');
+  const ttsActive = ttsLoading || ttsPlaying;
   const speakTitle = !ttsAvailability.ready
     ? ttsAvailability.status === 'failed'
       ? i18n('Read-aloud is temporarily unavailable; please try again later')
@@ -177,20 +185,22 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
               <button
                 data-meta-tts
                 onClick={() => tts.toggle(speechKey, speechText)}
-                disabled={!speakEnabled && !ttsStopping}
+                disabled={!speakEnabled && !ttsActive}
                 className={`p-1 -my-1 rounded transition-colors disabled:opacity-40 disabled:hover:bg-transparent ${
-                  ttsStopping
-                    ? 'bg-red-500 text-white shadow-sm hover:bg-red-600'
+                  ttsActive
+                    ? 'bg-muted text-foreground'
                     : 'hover:bg-muted hover:text-foreground'
                 }`}
                 title={speakTitle}
                 aria-label={speakTitle}
-                aria-pressed={ttsStopping}
+                aria-pressed={ttsActive}
               >
-                {ttsStopping ? (
-                  <Square className="w-3 h-3 fill-current" />
-                ) : tts.state === 'ready' && speaking ? (
-                  <Play className="w-3 h-3" />
+                {/* Three states, one silhouette (see VolumeLoadingIcon): idle speaker → dots while
+                    the clip is still on its way → filled speaker while it is audible. */}
+                {ttsPlaying ? (
+                  <Volume2 className="w-3 h-3 fill-current" />
+                ) : ttsPending ? (
+                  <VolumeLoadingIcon className={`w-3 h-3${ttsLoading ? ' animate-pulse' : ''}`} />
                 ) : (
                   <Volume2 className="w-3 h-3" />
                 )}

@@ -5,12 +5,30 @@ import { useVoiceInput } from '@/hooks/useVoiceInput';
 import type { DictationSink, DictationSlotHandle } from '@/hooks/dictation-sink';
 import { asrService } from '@/services/asr-service';
 
-vi.mock('@/services/asr-service', () => ({
-  asrService: {
-    transcribeSegment: vi.fn(),
-    refineText: vi.fn(),
-  },
-}));
+// Keep the real reason→notice table: only the network calls are replaced here.
+vi.mock('@/services/asr-service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/asr-service')>();
+  return {
+    ...actual,
+    asrService: {
+      availability: vi.fn(),
+      transcribeSegment: vi.fn(),
+      refineText: vi.fn(),
+    },
+  };
+});
+
+/** The HTTP channel is what these cases cover; the streaming channel has its own suite. */
+const HTTP_AVAILABILITY = {
+  configured: true,
+  transport: 'HTTP' as const,
+  capability: 'HTTP_SEGMENT' as const,
+  capabilitySource: 'CATALOG' as const,
+  modelId: 'qwen-audio-3.1-asr-flash',
+  reason: null,
+  hint: null,
+  refineReady: false,
+};
 
 interface PendingTranscription {
   blob: Blob;
@@ -82,7 +100,8 @@ async function setup(orderedCommits = false) {
   const sink = new RecordingSink(orderedCommits);
   const onError = vi.fn<(message: string) => void>();
   const stopTrack = vi.fn();
-  const stream = { getTracks: () => [{ stop: stopTrack }] };
+  const track = { stop: stopTrack, addEventListener: vi.fn() };
+  const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
   const contexts: FakeAudioContext[] = [];
   const worklets: FakeAudioWorkletNode[] = [];
 
@@ -147,6 +166,8 @@ beforeEach(() => {
   stopSessions = [];
   vi.mocked(asrService.transcribeSegment).mockReset();
   vi.mocked(asrService.refineText).mockReset();
+  vi.mocked(asrService.availability).mockReset();
+  vi.mocked(asrService.availability).mockResolvedValue(HTTP_AVAILABILITY);
   vi.mocked(asrService.transcribeSegment).mockImplementation((blob) =>
     new Promise<string>((resolve, reject) => {
       requests.push({ blob, resolve, reject });

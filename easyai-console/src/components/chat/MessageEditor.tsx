@@ -122,7 +122,7 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
   const imageRootsRef = useRef<Map<HTMLElement, Root>>(new Map());
   // Voice input: gated on the user's Task Models choices (asr enables the mic,
   // dictation_refine only decides whether the stop-time rewrite runs).
-  const { asrReady, isRefineEnabled } = useDictationAvailability();
+  const { asrReady, notice: asrNotice, isRefineEnabled } = useDictationAvailability();
 
   useEffect(() => {
     if (toolbarRowRef.current) {
@@ -1245,15 +1245,19 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
   /** iOS refuses `getUserMedia` outside a secure context, so the mic must not even appear there. */
   const micHidden = isMobile && !window.isSecureContext;
 
+  // `connecting` is part of an active round: the microphone is already open (the streaming channel is
+  // waiting for its socket), so the stop control must replace the mic button there too.
+  const voiceActive = voice.phase === 'recording' || voice.phase === 'connecting';
+
   const voiceRecordingControls = (
     <>
       <VoiceWaveform analyserRef={voice.analyserRef} />
       <button
         className={isMobile ? 'mobile-hit rounded-md bg-destructive text-destructive-foreground' : 'p-1.5 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors'}
-        title={i18n('Stop voice input')}
+        title={voice.phase === 'connecting' ? i18n('Connecting to the recognition service…') : i18n('Stop voice input')}
         onClick={() => { void voice.stopAndFinish(); }}
       >
-        <Square className="w-4 h-4" />
+        {voice.phase === 'connecting' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
       </button>
     </>
   );
@@ -1265,7 +1269,7 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
       className={isMobile ? 'mobile-hit rounded-md text-muted-foreground disabled:opacity-40' : 'p-1.5 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40'}
       title={
         !asrReady
-          ? i18n('Please configure an ASR model in Settings → Task Models')
+          ? asrNotice || i18n('Please configure an ASR model in Settings → Task Models')
           : isStreaming
             ? i18n('Wait for the current response to finish')
             : i18n('Start voice input')
@@ -1464,8 +1468,7 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
           contentEditable={!isSubmitting && !isAwaitingAskQuestion() && !isAwaitingPermission() && voice.phase !== 'processing'}
         />
 
-        {isMobile &&
-          (voice.phase === 'recording' ? voiceRecordingControls : micButton)}
+        {isMobile && (voiceActive ? voiceRecordingControls : micButton)}
       </div>
 
       <div ref={toolbarRowRef} className="flex items-center justify-between">
@@ -1506,8 +1509,8 @@ export const MessageEditor: React.FC<MessageEditorProps> = ({ variant = 'desktop
         </div>
         <div className="flex items-center gap-0.5">
           {isMobile
-            ? (voice.phase === 'recording' ? null : (<>{refineButton}{sendCluster}</>))
-            : (voice.phase === 'recording' ? voiceRecordingControls : (<>{micButton}{refineButton}{sendCluster}</>))}
+            ? (voiceActive ? null : (<>{refineButton}{sendCluster}</>))
+            : (voiceActive ? voiceRecordingControls : (<>{micButton}{refineButton}{sendCluster}</>))}
         </div>
       </div>
 

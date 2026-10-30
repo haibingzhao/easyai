@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { asrService } from '@/services/asr-service';
+import { asrService, asrUnavailableNotice, type AsrTransport } from '@/services/asr-service';
+import { AsrBackpressureError, AsrRealtimeSession, type AsrRealtimeEvent } from '@/services/asr-realtime-service';
+import { PcmStreamEncoder, downmixChannels } from '@/audio/pcm-stream';
+import { SentenceMerger } from '@/audio/sentence-merge';
 import { encodeWav, downmixTo16k } from '@/utils/wav-encoder';
 import type { DictationSink, DictationSlotHandle } from '@/hooks/dictation-sink';
 import { i18n } from '@/utils/i18n';
 
-export type VoicePhase = 'idle' | 'recording' | 'processing';
+/** `connecting` belongs to the streaming channel: the socket must be ready before we invite speech. */
+export type VoicePhase = 'idle' | 'connecting' | 'recording' | 'processing';
 
 /** A failed correction pass degrades to "no better text" so the visible draft still gets committed. */
 async function tryTranscribe(samples: Float32Array): Promise<string> {
@@ -35,6 +39,11 @@ const REFINE_TIMEOUT_MS = 20_000;
  * slot's conflict check.
  */
 const FINALIZE_TIMEOUT_MS = 2_500;
+/**
+ * Streaming rounds get a slightly longer tail budget: the service still has to flush its own
+ * upstream task and return the last sentences, but it must not hold the composer either.
+ */
+const REALTIME_FINALIZE_TIMEOUT_MS = 3_000;
 /** Shown when capture ends without the user pressing stop. */
 const INTERRUPT_NOTICE = 'Voice input stopped (screen off or app switched away); captured audio was kept';
 
@@ -47,11 +56,25 @@ interface Slot {
   finalized: boolean;
 }
 
+/** State of the streaming channel for one round; unused when the round runs over HTTP. */
+interface RealtimeRound {
+  encoder: PcmStreamEncoder;
+  merger: SentenceMerger;
+  client: AsrRealtimeSession | null;
+  /** Frames (and therefore speech) may only flow once the service confirmed `ready`. */
+  ready: boolean;
+  /** Resolves on the first terminal frame so stop can bound its wait. */
+  settled: Promise<void>;
+  settle: () => void;
+}
+
 interface Session {
   ctx: AudioContext;
   stream: MediaStream;
   analyser: AnalyserNode;
   worklet: AudioWorkletNode;
+  channel: 'http' | 'ws';
+  realtime: RealtimeRound | null;
   slots: Slot[];
   current: Slot;
   seq: number;
@@ -65,6 +88,10 @@ interface Session {
   finalChain: Promise<unknown>;
   stopped: boolean;
   draftFailureReported: boolean;
+  /** The round was finalised; further downstream frames must not write text or change phase. */
+  closed: boolean;
+  /** The round was abandoned (timeout, error); late results must not reappear in the editor. */
+  abandoned: boolean;
   wakeLock: WakeLockSentinel | null;
 }
 
@@ -76,10 +103,22 @@ export interface UseVoiceInputOptions {
   onError: (message: string) => void;
 }
 
+function deferred(): { promise: Promise<void>; settle: () => void } {
+  let settle!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  return { promise, settle };
+}
+
 /**
- * Dictation with near-real-time draft transcription plus per-pause whole-sentence
- * retranscription. The context-aware LLM rewrite is manual — after a round ends the caller
- * offers a polish action the user triggers on demand, so a slow network never blocks stopping.
+ * Dictation with two interchangeable channels behind one round lifecycle.
+ *
+ * The channel is chosen by the server (`GET /api/asr/availability`), never by looking at the model
+ * id here: `WEBSOCKET` streams continuous PCM and receives sentence snapshots, `HTTP` keeps the
+ * existing 2-second draft plus per-pause retranscription. Microphone permission, the AudioWorklet,
+ * the wake lock, the round/epoch bookkeeping, stop/cancel and the manual-edit protection are
+ * implemented once for both.
  *
  * Text rendering is delegated to a DictationSink: the chat composer writes one
  * `<span data-dict-slot>` per sentence, while the article editor commits finalized sentences into
@@ -93,6 +132,12 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
   // start() awaits getUserMedia/addModule before sessionRef exists — without this
   // guard a second click during that window creates a second, unstoppable session.
   const startingRef = useRef(false);
+  /**
+   * False once the composer is gone. The awaits in start() (permission prompt, worklet load,
+   * handshake) can outlive the component, and releasing the microphone only works if the session
+   * exists — so each await has to check this instead of assuming the UI is still there.
+   */
+  const aliveRef = useRef(true);
   /** An interrupt fired while the page was hidden; the notice waits for the user to return. */
   const pendingInterruptNoticeRef = useRef(false);
   /** Manual polish in flight; drives the spinner on the polish action. */
@@ -100,7 +145,7 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
   /** Whether to offer the manual polish action for the last completed round. */
   const [canRefine, setCanRefine] = useState(false);
   /** Slots of the last completed round — the region the manual polish rewrites. */
-  const lastRoundRef = useRef<Slot[]>([]);
+  const lastRoundRef = useRef<DictationSlotHandle[]>([]);
 
   const teardown = useCallback((session: Session) => {
     session.stopped = true;
@@ -115,6 +160,28 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
     if (sessionRef.current === session) sessionRef.current = null;
     if (analyserRef.current === session.analyser) analyserRef.current = null;
   }, []);
+
+  /**
+   * End the round exactly once: close unfinished sentences, drop the socket, release the media and
+   * restore `idle`. Every exit path goes through here, so a late `done` cannot reopen a round whose
+   * text was already committed as partial.
+   */
+  const closeRound = useCallback((session: Session) => {
+    if (session.closed) return;
+    session.closed = true;
+    const realtime = session.realtime;
+    if (realtime) {
+      // Sentences the service never finalised still hold visible text: keep it, close it, and let the
+      // editor commit what was spoken instead of throwing the round away.
+      realtime.merger.finalizeRemaining();
+      realtime.client?.dispose();
+      realtime.settle();
+      teardown(session);
+      lastRoundRef.current = realtime.merger.slots();
+      if (isRefineEnabled() && realtime.merger.text().trim().length >= REFINE_MIN_CHARS) setCanRefine(true);
+    }
+    setPhase('idle');
+  }, [isRefineEnabled, teardown]);
 
   /**
    * Phones drop microphone capture the moment the screen turns off, so a display
@@ -138,6 +205,15 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
   /** A backend transcription error is not transient here — close the mic instead of retrying. */
   const failSession = useCallback((session: Session, cause?: unknown) => {
     if (session.stopped) return;
+    if (session.closed) {
+      teardown(session);
+      return;
+    }
+    session.abandoned = true;
+    session.realtime?.merger.finalizeRemaining();
+    session.realtime?.client?.dispose();
+    session.realtime?.settle();
+    session.closed = true;
     teardown(session);
     if (!session.draftFailureReported) {
       session.draftFailureReported = true;
@@ -149,6 +225,53 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
     }
     setPhase('idle');
   }, [onError, teardown]);
+
+  /** Live frames from the streaming service: one slot per sentence, snapshot-replaced. */
+  const onRealtimeEvent = useCallback((session: Session, event: AsrRealtimeEvent) => {
+    const realtime = session.realtime;
+    if (!realtime) return;
+    if (event.type === 'ready') {
+      realtime.ready = true;
+      // The worklet is only allowed to produce audio once the service is listening; its credit
+      // window turns "main thread stalled" into a bounded, reported failure instead of a backlog.
+      session.worklet.port.postMessage({ type: 'flow-control' });
+      // A stop pressed while `connecting` wins: it must not bring the waveform back for a session
+      // whose microphone is already released.
+      if (!session.closed && !session.stopped) setPhase('recording');
+      return;
+    }
+    if (event.type === 'sentence') {
+      if (session.abandoned || session.closed) return;
+      // Writes go through the sink, so a manual edit sticks and a late draft cannot reorder slots.
+      realtime.merger.apply(event.sentenceId, event.text, event.isFinal);
+      return;
+    }
+    if (session.closed) return;
+    if (event.type === 'done') {
+      if (event.notice === 'ROUND_LIMIT') onError(i18n('Voice input reached its 10 minute limit'));
+      else if (event.notice === 'TEXT_LIMIT') onError(i18n('Voice input reached its length limit for this recording'));
+      // `done` should have closed every sentence. Anything still open (or a sentence-id gap) means the
+      // transcript is partial: keep the text, but say so instead of presenting it as complete.
+      else if (realtime.merger.isPartial) onError(i18n('Some sentences were kept without a final correction'));
+      closeRound(session);
+      return;
+    }
+    if (event.type === 'error') {
+      // Keep whatever was already transcribed, and say so: a silent truncation reads as a bad model.
+      session.abandoned = true;
+      onError(`${i18n('Transcription failed; voice input stopped')} (${event.code})`);
+      closeRound(session);
+      return;
+    }
+    if (event.type === 'cancelled') {
+      closeRound(session);
+      return;
+    }
+    // `closed`: the socket went away without a terminal frame, so the round is incomplete.
+    session.abandoned = true;
+    onError(i18n('The recognition connection closed unexpectedly; captured text was kept'));
+    closeRound(session);
+  }, [closeRound, onError]);
 
   const renderSlot = useCallback((slot: Slot, final: boolean) => {
     const text = [...slot.fragments.entries()]
@@ -168,7 +291,9 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
 
   const track = useCallback((session: Session, promise: Promise<unknown>) => {
     session.inFlight.add(promise);
-    void promise.finally(() => session.inFlight.delete(promise));
+    // `finally` returns a new promise that keeps the rejection; without the catch a failed
+    // transcription surfaces as an unhandled rejection on top of the error already shown.
+    void promise.catch(() => undefined).finally(() => session.inFlight.delete(promise));
   }, []);
 
   const flushDraft = useCallback((session: Session) => {
@@ -239,8 +364,33 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
     if (openNext) session.current = openSlot(session);
   }, [openSlot, renderSlot, sink, track]);
 
+  /** Streaming branch: encode continuously and forward whole 100 ms frames, silence included. */
+  const onRealtimeFrame = useCallback((session: Session, frame: Float32Array) => {
+    const realtime = session.realtime;
+    if (!realtime || !realtime.ready || !realtime.client) return;
+    const client = realtime.client;
+    // Multi-channel capture is mixed down before resampling; the encoder keeps its phase across
+    // blocks, so long rounds cannot drift away from the service's VAD timeline.
+    for (const pcm of realtime.encoder.push(downmixChannels([frame]))) {
+      try {
+        client.sendAudio(pcm);
+      } catch (e) {
+        failSession(session, e instanceof AsrBackpressureError
+          ? new Error(i18n('The network is too slow for realtime recognition'))
+          : e);
+        return;
+      }
+    }
+    // One credit per rendered block: the worklet may keep producing while this thread keeps up.
+    session.worklet.port.postMessage({ type: 'credits', count: 1 });
+  }, [failSession]);
+
   const onFrame = useCallback((session: Session, frame: Float32Array) => {
     if (session.stopped) return;
+    if (session.channel === 'ws') {
+      onRealtimeFrame(session, frame);
+      return;
+    }
     const mono = downmixTo16k(frame, session.ctx.sampleRate);
     let sum = 0;
     for (let i = 0; i < mono.length; i++) sum += mono[i] * mono[i];
@@ -256,7 +406,56 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
     if (session.draftSamples >= DRAFT_SAMPLES) flushDraft(session);
     const pauseHit = session.silenceMs >= SILENCE_MS && session.sentenceSamples >= MIN_SENTENCE_SAMPLES;
     if (pauseHit || session.sentenceSamples >= SENTENCE_MAX_SAMPLES) closeSentence(session, true);
-  }, [closeSentence, flushDraft]);
+  }, [closeSentence, flushDraft, onRealtimeFrame]);
+
+  /** Worklet control frames (credit accounting, overflow) arrive on the same port as audio. */
+  const onWorkletMessage = useCallback((session: Session, data: unknown) => {
+    if (data instanceof Float32Array) {
+      onFrame(session, data);
+      return;
+    }
+    if (!data || typeof data !== 'object') return;
+    if ((data as { type?: string }).type === 'overflow') {
+      // The main thread stopped draining: report it instead of silently dropping speech.
+      failSession(session, new Error(i18n('The network is too slow for realtime recognition')));
+    }
+  }, [failSession, onFrame]);
+
+  /**
+   * Streaming stop barrier: send the encoder's tail, then `finish`, then close the microphone.
+   * Closing capture first would lose the final partial frame, which is usually the last syllable.
+   */
+  const finishRealtimeRound = useCallback(async (session: Session) => {
+    const realtime = session.realtime;
+    if (!realtime) return;
+    const client = realtime.client;
+    if (client && !client.isTerminated) {
+      const tail = realtime.encoder.flush();
+      if (tail) {
+        try {
+          client.sendAudio(tail);
+        } catch {
+          // Budget exhausted at the very end: finish anyway, the service reports the shortened round.
+        }
+      }
+      client.finish();
+    }
+    teardown(session);
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const completed = await Promise.race([
+      realtime.settled.then(() => true),
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), REALTIME_FINALIZE_TIMEOUT_MS); }),
+    ]);
+    if (timer) clearTimeout(timer);
+    if (!completed) {
+      // Past the budget the round is no longer trustworthy: cancel upstream, keep the text that is
+      // already visible, and refuse any late result so it cannot rewrite what the user sees.
+      session.abandoned = true;
+      client?.cancel();
+    }
+    closeRound(session);
+  }, [closeRound, teardown]);
 
   const stopAndFinish = useCallback(async () => {
     const session = sessionRef.current;
@@ -266,6 +465,10 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
     // kept the dead stop button + waveform on screen with zero feedback, which read
     // as a frozen tab.
     setPhase('processing');
+    if (session.channel === 'ws') {
+      await finishRealtimeRound(session);
+      return;
+    }
     // Release the mic first: every sample is already captured in buffers, and
     // awaiting in-flight transcriptions before teardown kept the tab in
     // recording state (and the worklet feeding frames) for no reason.
@@ -286,11 +489,11 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
 
     // Offer a manual polish of this round instead of blocking on an LLM rewrite —
     // the composer is usable immediately, and the user decides whether to spend it.
-    lastRoundRef.current = session.slots;
-    const roundText = sink.roundText(session.slots.map((s) => s.handle));
+    lastRoundRef.current = session.slots.map((s) => s.handle);
+    const roundText = sink.roundText(lastRoundRef.current);
     if (isRefineEnabled() && roundText.trim().length >= REFINE_MIN_CHARS) setCanRefine(true);
     setPhase('idle');
-  }, [closeSentence, isRefineEnabled, sink, teardown]);
+  }, [closeSentence, finishRealtimeRound, isRefineEnabled, sink, teardown]);
 
   /**
    * Capture dies when the page is hidden (screen lock, app switch) or the system
@@ -310,61 +513,143 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
     // A new round supersedes the previous one's polish offer.
     setCanRefine(false);
     startingRef.current = true;
-    let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
-    } catch {
-      startingRef.current = false;
-      onError(i18n('Microphone unavailable or permission denied'));
-      return;
-    }
-    try {
-      const ctx = new AudioContext({ sampleRate: 16_000 });
-      await ctx.audioWorklet.addModule(new URL('../audio/capture-processor.js', import.meta.url).toString());
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      const worklet = new AudioWorkletNode(ctx, 'capture-processor');
-      source.connect(analyser);
-      analyser.connect(worklet);
-      worklet.connect(ctx.destination);
-
-      const session: Session = {
-        ctx, stream, analyser, worklet,
-        slots: [], current: null as unknown as Slot, seq: 0,
-        draftBuf: [], draftSamples: 0,
-        sentenceBuf: [], sentenceSamples: 0,
-        silenceMs: 0, inFlight: new Set(), finalChain: Promise.resolve(),
-        stopped: false, draftFailureReported: false,
-        wakeLock: null,
-      };
-      // The page can go away while permissions and the worklet load; starting
-      // capture is impossible then, so fail cleanly instead of showing a live
-      // recorder that is not receiving audio.
-      if (document.visibilityState === 'hidden') {
-        teardown(session);
-        pendingInterruptNoticeRef.current = true;
+      // Read the channel decision once per round and snapshot it: switching models mid-round would
+      // move the audio to a different endpoint while the user is already speaking.
+      const availability = await asrService.availability().catch(() => null);
+      if (!aliveRef.current) return;
+      const transport: AsrTransport = availability?.transport ?? 'NONE';
+      if (transport === 'NONE') {
+        onError(i18n(asrUnavailableNotice(availability)));
         return;
       }
-      sink.beginRound();
-      session.current = openSlot(session);
-      sessionRef.current = session;
-      analyserRef.current = analyser;
-      ctx.onstatechange = () => {
-        // iOS reports lock-screen as "interrupted"; any non-running state means
-        // capture is dead, so finalize instead of leaving a fake recorder open.
-        if (ctx.state !== 'running') interrupt(session);
-      };
-      worklet.port.onmessage = (ev: MessageEvent<Float32Array>) => onFrame(session, ev.data);
-      setPhase('recording');
-      acquireWakeLock(session);
-    } catch (e) {
-      stream.getTracks().forEach((t) => t.stop());
-      onError(e instanceof Error ? e.message : i18n('Microphone unavailable or permission denied'));
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+      } catch {
+        onError(i18n('Microphone unavailable or permission denied'));
+        return;
+      }
+      // The permission prompt can sit open for seconds; a composer that went away meanwhile must
+      // not leave the microphone live with nothing holding a reference to it.
+      if (!aliveRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      try {
+        const ctx = new AudioContext({ sampleRate: 16_000 });
+        await ctx.audioWorklet.addModule(new URL('../audio/capture-processor.js', import.meta.url).toString());
+        if (!aliveRef.current) {
+          stream.getTracks().forEach((t) => t.stop());
+          void ctx.close().catch(() => undefined);
+          return;
+        }
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        const worklet = new AudioWorkletNode(ctx, 'capture-processor');
+        source.connect(analyser);
+        analyser.connect(worklet);
+        worklet.connect(ctx.destination);
+
+        const session: Session = {
+          ctx, stream, analyser, worklet,
+          channel: transport === 'WEBSOCKET' ? 'ws' : 'http',
+          realtime: null,
+          slots: [], current: null as unknown as Slot, seq: 0,
+          draftBuf: [], draftSamples: 0,
+          sentenceBuf: [], sentenceSamples: 0,
+          silenceMs: 0, inFlight: new Set(), finalChain: Promise.resolve(),
+          stopped: false, draftFailureReported: false, closed: false, abandoned: false,
+          wakeLock: null,
+        };
+        if (session.channel === 'ws') {
+          const settled = deferred();
+          session.realtime = {
+            // The browser may ignore the requested 16 kHz context, so the encoder works from the
+            // rate the context actually reports instead of assuming one.
+            encoder: new PcmStreamEncoder(ctx.sampleRate),
+            merger: new SentenceMerger(sink),
+            client: null,
+            ready: false,
+            settled: settled.promise,
+            settle: settled.settle,
+          };
+        }
+        // The page can go away while permissions and the worklet load; starting
+        // capture is impossible then, so fail cleanly instead of showing a live
+        // recorder that is not receiving audio.
+        if (document.visibilityState === 'hidden') {
+          teardown(session);
+          pendingInterruptNoticeRef.current = true;
+          return;
+        }
+        if (!aliveRef.current) {
+          teardown(session);
+          return;
+        }
+        sink.beginRound();
+        if (session.channel === 'http') session.current = openSlot(session);
+        sessionRef.current = session;
+        analyserRef.current = analyser;
+        ctx.onstatechange = () => {
+          // iOS reports lock-screen as "interrupted"; any non-running state means
+          // capture is dead, so finalize instead of leaving a fake recorder open.
+          if (ctx.state !== 'running') interrupt(session);
+        };
+        worklet.port.onmessage = (ev: MessageEvent<unknown>) => onWorkletMessage(session, ev.data);
+        // A revoked permission or an unplugged headset ends the track while the graph keeps
+        // producing silence, so the level meter never fires and nothing else notices. Without this
+        // the UI shows a live recorder that is transcribing an empty room.
+        const [micTrack] = stream.getAudioTracks();
+        if (micTrack) {
+          micTrack.addEventListener('ended', () => {
+            if (sessionRef.current !== session || session.stopped) return;
+            onError(i18n('The microphone was disconnected or its permission was revoked'));
+            void stopAndFinish();
+          }, { once: true });
+        }
+
+        if (session.channel === 'ws') {
+          // The microphone is open but silenced: the worklet only starts producing once `ready`
+          // grants credits, so nothing is spoken into a socket the service is not reading yet.
+          setPhase('connecting');
+          try {
+            const client = await AsrRealtimeSession.open({
+              onEvent: (event) => onRealtimeEvent(session, event),
+            });
+            // A stop or an unmount can win the race against the handshake: the round is already
+            // closed by then, so nothing else would ever release this socket, its heartbeat or the
+            // service-side round.
+            if (session.closed || session.stopped || !aliveRef.current) {
+              client.dispose();
+              return;
+            }
+            session.realtime!.client = client;
+          } catch (e) {
+            const detail = e instanceof Error ? e.message : '';
+            const headline = i18n('Could not open the realtime recognition channel');
+            session.closed = true;
+            teardown(session);
+            onError(detail ? `${headline} (${detail})` : headline);
+            setPhase('idle');
+            return;
+          }
+          // A cancel during the handshake already closed the round and disposed the socket.
+          if (session.closed || session.stopped) return;
+          if (session.realtime!.ready) setPhase('recording');
+        } else {
+          setPhase('recording');
+        }
+        acquireWakeLock(session);
+      } catch (e) {
+        stream.getTracks().forEach((t) => t.stop());
+        onError(e instanceof Error ? e.message : i18n('Microphone unavailable or permission denied'));
+      }
     } finally {
       startingRef.current = false;
     }
-  }, [acquireWakeLock, interrupt, onError, onFrame, openSlot, sink, teardown]);
+  }, [acquireWakeLock, interrupt, onError, onRealtimeEvent, onWorkletMessage, openSlot, sink, stopAndFinish, teardown]);
 
   /**
    * Manual polish: LLM-rewrite the last dictation round in place, using surrounding
@@ -373,9 +658,8 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
    */
   const refine = useCallback(async () => {
     if (refining) return;
-    const slots = lastRoundRef.current.filter((s) => s.handle.isConnected());
-    if (slots.length === 0) { setCanRefine(false); return; }
-    const handles = slots.map((s) => s.handle);
+    const handles = lastRoundRef.current.filter((handle) => handle.isConnected());
+    if (handles.length === 0) { setCanRefine(false); return; }
     const roundText = sink.roundText(handles);
     if (roundText.trim().length < REFINE_MIN_CHARS) return;
     setRefining(true);
@@ -426,8 +710,15 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
 
   // Release the microphone if the composer unmounts mid-recording.
   useEffect(() => () => {
+    aliveRef.current = false;
     const session = sessionRef.current;
-    if (session) teardown(session);
+    if (!session) return;
+    // Closing the round here is what keeps an in-flight stop() from calling setState on a component
+    // that is gone: closeRound returns immediately for a session already marked closed.
+    session.closed = true;
+    session.realtime?.client?.dispose();
+    session.realtime?.settle();
+    teardown(session);
   }, [teardown]);
 
   return { phase, refining, canRefine, start, stopAndFinish, refine, dismissRefine, analyserRef };
