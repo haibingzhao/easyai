@@ -1,6 +1,7 @@
 package com.easy.easyai.web.controller
 
 import com.easy.easyai.api.config.ModelProviderConfigStore
+import com.easy.easyai.api.model.ModelType
 import com.easy.easyai.core.model.aux.AuxModelResolver
 import com.easy.easyai.core.model.aux.AuxModelSettingsStore
 import com.easy.easyai.core.model.aux.AuxModelTask
@@ -74,8 +75,20 @@ class AuxModelConfigController(
             val configs = configStore ?: throw databaseDisabled()
             // The referenced model only has to be visible to the caller (own, group or system); where
             // the choice itself is stored is the write owner resolved above.
-            if (configs.getConfig(modelConfigId, currentOwners()) == null) {
-                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Model config not found: $modelConfigId")
+            val config = configs.getConfig(modelConfigId, currentOwners())
+                ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Model config not found: $modelConfigId")
+            // Visibility is not enough: a task can only point at the kind of model its consumer knows
+            // how to call. Without this the API would accept a combination that only fails at run time.
+            val expected = TASK_MODEL_TYPE[task]
+                ?: throw ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Task '$taskKey' has no known model type; add it to TASK_MODEL_TYPE"
+                )
+            if (config.modelType != expected) {
+                throw ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Task '$taskKey' needs a ${expected.name} model; '$modelConfigId' is ${config.modelType.name}"
+                )
             }
             store.save(owner, task, modelConfigId)
         }
@@ -97,6 +110,24 @@ class AuxModelConfigController(
     private companion object {
         const val SOURCE_USER = "user"
         const val SOURCE_DEFAULT = "default"
+
+        /**
+         * The model type each task may point at.
+         *
+         * Every task is listed, not just the media ones: a CHAT-only purpose pointed at a SPEECH row
+         * would save fine here and then fail inside the consumer, with nothing on the settings page
+         * to explain why. A new [AuxModelTask] constant must be added here too — without a mapping
+         * its task is rejected as unsaveable.
+         */
+        val TASK_MODEL_TYPE: Map<AuxModelTask, ModelType> = mapOf(
+            AuxModelTask.COMPACTION to ModelType.CHAT,
+            AuxModelTask.SESSION_TITLE to ModelType.CHAT,
+            AuxModelTask.SKILL_SELECTION to ModelType.CHAT,
+            AuxModelTask.DICTATION_REFINE to ModelType.CHAT,
+            AuxModelTask.MEMORY_CURATION to ModelType.CHAT,
+            AuxModelTask.ASR to ModelType.ASR,
+            AuxModelTask.TTS to ModelType.SPEECH
+        )
     }
 }
 

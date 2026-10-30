@@ -10,7 +10,7 @@
     {
       "name": "easyai.web.console.enabled",
       "type": "java.lang.Boolean",
-      "description": "Whether the console bundle's HTTP policy applies: immutable caching for the hashed /assets/** tree, plus a Content-Type whitelist for Netty response compression that deliberately leaves text/event-stream uncompressed. Set false in a backend that serves no console.",
+      "description": "Whether immutable caching applies to the console bundle's hashed /assets/** tree. Response compression is configured independently through server.compression.*. Set false in a backend that serves no console.",
       "sourceType": "com.easy.easyai.autoconfigure.web.ConsoleResourcesAutoConfiguration",
       "defaultValue": true
     }

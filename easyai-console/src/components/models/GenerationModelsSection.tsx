@@ -5,6 +5,7 @@ import { modelConfigService } from '@/services/model-config-service';
 import { readErrorMessage } from '@/services/api-client';
 import { InlineGenerationModelForm } from '@/components/models/InlineGenerationModelForm';
 import { GroupEditDialog } from '@/components/models/GroupEditDialog';
+import { invalidateTtsAvailability } from '@/hooks/useTtsAvailability';
 import type {
   ModelConfigGroup,
   ModelProviderConfig,
@@ -89,6 +90,9 @@ export const GenerationModelsSection: React.FC<GenerationModelsSectionProps> = (
   const handleSaveFromForm = async (request: SaveModelProviderConfigRequest): Promise<ModelProviderConfig> => {
     const saved = await modelConfigService.saveConfiguration(request);
     await loadData();
+    // Chat read-aloud resolves a SPEECH row through the aux cache and probes on demand; a new or
+    // edited voice/format must show up on the next click, so drop the cached availability.
+    invalidateTtsAvailability();
     return saved;
   };
 
@@ -97,6 +101,7 @@ export const GenerationModelsSection: React.FC<GenerationModelsSectionProps> = (
       setError(null);
       await modelConfigService.saveConfiguration(requestFromConfig(config, patch));
       await loadData();
+      invalidateTtsAvailability();
     } catch (e) {
       setError(readErrorMessage(e, 'Failed to update'));
     }
@@ -108,6 +113,7 @@ export const GenerationModelsSection: React.FC<GenerationModelsSectionProps> = (
       setError(null);
       await modelConfigService.deleteConfiguration(id);
       await loadData();
+      invalidateTtsAvailability();
     } catch (e) {
       setError(readErrorMessage(e, 'Failed to delete'));
     }
@@ -128,6 +134,7 @@ export const GenerationModelsSection: React.FC<GenerationModelsSectionProps> = (
       setError(null);
       await modelConfigService.deleteGroup(group.id);
       await loadData();
+      invalidateTtsAvailability();
     } catch (e) {
       setError(readErrorMessage(e, 'Failed to delete group'));
     }
@@ -139,6 +146,9 @@ export const GenerationModelsSection: React.FC<GenerationModelsSectionProps> = (
       await modelConfigService.updateGroup(request.id!, request);
       setEditingGroup(null);
       await loadData();
+      // Groups carry the credentials every row under them inherits, and a group is shared across
+      // model types — a group edit made from another section can change the SPEECH row's endpoint.
+      invalidateTtsAvailability();
     } catch (e) {
       setError(readErrorMessage(e, 'Failed to update group'));
     }

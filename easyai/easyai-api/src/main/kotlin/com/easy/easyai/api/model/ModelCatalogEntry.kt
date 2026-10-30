@@ -21,6 +21,13 @@ data class ModelCatalogEntry(
     /** Thinking/effort matrix resolved from vendor documentation; null on rows written before it existed. */
     val reasoningProfile: ReasoningProfile? = null,
     val pricing: ModelPricing? = null,
+    /**
+     * Speech-synthesis facts for TTS models (voices, formats, protocol caps).
+     *
+     * Never produced by a catalog refresh — it is maintained from the vendor's voice list — so the
+     * store preserves whatever is already stored when an incoming entry carries none.
+     */
+    val speechCapabilities: SpeechCapabilities? = null,
     /** Which pipeline wrote the row: `bailian-refresh` today; `manual`/`probed` are reserved. */
     val source: String,
     val rawPayload: String? = null,

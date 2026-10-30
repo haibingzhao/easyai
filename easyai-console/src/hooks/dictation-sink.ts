@@ -22,6 +22,7 @@ export interface DictationSlotHandle {
  * document.
  */
 export interface DictationSink {
+  readonly orderedCommits: boolean;
   /** A new recording round starts: DOM sinks do nothing, editor sinks pin the insertion point. */
   beginRound(): void;
   openSlot(): DictationSlotHandle;
@@ -35,10 +36,7 @@ export interface EditableDivRef {
   readonly current: HTMLDivElement | null;
 }
 
-/**
- * Chat-composer sink: one `<span data-dict-slot>` per sentence appended to the editor end.
- * Behaviour is unchanged from the original in-hook implementation.
- */
+/** Chat-composer sink: one `<span data-dict-slot>` per sentence appended to the editor end. */
 export function createContentEditableSink(
   editorRef: EditableDivRef,
   onChanged: () => void,
@@ -49,9 +47,8 @@ export function createContentEditableSink(
     const handle: DictationSlotHandle = {
       getText: () => el.textContent ?? '',
       setText: (text) => {
-        // A late transcription can arrive after the composer HTML was cleared on send; keep the
-        // original behaviour of re-attaching rather than silently dropping the text.
-        if (!el.isConnected) editorRef.current?.appendChild(el);
+        // Sending or clearing the editor invalidates pending transcription writes.
+        if (!editorRef.current?.contains(el)) return;
         el.textContent = text;
         onChanged();
       },
@@ -63,6 +60,7 @@ export function createContentEditableSink(
   };
 
   return {
+    orderedCommits: false,
     beginRound: () => undefined,
     openSlot: () => {
       const editor = editorRef.current;

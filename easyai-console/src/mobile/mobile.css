@@ -179,6 +179,20 @@
   white-space: nowrap;
 }
 
+/*
+ * Read-aloud is the one action this row offers on touch, so it gets the 44pt target the desktop
+ * utility class would have given it — scoped here instead of adding `.mobile-hit` in the component,
+ * whose 44px min-height would inflate the desktop hover row capped at `max-h-8`.
+ */
+.mobile-app [data-meta-tts] {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+
 /* ===== Message density ===== */
 
 .mobile-app .user-message-container {

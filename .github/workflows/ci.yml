@@ -28,6 +28,12 @@ jobs:
       - name: Build & Test
         run: ./mvnw clean install -B -q
 
+      # The TTS catalog rows live in a generated Flyway migration plus a hot-patch script and the
+      # plan's voice appendix. All three are derived from scripts/tts-voices.json; drift between them
+      # would ship a migration whose checksum no longer matches a hand-edited script.
+      - name: TTS catalog artifacts in sync
+        run: python3 scripts/gen-tts-catalog.py --check
+
   frontend:
     name: Frontend Lint & Typecheck
     runs-on: ubuntu-latest

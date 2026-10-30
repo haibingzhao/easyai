@@ -11,6 +11,8 @@ import com.easy.easyai.api.model.ReasoningProfile
 import com.easy.easyai.api.model.SaveModelConfigGroupRequest
 import com.easy.easyai.api.model.SaveModelProviderConfigRequest
 import com.easy.easyai.core.media.MediaProviderResolver
+import com.easy.easyai.core.model.aux.AuxModelResolver
+import com.easy.easyai.core.model.aux.AuxModelTask
 import com.easy.easyai.web.service.ModelCatalogService
 import com.easy.easyai.web.security.currentOwners
 import com.easy.easyai.web.security.getCurrentUserId
@@ -31,6 +33,8 @@ class ModelConfigController(
     private val modelConfigService: ModelConfigService,
     @param:Autowired(required = false)
     private val mediaProviderResolver: MediaProviderResolver? = null,
+    @param:Autowired(required = false)
+    private val auxModelResolver: AuxModelResolver? = null,
     @param:Autowired(required = false)
     private val modelCatalogService: ModelCatalogService? = null
 ) {
@@ -156,7 +160,8 @@ class ModelConfigController(
         @RequestParam(required = false) scope: String? = null
     ): Mono<ModelConfigGroup> =
         mono {
-            modelConfigService.saveGroup(request, resolveWriteOwner(parseAssetScope(scope))).masked()
+            val owner = resolveWriteOwner(parseAssetScope(scope))
+            modelConfigService.saveGroup(request, owner).masked().also { refreshCachesForOwner(owner) }
         }
 
     @PutMapping("/model-groups/{id}")
@@ -166,7 +171,8 @@ class ModelConfigController(
         @RequestParam(required = false) scope: String? = null
     ): Mono<ModelConfigGroup> =
         mono {
-            modelConfigService.updateGroup(id, request, resolveWriteOwner(parseAssetScope(scope))).masked()
+            val owner = resolveWriteOwner(parseAssetScope(scope))
+            modelConfigService.updateGroup(id, request, owner).masked().also { refreshCachesForOwner(owner) }
         }
 
     @DeleteMapping("/model-groups/{id}")
@@ -176,16 +182,39 @@ class ModelConfigController(
         @RequestParam(required = false) scope: String? = null
     ): Mono<Void> =
         mono {
-            val deleted = modelConfigService.deleteGroup(id, resolveWriteOwner(parseAssetScope(scope)))
+            val owner = resolveWriteOwner(parseAssetScope(scope))
+            val deleted = modelConfigService.deleteGroup(id, owner)
             if (!deleted) {
                 throw ResponseStatusException(HttpStatus.NOT_FOUND, "Group not found: $id")
             }
+            refreshCachesForOwner(owner)
         }.then()
 
-    /** Generation rows are cached per (user, kind) by the media resolver; hot-apply on any change. */
+    /**
+     * Drop the caches every model-row write invalidates.
+     *
+     * The media cache is scoped to one model type; the aux cache is not, because a task's choice
+     * only records a config id — which task was pointing at the row that just changed is not known
+     * here. Evicting every task for this owner is the correct scope: a stale aux entry would keep
+     * synthesizing with a deleted row, a disabled row or a group's old credentials until restart.
+     */
     private fun refreshMediaCache(userId: String, modelType: ModelType) {
-        if (modelType == ModelType.CHAT) return
-        mediaProviderResolver?.refresh(userId)
+        if (modelType != ModelType.CHAT) mediaProviderResolver?.refresh(userId)
+        refreshAuxCache(userId)
+    }
+
+    /**
+     * A group edit can change the credentials under rows of several kinds at once, so both caches
+     * are dropped for the owner without a type filter.
+     */
+    private fun refreshCachesForOwner(owner: String) {
+        mediaProviderResolver?.refresh(owner)
+        refreshAuxCache(owner)
+    }
+
+    private fun refreshAuxCache(owner: String) {
+        val resolver = auxModelResolver ?: return
+        AuxModelTask.entries.forEach { resolver.refresh(owner, it) }
     }
 
     // ─── Model Catalog (global, vendor-published facts) ─────────────────────────

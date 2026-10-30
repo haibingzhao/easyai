@@ -118,7 +118,7 @@ export function createTiptapDictationSink(editor: Editor): TiptapDictationHandle
         if (final) {
           insertSentence(clean);
           clearPreviewIfOwned();
-        } else {
+        } else if (state.liveSlotId === null || id >= state.liveSlotId) {
           state.liveText = clean;
           state.liveSlotId = id;
         }
@@ -136,6 +136,7 @@ export function createTiptapDictationSink(editor: Editor): TiptapDictationHandle
   };
 
   return {
+    orderedCommits: true,
     dispose: () => {
       try {
         editor.unregisterPlugin(pluginKey);
@@ -206,6 +207,7 @@ export function useTiptapDictationSink(editor: Editor | null): DictationSink {
   }, [editor]);
 
   return useMemo<DictationSink>(() => ({
+    orderedCommits: true,
     beginRound: () => handleRef.current?.beginRound(),
     openSlot: () => handleRef.current?.openSlot() ?? NOOP_SLOT,
     contextAround: (slots) => handleRef.current?.contextAround(slots) ?? { before: '', after: '' },

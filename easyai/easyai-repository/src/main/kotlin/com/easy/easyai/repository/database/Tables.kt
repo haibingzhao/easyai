@@ -439,6 +439,7 @@ object Tables {
         val defaultOptions = text("default_options").nullable()  // JSON CatalogOptions
         val reasoningProfile = text("reasoning_profile").nullable() // JSON ReasoningProfile
         val pricing = text("pricing").nullable()                 // JSON ModelPricing
+        val speechCapabilities = text("speech_capabilities").nullable() // JSON SpeechCapabilities
         val catalogSource = varchar("source", 64)
         val rawPayload = text("raw_payload").nullable()          // vendor item JSON as fetched
         val createdAt = long("created_at")

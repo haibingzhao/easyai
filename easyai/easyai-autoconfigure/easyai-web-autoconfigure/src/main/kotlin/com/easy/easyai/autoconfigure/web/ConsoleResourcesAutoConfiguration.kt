@@ -1,17 +1,14 @@
 package com.easy.easyai.autoconfigure.web
 
-import io.netty.handler.codec.http.HttpHeaderNames
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.boot.reactor.netty.NettyReactiveWebServerFactory
-import org.springframework.boot.web.server.WebServerFactoryCustomizer
 import org.springframework.context.annotation.Bean
 import org.springframework.http.CacheControl
 import org.springframework.web.reactive.config.ResourceHandlerRegistry
 import org.springframework.web.reactive.config.WebFluxConfigurer
-import reactor.netty.http.server.HttpServer
 import java.time.Duration
 
 /**
@@ -43,40 +40,5 @@ open class ConsoleResourcesAutoConfiguration {
                 .addResourceLocations("classpath:/static/assets/")
                 .setCacheControl(CacheControl.maxAge(Duration.ofDays(365)).cachePublic().immutable())
         }
-    }
-
-    /**
-     * A 1.7 MB uncompressed main chunk times out on a lossy relay link, so the text bundle is
-     * deflated on the way out.
-     *
-     * Matched on the response `Content-Type` rather than the request path, and as a whitelist, so
-     * `text/event-stream` is never handed to Netty's compressor: deflate buffers the chunks a chat
-     * stream depends on.
-     */
-    @Bean
-    @ConditionalOnMissingBean(name = ["consoleCompressionCustomizer"])
-    open fun consoleCompressionCustomizer(): WebServerFactoryCustomizer<NettyReactiveWebServerFactory> =
-        WebServerFactoryCustomizer { factory ->
-            factory.addServerCustomizers(
-                { server: HttpServer ->
-                    server.compress { _, response ->
-                        isCompressible(response.responseHeaders().get(HttpHeaderNames.CONTENT_TYPE, ""))
-                    }
-                }
-            )
-        }
-
-    internal companion object {
-        val COMPRESSIBLE_CONTENT_TYPES = listOf(
-            "text/javascript",
-            "application/javascript",
-            "text/css",
-            "text/html",
-            "image/svg+xml",
-        )
-
-        /** Matched by prefix so a `;charset=` suffix still counts as the same type. */
-        fun isCompressible(contentType: String): Boolean =
-            COMPRESSIBLE_CONTENT_TYPES.any { contentType.startsWith(it) }
     }
 }

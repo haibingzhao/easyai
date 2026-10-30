@@ -1,10 +1,13 @@
-import React, { useState } from 'react';
-import { GitBranch, Bookmark } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { GitBranch, Bookmark, Play, Square, Volume2 } from 'lucide-react';
 import type { AssistantMessage } from '../../types/message';
 import { useChatStore } from '@/services/stores/chat-store';
 import { sessionService } from '@/services/session-service';
 import { switchToSession } from '@/services/session-switch';
 import { SaveToKnowledgeDialog } from '@/components/knowledge/SaveToKnowledgeDialog';
+import { useTtsAvailability } from '@/hooks/useTtsAvailability';
+import { useTtsPlayback } from '@/hooks/useTtsPlayback';
+import { MAX_SPEECH_CHARS, stripMarkdownForSpeech } from '@/utils/speech-text';
 import { i18n } from '@/utils/i18n';
 import { formatTokenCount } from '../../utils/format';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
@@ -34,6 +37,45 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
   const saveContent = messages.map((m) => m.content).filter(Boolean).join('\n\n');
   const saveMessageId = forkTarget?.messageId;
 
+  // ─── Read-aloud ────────────────────────────────────────────────────────────
+  // The clip is shared conversation-wide, so this bar only reports the slice that belongs to it.
+  const ttsAvailability = useTtsAvailability();
+  const tts = useTtsPlayback();
+  // Cleaning is not free on a long answer and the list re-renders while streaming; cache it and
+  // reuse the same string on click instead of cleaning twice.
+  const speechText = useMemo(() => stripMarkdownForSpeech(saveContent), [saveContent]);
+  // A reply that is only a code block or an image cleans down to nothing and has no action. Keep
+  // the speaker visible but disabled when synthesis is unavailable or the reply is over-long, so
+  // the reason is discoverable instead of the control silently vanishing.
+  const speechTooLong = speechText.length > MAX_SPEECH_CHARS;
+  const showSpeak = !isStreaming && speechText.length > 0;
+  const speakEnabled = showSpeak && ttsAvailability.ready && !speechTooLong;
+  /** Stable per-message identity: an unsaved message still needs a key of its own. */
+  const lastMessage = messages[messages.length - 1];
+  const speechKey = saveMessageId ?? `ts:${lastMessage?.timestamp ?? 0}:${speechText.length}`;
+  const speaking = tts.activeKey === speechKey;
+  const ttsError = speaking ? tts.error : null;
+  /** A clip this message owns is loaded: playing, or parked because the browser blocked autoplay. */
+  const ttsLoaded = speaking && (tts.state === 'playing' || tts.state === 'ready');
+  const ttsLoading = speaking && tts.state === 'loading';
+  /** Loading cancels synthesis; playing stops audio and any body still streaming. */
+  const ttsStopping = ttsLoading || (speaking && tts.state === 'playing');
+  const speakTitle = !ttsAvailability.ready
+    ? ttsAvailability.status === 'failed'
+      ? i18n('Read-aloud is temporarily unavailable; please try again later')
+      : ttsAvailability.status === 'loading' || ttsAvailability.status === 'idle'
+        ? i18n('Checking read-aloud availability…')
+        : i18n('No usable speech model configured — check Settings → Task Models')
+    : speechTooLong
+      ? i18n('This reply is too long to read aloud (max 20,000 characters)')
+      : ttsLoading
+        ? i18n('Stop reading')
+        : tts.state === 'ready' && speaking
+          ? i18n('Tap to play')
+          : ttsLoaded
+            ? i18n('Stop reading')
+            : i18n('Read aloud');
+
   let inputTokens = 0;
   let outputTokens = 0;
   let totalCache = 0;
@@ -49,7 +91,7 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
     if (usage.modelName) modelName = usage.modelName;
   }
   const showUsage = outputTokens > 0;
-  if (!showUsage && !canFork && !canSave) return null;
+  if (!showUsage && !canFork && !canSave && !showSpeak) return null;
 
   const handleFork = async () => {
     if (!sessionId || !forkTarget?.messageId || forking) return;
@@ -125,6 +167,40 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
             >
               <Bookmark className="w-3 h-3" />
             </button>
+          )}
+          {/* Touch sizing and always-visible behaviour live in mobile.css (`.mobile-app [data-meta-tts]`):
+              `mobile-hit` is unscoped and its 44px height would inflate this desktop-hover row. */}
+          {showSpeak && (
+            // Disabled buttons do not consistently dispatch mouse events across browsers; the
+            // wrapper keeps the explanatory tooltip available when synthesis cannot be started.
+            <span className="inline-flex" title={speakTitle}>
+              <button
+                data-meta-tts
+                onClick={() => tts.toggle(speechKey, speechText)}
+                disabled={!speakEnabled && !ttsStopping}
+                className={`p-1 -my-1 rounded transition-colors disabled:opacity-40 disabled:hover:bg-transparent ${
+                  ttsStopping
+                    ? 'bg-red-500 text-white shadow-sm hover:bg-red-600'
+                    : 'hover:bg-muted hover:text-foreground'
+                }`}
+                title={speakTitle}
+                aria-label={speakTitle}
+                aria-pressed={ttsStopping}
+              >
+                {ttsStopping ? (
+                  <Square className="w-3 h-3 fill-current" />
+                ) : tts.state === 'ready' && speaking ? (
+                  <Play className="w-3 h-3" />
+                ) : (
+                  <Volume2 className="w-3 h-3" />
+                )}
+              </button>
+            </span>
+          )}
+          {ttsError && (
+            <span role="status" className="text-red-500/80" title={ttsError}>
+              {i18n('Read aloud failed')}
+            </span>
           )}
         </div>
       </div>
