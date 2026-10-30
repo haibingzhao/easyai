@@ -6,7 +6,9 @@ import com.easy.easyai.api.model.ModelCatalogEntry
 import com.easy.easyai.api.model.ModelPricing
 import com.easy.easyai.api.model.ReasoningMode
 import com.easy.easyai.api.model.ReasoningProfile
+import com.easy.easyai.api.model.SpeechCapabilities
 import com.easy.easyai.api.model.StructuredOutputSupport
+import com.easy.easyai.api.model.VoiceSpec
 import com.easy.easyai.repository.database.DatabaseMigration
 import kotlinx.coroutines.test.runTest
 import org.jetbrains.exposed.v1.r2dbc.R2dbcDatabase
@@ -55,7 +57,8 @@ class R2dbcModelCatalogStoreTest {
         pricing: ModelPricing? = ModelPricing("CNY", 12.0, 36.0, 1.5),
         description: String? = "desc of $modelId",
         rawPayload: String? = """{"model":"$modelId"}""",
-        reasoningProfile: ReasoningProfile? = null
+        reasoningProfile: ReasoningProfile? = null,
+        speechCapabilities: SpeechCapabilities? = null
     ) = ModelCatalogEntry(
         modelId = modelId,
         vendor = "bailian",
@@ -65,6 +68,7 @@ class R2dbcModelCatalogStoreTest {
         defaultOptions = CatalogOptions(maxTokens, maxContextTokens),
         reasoningProfile = reasoningProfile,
         pricing = pricing,
+        speechCapabilities = speechCapabilities,
         source = "bailian-refresh",
         rawPayload = rawPayload
     )
@@ -194,6 +198,64 @@ class R2dbcModelCatalogStoreTest {
 
             val loaded = assertNotNull(store.getByModelId(modelId))
             assertEquals(revised, loaded.reasoningProfile)
+        }
+    }
+
+    @Nested
+    inner class `speech capabilities` {
+
+        private fun speechCaps(defaultVoice: String = "longanhuan_v3.1") = SpeechCapabilities(
+            supportsSsml = true,
+            supportsInstruction = true,
+            formats = listOf("mp3", "wav"),
+            sampleRates = listOf(24000),
+            maxCharsPerFrame = 20_000,
+            defaultVoice = defaultVoice,
+            voices = listOf(VoiceSpec(voice = defaultVoice, name = "Voice $defaultVoice"))
+        )
+
+        @Test
+        fun `a row inserted with capabilities round-trips them`() = runTest {
+            val store = createStore()
+            val modelId = "speech-${UUID.randomUUID()}"
+            store.upsert(entry(modelId, speechCapabilities = speechCaps()))
+
+            assertEquals(speechCaps(), assertNotNull(store.getByModelId(modelId)).speechCapabilities)
+        }
+
+        @Test
+        fun `a catalog refresh without capabilities preserves the stored block`() = runTest {
+            val store = createStore()
+            val modelId = "speech-refresh-${UUID.randomUUID()}"
+            store.upsert(entry(modelId, speechCapabilities = speechCaps()))
+
+            // Refresh-shaped entry: the pipeline that writes it never produces this block.
+            store.upsert(entry(modelId, displayName = "Renamed by refresh", speechCapabilities = null))
+
+            val loaded = assertNotNull(store.getByModelId(modelId))
+            assertEquals("Renamed by refresh", loaded.displayName)
+            assertEquals(speechCaps(), loaded.speechCapabilities, "one refresh must not empty every voice picker")
+        }
+
+        @Test
+        fun `an entry that carries capabilities overwrites the stored block`() = runTest {
+            val store = createStore()
+            val modelId = "speech-update-${UUID.randomUUID()}"
+            store.upsert(entry(modelId, speechCapabilities = speechCaps()))
+            val revised = speechCaps(defaultVoice = "longanlingxin_v3.1")
+
+            store.upsert(entry(modelId, speechCapabilities = revised))
+
+            assertEquals(revised, assertNotNull(store.getByModelId(modelId)).speechCapabilities)
+        }
+
+        @Test
+        fun `a row without capabilities reads back null`() = runTest {
+            val store = createStore()
+            val modelId = "no-speech-${UUID.randomUUID()}"
+            store.upsert(entry(modelId))
+
+            assertNull(assertNotNull(store.getByModelId(modelId)).speechCapabilities)
         }
     }
 }

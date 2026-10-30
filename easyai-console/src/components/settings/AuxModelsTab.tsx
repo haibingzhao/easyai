@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { auxModelConfigService } from '@/services/aux-model-config-service';
 import { modelConfigService } from '@/services/model-config-service';
+import { invalidateTtsAvailability } from '@/hooks/useTtsAvailability';
 import type { AuxModelConfig, AuxModelTaskKey, ModelProviderConfig } from '@/types/settings';
 import { i18n } from '@/utils/i18n';
 import { Cpu, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
@@ -11,6 +12,7 @@ const TASK_LABEL: Record<AuxModelTaskKey, string> = {
   session_title: 'Session Title Model',
   skill_selection: 'Skill Selection Model',
   asr: 'ASR Model',
+  tts: 'TTS Model',
   dictation_refine: 'Dictation Refine Model',
   memory_curation: 'Memory Curation Model',
 };
@@ -18,6 +20,7 @@ const TASK_LABEL: Record<AuxModelTaskKey, string> = {
 /** Tasks whose blank choice disables a feature outright, instead of following the chat model. */
 const OPT_IN_TASKS: Partial<Record<AuxModelTaskKey, string>> = {
   asr: 'Not configured (voice input off)',
+  tts: 'Not configured (read-aloud off)',
   dictation_refine: 'Not configured (no rewrite)',
   memory_curation: 'Not configured (consolidation off)',
 };
@@ -28,10 +31,18 @@ const TASK_HINT: Partial<Record<AuxModelTaskKey, string>> = {
     'Routes each new user message through a decision model to pick the single best-matching skill; leave unset to rely on skill_search.',
   asr:
     'Powers the microphone button in the chat composer. The referenced model must expose an OpenAI-compatible audio transcriptions endpoint.',
+  tts:
+    'Powers the speaker button on assistant replies. Pick a SPEECH model — the picker only lists those, and the backend rejects a model of any other type. Read-aloud always speaks plain text as MP3, using the voice stored in that model row.',
   dictation_refine:
     'Rewrites a finished dictation round against its surrounding context to fix homophones and punctuation. Leave unset to keep raw transcriptions.',
   memory_curation:
     'Required for memory consolidation. The model merges related memories into higher-level entries; absorbed sources are archived, never deleted. Leave unset to keep consolidation disabled.',
+};
+
+/** Model type a picker is restricted to, for the "add one first" hint. */
+const TYPE_LABEL: Partial<Record<AuxModelTaskKey, string>> = {
+  asr: 'ASR',
+  tts: 'SPEECH',
 };
 
 const SOURCE_BADGE: Record<AuxModelConfig['effectiveSource'], { label: string; tone: string }> = {
@@ -49,6 +60,7 @@ export const AuxModelsTab: React.FC = () => {
   const [configs, setConfigs] = useState<AuxModelConfig[]>([]);
   const [models, setModels] = useState<ModelProviderConfig[]>([]);
   const [asrModels, setAsrModels] = useState<ModelProviderConfig[]>([]);
+  const [speechModels, setSpeechModels] = useState<ModelProviderConfig[]>([]);
   const [groupNames, setGroupNames] = useState<Record<string, string>>({});
   // Draft selection per task, keyed by taskKey; initialized from the server on load.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -57,15 +69,19 @@ export const AuxModelsTab: React.FC = () => {
 
   const load = useCallback(async () => {
     try {
-      const [auxList, modelList, groups, asrList] = await Promise.all([
+      // ASR and TTS can only point at a row of their own model type — the backend validates this,
+      // and offering chat rows here would only produce a 400 on save.
+      const [auxList, modelList, groups, asrList, speechList] = await Promise.all([
         auxModelConfigService.list(),
         modelConfigService.getUserConfigurations(),
         modelConfigService.getGroups(),
         modelConfigService.getUserConfigurations('ASR'),
+        modelConfigService.getUserConfigurations('SPEECH'),
       ]);
       setConfigs(auxList);
       setModels(modelList);
       setAsrModels(asrList);
+      setSpeechModels(speechList);
       const nameMap: Record<string, string> = {};
       for (const g of groups) nameMap[g.id] = g.name;
       setGroupNames(nameMap);
@@ -103,7 +119,14 @@ export const AuxModelsTab: React.FC = () => {
   );
 
   const grouped = useMemo(() => groupByGroupName(models), [groupByGroupName, models]);
-  const groupedAsr = useMemo(() => groupByGroupName(asrModels), [groupByGroupName, asrModels]);
+  /** Tasks restricted to one model type get their own picker population. */
+  const typedGroups = useMemo<Partial<Record<AuxModelTaskKey, ReturnType<typeof groupByGroupName>>>>(
+    () => ({
+      asr: groupByGroupName(asrModels),
+      tts: groupByGroupName(speechModels),
+    }),
+    [groupByGroupName, asrModels, speechModels],
+  );
 
   const optionLabel = (config: ModelProviderConfig): string => {
     const displayName = config.name || config.modelName || config.modelId;
@@ -120,6 +143,9 @@ export const AuxModelsTab: React.FC = () => {
         modelConfigId: modelConfigId.trim() ? modelConfigId.trim() : null,
       });
       setConfigs((prev) => prev.map((c) => (c.taskKey === taskKey ? updated : c)));
+      // Message read-aloud is gated on this task: re-probe so the speaker button appears or
+      // disappears without a reload.
+      if (taskKey === 'tts') invalidateTtsAvailability();
       setMessage({ type: 'success', text: i18n('Settings saved successfully') });
     } catch (e) {
       setMessage({ type: 'error', text: e instanceof Error ? e.message : i18n('Failed to save') });
@@ -161,7 +187,9 @@ export const AuxModelsTab: React.FC = () => {
           {configs.map((config) => {
             const optInLabel = OPT_IN_TASKS[config.taskKey];
             const badge = optInLabel && config.effectiveSource === 'default' ? NOT_ENABLED_BADGE : SOURCE_BADGE[config.effectiveSource];
-            const isAsrTask = config.taskKey === 'asr';
+            /** Set for tasks that may only reference their own model type (ASR, TTS). */
+            const restrictedTo = typedGroups[config.taskKey];
+            const source = restrictedTo ?? grouped;
             const draft = drafts[config.taskKey] ?? '';
             const dirty = draft !== config.modelConfigId;
             return (
@@ -179,40 +207,28 @@ export const AuxModelsTab: React.FC = () => {
                   className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                 >
                   <option value="">{i18n(optInLabel ?? 'Follow chat model (default)')}</option>
-                  {isAsrTask
-                    ? (
-                      <>
-                        {[...groupedAsr.byGroup.entries()].map(([groupId, groupModels]) => (
-                          <optgroup key={groupId} label={groupNames[groupId]}>
-                            {groupModels.map((m) => (
-                              <option key={m.id} value={m.id}>{`${m.name || m.modelName || m.modelId} (${m.modelId})`}</option>
-                            ))}
-                          </optgroup>
-                        ))}
-                        {groupedAsr.ungrouped.map((m) => (
-                          <option key={m.id} value={m.id}>{`${m.name || m.modelName || m.modelId} (${m.modelId})`}</option>
-                        ))}
-                      </>
-                    )
-                    : (
-                      <>
-                        {[...grouped.byGroup.entries()].map(([groupId, groupModels]) => (
-                          <optgroup key={groupId} label={groupNames[groupId]}>
-                            {groupModels.map((m) => (
-                              <option key={m.id} value={m.id}>{optionLabel(m)}</option>
-                            ))}
-                          </optgroup>
-                        ))}
-                        {grouped.ungrouped.map((m) => (
-                          <option key={m.id} value={m.id}>{optionLabel(m)}</option>
-                        ))}
-                      </>
-                    )}
+                  {[...source.byGroup.entries()].map(([groupId, groupModels]) => (
+                    <optgroup key={groupId} label={groupNames[groupId]}>
+                      {groupModels.map((m) => (
+                        <option key={m.id} value={m.id}>{optionLabel(m)}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                  {source.ungrouped.map((m) => (
+                    <option key={m.id} value={m.id}>{optionLabel(m)}</option>
+                  ))}
                 </select>
 
-                {TASK_HINT[config.taskKey] && (
-                  <p className="text-xs text-muted-foreground">{i18n(TASK_HINT[config.taskKey]!)}
+                {restrictedTo && source.byGroup.size === 0 && source.ungrouped.length === 0 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    {i18n('No {type} model is configured yet — add one under Models → {type} first.')
+                      .split('{type}')
+                      .join(i18n(TYPE_LABEL[config.taskKey] ?? config.taskKey))}
                   </p>
+                )}
+
+                {TASK_HINT[config.taskKey] && (
+                  <p className="text-xs text-muted-foreground">{i18n(TASK_HINT[config.taskKey]!)}</p>
                 )}
 
                 <div className="flex justify-end">

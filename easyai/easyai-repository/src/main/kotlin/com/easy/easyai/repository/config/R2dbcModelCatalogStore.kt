@@ -6,6 +6,7 @@ import com.easy.easyai.api.model.CatalogOptions
 import com.easy.easyai.api.model.ModelCatalogEntry
 import com.easy.easyai.api.model.ModelPricing
 import com.easy.easyai.api.model.ReasoningProfile
+import com.easy.easyai.api.model.SpeechCapabilities
 import com.easy.easyai.common.util.SharedObjectMapper
 import com.easy.easyai.repository.database.Tables
 import kotlinx.coroutines.flow.firstOrNull
@@ -19,6 +20,7 @@ import org.jetbrains.exposed.v1.r2dbc.select
 import org.jetbrains.exposed.v1.r2dbc.selectAll
 import org.jetbrains.exposed.v1.r2dbc.transactions.suspendTransaction
 import org.jetbrains.exposed.v1.r2dbc.update
+import org.slf4j.LoggerFactory
 import tools.jackson.databind.ObjectMapper
 
 /**
@@ -30,6 +32,8 @@ class R2dbcModelCatalogStore(
     private val db: R2dbcDatabase,
     private val objectMapper: ObjectMapper = SharedObjectMapper.instance
 ) : ModelCatalogStore {
+
+    private val logger = LoggerFactory.getLogger(javaClass)
 
     override suspend fun getByModelId(modelId: String): ModelCatalogEntry? {
         return suspendTransaction(db) {
@@ -56,7 +60,11 @@ class R2dbcModelCatalogStore(
         return suspendTransaction(db) {
             val now = System.currentTimeMillis()
             val existing = Tables.ModelCatalogTable
-                .select(Tables.ModelCatalogTable.modelId, Tables.ModelCatalogTable.reasoningProfile)
+                .select(
+                    Tables.ModelCatalogTable.modelId,
+                    Tables.ModelCatalogTable.reasoningProfile,
+                    Tables.ModelCatalogTable.speechCapabilities
+                )
                 .where { Tables.ModelCatalogTable.modelId eq entry.modelId }
                 .limit(1)
                 .firstOrNull()
@@ -65,6 +73,11 @@ class R2dbcModelCatalogStore(
                 ?.takeIf { parseProfile(it)?.source == ReasoningProfile.SOURCE_MANUAL }
             val profileJson = preservedProfile
                 ?: entry.reasoningProfile?.let { objectMapper.writeValueAsString(it) }
+            // Speech capabilities are maintained by hand (voice list + protocol facts) and a refresh
+            // never produces them: keep whatever is stored rather than writing null over it, or one
+            // Refresh on the Models page empties every voice picker.
+            val speechJson = entry.speechCapabilities?.let { objectMapper.writeValueAsString(it) }
+                ?: existing?.get(Tables.ModelCatalogTable.speechCapabilities)
             if (existing != null) {
                 Tables.ModelCatalogTable.update(
                     where = { Tables.ModelCatalogTable.modelId eq entry.modelId }
@@ -76,6 +89,7 @@ class R2dbcModelCatalogStore(
                     it[defaultOptions] = entry.defaultOptions?.let { o -> objectMapper.writeValueAsString(o) }
                     it[reasoningProfile] = profileJson
                     it[pricing] = entry.pricing?.let { p -> objectMapper.writeValueAsString(p) }
+                    it[speechCapabilities] = speechJson
                     it[catalogSource] = entry.source
                     it[rawPayload] = entry.rawPayload
                     it[updatedAt] = now
@@ -91,6 +105,7 @@ class R2dbcModelCatalogStore(
                     it[defaultOptions] = entry.defaultOptions?.let { o -> objectMapper.writeValueAsString(o) }
                     it[reasoningProfile] = profileJson
                     it[pricing] = entry.pricing?.let { p -> objectMapper.writeValueAsString(p) }
+                    it[speechCapabilities] = speechJson
                     it[catalogSource] = entry.source
                     it[rawPayload] = entry.rawPayload
                     it[createdAt] = now
@@ -103,6 +118,18 @@ class R2dbcModelCatalogStore(
 
     private fun parseProfile(json: String): ReasoningProfile? =
         runCatching { objectMapper.readValue(json, ReasoningProfile::class.java) }.getOrNull()
+
+    /**
+     * Speech capabilities are hand-maintained JSON, so a typo in one row must degrade that row's
+     * speech block to null (the model form then falls back to the raw options textarea) instead of
+     * failing the whole catalog lookup with a 500.
+     */
+    private fun parseSpeech(json: String?): SpeechCapabilities? {
+        if (json.isNullOrBlank()) return null
+        return runCatching { objectMapper.readValue(json, SpeechCapabilities::class.java) }
+            .onFailure { logger.warn("Unreadable speech_capabilities JSON ({} chars): {}", json.length, it.message) }
+            .getOrNull()
+    }
 
     private fun mapRow(row: ResultRow): ModelCatalogEntry {
         return ModelCatalogEntry(
@@ -122,6 +149,7 @@ class R2dbcModelCatalogStore(
             pricing = row[Tables.ModelCatalogTable.pricing]?.let {
                 objectMapper.readValue(it, ModelPricing::class.java)
             },
+            speechCapabilities = parseSpeech(row[Tables.ModelCatalogTable.speechCapabilities]),
             source = row[Tables.ModelCatalogTable.catalogSource],
             rawPayload = row[Tables.ModelCatalogTable.rawPayload],
             createdAt = row[Tables.ModelCatalogTable.createdAt],

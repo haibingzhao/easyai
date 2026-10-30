@@ -42,6 +42,7 @@ interface Slot {
   handle: DictationSlotHandle;
   /** Draft fragments keyed by issue order; rendering joins them by key, immune to out-of-order responses. */
   fragments: Map<number, string>;
+  drafts: Promise<void>[];
   lastWritten: string;
   finalized: boolean;
 }
@@ -154,13 +155,13 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
       .sort((a, b) => a[0] - b[0])
       .map(([, t]) => t)
       .join('');
-    slot.lastWritten = text;
     slot.handle.setText(text, final);
+    slot.lastWritten = slot.handle.getText();
   }, []);
 
   const openSlot = useCallback((session: Session): Slot => {
     const handle = sink.openSlot();
-    const slot: Slot = { handle, fragments: new Map(), lastWritten: '', finalized: false };
+    const slot: Slot = { handle, fragments: new Map(), drafts: [], lastWritten: '', finalized: false };
     session.slots.push(slot);
     return slot;
   }, [sink]);
@@ -182,16 +183,18 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
     if (session.silenceMs >= samples.length / 16) return;
     const slot = session.current;
     const seq = session.seq++;
-    track(session, asrService.transcribeSegment(encodeWav(samples))
+    const draft = asrService.transcribeSegment(encodeWav(samples))
       .then((text) => {
-        if (slot.finalized || !text) return;
+        if (slot.finalized || !text || slot.handle.getText() !== slot.lastWritten) return;
         slot.fragments.set(seq, text);
         renderSlot(slot, false);
       })
       .catch((e: unknown) => {
-        failSession(session, e);
-      }));
-  }, [failSession, onError, renderSlot, track]);
+        if (!slot.finalized) failSession(session, e);
+      });
+    slot.drafts.push(draft);
+    track(session, draft);
+  }, [failSession, renderSlot, track]);
 
   /** Close the open sentence: finalize the slot, retranscribe the whole sentence, open the next. */
   const closeSentence = useCallback((session: Session, openNext: boolean) => {
@@ -207,59 +210,47 @@ export function useVoiceInput({ sink, isRefineEnabled, onError }: UseVoiceInputO
     session.draftSamples = 0;
     session.silenceMs = 0;
 
-    if (samples.length >= MIN_SENTENCE_SAMPLES) {
-      slot.finalized = true;
-      // Final passes run one after another: a slow earlier response must not commit after a later
-      // sentence in single-anchor editor sinks.
-      const finalPass = session.finalChain.then(async () => {
-        const text = await tryTranscribe(samples);
-        // Manual-edit conflict: only replace a slot the user has not touched.
+    if (samples.length >= MIN_SENTENCE_SAMPLES || slot.drafts.length > 0 || slot.fragments.size > 0) {
+      const transcription = samples.length >= MIN_SENTENCE_SAMPLES
+        ? tryTranscribe(samples)
+        : Promise.resolve('');
+      const commit = async () => {
+        const text = await transcription;
+        // A failed correction must not discard drafts that are still in flight.
+        if (!text) await Promise.allSettled(slot.drafts);
+        slot.finalized = true;
         if (slot.handle.getText() !== slot.lastWritten) return;
-        if (!text) {
-          // Empty or failed correction while draft text is already visible. Editor sinks only
-          // commit on `final`, so this is the last chance to keep that text.
-          renderSlot(slot, true);
-          return;
+        if (text) {
+          slot.fragments.clear();
+          slot.fragments.set(0, text);
         }
-        slot.fragments.clear();
-        slot.fragments.set(0, text);
         renderSlot(slot, true);
-      });
-      session.finalChain = finalPass;
+      };
+      // Only single-anchor sinks need ordered commits; recognition itself can run concurrently.
+      const finalPass = sink.orderedCommits ? session.finalChain.then(commit) : commit();
+      if (sink.orderedCommits) session.finalChain = finalPass;
       track(session, finalPass);
-    }
-
-    if (openNext) {
-      session.current = openSlot(session);
-    } else if (slot.fragments.size === 0 && slot.handle.getText() === '') {
+    } else if (!openNext && slot.handle.getText() === '') {
       slot.finalized = true;
       slot.handle.remove();
       session.slots.pop();
-    } else if (samples.length < MIN_SENTENCE_SAMPLES) {
-      // Too little audio for a correction pass: commit the visible draft through the final chain,
-      // so an earlier sentence whose correction is still in flight cannot land after it in a
-      // single-anchor editor sink. Marking the slot closed also rejects any late draft write.
-      slot.finalized = true;
-      const tailCommit = session.finalChain.then(async () => {
-        if (slot.handle.getText() !== slot.lastWritten) return;
-        renderSlot(slot, true);
-      });
-      session.finalChain = tailCommit;
-      track(session, tailCommit);
     }
-  }, [openSlot, renderSlot, track]);
+
+    if (openNext) session.current = openSlot(session);
+  }, [openSlot, renderSlot, sink, track]);
 
   const onFrame = useCallback((session: Session, frame: Float32Array) => {
     if (session.stopped) return;
     const mono = downmixTo16k(frame, session.ctx.sampleRate);
+    let sum = 0;
+    for (let i = 0; i < mono.length; i++) sum += mono[i] * mono[i];
+    const rms = Math.sqrt(sum / mono.length);
+    if (rms < SILENCE_RMS && session.sentenceSamples === 0) return;
+
     session.draftBuf.push(mono);
     session.draftSamples += mono.length;
     session.sentenceBuf.push(mono);
     session.sentenceSamples += mono.length;
-
-    let sum = 0;
-    for (let i = 0; i < mono.length; i++) sum += mono[i] * mono[i];
-    const rms = Math.sqrt(sum / mono.length);
     session.silenceMs = rms < SILENCE_RMS ? session.silenceMs + (mono.length / 16) : 0;
 
     if (session.draftSamples >= DRAFT_SAMPLES) flushDraft(session);

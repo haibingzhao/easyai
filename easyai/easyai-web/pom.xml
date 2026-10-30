@@ -24,6 +24,10 @@
         </dependency>
         <dependency>
             <groupId>com.easy</groupId>
+            <artifactId>easyai-speech</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.easy</groupId>
             <artifactId>easyai-agent-core</artifactId>
         </dependency>
         <dependency>

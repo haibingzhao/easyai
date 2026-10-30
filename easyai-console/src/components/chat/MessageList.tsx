@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { Play } from 'lucide-react';
 import type { Message, AssistantMessage as AssistantMessageType, ErrorMessage as ErrorMessageType, CustomMessage } from '../../types/message';
 import { UserMessage } from './UserMessage';
@@ -12,6 +12,7 @@ import { CompactionIndicator } from './CompactionIndicator';
 import { ConsolidationTurn, readConsolidationTurn } from './ConsolidationTurn';
 import { useChatStore } from '../../services/stores/chat-store';
 import { resumeSession } from '../../services/chat-service';
+import { ttsPlayback } from '@/services/tts-playback-controller';
 import { i18n } from '../../utils/i18n';
 
 interface MessageListProps {
@@ -67,7 +68,14 @@ export const MessageList: React.FC<MessageListProps> = ({ messages, isStreaming,
   const retryInfo = useChatStore((state) => state.retryInfo);
   const livePreview = useChatStore((state) => state.livePreview);
   const transcriptMode = useChatStore((state) => state.transcriptMode);
+  const sessionId = useChatStore((state) => state.sessionId);
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
+
+  // Read-aloud belongs to one conversation: a clip (or a pending synthesis) from the previous
+  // session must neither keep playing nor start playing after the switch. Living here rather than
+  // in ChatPanel covers every host of this list (desktop chat, mobile chat, task transcript), and
+  // the cleanup on unmount means leaving the chat never leaves audio behind.
+  useEffect(() => () => ttsPlayback.stop(), [sessionId]);
 
   const items = useMemo(() => buildRenderItems(messages), [messages]);
 

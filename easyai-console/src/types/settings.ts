@@ -197,6 +197,8 @@ export interface ModelCatalogEntry {
   description?: string;
   capabilities?: CatalogCapabilities;
   defaultOptions?: CatalogOptions;
+  /** Speech-synthesis facts for TTS models; absent for every other kind and for hand-added rows. */
+  speechCapabilities?: SpeechCapabilities;
   /** Resolved thinking matrix; the lookup endpoint also returns one for ids the catalog lacks. */
   reasoningProfile?: ReasoningProfile;
   pricing?: ModelPricing;
@@ -214,6 +216,66 @@ export interface CatalogRefreshResult {
   message: string;
   inserted: number;
   updated: number;
+}
+
+/** One `optgroup` of the vendor's voice table, in publication order. */
+export interface VoiceGroup {
+  key: string;
+  label: string;
+  count: number;
+}
+
+/**
+ * One system voice. `traits` / `scenarios` are the vendor's own wording and are the only text a
+ * model can use to choose a voice it cannot hear; `ssml` / `instruction` / `timestamp` are per-voice
+ * conclusions and must not be inferred from the model-level flags.
+ */
+export interface VoiceSpec {
+  /** The exact `voice` parameter value. */
+  voice: string;
+  name: string;
+  group?: string;
+  groupLabel?: string;
+  /** 'female' | 'male' | 'child'; absent when the vendor does not say. */
+  gender?: string;
+  age?: number;
+  traits: string[];
+  scenarios: string[];
+  accent?: string;
+  /** BCP-47 language tags. */
+  languages: string[];
+  languageLabel?: string;
+  /** The vendor did not state a language: the tags above are an inference, and the UI must say so. */
+  languageInferred?: boolean;
+  localName?: string;
+  /** Dialects reachable through `instruction` for this voice. */
+  dialects: string[];
+  ssml?: boolean;
+  instruction?: boolean;
+  timestamp?: boolean;
+}
+
+/** Vendor-published speech facts for one TTS model; drives the whole voice form. */
+export interface SpeechCapabilities {
+  supportsInstruction: boolean;
+  supportsEmotionTags: boolean;
+  supportsSsml: boolean;
+  supportsLatex: boolean;
+  supportsWordTimestamp: boolean;
+  supportsHotFix: boolean;
+  /** Output formats the model accepts, e.g. ['mp3','pcm','wav','opus']. */
+  formats: string[];
+  /** Discrete sample rates in Hz. */
+  sampleRates: number[];
+  /** Protocol ceiling for one `continue-task` frame. */
+  maxCharsPerFrame: number;
+  /** Protocol ceiling for one task across all frames. */
+  maxCharsPerTask: number;
+  docsUrl?: string;
+  emotionTags: string[];
+  voiceGroups: VoiceGroup[];
+  defaultVoice?: string;
+  voices: VoiceSpec[];
 }
 
 // Object-storage settings types (Settings → Storage)
@@ -263,7 +325,7 @@ export interface ModelConfigTestResult {
 // Auxiliary (per-task) model settings types (Settings → Task Models)
 
 /** A background purpose that can be backed by its own model. Mirrors the backend AuxModelTask enum. */
-export type AuxModelTaskKey = 'compaction' | 'session_title' | 'skill_selection' | 'asr' | 'dictation_refine' | 'memory_curation';
+export type AuxModelTaskKey = 'compaction' | 'session_title' | 'skill_selection' | 'asr' | 'dictation_refine' | 'memory_curation' | 'tts';
 
 /** Which layer is in force for a task: the user's choice, or the default (chat-session model). */
 export type AuxModelEffectiveSource = 'user' | 'default';

@@ -1199,6 +1199,63 @@ const translations: Record<string, Record<string, string>> = {
     'Key': 'Key',
     'Label': 'Label',
     'Skipped': 'Skipped',
+    // ─── Speech synthesis (TTS) ───
+    'TTS Model': 'TTS Model',
+    'Not configured (read-aloud off)': 'Not configured (read-aloud off)',
+    'Powers the speaker button on assistant replies. Pick a SPEECH model — the picker only lists those, and the backend rejects a model of any other type. Read-aloud always speaks plain text as MP3, using the voice stored in that model row.':
+      'Powers the speaker button on assistant replies. Pick a SPEECH model — the picker only lists those, and the backend rejects a model of any other type. Read-aloud always speaks plain text as MP3, using the voice stored in that model row.',
+    'No {type} model is configured yet — add one under Models → {type} first.':
+      'No {type} model is configured yet — add one under Models → {type} first.',
+    'Read aloud': 'Read aloud',
+    'No usable speech model configured — check Settings → Task Models': 'No usable speech model configured — check Settings → Task Models',
+    'Checking read-aloud availability…': 'Checking read-aloud availability…',
+    'Read-aloud is temporarily unavailable; please try again later': 'Read-aloud is temporarily unavailable; please try again later',
+    'Tap to play': 'Tap to play',
+    'Stop reading': 'Stop reading',
+    'Synthesizing…': 'Synthesizing…',
+    'Read aloud failed': 'Read aloud failed',
+    'Speech Settings': 'Speech Settings',
+    'Voice list': 'Voice list',
+    'Voice': 'Voice',
+    'Recommended': 'Recommended',
+    'Search by name, trait or language': 'Search by name, trait or language',
+    'Use the model default': 'Use the model default',
+    'Custom / unrecognised voice': 'Custom / unrecognised voice',
+    'Format': 'Format',
+    'Sample rate (Hz)': 'Sample rate (Hz)',
+    'Model default': 'Model default',
+    'Instruction': 'Instruction',
+    'e.g. Read this in a warm, slightly slower voice.': 'e.g. Read this in a warm, slightly slower voice.',
+    'Enable SSML': 'Enable SSML',
+    'The whole text must then be one <speak> document and is sent in a single frame.':
+      'The whole text must then be one <speak> document and is sent in a single frame.',
+    "Chat read-aloud always speaks plain text as MP3 from this model's default voice; these settings exist for the speech generation tool.":
+      "Chat read-aloud always speaks plain text as MP3 from this model's default voice; these settings exist for the speech generation tool.",
+    'Emotion tags': 'Emotion tags',
+    'Timestamps': 'Timestamps',
+    'Dialects': 'Dialects',
+    'Language not stated by the vendor': 'Language not stated by the vendor',
+    'Unspecified': 'Unspecified',
+    'no SSML / instruction': 'no SSML / instruction',
+    'WAV — generation tools only; chat read-aloud always uses MP3':
+      'WAV — generation tools only; chat read-aloud always uses MP3',
+    'PCM — generation tools only; chat read-aloud always uses MP3':
+      'PCM — generation tools only; chat read-aloud always uses MP3',
+    'Opus — generation tools only; chat read-aloud always uses MP3':
+      'Opus — generation tools only; chat read-aloud always uses MP3',
+    'Fix the Generation Options JSON above before using the structured fields.':
+      'Fix the Generation Options JSON above before using the structured fields.',
+    'Other voices': 'Other voices',
+    'Search voices': 'Search voices',
+    'This reply is too long to read aloud (max 20,000 characters)':
+      'This reply is too long to read aloud (max 20,000 characters)',
+    'Nothing to read aloud here': 'Nothing to read aloud here',
+    'Sign in again to use read-aloud': 'Sign in again to use read-aloud',
+    'No text-to-speech model is configured': 'No text-to-speech model is configured',
+    'The previous read-aloud is still running': 'The previous read-aloud is still running',
+    'Speech synthesis timed out': 'Speech synthesis timed out',
+    'Speech synthesis failed': 'Speech synthesis failed',
+    'Playback failed': 'Playback failed',
   },
 
   zh: {
@@ -2468,6 +2525,63 @@ const translations: Record<string, Record<string, string>> = {
     'Default folder': '默认目录',
     'Uncategorized': '未分类',
     'Save the article first to use AI': '请先保存文章再使用 AI',
+    // ─── Speech synthesis (TTS) ───
+    'TTS Model': 'TTS 模型',
+    'Not configured (read-aloud off)': '未配置（不开启朗读）',
+    'Powers the speaker button on assistant replies. Pick a SPEECH model — the picker only lists those, and the backend rejects a model of any other type. Read-aloud always speaks plain text as MP3, using the voice stored in that model row.':
+      '驱动助手回复下方的喇叭按钮。这里只能选 SPEECH 类型的模型（下拉只列出这类行，后端也会拒收其他类型）。朗读固定按纯文本合成 MP3，音色取该模型行里配置的那个。',
+    'No {type} model is configured yet — add one under Models → {type} first.':
+      '还没有配置 {type} 模型，请先到「模型 → {type}」添加一行。',
+    'Read aloud': '朗读',
+    'No usable speech model configured — check Settings → Task Models': '没有可用的语音合成模型，请检查 设置 → 任务模型',
+    'Checking read-aloud availability…': '正在检查朗读功能是否可用…',
+    'Read-aloud is temporarily unavailable; please try again later': '朗读功能暂时不可用，请稍后重试',
+    'Tap to play': '点击播放',
+    'Stop reading': '停止朗读',
+    'Synthesizing…': '合成中…',
+    'Read aloud failed': '朗读失败',
+    'Speech Settings': '语音设置',
+    'Voice list': '音色列表',
+    'Voice': '音色',
+    'Recommended': '推荐',
+    'Search by name, trait or language': '按名称、特质或语种搜索',
+    'Use the model default': '使用模型默认音色',
+    'Custom / unrecognised voice': '自定义 / 未识别音色',
+    'Format': '格式',
+    'Sample rate (Hz)': '采样率 (Hz)',
+    'Model default': '模型默认',
+    'Instruction': '指令',
+    'e.g. Read this in a warm, slightly slower voice.': '例如：请用温和、稍慢的语气朗读。',
+    'Enable SSML': '启用 SSML',
+    'The whole text must then be one <speak> document and is sent in a single frame.':
+      '开启后全文必须是一份 <speak> 文档，并以单帧发送。',
+    "Chat read-aloud always speaks plain text as MP3 from this model's default voice; these settings exist for the speech generation tool.":
+      '聊天朗读固定用纯文本合成 MP3、并使用该模型的默认音色；这里的设置供语音生成工具使用。',
+    'Emotion tags': '情感标签',
+    'Timestamps': '字级时间戳',
+    'Dialects': '方言',
+    'Language not stated by the vendor': '厂商未标注语种',
+    'Unspecified': '未标注',
+    'no SSML / instruction': '不支持 SSML / 指令',
+    'WAV — generation tools only; chat read-aloud always uses MP3':
+      'WAV — 仅生成工具使用；聊天朗读固定 MP3',
+    'PCM — generation tools only; chat read-aloud always uses MP3':
+      'PCM — 仅生成工具使用；聊天朗读固定 MP3',
+    'Opus — generation tools only; chat read-aloud always uses MP3':
+      'Opus — 仅生成工具使用；聊天朗读固定 MP3',
+    'Fix the Generation Options JSON above before using the structured fields.':
+      '请先修正上方的「生成选项」JSON，再使用结构化控件。',
+    'Other voices': '其他音色',
+    'Search voices': '搜索音色',
+    'This reply is too long to read aloud (max 20,000 characters)':
+      '这条回复太长，无法朗读（上限 20,000 字符）',
+    'Nothing to read aloud here': '这里没有可朗读的内容',
+    'Sign in again to use read-aloud': '请重新登录后再使用朗读',
+    'No text-to-speech model is configured': '还没有配置语音合成模型',
+    'The previous read-aloud is still running': '上一段朗读还在进行中，请稍后再试',
+    'Speech synthesis timed out': '语音合成超时',
+    'Speech synthesis failed': '语音合成失败',
+    'Playback failed': '播放失败',
   },
 };
 

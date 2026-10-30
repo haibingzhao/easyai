@@ -1,7 +1,10 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { i18n } from '../../utils/i18n';
 import { Trash2 } from 'lucide-react';
 import { modelConfigService } from '@/services/model-config-service';
+import { SpeechModelFields } from './SpeechModelFields';
+import { reconcileSpeechOptions } from './speech-options';
+import { useSpeechCatalogPrefill } from './useSpeechCatalogPrefill';
 import type {
   ModelConfigGroup,
   ModelProviderConfig,
@@ -91,6 +94,46 @@ export const InlineGenerationModelForm: React.FC<InlineGenerationModelFormProps>
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [addedCount, setAddedCount] = useState(0);
   const configNameRef = useRef<HTMLInputElement>(null);
+
+  // ─── Speech capability lookup (SPEECH rows only) ──────────────────────────
+  const speechCatalog = useSpeechCatalogPrefill(modelType === 'SPEECH' ? modelId : '');
+  const speechModel = modelId.trim();
+  // Only the capabilities that belong to the current id: on the render where `modelId` changes the
+  // hook still holds the previous model's result, and rendering or reconciling against it would
+  // show the wrong voices and mark the new model aligned before its own result arrives.
+  const speech = speechCatalog.forModelId === speechModel ? speechCatalog.speech : null;
+  /**
+   * Catalog history for this form: the model the options were last aligned with, and the voices
+   * that catalog offered. The pair is what tells a stale voice (it belonged to the model we just
+   * left, so drop it) from a custom one (no catalog knows it, so keep the user's row untouched).
+   */
+  const alignedModel = useRef<string | null>(null);
+  const alignedVoices = useRef<Set<string> | null>(null);
+
+  // A cleared id ("Save & Add Another", or wiping the field) ends the alignment history: the row's
+  // options no longer describe any catalog model, so the next id must reconcile and seed afresh.
+  useEffect(() => {
+    if (modelId.trim()) return;
+    alignedModel.current = null;
+    alignedVoices.current = null;
+  }, [modelId]);
+
+  useEffect(() => {
+    if (!speech) return;
+    const model = modelId.trim();
+    if (alignedModel.current === model) return;
+    const previousVoices = alignedVoices.current;
+    alignedModel.current = model;
+    alignedVoices.current = new Set((speech.voices ?? []).map((voice) => voice.voice));
+    setMediaOptions((prev) =>
+      reconcileSpeechOptions(prev, speech, {
+        // "This row has no options yet" is the only state worth seeding — it covers a new row and
+        // the blank row left behind by "Save & Add Another", and never overrides a stored voice.
+        seedVoice: prev.trim() === '',
+        previousVoices,
+      })
+    );
+  }, [speech, modelId]);
 
   const createdGroup = createsGroup && !!groupId;
   const showConnectionFields = !inheritedGroup;
@@ -368,6 +411,10 @@ export const InlineGenerationModelForm: React.FC<InlineGenerationModelFormProps>
               className="flex w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm font-mono"
             />
           </div>
+
+          {speech && (
+            <SpeechModelFields capabilities={speech} options={mediaOptions} onChange={setMediaOptions} />
+          )}
 
           <div>
             <label className="text-sm font-medium mb-1 block">{i18n('Timeout (seconds)')}</label>

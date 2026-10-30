@@ -79,6 +79,7 @@
         <module>easyai-api</module>
         <module>easyai-common</module>
         <module>easyai-core</module>
+        <module>easyai-speech</module>
         <module>easyai-tools</module>
         <module>easyai-swarm</module>
         <module>easyai-observability</module>
@@ -198,6 +199,11 @@
             <dependency>
                 <groupId>com.easy</groupId>
                 <artifactId>easyai-core</artifactId>
+                <version>${revision}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.easy</groupId>
+                <artifactId>easyai-speech</artifactId>
                 <version>${revision}</version>
             </dependency>
             <dependency>

@@ -34,6 +34,13 @@ enum class AuxModelTask(val key: String) {
     ASR("asr"),
 
     /**
+     * Chat read-aloud speech synthesis. Unset means the read-aloud button is not offered at all;
+     * consumed through [AuxModelResolver.resolveConfig] like [ASR] — the row supplies endpoint
+     * material and `mediaOptions`, and the speech module speaks the protocol.
+     */
+    TTS("tts"),
+
+    /**
      * Post-dictation context-aware rewrite of the dictated text. Unset means the refinement step
      * is skipped and raw transcriptions stand.
      */

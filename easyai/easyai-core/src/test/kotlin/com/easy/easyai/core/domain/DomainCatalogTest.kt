@@ -1,6 +1,9 @@
 package com.easy.easyai.core.domain
 
+import com.easy.easyai.common.util.SharedObjectMapper
+import com.easy.easyai.core.memory.MemoryScope
 import com.easy.easyai.core.memory.MemoryType
+import com.easy.easyai.core.model.ContextReferences
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -48,6 +51,43 @@ class DomainCatalogTest {
         val catalog = DomainCatalog(listOf(contributor("home", "other")), "HOME")
         assertEquals("home", catalog.activeDomain)
         assertEquals(listOf("other"), catalog.memoryCodes())
+    }
+
+    @Nested
+    inner class `memory type json compatibility` {
+
+        private val mapper = SharedObjectMapper.instance
+
+        @Test
+        fun `legacy enum names and host category codes deserialize from strings`() {
+            val json = """
+                {
+                  "memories": [
+                    {"name":"market","description":"macro","type":"MARKET_INSIGHTS","scope":"GLOBAL"},
+                    {"name":"family","description":"preference","type":"family_preferences","scope":"PROJECT"}
+                  ],
+                  "rules": []
+                }
+            """.trimIndent()
+
+            val references = mapper.readValue(json, ContextReferences::class.java)
+
+            assertEquals(
+                listOf(MemoryType("market_insights"), MemoryType("family_preferences")),
+                references.memories.map { it.type }
+            )
+            assertEquals(listOf(MemoryScope.GLOBAL, MemoryScope.PROJECT), references.memories.map { it.scope })
+        }
+
+        @Test
+        fun `memory type serializes as its stable storage code`() {
+            val type = MemoryType("strategy_lessons")
+
+            val json = mapper.writeValueAsString(type)
+
+            assertEquals("\"strategy_lessons\"", json)
+            assertEquals(type, mapper.readValue(json, MemoryType::class.java))
+        }
     }
 
     @Nested

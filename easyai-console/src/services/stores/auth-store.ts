@@ -8,6 +8,8 @@ import { useChatStore } from './chat-store';
 import { useCapabilityStore } from './capability-store';
 import { useAgentStore } from './agent-store';
 import { startNotificationPolling, stopNotificationPolling } from './notification-store';
+import { resetTtsAvailability } from '@/hooks/useTtsAvailability';
+import { ttsPlayback } from '@/services/tts-playback-controller';
 
 interface AuthState {
   user: UserProfile | null;
@@ -140,6 +142,10 @@ function resetUserScopedState() {
   useChatStore.getState().clearChat();
   useCapabilityStore.getState().clear();
   useAgentStore.getState().resetForUserSwitch();
+  // Read-aloud is user-scoped twice over: the clip that is playing belongs to the old identity, and
+  // the availability probe answered for that identity's TTS row. Neither may survive the switch.
+  ttsPlayback.stop();
+  resetTtsAvailability();
   // An account switch also stops the badge loop: the next identity must not inherit the previous
   // one's inbox, and an unauthenticated poll would only churn the token refresh path.
   stopNotificationPolling();

@@ -1,6 +1,8 @@
 package com.easy.easyai.core.memory
 
 import com.easy.easyai.core.domain.DomainCatalog
+import com.fasterxml.jackson.annotation.JsonCreator
+import com.fasterxml.jackson.annotation.JsonValue
 
 /**
  * Storage category of a memory entry: the `{type}/{name}.md` directory and stable API value.
@@ -10,7 +12,7 @@ import com.easy.easyai.core.domain.DomainCatalog
  * application). This type only carries the storage key, so an entry written under another
  * domain's taxonomy still parses and round-trips unchanged.
  */
-data class MemoryType(val dirName: String) {
+data class MemoryType(@get:JsonValue val dirName: String) {
 
     init {
         require(DomainCatalog.CODE_PATTERN.matches(dirName)) {
@@ -19,6 +21,12 @@ data class MemoryType(val dirName: String) {
     }
 
     companion object {
+        /** JSON keeps the stable storage code; legacy enum names differ only by case. */
+        @JvmStatic
+        @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
+        fun fromJson(value: String): MemoryType =
+            of(value) ?: throw IllegalArgumentException("Invalid memory type code '$value'")
+
         @JvmField
         val USER_PREFERENCES = MemoryType("user_preferences")
 

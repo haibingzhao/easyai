@@ -11,6 +11,7 @@ import com.easy.easyai.core.tool.ToolExecutionMode
 import com.easy.easyai.core.tool.ToolMetadata
 import com.easy.easyai.core.tool.ToolResult
 import com.easy.easyai.core.tool.ToolUpdate
+import com.easy.easyai.speech.SpeechSynthesizer
 import kotlinx.coroutines.CoroutineScope
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
@@ -21,18 +22,20 @@ data class TtsParams(
     val text: String,
     /** Voice identifier (provider-specific), e.g. "alloy". Optional. */
     val voice: String? = null,
-    /** Output audio format: mp3 (default), wav, opus, aac, flac. */
+    /** Output audio format: mp3 (default), wav, pcm, opus. DashScope rows fall back to mp3 for anything else (aac, flac). */
     val format: String? = null,
     /** Optional generation-model name; matches a configured entry's model id or display name. */
     val model: String? = null
 )
 
 /**
- * Synthesizes speech from text through an OpenAI-compatible provider, persisting the audio to object
+ * Synthesizes speech from text through a configured provider, persisting the audio to object
  * storage and returning only a reference. Fast (seconds), so it completes within one call.
  *
  * The concrete provider is resolved per call from the optional [TtsParams.model] against the user's
- * enabled SPEECH entries.
+ * enabled SPEECH entries, and the protocol decides the wire format: DashScope rows speak the native
+ * duplex WebSocket protocol (Qwen-Audio-TTS, CosyVoice v3), everything else the OpenAI-compatible
+ * `/audio/speech` route.
  */
 class TtsTool(
     metadata: ToolMetadata,
@@ -65,7 +68,18 @@ class TtsTool(
 
         onUpdate(ToolUpdate.Progress("Synthesizing speech…"))
         return try {
-            val (bytes, mime) = OpenAiCompatibleClient(settings).synthesize(text, voice, format)
+            val synthesizer = SpeechSynthesizer.create()
+            val (bytes, mime) = if (synthesizer.supports(settings)) {
+                val audio = synthesizer.synthesize(
+                    settings = settings,
+                    text = text,
+                    voice = voice,
+                    format = format
+                )
+                audio.bytes to audio.mimeType
+            } else {
+                OpenAiCompatibleClient(settings).synthesize(text, voice, format)
+            }
             if (bytes.isEmpty()) return errorResult(toolCallId, name, "provider returned empty audio")
             val item = MediaArtifacts.store(storage, userId, bytes, mime)
             val result = MediaResult(MediaProviderSettings.SERVICE_KIND_SPEECH, MediaResult.STATUS_COMPLETED, listOf(item))
