@@ -171,4 +171,52 @@ class SpeechPlanAssemblerTest {
             assertTrue(assembler.warnings.any { it.code == SpeechScriptValidator.CODE_EMOTION })
         }
     }
+
+    /** What the director writes into `voice`, and what the segment ends up carrying. */
+    @Nested
+    inner class VoiceIdentity {
+
+        private val labelled = SpeechCapabilityResolver().resolve(
+            SpeechCapabilities(
+                defaultVoice = "longanhuan_v3.1",
+                voices = listOf(
+                    VoiceSpec(voice = "longanhuan_v3.1", name = "龙安欢_v3.1"),
+                    VoiceSpec(voice = "longsisi_v3.1", name = "龙思思_v3.1")
+                )
+            )
+        )
+
+        @Test
+        fun `a voice copied with its display label is kept, not reported as a fallback`() {
+            // The prompt shows `id｜名称`; copying the whole cell is a labelling slip, not a request
+            // for a different timbre, so neither the choice nor the warning list should change.
+            val assembler = SpeechPlanAssembler("原文。", labelled, 20_000)
+            val fixed = assertNotNull(
+                assembler.accept(SpeechSegment("seg-0", 0, "原文。", "原文。", "longanhuan_v3.1｜龙安欢_v3.1"))
+            )
+            assertEquals("longanhuan_v3.1", fixed.voice)
+            assertEquals(emptyList(), assembler.warnings)
+        }
+
+        @Test
+        fun `the resolved id is what the segment carries downstream`() {
+            val assembler = SpeechPlanAssembler("原文。", labelled, 20_000)
+            val fixed = assertNotNull(
+                assembler.accept(SpeechSegment("seg-0", 0, "原文。", "原文。", "longsisi_v3.1|龙思思_v3.1"))
+            )
+            assertEquals("longsisi_v3.1", fixed.voice)
+        }
+
+        @Test
+        fun `an unknown voice still falls back to the default and is reported`() {
+            val assembler = SpeechPlanAssembler("原文。", labelled, 20_000)
+            val fixed = assertNotNull(
+                assembler.accept(SpeechSegment("seg-0", 0, "原文。", "原文。", "longanhuan_v9.9｜龙安欢_v9.9"))
+            )
+            assertEquals("longanhuan_v3.1", fixed.voice)
+            val warning = assembler.warnings.single()
+            assertEquals(SpeechScriptValidator.CODE_VOICE, warning.code)
+            assertTrue(warning.message.contains("longanhuan_v9.9｜龙安欢_v9.9"))
+        }
+    }
 }

@@ -32,9 +32,10 @@ enum class SpeechScriptTarget(val key: String) {
 /**
  * Lifecycle of a stored script.
  *
- * AUTO is the machine's copy: one per target, overwritten by the next plan for the same text, and
- * expired after a retention window. PINNED is the user's copy: never overwritten, never expired.
- * ARCHIVED is a soft delete — the row stays so that "this was deleted" is a fact, not an absence.
+ * AUTO is the machine's copy: one per target and mode, overwritten by the next plan of the same
+ * mode for the same text, and expired after a retention window. PINNED is the user's copy: never
+ * overwritten, never expired. ARCHIVED is a soft delete — the row stays so that "this was deleted"
+ * is a fact, not an absence.
  */
 enum class SpeechScriptStatus {
     AUTO,
@@ -44,6 +45,26 @@ enum class SpeechScriptStatus {
     companion object {
         @JvmStatic
         fun fromKey(key: String?): SpeechScriptStatus? =
+            entries.firstOrNull { it.name.equals(key?.trim(), ignoreCase = true) }
+    }
+}
+
+/**
+ * Whether planning finished, independently of the row's AUTO/PINNED/ARCHIVED lifecycle.
+ *
+ * Null is deliberate for rows written before this state existed: their completeness is unknown, so
+ * they must be planned again rather than trusted as complete. An IN_PROGRESS row left by a crashed
+ * process is not reusable either; only COMPLETED crosses the archive's reuse gate.
+ */
+enum class SpeechScriptGenerationStatus {
+    IN_PROGRESS,
+    COMPLETED,
+    CANCELLED,
+    FAILED;
+
+    companion object {
+        @JvmStatic
+        fun fromKey(key: String?): SpeechScriptGenerationStatus? =
             entries.firstOrNull { it.name.equals(key?.trim(), ignoreCase = true) }
     }
 }
@@ -77,6 +98,8 @@ data class SpeechScriptRecord(
     val script: SpeechScript,
     val ttsParams: SpeechTtsParams,
     val directionParams: SpeechDirectionParams?,
+    /** Null means a legacy row whose planning outcome cannot be established. */
+    val generationStatus: SpeechScriptGenerationStatus? = null,
     val isFavorite: Boolean = false,
     val playCount: Int = 0,
     val lastPlayedAt: Long? = null,
@@ -136,35 +159,60 @@ data class SpeechScriptQuery(
  * not as a permission error, so a guessed id leaks nothing.
  *
  * The AUTO contract is enforced here rather than by a unique index (H2 has no filtered index):
- * [saveAuto] replaces the single AUTO row for its target, [savePinned] never does.
+ * [saveAuto] replaces the single AUTO row for its target **and mode**, [savePinned] never does.
  */
 interface SpeechScriptStore {
 
-    /** Insert or replace the machine-saved script for this target, keeping its id stable. */
+    /**
+     * Insert or replace the machine-saved script for this target **and mode**, keeping its id stable.
+     *
+     * Mode is part of the identity on purpose: a refined read and a directed plan of the same reply
+     * are different scripts with different segment counts, and keeping one row for both meant the
+     * later one silently replaced the earlier — and, because reuse queries did not filter by mode,
+     * "direct this reply" could be answered with the refined single segment.
+     */
     suspend fun saveAuto(record: SpeechScriptRecord): SpeechScriptRecord
+
+    /**
+     * Write the terminal snapshot of a plan that never finished planning (cancelled or failed).
+     *
+     * Only applies while the AUTO row is still IN_PROGRESS: a plan completed meanwhile for the same
+     * reply (the script panel can plan beside a running playback) must not be replaced by a partial
+     * one. Returns whether a row was updated; a row that no longer qualifies is left untouched.
+     */
+    suspend fun saveAbandoned(record: SpeechScriptRecord): Boolean
 
     /** Insert a user-saved script; an existing PINNED row is never replaced. */
     suspend fun savePinned(record: SpeechScriptRecord): SpeechScriptRecord
 
     /**
-     * The id [saveAuto] would keep for this target, or null when no AUTO row exists yet.
+     * The id [saveAuto] would keep for this target **and mode**, or null when no such AUTO row exists.
      *
      * A render that has not been planned by the panel yet needs this: [saveAuto] keeps an existing
      * row's id, so emitting a fresh random id in `meta` would leave the archive, the plan cache and
      * `touchPlayed` pointing at different rows.
+     *
+     * [mode] is part of the key (see [saveAuto]): the refined read and the directed plan of one
+     * reply are two rows, so a lookup that ignored the mode would announce the wrong id.
      */
-    suspend fun findAutoId(owner: String, targetType: String, targetId: String?): String?
+    suspend fun findAutoId(owner: String, targetType: String, targetId: String?, mode: String): String?
 
     /**
-     * The newest reusable script for a target whose source digest still matches.
+     * The newest COMPLETED script for a target **and mode** whose source digest still matches.
      *
-     * Returns null when the text changed: a script written for an older reply must not be spoken
-     * over a regenerated one.
+     * Returns null when the text changed or planning did not complete: an old or partial script must
+     * not be spoken over a regenerated reply. Legacy rows with unknown generation state also do not
+     * qualify.
+     *
+     * Mode is filtered here, not by the caller: a one-segment refined read is a legal script for the
+     * same reply, so without it "direct this reply" would silently replay the refined one instead of
+     * planning a multi-segment performance.
      */
     suspend fun findReusable(
         owner: String,
         targetType: String,
         targetId: String?,
+        mode: String,
         digest: String
     ): SpeechScriptRecord?
 

@@ -9,7 +9,7 @@ import {
   type TtsSpeechResponse,
 } from '@/services/tts-service';
 import { endTtsAudioSession, primeTtsAudio, ttsAudioElement } from '@/services/tts-audio';
-import type { ReadAloudMode } from '@/types/settings';
+import type { ReadAloudMode, ReadAloudTone } from '@/types/settings';
 
 /** idle → loading → playing, with `ready` holding a clip the browser refused to autoplay. */
 export type TtsPlaybackState = 'idle' | 'loading' | 'ready' | 'playing';
@@ -74,7 +74,13 @@ export interface TtsAudioElement {
 }
 
 export interface TtsPlaybackDeps {
-  speak(text: string, signal: AbortSignal, mode: ReadAloudMode, target?: SpeechTargetRef): Promise<TtsSpeechResponse>;
+  speak(
+    text: string,
+    signal: AbortSignal,
+    mode: ReadAloudMode,
+    target?: SpeechTargetRef,
+    tone?: ReadAloudTone
+  ): Promise<TtsSpeechResponse>;
   /**
    * Directed read-aloud: consume the NDJSON event stream. Optional so a build without the endpoint
    * — or a test that only exercises one clip — still satisfies the interface.
@@ -102,7 +108,7 @@ export interface TtsPlaybackDeps {
 }
 
 const browserDeps: TtsPlaybackDeps = {
-  speak: (text, signal, mode, target) => ttsService.speak(text, signal, mode, target),
+  speak: (text, signal, mode, target, tone) => ttsService.speak(text, signal, mode, target, tone),
   render: (request, signal, onEvent) => ttsService.render(request, signal, onEvent),
   // One element for every clip: an iOS unlock is per element and dies with it.
   createAudio: () => ttsAudioElement(),
@@ -176,12 +182,13 @@ export class TtsPlaybackController {
     key: string,
     text: string,
     mode: ReadAloudMode = 'direct',
-    target?: SpeechTargetRef
+    target?: SpeechTargetRef,
+    tone: ReadAloudTone = 'default'
   ): Promise<void> {
     // The directed path is a different transport (an event stream, not one audio body), so it owns
     // its own loop; everything that is shared — the epoch, the abort slot, the element — is.
     if (mode === 'director') {
-      await this.speakScript(key, { text, target });
+      await this.speakScript(key, { text, target, tone });
       return;
     }
     const epoch = ++this.epoch;
@@ -198,7 +205,7 @@ export class TtsPlaybackController {
     this.emit({ state: 'loading', activeKey: key, error: null });
 
     try {
-      const speech = await this.deps.speak(text, controller.signal, mode, target);
+      const speech = await this.deps.speak(text, controller.signal, mode, target, tone);
       if (epoch !== this.epoch) return;
       const notice = refineFallbackNotice(speech.fallbackReason);
       if (notice) this.emit({ state: 'loading', activeKey: key, error: null, notice });
@@ -771,12 +778,33 @@ export class TtsPlaybackController {
   }
 }
 
+/**
+ * Turn the server's reason code into the sentence shown under the message.
+ *
+ * The code is `reason` or `reason:seconds` (`refine-timeout:4`). A timeout is the one case where the
+ * budget *is* the diagnosis — "given 4 s for this reply" — so it is quoted; the others name the
+ * thing to fix. An unknown code still gets the generic notice: a newer server must never make the
+ * fallback silent, because the listener then hears a plain read believing it was refined.
+ */
 function refineFallbackNotice(reason: TtsSpeechResponse['fallbackReason']): string | undefined {
-  if (reason === 'length-limit') {
-    return i18n('Refine skipped: text exceeds the 1,200-character limit; reading the original');
+  if (!reason) return undefined;
+  const [code, seconds] = reason.split(':');
+  switch (code) {
+    case 'length-limit':
+      return i18n('Refine skipped: text exceeds the 1,200-character limit; reading the original');
+    case 'refine-timeout':
+      return seconds
+        ? i18n('Refine timed out after {seconds}s; reading the original').replace('{seconds}', seconds)
+        : i18n('Refine timed out; reading the original');
+    case 'refine-not-configured':
+      return i18n('Refine skipped: no Speech Direction Model is configured; reading the original');
+    case 'refine-no-voice':
+      return i18n('Refine skipped: the TTS model exposes no usable voice; reading the original');
+    case 'refine-rejected':
+      return i18n('Refine rejected by the fidelity checks; reading the original');
+    default:
+      return i18n('Refine unavailable; reading the original');
   }
-  if (reason === 'unavailable') return i18n('Refine unavailable; reading the original');
-  return undefined;
 }
 
 function abortError(): DOMException {

@@ -119,12 +119,15 @@ class SpeechPlanAssembler(
      */
     private fun repair(segment: SpeechSegment, canonicalSource: String): SpeechSegment {
         val defaultVoice = capabilities.defaultVoice!!
-        var voice = segment.voice
-        if (capabilities.voice(voice) == null) {
+        // A voice the director named by its display label still resolves; the segment then carries the
+        // catalog's own id, because everything downstream keys off that exact string.
+        val requested = capabilities.voice(segment.voice)
+        var voice = requested?.voice ?: segment.voice
+        if (requested == null) {
             collected += SpeechWarning(
                 SpeechScriptValidator.CODE_VOICE,
                 segment.id,
-                "voice '$voice' is not offered by this model; used $defaultVoice"
+                "voice '${segment.voice}' is not offered by this model; used $defaultVoice"
             )
             voice = defaultVoice
         }

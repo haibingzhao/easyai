@@ -236,6 +236,55 @@ describe('TtsPlaybackController', () => {
     });
   });
 
+  it('quotes the budget when the refine timed out, so the reason is actionable', async () => {
+    const { controller, requests } = setup();
+    const done = controller.speak('m1', 'hello', 'refine');
+
+    requests[0].resolveResponse({
+      mimeType: 'audio/mpeg',
+      body: null,
+      fallbackReason: 'refine-timeout:5',
+      blob: () => Promise.resolve(new Blob(['mp3'])),
+    });
+    await done;
+
+    expect(controller.getSnapshot().notice).toBe('Refine timed out after 5s; reading the original');
+  });
+
+  it('names the misconfiguration instead of the generic fallback', async () => {
+    const { controller, requests } = setup();
+    const done = controller.speak('m1', 'hello', 'refine');
+
+    requests[0].resolveResponse({
+      mimeType: 'audio/mpeg',
+      body: null,
+      fallbackReason: 'refine-no-voice',
+      blob: () => Promise.resolve(new Blob(['mp3'])),
+    });
+    await done;
+
+    expect(controller.getSnapshot().notice).toBe(
+      'Refine skipped: the TTS model exposes no usable voice; reading the original'
+    );
+  });
+
+  it('never goes silent on a reason a newer server invented', async () => {
+    // An unknown code must still produce a notice: otherwise the listener hears a plain read while
+    // believing the reply was refined, which is the one outcome this notice exists to prevent.
+    const { controller, requests } = setup();
+    const done = controller.speak('m1', 'hello', 'refine');
+
+    requests[0].resolveResponse({
+      mimeType: 'audio/mpeg',
+      body: null,
+      fallbackReason: 'refine-something-new',
+      blob: () => Promise.resolve(new Blob(['mp3'])),
+    });
+    await done;
+
+    expect(controller.getSnapshot().notice).toBe('Refine unavailable; reading the original');
+  });
+
   it('forwards the message target for a refined read', async () => {
     const { controller, requests } = setup();
     const target: SpeechTargetRef = { type: 'session_message', id: 'msg-1', sessionId: 'sess-1' };
@@ -607,7 +656,9 @@ describe('TtsPlaybackController directed playback', () => {
     const { controller, audios, pauses, requests, push } = setupDirected();
     const done = controller.speak('m1', 'the reply', 'director');
 
-    expect(requests[0]).toEqual({ text: 'the reply' });
+    // The planner is asked for the tone the listener picked, and defaults are stated explicitly so
+    // the server never has to infer "no preference" from an absent field.
+    expect(requests[0]).toEqual({ text: 'the reply', tone: 'default' });
     expect(controller.getSnapshot()).toMatchObject({ state: 'loading', activeKey: 'm1' });
 
     // The server publishes by `index` (SpeechSegmentScheduler), so the client plays what arrives in
@@ -632,6 +683,17 @@ describe('TtsPlaybackController directed playback', () => {
     audios[1].end();
     await done;
     expect(controller.getSnapshot()).toEqual({ state: 'idle', activeKey: null, error: null });
+  });
+
+  it('carries the chosen tone into the plan request', async () => {
+    const { controller, requests } = setupDirected();
+    void controller.speakScript('m1', { text: 'the reply', tone: 'blunt' });
+
+    // The tone shapes the wording, so it has to reach the request that plans — not only the mode.
+    expect(requests[0]).toMatchObject({ text: 'the reply', tone: 'blunt' });
+
+    controller.stop();
+    await flush();
   });
 
   it('does not let a superseded plan tear down the one that replaced it', async () => {

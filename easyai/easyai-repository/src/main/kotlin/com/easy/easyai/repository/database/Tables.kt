@@ -1094,6 +1094,8 @@ object Tables {
 
         val mode = varchar("mode", 16)
         val status = varchar("status", 16)
+        // Null for pre-generation-state rows: unknown completeness must never qualify for reuse.
+        val generationStatus = varchar("generation_status", 16).nullable()
         val revision = integer("revision")
         val segmentCount = integer("segment_count")
 
@@ -1122,6 +1124,9 @@ object Tables {
         init {
             index(false, userId, updatedAt)
             index(false, targetType, targetId)
+            // The AUTO row's identity: mode belongs in it, or a directed plan replaces the refined
+            // read of the same reply (see V51).
+            index(false, userId, targetType, targetId, mode)
             index(false, userId, sessionId)
             index(false, sourceDigest)
         }

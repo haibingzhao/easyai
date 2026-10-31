@@ -26,7 +26,22 @@ data class ResolvedSpeechCapabilities(
      */
     val spokenTags: List<String> = (emotionTags + paralinguisticTags).distinct()
 
-    fun voice(voiceId: String): VoiceSpec? = voices.firstOrNull { it.voice == voiceId }
+    /**
+     * Resolve a plan-supplied voice to its catalog entry.
+     *
+     * The director is shown one line per voice — `id｜名称｜特质…｜场景…` — and echoes that first cell
+     * back as the `voice` value often enough that a strict comparison would report a correct choice as
+     * a fallback and silently swap in the default timbre. Everything from the first separator on is
+     * display text, not identity, so it is cut away before matching; a human name on its own is
+     * accepted only when it names exactly one voice, because an ambiguous name is not a choice.
+     */
+    fun voice(voiceId: String): VoiceSpec? {
+        val id = canonicalVoiceId(voiceId)
+        if (id.isEmpty()) return null
+        return voices.firstOrNull { it.voice == id }
+            ?: voices.firstOrNull { it.voice.equals(id, ignoreCase = true) }
+            ?: voices.filter { it.name.trim().equals(id, ignoreCase = true) }.singleOrNull()
+    }
 
     /** True for a tag a rewrite may write inline, with or without its brackets. */
     fun isSpokenTag(tag: String): Boolean = normalizeTag(tag) in spokenTags
@@ -45,6 +60,18 @@ data class ResolvedSpeechCapabilities(
         @JvmStatic
         fun normalizeTag(raw: String): String =
             raw.trim().removePrefix("[").removeSuffix("]").trim()
+
+        /**
+         * The bare voice id inside [raw].
+         *
+         * A plan may carry `longanhuan_v3.1｜龙安欢_v3.1` where only `longanhuan_v3.1` is an id: the
+         * name, the traits and the scenarios after it are labels written for a human reader. Both
+         * separators are cut here because the prompt uses the full-width one while a model copying by
+         * hand sometimes types the ASCII form.
+         */
+        @JvmStatic
+        fun canonicalVoiceId(raw: String): String =
+            raw.trim().substringBefore('｜').substringBefore('|').trim()
     }
 }
 

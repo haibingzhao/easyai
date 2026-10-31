@@ -9,6 +9,7 @@ import com.easy.easyai.speech.SpeechOverrideParams
 import com.easy.easyai.speech.SpeechProviderParams
 import com.easy.easyai.speech.SpeechRowDefaults
 import com.easy.easyai.speech.SpeechScript
+import com.easy.easyai.speech.SpeechScriptGenerationStatus
 import com.easy.easyai.speech.SpeechScriptQuery
 import com.easy.easyai.speech.SpeechScriptRecord
 import com.easy.easyai.speech.SpeechScriptSort
@@ -49,9 +50,10 @@ import tools.jackson.databind.ObjectMapper
  * Ownership is strict per user: every read and write carries `user_id`, so a correctly guessed id
  * belonging to someone else reads as absent rather than as a permission error.
  *
- * The AUTO contract (one machine-saved row per target) is enforced here rather than by a unique
- * index, because H2 has no filtered index. Two plans for the same target racing each other can
- * therefore both insert; [findReusable] and [list] take the newest, which is the intended outcome.
+ * The AUTO contract (one machine-saved row per target **and mode**) is enforced here rather than by
+ * a unique index, because H2 has no filtered index. Two plans for the same target racing each other
+ * can therefore both insert; [findReusable] and [list] take the newest, which is the intended
+ * outcome.
  *
  * `segments_json` is read only by [get] and [findReusable]. [list] projects summary columns
  * explicitly, so a page of twenty 20 000-character plans does not travel through the wire.
@@ -65,7 +67,7 @@ class R2dbcSpeechScriptStore(
 
     override suspend fun saveAuto(record: SpeechScriptRecord): SpeechScriptRecord = asyncTransaction(db) {
         val table = SpeechScriptTable
-        val existingId = autoRowId(record.owner, record.targetType, record.targetId)
+        val existingId = autoRowId(record.owner, record.targetType, record.targetId, record.mode)
 
         val now = System.currentTimeMillis()
         if (existingId == null) {
@@ -81,6 +83,22 @@ class R2dbcSpeechScriptStore(
         }
     }
 
+    override suspend fun saveAbandoned(record: SpeechScriptRecord): Boolean = asyncTransaction(db) {
+        val table = SpeechScriptTable
+        val now = System.currentTimeMillis()
+        // Compared-and-set on the state this render wrote itself: a row completed or pinned since
+        // must win over the partial snapshot of a playback that was stopped.
+        table.update({
+            (table.id eq record.id) and
+                (table.userId eq record.owner) and
+                (table.status eq SpeechScriptStatus.AUTO.name) and
+                (table.generationStatus eq SpeechScriptGenerationStatus.IN_PROGRESS.name)
+        }) {
+            writeBody(record, it, revision = record.revision, now = now)
+            it[title] = record.title.take(MAX_TITLE_CHARS)
+        } > 0
+    }
+
     override suspend fun savePinned(record: SpeechScriptRecord): SpeechScriptRecord = asyncTransaction(db) {
         val now = System.currentTimeMillis()
         insertRow(record, now)
@@ -90,13 +108,15 @@ class R2dbcSpeechScriptStore(
     override suspend fun findAutoId(
         owner: String,
         targetType: String,
-        targetId: String?
-    ): String? = asyncTransaction(db) { autoRowId(owner, targetType, targetId) }
+        targetId: String?,
+        mode: String
+    ): String? = asyncTransaction(db) { autoRowId(owner, targetType, targetId, mode) }
 
     override suspend fun findReusable(
         owner: String,
         targetType: String,
         targetId: String?,
+        mode: String,
         digest: String
     ): SpeechScriptRecord? = asyncTransaction(db) {
         val table = SpeechScriptTable
@@ -105,8 +125,10 @@ class R2dbcSpeechScriptStore(
                 (table.userId eq owner) and
                     (table.targetType eq targetType) and
                     targetMatches(targetId) and
+                    (table.mode eq mode) and
                     (table.sourceDigest eq digest) and
-                    (table.status neq SpeechScriptStatus.ARCHIVED.name)
+                    (table.status neq SpeechScriptStatus.ARCHIVED.name) and
+                    (table.generationStatus eq SpeechScriptGenerationStatus.COMPLETED.name)
             }
             .orderBy(table.updatedAt to SortOrder.DESC)
             .limit(1)
@@ -300,6 +322,7 @@ class R2dbcSpeechScriptStore(
         statement[table.spokenChars] = record.spokenChars
         statement[table.mode] = record.mode
         statement[table.status] = record.status.name
+        statement[table.generationStatus] = record.generationStatus?.name
         statement[table.revision] = revision
         statement[table.segmentCount] = record.segmentCount
         statement[table.style] = record.script.style.name
@@ -312,14 +335,25 @@ class R2dbcSpeechScriptStore(
         statement[table.updatedAt] = now
     }
 
-    /** The id of the AUTO row this owner already has for the target, if any. */
-    private suspend fun autoRowId(owner: String, targetType: String, targetId: String?): String? {
+    /**
+     * The id of the AUTO row this owner already has for the target **and mode**, if any.
+     *
+     * The mode predicate is what keeps a refined read and a directed plan of the same reply in two
+     * rows: without it the second save would overwrite the first one's body and keep its id.
+     */
+    private suspend fun autoRowId(
+        owner: String,
+        targetType: String,
+        targetId: String?,
+        mode: String
+    ): String? {
         val table = SpeechScriptTable
         return table.select(table.id)
             .where {
                 (table.userId eq owner) and
                     (table.targetType eq targetType) and
                     targetMatches(targetId) and
+                    (table.mode eq mode) and
                     (table.status eq SpeechScriptStatus.AUTO.name)
             }
             .orderBy(table.updatedAt to SortOrder.DESC)
@@ -393,6 +427,7 @@ class R2dbcSpeechScriptStore(
             script = script,
             ttsParams = readJson<SpeechTtsParams>(id, "tts parameters", this[table.ttsParams]) ?: EMPTY_PARAMS,
             directionParams = readJson<SpeechDirectionParams>(id, "direction parameters", this[table.directionParams]),
+            generationStatus = SpeechScriptGenerationStatus.fromKey(this[table.generationStatus]),
             isFavorite = this[table.isFavorite],
             playCount = this[table.playCount],
             lastPlayedAt = this[table.lastPlayedAt],

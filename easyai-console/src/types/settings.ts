@@ -8,6 +8,24 @@
  */
 export type ReadAloudMode = 'direct' | 'refine' | 'director';
 
+/**
+ * How a rewritten read-aloud should *sound*.
+ *
+ * Separate from [ReadAloudMode] on purpose: a mode decides whether the text is rewritten at all and
+ * into how many segments, while a tone decides how it reads once there is a rewrite. `direct` never
+ * reaches the planner, so the tone has no effect there. Keys mirror the backend `SpeechTone` enum —
+ * the instruction text itself lives server-side, so the prompt has one owner.
+ */
+export type ReadAloudTone =
+  | 'default'
+  | 'professional'
+  | 'friendly'
+  | 'blunt'
+  | 'imaginative'
+  | 'efficient'
+  | 'sarcastic'
+  | 'socratic';
+
 export interface Settings {
   language: string;
   theme: 'light' | 'dark' | 'system';

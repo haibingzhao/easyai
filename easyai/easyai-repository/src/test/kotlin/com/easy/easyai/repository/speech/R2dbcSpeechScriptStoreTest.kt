@@ -4,6 +4,8 @@ import com.easy.easyai.repository.database.DatabaseMigration
 import com.easy.easyai.speech.SpeechCostParams
 import com.easy.easyai.speech.SpeechProviderParams
 import com.easy.easyai.speech.SpeechScript
+import com.easy.easyai.speech.SpeechScriptGenerationStatus
+import com.easy.easyai.speech.SpeechScriptQuery
 import com.easy.easyai.speech.SpeechScriptRecord
 import com.easy.easyai.speech.SpeechScriptStatus
 import com.easy.easyai.speech.SpeechSegment
@@ -19,6 +21,8 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -42,7 +46,9 @@ class R2dbcSpeechScriptStoreTest {
         id: String = "script-1",
         owner: String = "alice",
         targetId: String = "msg-1",
-        text: String = "今天杭州有雨，出门记得带伞。"
+        text: String = "今天杭州有雨，出门记得带伞。",
+        mode: String = "director",
+        generationStatus: SpeechScriptGenerationStatus? = SpeechScriptGenerationStatus.COMPLETED
     ) = SpeechScriptRecord(
         id = id,
         owner = owner,
@@ -53,7 +59,7 @@ class R2dbcSpeechScriptStoreTest {
         title = "A script",
         sourceText = text,
         sourceDigest = SpokenTextNormalizer.sourceDigest(text),
-        mode = "director",
+        mode = mode,
         status = SpeechScriptStatus.AUTO,
         revision = 1,
         script = SpeechScript(
@@ -73,7 +79,7 @@ class R2dbcSpeechScriptStoreTest {
         ),
         ttsParams = SpeechTtsParams(
             capturedAt = 0,
-            mode = "director",
+            mode = mode,
             provider = SpeechProviderParams(
                 modelConfigId = "cfg",
                 modelId = "qwen-audio-3.1-tts-flash",
@@ -87,7 +93,8 @@ class R2dbcSpeechScriptStoreTest {
             ),
             cost = SpeechCostParams(maxChars = 20_000, characters = text.length)
         ),
-        directionParams = null
+        directionParams = null,
+        generationStatus = generationStatus
     )
 
     @Test
@@ -117,13 +124,127 @@ class R2dbcSpeechScriptStoreTest {
     }
 
     @Test
+    fun `only a completed script passes the reuse query`() = runTest {
+        val store = R2dbcSpeechScriptStore(db)
+        val statuses = listOf<SpeechScriptGenerationStatus?>(
+            null,
+            SpeechScriptGenerationStatus.IN_PROGRESS,
+            SpeechScriptGenerationStatus.CANCELLED,
+            SpeechScriptGenerationStatus.FAILED,
+            SpeechScriptGenerationStatus.COMPLETED
+        )
+
+        statuses.forEachIndexed { index, status ->
+            val targetId = "msg-generation-$index"
+            val saved = store.saveAuto(
+                record(id = "script-generation-$index", targetId = targetId, generationStatus = status)
+            )
+            val digest = SpokenTextNormalizer.sourceDigest(saved.sourceText)
+
+            val reusable = store.findReusable("alice", "session_message", targetId, "director", digest)
+
+            if (status == SpeechScriptGenerationStatus.COMPLETED) {
+                assertNotNull(reusable)
+            } else {
+                assertNull(reusable, "generation status $status must not be reusable")
+            }
+            assertEquals(status, store.get("alice", saved.id)?.generationStatus)
+        }
+    }
+
+    @Test
+    fun `abandoning an in-progress plan records the terminal state`() = runTest {
+        val store = R2dbcSpeechScriptStore(db)
+        val saved = store.saveAuto(record(generationStatus = SpeechScriptGenerationStatus.IN_PROGRESS))
+        val digest = SpokenTextNormalizer.sourceDigest(saved.sourceText)
+
+        assertTrue(store.saveAbandoned(saved.copy(generationStatus = SpeechScriptGenerationStatus.CANCELLED)))
+
+        val row = assertNotNull(store.get("alice", saved.id))
+        assertEquals(SpeechScriptGenerationStatus.CANCELLED, row.generationStatus)
+        assertEquals(saved.script.segments, row.script.segments)
+        assertNull(store.findReusable("alice", "session_message", "msg-1", "director", digest))
+    }
+
+    @Test
+    fun `abandoning never replaces a row completed meanwhile`() = runTest {
+        val store = R2dbcSpeechScriptStore(db)
+        val saved = store.saveAuto(record(generationStatus = SpeechScriptGenerationStatus.IN_PROGRESS))
+        store.saveAuto(saved.copy(generationStatus = SpeechScriptGenerationStatus.COMPLETED))
+
+        val abandoned = saved.copy(
+            generationStatus = SpeechScriptGenerationStatus.FAILED,
+            script = saved.script.copy(segments = emptyList())
+        )
+
+        assertFalse(store.saveAbandoned(abandoned))
+
+        val row = assertNotNull(store.get("alice", saved.id))
+        assertEquals(SpeechScriptGenerationStatus.COMPLETED, row.generationStatus)
+        assertTrue(row.script.segments.isNotEmpty())
+        assertNotNull(
+            store.findReusable(
+                "alice",
+                "session_message",
+                "msg-1",
+                "director",
+                SpokenTextNormalizer.sourceDigest(saved.sourceText)
+            )
+        )
+    }
+
+    @Test
     fun `findAutoId resolves the row saveAuto would keep`() = runTest {
         val store = R2dbcSpeechScriptStore(db)
 
-        assertNull(store.findAutoId("alice", "session_message", "msg-find"))
+        assertNull(store.findAutoId("alice", "session_message", "msg-find", "director"))
         val saved = store.saveAuto(record(id = "script-find", targetId = "msg-find"))
 
-        assertEquals(saved.id, store.findAutoId("alice", "session_message", "msg-find"))
-        assertNull(store.findAutoId("bob", "session_message", "msg-find"))
+        assertEquals(saved.id, store.findAutoId("alice", "session_message", "msg-find", "director"))
+        assertNull(store.findAutoId("bob", "session_message", "msg-find", "director"))
+    }
+
+    @Test
+    fun `a refined read and a directed plan of one reply are two rows`() = runTest {
+        val store = R2dbcSpeechScriptStore(db)
+        val targetId = "msg-mode-split"
+
+        val refined = store.saveAuto(record(id = "script-refined", targetId = targetId, mode = "refine"))
+        val directed = store.saveAuto(record(id = "script-directed", targetId = targetId, mode = "director"))
+
+        assertNotEquals(refined.id, directed.id)
+        assertEquals("refine", store.get("alice", "script-refined")?.mode)
+        assertEquals("director", store.get("alice", "script-directed")?.mode)
+        assertEquals(2, store.list("alice", SpeechScriptQuery(targetType = "session_message", targetId = targetId)).size)
+    }
+
+    @Test
+    fun `reuse never crosses modes for the same reply`() = runTest {
+        val store = R2dbcSpeechScriptStore(db)
+        val targetId = "msg-mode-reuse"
+        val saved = store.saveAuto(record(id = "script-only-refined", targetId = targetId, mode = "refine"))
+        val digest = SpokenTextNormalizer.sourceDigest(saved.sourceText)
+
+        assertNotNull(store.findReusable("alice", "session_message", targetId, "refine", digest))
+        assertNull(
+            store.findReusable("alice", "session_message", targetId, "director", digest),
+            "a refined single segment must not be spoken as a directed plan"
+        )
+    }
+
+    @Test
+    fun `each mode keeps its own auto row when it is planned again`() = runTest {
+        val store = R2dbcSpeechScriptStore(db)
+        val targetId = "msg-mode-keep"
+
+        val refined = store.saveAuto(record(id = "script-refine-id", targetId = targetId, mode = "refine"))
+        val directed = store.saveAuto(record(id = "script-director-id", targetId = targetId, mode = "director"))
+        val refinedAgain = store.saveAuto(
+            record(id = "script-refine-id", targetId = targetId, mode = "refine", text = "换了一版回复。")
+        )
+
+        assertEquals(refined.id, refinedAgain.id)
+        assertEquals("换了一版回复。", store.get("alice", refined.id)?.sourceText)
+        assertEquals("今天杭州有雨，出门记得带伞。", store.get("alice", directed.id)?.sourceText)
     }
 }

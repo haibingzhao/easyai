@@ -1,5 +1,5 @@
 import { authFetch, fetchJson, JSON_HEADERS, readErrorBody } from '@/services/api-client';
-import type { ReadAloudMode } from '@/types/settings';
+import type { ReadAloudMode, ReadAloudTone } from '@/types/settings';
 
 const API_BASE = '/api/tts';
 
@@ -131,14 +131,25 @@ export interface RenderSpeechRequest {
    * Ignored with `scriptId`: a stored plan is always validated whole.
    */
   incremental?: boolean;
+  /**
+   * How a fresh plan should sound. Ignored with `scriptId` — a stored plan keeps the wording it was
+   * made with — and ignored by `direct`, which never asks the planner.
+   */
+  tone?: ReadAloudTone;
 }
 
 /** Authenticated audio response; the body can be consumed incrementally or buffered as a fallback. */
 export interface TtsSpeechResponse {
   mimeType: string;
   body: ReadableStream<Uint8Array> | null;
-  /** Why the server used the original text despite `mode: 'refine'`; absent on a real refine/direct. */
-  fallbackReason?: 'length-limit' | 'unavailable';
+  /**
+   * Why the server used the original text despite `mode: 'refine'`; absent on a real refine/direct.
+   *
+   * A short reason code, or `code:seconds` when a budget explains it (`refine-timeout:4`). Passed
+   * through verbatim rather than whitelisted here: a new server-side reason then still shows its
+   * generic notice instead of being silently dropped, and the wording stays in the view layer.
+   */
+  fallbackReason?: string;
   blob(): Promise<Blob>;
 }
 
@@ -154,12 +165,13 @@ export const ttsService = {
     text: string,
     signal?: AbortSignal,
     mode: ReadAloudMode = 'direct',
-    target?: SpeechTargetRef
+    target?: SpeechTargetRef,
+    tone: ReadAloudTone = 'default'
   ): Promise<TtsSpeechResponse> {
     const response = await authFetch(`${API_BASE}/speak`, {
       method: 'POST',
       headers: JSON_HEADERS,
-      body: JSON.stringify({ text, mode, ...targetFields(target) }),
+      body: JSON.stringify({ text, mode, tone, ...targetFields(target) }),
       signal,
     });
     if (!response.ok) {
@@ -176,7 +188,7 @@ export const ttsService = {
     return {
       mimeType: contentType.split(';', 1)[0] || 'audio/mpeg',
       body: response.body,
-      fallbackReason: fallback === 'length-limit' || fallback === 'unavailable' ? fallback : undefined,
+      fallbackReason: fallback || undefined,
       blob: () => response.blob(),
     };
   },
@@ -207,6 +219,7 @@ export const ttsService = {
         scriptId: request.scriptId ?? null,
         segments: request.segments ?? null,
         incremental: request.incremental ?? true,
+        tone: request.tone ?? 'default',
         ...targetFields(request.target),
       }),
       signal,

@@ -13,6 +13,7 @@ import com.easy.easyai.speech.SpeechOverrides
 import com.easy.easyai.speech.SpeechOverrideParams
 import com.easy.easyai.speech.SpeechRenderEvent
 import com.easy.easyai.speech.SpeechScript
+import com.easy.easyai.speech.SpeechScriptGenerationStatus
 import com.easy.easyai.speech.SpeechScriptRecord
 import com.easy.easyai.speech.SpeechScriptStatus
 import com.easy.easyai.speech.SpeechScriptTarget
@@ -21,6 +22,7 @@ import com.easy.easyai.speech.SpeechSegment
 import com.easy.easyai.speech.SpeechSegmentScheduler
 import com.easy.easyai.speech.SpeechStyle
 import com.easy.easyai.speech.SpeechSynthesizer
+import com.easy.easyai.speech.SpeechTone
 import com.easy.easyai.speech.SpeechWarning
 import com.easy.easyai.speech.SpokenTextNormalizer
 import kotlinx.coroutines.CancellationException
@@ -150,9 +152,10 @@ class TtsService(
         owners: Collection<String>,
         text: String,
         mode: String = SpeechMode.DIRECT.key,
-        target: SpeechTarget = SpeechTarget.manual()
+        target: SpeechTarget = SpeechTarget.manual(),
+        tone: SpeechTone = SpeechTone.DEFAULT
     ): SpeechAudio {
-        val request = prepare(owners, text, mode, target)
+        val request = prepare(owners, text, mode, target, tone)
         try {
             val audio = try {
                 withTimeout(request.settings.timeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS).seconds) {
@@ -203,8 +206,9 @@ class TtsService(
         owners: Collection<String>,
         text: String,
         mode: String = SpeechMode.DIRECT.key,
-        target: SpeechTarget = SpeechTarget.manual()
-    ): PreparedSpeech = prepare(owners, text, mode, target)
+        target: SpeechTarget = SpeechTarget.manual(),
+        tone: SpeechTone = SpeechTone.DEFAULT
+    ): PreparedSpeech = prepare(owners, text, mode, target, tone)
 
     /**
      * Low-latency read-aloud: headers are returned before synthesis finishes and every provider
@@ -293,7 +297,8 @@ class TtsService(
     suspend fun planScript(
         owners: Collection<String>,
         text: String,
-        target: SpeechTarget = SpeechTarget.manual()
+        target: SpeechTarget = SpeechTarget.manual(),
+        tone: SpeechTone = SpeechTone.DEFAULT
     ): PlannedScript {
         // No single-flight slot: this call only plans, and a plan is not something a second one can
         // double-bill. Holding it here is what made opening the script panel block the speaker
@@ -301,7 +306,7 @@ class TtsService(
         val session = claim(owners, text, holdSlot = false)
         try {
             val capture = captureOf(session, target, SpeechMode.DIRECTOR)
-            reusable(session, capture)?.let { stored ->
+            reusable(session, capture, tone)?.let { stored ->
                 scripts.put(session.owner, stored, session.speech)
                 logger.info(
                     "Reused stored read-aloud script '{}' ({} chars, {} segment(s))",
@@ -322,6 +327,7 @@ class TtsService(
                     ttsConfig = session.config,
                     maxChars = MAX_CHARS,
                     incremental = false,
+                    tone = tone,
                     onSegment = { collected += it }
                 )
             } catch (e: CancellationException) {
@@ -405,7 +411,8 @@ class TtsService(
         owners: Collection<String>,
         text: String,
         scriptId: String?,
-        target: SpeechTarget = SpeechTarget.manual()
+        target: SpeechTarget = SpeechTarget.manual(),
+        tone: SpeechTone = SpeechTone.DEFAULT
     ): RenderSession {
         val session = claim(owners, text, requireText = scriptId.isNullOrBlank())
         try {
@@ -413,16 +420,40 @@ class TtsService(
                 // The speaker button does not open the preview first, so this is its only chance to
                 // reuse the script already filed for the reply. Without it every click directs again.
                 val capture = captureOf(session, target, SpeechMode.DIRECTOR)
-                val reused = reusable(session, capture)
+                val reused = reusable(session, capture, tone)
                 if (reused != null) {
                     scripts.put(session.owner, reused, session.speech)
                     val stored = scripts.get(session.owner, reused.scriptId)
                     if (stored != null) {
                         logger.info("Reused stored read-aloud script '{}' for playback", reused.scriptId)
-                        return RenderSession(session, stored, target)
+                        return RenderSession(session, stored, target, tone)
                     }
                 }
-                return RenderSession(session, null, target)
+                return RenderSession(session, null, target, tone)
+            }
+            // Check the durable state before the hot cache: a regeneration may have replaced a
+            // previously complete row with CANCELLED/FAILED while its old plan is still in memory.
+            // Best-effort like every other archive read: a database hiccup must not turn a plan that
+            // is still hot into a 500, because the audio never needed the database.
+            val record = try {
+                archive?.load(session.owner, scriptId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger.warn("Could not read the archived state of read-aloud script '{}': {}", scriptId, e.message)
+                null
+            }
+            val unfinished = record?.takeIf {
+                it.status != SpeechScriptStatus.ARCHIVED &&
+                    it.generationStatus != SpeechScriptGenerationStatus.COMPLETED
+            }
+            if (unfinished != null) {
+                return RenderSession(
+                    session.copy(speech = unfinished.sourceText),
+                    null,
+                    SpeechTarget(unfinished.targetType, unfinished.targetId, unfinished.sessionId),
+                    tone
+                )
             }
             val stored = scripts.get(session.owner, scriptId) ?: restoreFromArchive(session, scriptId)
                 ?: throw ResponseStatusException(
@@ -433,7 +464,7 @@ class TtsService(
             // after its first event.
             capabilitiesFor(session.config)
                 ?: throw ResponseStatusException(HttpStatus.CONFLICT, MESSAGE_NO_VOICE)
-            return RenderSession(session, stored, target)
+            return RenderSession(session, stored, target, tone)
         } catch (e: Exception) {
             // The single-flight slot was claimed for work that will never run.
             slots.release(session.lease)
@@ -451,7 +482,7 @@ class TtsService(
             try {
                 val stored = handle.stored
                 if (stored == null) {
-                    renderFreshPlan(handle.session, handle.target, incremental) { send(it) }
+                    renderFreshPlan(handle.session, handle.target, incremental, handle.tone) { send(it) }
                 } else {
                     renderStoredPlan(handle.session, stored, editedSegments) { send(it) }
                 }
@@ -475,6 +506,7 @@ class TtsService(
         session: Session,
         target: SpeechTarget,
         incremental: Boolean,
+        tone: SpeechTone,
         emit: suspend (SpeechRenderEvent) -> Unit
     ) {
         val director = speechDirector
@@ -486,6 +518,10 @@ class TtsService(
         var planned = false
         var played = 0
         var summary: SpeechPlanner.PlanSummary? = null
+        // Planning, not playback, decides whether the archived script is complete. Once the director
+        // has returned, stopping a clip must not turn a valid script into a cancelled one.
+        var planningComplete = false
+        var completedSegments: List<SpeechSegment>? = null
 
         try {
             scheduler.stream(
@@ -529,6 +565,7 @@ class TtsService(
                             maxChars = MAX_CHARS,
                             incremental = true,
                             firstSegmentBudgetMs = SpeechPlanner.FIRST_SEGMENT_BUDGET_MS,
+                            tone = tone,
                             onSegment = { segment ->
                                 delivered += segment
                                 if (!planned) {
@@ -536,12 +573,17 @@ class TtsService(
                                     // File the first usable plan before announcing it. The library is
                                     // then populated even if the client goes away during playback;
                                     // the completed/partial plan below replaces this initial row.
-                                    persistPlan(session, capture, scriptId, summary, delivered, incremental)
+                                    persistPlan(
+                                        session, capture, scriptId, summary, delivered, incremental,
+                                        SpeechScriptGenerationStatus.IN_PROGRESS
+                                    )
                                     emit(SpeechRenderEvent.Meta(scriptId, 1, UNKNOWN_SEGMENT_COUNT, planned = true))
                                 }
                                 send(segment)
                             }
                         )
+                        planningComplete = true
+                        completedSegments = delivered.toList()
                     } else {
                         // Whole-plan planning: nothing is synthesized until every gate has passed.
                         val collected = mutableListOf<SpeechSegment>()
@@ -551,10 +593,16 @@ class TtsService(
                             ttsConfig = session.config,
                             maxChars = MAX_CHARS,
                             incremental = false,
+                            tone = tone,
                             onSegment = { collected += it }
                         )
+                        planningComplete = true
+                        completedSegments = collected.toList()
                         planned = true
-                        persistPlan(session, capture, scriptId, summary, collected, incremental)
+                        persistPlan(
+                            session, capture, scriptId, summary, collected, incremental,
+                            SpeechScriptGenerationStatus.COMPLETED
+                        )
                         emit(
                             SpeechRenderEvent.Meta(
                                 scriptId = scriptId,
@@ -573,7 +621,11 @@ class TtsService(
             )
             // The plan the listener actually heard, not just the initial plan: a segment that fell
             // back to its source is part of what "play it again" has to reproduce.
-            persistPlan(session, capture, scriptId, summary, delivered, incremental)
+            planningComplete = true
+            persistPlan(
+                session, capture, scriptId, summary, delivered, incremental,
+                SpeechScriptGenerationStatus.COMPLETED
+            )
             archive?.touchPlayed(session.owner, scriptId)
             emit(SpeechRenderEvent.Completed(played, summary?.warnings.orEmpty()))
             if (played > 0) {
@@ -587,14 +639,20 @@ class TtsService(
             }
         } catch (e: CancellationException) {
             // `saveAuto` is non-cancellable, so stopping/replacing a read cannot roll back this
-            // final snapshot. `delivered` may be fuller than the first plan announced above.
-            persistPlan(session, capture, scriptId, summary, delivered, incremental)
+            // final snapshot. A partial plan is explicitly marked CANCELLED and cannot be reused;
+            // cancellation after planning finished only stops playback and preserves COMPLETED.
+            persistPlan(
+                session, capture, scriptId, summary, completedSegments ?: delivered, incremental,
+                if (planningComplete) SpeechScriptGenerationStatus.COMPLETED else SpeechScriptGenerationStatus.CANCELLED
+            )
             throw e
         } catch (e: Exception) {
-            if (played > 0) {
-                // A provider failure after some clips must not erase the script that was heard.
-                persistPlan(session, capture, scriptId, summary, delivered, incremental)
-            }
+            // A planning failure must not leave the first incremental snapshot looking reusable.
+            // Once planning is complete, a synthesis failure is a playback failure, not a bad script.
+            persistPlan(
+                session, capture, scriptId, summary, completedSegments ?: delivered, incremental,
+                if (planningComplete) SpeechScriptGenerationStatus.COMPLETED else SpeechScriptGenerationStatus.FAILED
+            )
             // Not showing anything is worse than showing the text plainly: if no audio has left the
             // server yet, reading the original text is the fallback this feature promises, whether the
             // plan never arrived or arrived and failed to synthesize.
@@ -623,7 +681,8 @@ class TtsService(
         scriptId: String,
         summary: SpeechPlanner.PlanSummary?,
         segments: List<SpeechSegment>,
-        incremental: Boolean
+        incremental: Boolean,
+        generationStatus: SpeechScriptGenerationStatus
     ) {
         if (segments.isEmpty()) return
         val rendered = SpeechScript(
@@ -634,8 +693,28 @@ class TtsService(
             segments = segments.toList(),
             warnings = summary?.warnings.orEmpty()
         )
-        store(session, rendered)
-        capture?.let { archive?.saveAuto(it, session.speech, rendered, incremental = incremental) }
+        // Partial plans stay inspectable in the archive, but never enter the hot render cache: an
+        // explicit render-by-id must not bypass the same completeness gate used for automatic reuse.
+        // The first IN_PROGRESS snapshot inserts or replaces the row; terminal snapshots only update
+        // a row that is still IN_PROGRESS, so they never replace a plan completed in another request.
+        if (generationStatus == SpeechScriptGenerationStatus.COMPLETED) store(session, rendered)
+        capture?.let {
+            if (generationStatus == SpeechScriptGenerationStatus.CANCELLED ||
+                generationStatus == SpeechScriptGenerationStatus.FAILED
+            ) {
+                archive?.saveAbandoned(
+                    it, session.speech, rendered,
+                    incremental = incremental,
+                    generationStatus = generationStatus
+                )
+            } else {
+                archive?.saveAuto(
+                    it, session.speech, rendered,
+                    incremental = incremental,
+                    generationStatus = generationStatus
+                )
+            }
+        }
     }
 
     private suspend fun renderStoredPlan(
@@ -949,9 +1028,36 @@ class TtsService(
      * text), and the validator checks that the voices and lengths still hold for the model that is
      * configured now. Either failure means "plan it again", never "speak it anyway".
      */
-    private suspend fun reusable(session: Session, capture: SpeechCapture?): SpeechScript? {
+    private suspend fun reusable(
+        session: Session,
+        capture: SpeechCapture?,
+        tone: SpeechTone = SpeechTone.DEFAULT
+    ): SpeechScript? {
         val capture = capture ?: return null
+        // A stored plan was written under whatever tone was in force when it was made, and the tone is
+        // not recorded with it. Reusing it for a different tone would silently ignore the setting the
+        // listener just changed — the worst possible outcome for a preference — so a non-default tone
+        // always plans again. Correctness over the saved call; recording the tone on the row would be
+        // the fix, and that is a schema change.
+        if (tone != SpeechTone.DEFAULT) {
+            logger.debug("Skipping stored plan reuse: tone '{}' is not the default", tone.key)
+            return null
+        }
         val stored = archive?.reusable(capture, session.speech) ?: return null
+        // A stored plan was written by the prompt in force at the time, and the prompt is part of what
+        // the listener hears (how many fillers it inserts, how it breathes, how it truncates). Reusing
+        // a plan from an older prompt makes a prompt change look like it did nothing — the exact confusion
+        // `promptVersion` was recorded to prevent, so it is actually read here.
+        val storedVersion = stored.directionParams?.promptVersion
+        if (storedVersion != null && storedVersion != SpeechDirector.PROMPT_VERSION) {
+            logger.info(
+                "Skipping stored read-aloud script '{}': it was planned with prompt v{}, current is v{}",
+                stored.id,
+                storedVersion,
+                SpeechDirector.PROMPT_VERSION
+            )
+            return null
+        }
         val capabilities = capabilitiesFor(session.config) ?: return null
         val validation = SpeechScriptValidator.validateFull(stored.script, stored.sourceText, capabilities, MAX_CHARS)
         val usable = validation.script
@@ -972,7 +1078,9 @@ class TtsService(
      */
     private suspend fun restoreFromArchive(session: Session, scriptId: String): SpeechPlanStore.Entry? {
         val record = archive?.load(session.owner, scriptId) ?: return null
-        if (record.status == SpeechScriptStatus.ARCHIVED) return null
+        if (record.status == SpeechScriptStatus.ARCHIVED ||
+            record.generationStatus != SpeechScriptGenerationStatus.COMPLETED
+        ) return null
         scripts.put(session.owner, record.script, record.sourceText)
         logger.info("Restored read-aloud script '{}' from the archive", scriptId)
         return scripts.get(session.owner, scriptId)
@@ -988,7 +1096,8 @@ class TtsService(
         owners: Collection<String>,
         text: String,
         mode: String,
-        target: SpeechTarget = SpeechTarget.manual()
+        target: SpeechTarget = SpeechTarget.manual(),
+        tone: SpeechTone = SpeechTone.DEFAULT
     ): PreparedSpeech {
         val speechMode = SpeechMode.fromKey(mode)
             ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown read-aloud mode: $mode")
@@ -1007,25 +1116,40 @@ class TtsService(
             }
             // A one-clip read can only reuse a one-segment script. A multi-segment director plan is
             // still reusable through /render, but cannot be squeezed into this audio response.
-            val reusedScript = reusable(session, capture)?.takeIf { it.segments.size == 1 }
+            val reusedScript = reusable(session, capture, tone)?.takeIf { it.segments.size == 1 }
             var fallbackReason = if (speechMode == SpeechMode.REFINE) {
-                reusedScript?.warnings?.firstOrNull {
-                    it.code == FALLBACK_LENGTH_LIMIT || it.code == FALLBACK_UNAVAILABLE
-                }?.code ?: if (reusedScript == null && session.speech.length > SpeechDirector.REFINE_MAX_CHARS) {
-                    FALLBACK_LENGTH_LIMIT
-                } else {
-                    null
-                }
+                // A replayed fallback script remembers *why* it fell back, so the second play shows
+                // the same notice instead of a bare "unavailable".
+                reusedScript?.warnings?.firstOrNull { SpeechPlanner.isRefineReason(it.code) }?.code
+                    ?: if (reusedScript == null && session.speech.length > SpeechDirector.REFINE_MAX_CHARS) {
+                        FALLBACK_LENGTH_LIMIT
+                    } else {
+                        null
+                    }
             } else {
                 null
             }
+            var refineReason: String? = null
             val refinedScript = if (speechMode == SpeechMode.REFINE) {
                 if (reusedScript != null) {
                     logger.info("Reused stored read-aloud script '{}' for refined playback", reusedScript.scriptId)
                     reusedScript
                 } else {
                     try {
-                        speechDirector?.quickRefine(session.owners, session.speech, session.config, MAX_CHARS)
+                        when (val outcome = speechDirector?.quickRefine(
+                            session.owners,
+                            session.speech,
+                            session.config,
+                            MAX_CHARS,
+                            tone
+                        )) {
+                            null -> null
+                            is RefineOutcome.Planned -> outcome.script
+                            is RefineOutcome.Unavailable -> {
+                                refineReason = outcome.code()
+                                null
+                            }
+                        }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -1042,7 +1166,7 @@ class TtsService(
                 ?.takeIf { it.spokenText.isNotBlank() && it.spokenText.length <= MAX_CHARS }
             val finalText = usableSegment?.spokenText ?: session.speech
             if (speechMode == SpeechMode.REFINE && usableSegment == null && fallbackReason == null) {
-                fallbackReason = FALLBACK_UNAVAILABLE
+                fallbackReason = refineReason ?: FALLBACK_UNAVAILABLE
             }
             val overrides = if (usableSegment == null) {
                 SpeechOverrides(inputMode = SpeechInputMode.PLAIN_TEXT)
@@ -1085,7 +1209,9 @@ class TtsService(
                             ),
                             warnings = listOfNotNull(
                                 fallbackReason?.let {
-                                    SpeechWarning(code = it, message = "Refine was unavailable; read the original text")
+                                    // The code keeps the reason for the *next* play; the message is
+                                    // what the script library shows next to the stored plan.
+                                    SpeechWarning(code = it, message = "Refine fell back to the original text ($it)")
                                 }
                             )
                         )
@@ -1255,7 +1381,9 @@ class TtsService(
         /** The plan being re-rendered, or null when [renderStream] must plan the text itself. */
         internal val stored: SpeechPlanStore.Entry?,
         /** Where the text came from, so a freshly planned script is filed under the right target. */
-        internal val target: SpeechTarget
+        internal val target: SpeechTarget,
+        /** How a freshly planned script should sound; a stored plan already has its wording. */
+        internal val tone: SpeechTone
     )
 
     /** A validated read-aloud request with its claimed slot; `internal` so [openSpeak] can hand it over. */
@@ -1303,9 +1431,14 @@ class TtsService(
 
         const val CODE_DIRECTOR_FALLBACK = "DIRECTOR_FALLBACK"
 
-        /** Stable response-header values; the client owns the localized explanation. */
-        const val FALLBACK_LENGTH_LIMIT = "length-limit"
-        const val FALLBACK_UNAVAILABLE = "unavailable"
+        /**
+         * Stable response-header values; the client owns the localized explanation.
+         *
+         * Aliases of the planner's own vocabulary: the reason a refine failed is the planner's
+         * knowledge, and duplicating the strings here is how the two quietly drift apart.
+         */
+        const val FALLBACK_LENGTH_LIMIT = SpeechPlanner.REFINE_LENGTH_LIMIT
+        const val FALLBACK_UNAVAILABLE = SpeechPlanner.REFINE_UNAVAILABLE
 
         private const val SINGLE_SEGMENT_ID = "seg_0"
 

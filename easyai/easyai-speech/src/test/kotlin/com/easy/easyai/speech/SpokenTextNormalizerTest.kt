@@ -191,5 +191,31 @@ class SpokenTextNormalizerTest {
             assertEquals("very slowly", SpokenTextNormalizer.leadingTag("  [very slowly] 我们开始吧"))
             assertNull(SpokenTextNormalizer.leadingTag("我们开始吧[excited]"))
         }
+
+        @Test
+        fun `a spoken filler is content, not markup`() {
+            // The naturalness rule in the prompt asks for `嗯`/`哎呀` at breathing points. They are
+            // ordinary characters, so nothing may flag them: a filler is not a bracket tag, and it
+            // carries no anchor of its own, which is why it can be added without failing either gate.
+            assertFalse(SpokenTextNormalizer.containsUnexpectedMarkup("嗯，这个方案有三个问题，哎呀，我漏了一条", allowed))
+            assertTrue(
+                SpokenTextNormalizer.numbersPreserved(
+                    "这个方案有 3 个问题",
+                    "嗯，这个方案有 3 个问题"
+                )
+            )
+            assertEquals(emptyList(), SpokenTextNormalizer.missingTermAnchors("user_id 字段", "呃，user_id 字段"))
+        }
+
+        @Test
+        fun `a chinese parenthesis is spoken, not stripped`() {
+            // The trap behind the prompt's explicit ban: only ASCII brackets are recognised as tags,
+            // so `（叹气）` passes the markup gate and the engine reads the word "叹气" out loud.
+            assertEquals(
+                emptyList(),
+                SpokenTextNormalizer.unexpectedMarkup("（叹气）这事就算了吧", allowed)
+            )
+            assertEquals("（叹气）这事就算了吧", SpokenTextNormalizer.stripTags("（叹气）这事就算了吧"))
+        }
     }
 }

@@ -361,7 +361,7 @@ class TtsServiceTest {
         fun `refine uses the validated text and request overrides`() = runTest {
             val director = mockk<SpeechDirector>()
             coEvery { director.quickRefine(listOf("alice"), "你好", any(), TtsService.MAX_CHARS) } returns
-                refineScript("你好", "你好呀")
+                RefineOutcome.Planned(refineScript("你好", "你好呀"))
             val synthesizer = RecordingSynthesizer()
             TtsService(resolverReturning(config()), synthesizer, director)
                 .speak(listOf("alice"), "你好", SpeechMode.REFINE.key)
@@ -379,7 +379,8 @@ class TtsServiceTest {
         @Test
         fun `missing or invalid direction falls back to the original text`() = runTest {
             val director = mockk<SpeechDirector>()
-            coEvery { director.quickRefine(any(), any(), any(), any()) } returns null
+            coEvery { director.quickRefine(any(), any(), any(), any()) } returns
+                RefineOutcome.Unavailable(SpeechPlanner.REFINE_UNAVAILABLE)
             val synthesizer = RecordingSynthesizer()
             TtsService(resolverReturning(config()), synthesizer, director)
                 .speak(listOf("alice"), "你好", SpeechMode.REFINE.key)
@@ -407,7 +408,7 @@ class TtsServiceTest {
             val director = mockk<SpeechDirector>()
             coEvery { director.quickRefine(any(), any(), any(), any()) } answers {
                 val source = secondArg<String>()
-                refineScript(source, "a".repeat(TtsService.MAX_CHARS + 1))
+                RefineOutcome.Planned(refineScript(source, "a".repeat(TtsService.MAX_CHARS + 1)))
             }
             val synthesizer = RecordingSynthesizer()
             TtsService(resolverReturning(config()), synthesizer, director)

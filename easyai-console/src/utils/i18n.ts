@@ -1211,6 +1211,15 @@ const translations: Record<string, Record<string, string>> = {
     'Read-aloud mode': 'Read-aloud mode',
     'Direct read-aloud': 'Direct read-aloud',
     'Refine read-aloud': 'Refine read-aloud',
+    'Read-aloud tone': 'Read-aloud tone',
+    'Default tone': 'Default tone',
+    'Professional': 'Professional',
+    'Friendly': 'Friendly',
+    'Blunt': 'Blunt',
+    'Imaginative': 'Imaginative',
+    'Efficient': 'Efficient',
+    'Sarcastic': 'Sarcastic',
+    'Socratic': 'Socratic',
     'Not configured (read-aloud off)': 'Not configured (read-aloud off)',
     'Powers the speaker button on assistant replies. Pick a SPEECH model — the picker only lists those, and the backend rejects a model of any other type. Read-aloud always speaks plain text as MP3, using the voice stored in that model row.':
       'Powers the speaker button on assistant replies. Pick a SPEECH model — the picker only lists those, and the backend rejects a model of any other type. Read-aloud always speaks plain text as MP3, using the voice stored in that model row.',
@@ -1354,6 +1363,15 @@ const translations: Record<string, Record<string, string>> = {
     'Refine skipped: text exceeds the 1,200-character limit; reading the original':
       'Refine skipped: text exceeds the 1,200-character limit; reading the original',
     'Refine unavailable; reading the original': 'Refine unavailable; reading the original',
+    'Refine timed out after {seconds}s; reading the original':
+      'Refine timed out after {seconds}s; reading the original',
+    'Refine timed out; reading the original': 'Refine timed out; reading the original',
+    'Refine skipped: no Speech Direction Model is configured; reading the original':
+      'Refine skipped: no Speech Direction Model is configured; reading the original',
+    'Refine skipped: the TTS model exposes no usable voice; reading the original':
+      'Refine skipped: the TTS model exposes no usable voice; reading the original',
+    'Refine rejected by the fidelity checks; reading the original':
+      'Refine rejected by the fidelity checks; reading the original',
     'Starting the read-aloud…': 'Starting the read-aloud…',
     'The read-aloud did not start': 'The read-aloud did not start; please try again',
     'Directed read-aloud needs a newer server': 'Directed read-aloud needs a newer server; please upgrade and try again',
@@ -2731,6 +2749,15 @@ const translations: Record<string, Record<string, string>> = {
     'Read-aloud mode': '朗读模式',
     'Direct read-aloud': '原文朗读',
     'Refine read-aloud': '润色朗读',
+    'Read-aloud tone': '朗读口吻',
+    'Default tone': '默认口吻',
+    'Professional': '专业严谨',
+    'Friendly': '亲和友善',
+    'Blunt': '直言不讳',
+    'Imaginative': '天马行空',
+    'Efficient': '高效务实',
+    'Sarcastic': '毒舌吐槽',
+    'Socratic': '启发引导',
     'Not configured (read-aloud off)': '未配置（不开启朗读）',
     'Powers the speaker button on assistant replies. Pick a SPEECH model — the picker only lists those, and the backend rejects a model of any other type. Read-aloud always speaks plain text as MP3, using the voice stored in that model row.':
       '驱动助手回复下方的喇叭按钮。这里只能选 SPEECH 类型的模型（下拉只列出这类行，后端也会拒收其他类型）。朗读固定按纯文本合成 MP3，音色取该模型行里配置的那个。',
@@ -2866,6 +2893,15 @@ const translations: Record<string, Record<string, string>> = {
     'Refine skipped: text exceeds the 1,200-character limit; reading the original':
       '内容超过 1200 字，本次未润色，按原文朗读',
     'Refine unavailable; reading the original': '润色不可用，本次按原文朗读',
+    'Refine timed out after {seconds}s; reading the original':
+      '润色超时（{seconds} 秒内没返回），本次按原文朗读',
+    'Refine timed out; reading the original': '润色超时，本次按原文朗读',
+    'Refine skipped: no Speech Direction Model is configured; reading the original':
+      '未配置朗读导演模型（设置 → 任务模型），本次按原文朗读',
+    'Refine skipped: the TTS model exposes no usable voice; reading the original':
+      'TTS 模型没有可用音色，本次按原文朗读',
+    'Refine rejected by the fidelity checks; reading the original':
+      '润色稿未通过校验（数字或原文覆盖不一致），本次按原文朗读',
     'Starting the read-aloud…': '正在开始朗读…',
     'The read-aloud did not start': '朗读没有开始，请重试',
     'Directed read-aloud needs a newer server': '导演朗读需要更新的服务端，请升级后重试',

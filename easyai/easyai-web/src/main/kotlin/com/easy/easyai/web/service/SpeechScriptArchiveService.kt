@@ -11,6 +11,7 @@ import com.easy.easyai.speech.SpeechOverrideParams
 import com.easy.easyai.speech.SpeechProviderParams
 import com.easy.easyai.speech.SpeechRowDefaults
 import com.easy.easyai.speech.SpeechScript
+import com.easy.easyai.speech.SpeechScriptGenerationStatus
 import com.easy.easyai.speech.SpeechScriptQuery
 import com.easy.easyai.speech.SpeechScriptRecord
 import com.easy.easyai.speech.SpeechScriptStatus
@@ -82,7 +83,8 @@ data class SpeechCapture(
  *
  * Fidelity rule: a script is reusable only while its `sourceDigest` still matches the text about to
  * be spoken. Skipping that would let a regenerated reply be read from the script written for its
- * predecessor.
+ * predecessor. The mode is part of the same rule: a refined single-segment read and a directed
+ * multi-segment plan of one reply are different scripts and are never reused for each other.
  */
 @Service
 class SpeechScriptArchiveService(
@@ -102,25 +104,32 @@ class SpeechScriptArchiveService(
     /**
      * The script that may be reused for [text], or null.
      *
-     * Only the digest is checked here; the caller still runs `SpeechScriptValidator.validateFull`,
-     * because voice availability and length belong to the current model, not to the archive.
+     * The store checks the mode, the digest and the COMPLETED generation state; the caller still
+     * runs `SpeechScriptValidator.validateFull`, because voice availability and length belong to the
+     * current model, not to the archive.
      */
     suspend fun reusable(capture: SpeechCapture, text: String): SpeechScriptRecord? {
         val store = store ?: return null
         val digest = SpokenTextNormalizer.sourceDigest(text)
-        return store.findReusable(capture.owner, capture.target.type, capture.target.id, digest)
+        return store.findReusable(
+            capture.owner,
+            capture.target.type,
+            capture.target.id,
+            capture.mode,
+            digest
+        )
     }
 
     suspend fun load(owner: String, id: String): SpeechScriptRecord? = store?.get(owner, id)
 
     /**
-     * The id [saveAuto] will keep for this target, so a fresh render can announce it up front.
+     * The id [saveAuto] will keep for this target and mode, so a fresh render can announce it up front.
      *
      * Best-effort like every other archive lookup: a database hiccup must not make a read-aloud
      * impossible. Losing the id only costs the play counter and edit persistence, never the audio.
      */
     suspend fun autoIdFor(capture: SpeechCapture): String? = try {
-        store?.findAutoId(capture.owner, capture.target.type, capture.target.id)
+        store?.findAutoId(capture.owner, capture.target.type, capture.target.id, capture.mode)
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -148,19 +157,30 @@ class SpeechScriptArchiveService(
         }
     }
 
-    /** Machine-saved copy: one per target, replaced on every plan for the same text. */
+    /** Machine-saved copy: one per target **and mode**, replaced on every plan of that mode. */
     suspend fun saveAuto(
         capture: SpeechCapture,
         text: String,
         script: SpeechScript,
-        incremental: Boolean
+        incremental: Boolean,
+        generationStatus: SpeechScriptGenerationStatus = SpeechScriptGenerationStatus.COMPLETED
     ): SpeechScriptRecord? = withContext(NonCancellable) {
         // Playback and persistence have different lifetimes: closing the browser cancels the audio
         // stream, but the small UPSERT that has already started must still commit. Otherwise the
         // client sees a successful TTS exchange while `speech_script` remains empty.
         val store = store ?: return@withContext null
         val stored = try {
-            store.saveAuto(recordOf(capture, text, script, SpeechScriptStatus.AUTO, incremental, script.revision))
+            store.saveAuto(
+                recordOf(
+                    capture = capture,
+                    text = text,
+                    script = script,
+                    status = SpeechScriptStatus.AUTO,
+                    incremental = incremental,
+                    revision = script.revision,
+                    generationStatus = generationStatus
+                )
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -170,6 +190,47 @@ class SpeechScriptArchiveService(
         }
         purgeExpiredAuto(capture.owner)
         stored
+    }
+
+    /**
+     * Terminal snapshot of a plan that was cancelled or failed before planning finished.
+     *
+     * Unlike [saveAuto] this never replaces a row that completed in the meantime: the script panel
+     * can finish its own plan for the same reply while a playback is still running, and the stopped
+     * playback must not overwrite that complete script with its partial one.
+     */
+    suspend fun saveAbandoned(
+        capture: SpeechCapture,
+        text: String,
+        script: SpeechScript,
+        incremental: Boolean,
+        generationStatus: SpeechScriptGenerationStatus
+    ): Boolean = withContext(NonCancellable) {
+        val store = store ?: return@withContext false
+        val written = try {
+            store.saveAbandoned(
+                recordOf(
+                    capture = capture,
+                    text = text,
+                    script = script,
+                    status = SpeechScriptStatus.AUTO,
+                    incremental = incremental,
+                    revision = script.revision,
+                    generationStatus = generationStatus
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.warn(
+                "Could not archive the abandoned read-aloud script for target '{}': {}",
+                capture.target.type,
+                e.message
+            )
+            return@withContext false
+        }
+        purgeExpiredAuto(capture.owner)
+        written
     }
 
     /**
@@ -298,7 +359,8 @@ class SpeechScriptArchiveService(
         incremental: Boolean,
         revision: Int,
         id: String = script.scriptId,
-        title: String? = null
+        title: String? = null,
+        generationStatus: SpeechScriptGenerationStatus = SpeechScriptGenerationStatus.COMPLETED
     ): SpeechScriptRecord {
         val now = System.currentTimeMillis()
         return SpeechScriptRecord(
@@ -317,6 +379,7 @@ class SpeechScriptArchiveService(
             script = script,
             ttsParams = ttsParamsOf(capture, text, script),
             directionParams = directionOf(capture, incremental),
+            generationStatus = generationStatus,
             createdAt = now,
             updatedAt = now
         )

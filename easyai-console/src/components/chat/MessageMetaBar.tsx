@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { GitBranch, Bookmark, Volume2, SlidersHorizontal } from 'lucide-react';
 import type { AssistantMessage } from '../../types/message';
-import type { ReadAloudMode } from '../../types/settings';
+import type { ReadAloudMode, ReadAloudTone } from '../../types/settings';
 import { useChatStore } from '@/services/stores/chat-store';
 import { useSettingsStore } from '@/services/stores/settings-store';
 import { sessionService } from '@/services/session-service';
@@ -49,6 +49,8 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
   const tts = useTtsPlayback();
   const readAloudMode = useSettingsStore((state) => state.readAloudMode);
   const setReadAloudMode = useSettingsStore((state) => state.setReadAloudMode);
+  const readAloudTone = useSettingsStore((state) => state.readAloudTone);
+  const setReadAloudTone = useSettingsStore((state) => state.setReadAloudTone);
   // Cleaning is not free on a long answer and the list re-renders while streaming; cache it and
   // reuse the same string on click instead of cleaning twice.
   const speechText = useMemo(() => stripMarkdownForSpeech(saveContent), [saveContent]);
@@ -214,7 +216,7 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
             <span className="inline-flex items-center" title={speakTitle}>
               <button
                 data-meta-tts
-                onClick={() => tts.toggle(speechKey, speechText, readAloudMode, speechTarget)}
+                onClick={() => tts.toggle(speechKey, speechText, readAloudMode, speechTarget, readAloudTone)}
                 disabled={!speakEnabled && !ttsActive && !ttsResumable}
                 className={`p-1 -my-1 rounded transition-colors disabled:opacity-40 disabled:hover:bg-transparent ${
                   ttsActive
@@ -250,6 +252,27 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
                 <option value="refine">{i18n('Refine read-aloud')}</option>
                 <option value="director">{i18n('Directed read-aloud')}</option>
               </select>
+              {/* Only the two planning modes rewrite anything, so a direct read has no tone to apply:
+                  showing the control there would be a setting that visibly does nothing. */}
+              {readAloudMode !== 'direct' && (
+                <select
+                  data-meta-tts-tone
+                  value={readAloudTone}
+                  onChange={(event) => setReadAloudTone(event.target.value as ReadAloudTone)}
+                  className="h-6 max-w-20 rounded border-0 bg-transparent px-1 text-[11px] text-muted-foreground outline-none hover:bg-muted hover:text-foreground"
+                  title={i18n('Read-aloud tone')}
+                  aria-label={i18n('Read-aloud tone')}
+                >
+                  <option value="default">{i18n('Default tone')}</option>
+                  <option value="professional">{i18n('Professional')}</option>
+                  <option value="friendly">{i18n('Friendly')}</option>
+                  <option value="blunt">{i18n('Blunt')}</option>
+                  <option value="imaginative">{i18n('Imaginative')}</option>
+                  <option value="efficient">{i18n('Efficient')}</option>
+                  <option value="sarcastic">{i18n('Sarcastic')}</option>
+                  <option value="socratic">{i18n('Socratic')}</option>
+                </select>
+              )}
               {/* Only the directed mode has a plan to show; offering the panel under the other two
                   would promise an edit that they would ignore. */}
               {readAloudMode === 'director' && (

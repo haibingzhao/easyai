@@ -23,7 +23,7 @@ describe('ttsService.speak', () => {
 
     expect(result.mimeType).toBe('audio/mpeg');
     const [, options] = vi.mocked(authFetch).mock.calls[0];
-    expect(JSON.parse(options?.body as string)).toEqual({ text: 'hello', mode });
+    expect(JSON.parse(options?.body as string)).toEqual({ text: 'hello', mode, tone: 'default' });
     expect(options?.signal).toBe(controller.signal);
   });
 
@@ -39,6 +39,7 @@ describe('ttsService.speak', () => {
     expect(JSON.parse(options?.body as string)).toEqual({
       text: 'hello',
       mode: 'refine',
+      tone: 'default',
       targetType: 'session_message',
       targetId: 'msg-1',
       sessionId: 'sess-1',
@@ -61,7 +62,7 @@ describe('ttsService.speak', () => {
     }));
     await ttsService.speak('hello');
     const [, options] = vi.mocked(authFetch).mock.calls[0];
-    expect(JSON.parse(options?.body as string)).toEqual({ text: 'hello', mode: 'direct' });
+    expect(JSON.parse(options?.body as string)).toEqual({ text: 'hello', mode: 'direct', tone: 'default' });
   });
 });
 
@@ -122,6 +123,7 @@ describe('ttsService.render', () => {
       scriptId: null,
       segments: null,
       incremental: true,
+      tone: 'default',
     });
   });
 
