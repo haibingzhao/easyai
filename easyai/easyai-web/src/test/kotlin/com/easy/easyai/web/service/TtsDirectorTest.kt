@@ -18,6 +18,7 @@ import com.easy.easyai.speech.SpeechSegment
 import com.easy.easyai.speech.SpeechStyle
 import com.easy.easyai.speech.SpeechSegmentScheduler
 import com.easy.easyai.speech.SpeechSynthesizer
+import com.easy.easyai.speech.SpeechTone
 import com.easy.easyai.speech.SpokenTextNormalizer
 import io.mockk.coEvery
 import io.mockk.mockk
@@ -87,8 +88,9 @@ class TtsDirectorTest {
             owners: Collection<String>,
             text: String,
             ttsConfig: ModelProviderConfig,
-            maxChars: Int
-        ): SpeechScript? = null
+            maxChars: Int,
+            tone: SpeechTone
+        ): RefineOutcome = RefineOutcome.Unavailable(SpeechPlanner.REFINE_UNAVAILABLE)
 
         override suspend fun produce(
             owners: Collection<String>,
@@ -97,6 +99,7 @@ class TtsDirectorTest {
             maxChars: Int,
             incremental: Boolean,
             firstSegmentBudgetMs: Long?,
+            tone: SpeechTone,
             onSegment: suspend (SpeechSegment) -> Unit
         ): SpeechPlanner.PlanSummary {
             produceCalls++

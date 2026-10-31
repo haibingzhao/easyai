@@ -14,6 +14,7 @@ import com.easy.easyai.speech.SpeechAudio
 import com.easy.easyai.speech.SpeechCapabilityResolver
 import com.easy.easyai.speech.SpeechRenderEvent
 import com.easy.easyai.speech.SpeechScript
+import com.easy.easyai.speech.SpeechScriptGenerationStatus
 import com.easy.easyai.speech.SpeechScriptQuery
 import com.easy.easyai.speech.SpeechScriptRecord
 import com.easy.easyai.speech.SpeechScriptSort
@@ -23,10 +24,12 @@ import com.easy.easyai.speech.SpeechScriptSummary
 import com.easy.easyai.speech.SpeechSegment
 import com.easy.easyai.speech.SpeechStyle
 import com.easy.easyai.speech.SpeechSynthesizer
+import com.easy.easyai.speech.SpeechTone
 import com.easy.easyai.speech.SpokenTextNormalizer
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.take
@@ -71,7 +74,11 @@ class TtsScriptReuseTest {
     private class FakePlanner(
         private val capabilities: ResolvedSpeechCapabilities,
         private val splitIntoSentences: Boolean = false,
-        private val refinedText: String? = null
+        private val refinedText: String? = null,
+        private val afterFirstSegment: suspend () -> Unit = {},
+        /** What a refine reports when [refinedText] is null; tests pick the cause they assert on. */
+        private val refineFault: RefineOutcome.Unavailable =
+            RefineOutcome.Unavailable(SpeechPlanner.REFINE_UNAVAILABLE)
     ) : SpeechPlanner {
 
         var produceCalls = 0
@@ -80,18 +87,26 @@ class TtsScriptReuseTest {
         var quickRefineCalls = 0
             private set
 
+        /** The tone of the most recent planning call, so the tests can prove it was threaded through. */
+        var lastTone: SpeechTone? = null
+            private set
+
         override suspend fun capabilitiesFor(ttsConfig: ModelProviderConfig) = capabilities
 
         override suspend fun quickRefine(
             owners: Collection<String>,
             text: String,
             ttsConfig: ModelProviderConfig,
-            maxChars: Int
-        ): SpeechScript? {
+            maxChars: Int,
+            tone: SpeechTone
+        ): RefineOutcome {
             quickRefineCalls++
+            lastTone = tone
             // Match SpeechDirector's production guard: long input is a deliberate plain fallback.
-            if (text.length > SpeechDirector.REFINE_MAX_CHARS) return null
-            return refinedText?.let { spoken ->
+            if (text.length > SpeechDirector.REFINE_MAX_CHARS) {
+                return RefineOutcome.Unavailable(SpeechPlanner.REFINE_LENGTH_LIMIT)
+            }
+            val script = refinedText?.let { spoken ->
                 SpeechScript(
                     scriptId = "planner-id",
                     sourceDigest = SpokenTextNormalizer.sourceDigest(text),
@@ -107,7 +122,8 @@ class TtsScriptReuseTest {
                         )
                     )
                 )
-            }
+            } ?: return refineFault
+            return RefineOutcome.Planned(script)
         }
 
         override suspend fun produce(
@@ -117,9 +133,11 @@ class TtsScriptReuseTest {
             maxChars: Int,
             incremental: Boolean,
             firstSegmentBudgetMs: Long?,
+            tone: SpeechTone,
             onSegment: suspend (SpeechSegment) -> Unit
         ): SpeechPlanner.PlanSummary {
             produceCalls++
+            lastTone = tone
             val segments = if (splitIntoSentences) {
                 text.split('。').filter { it.isNotBlank() }.mapIndexed { index, sentence ->
                     val source = "$sentence。"
@@ -142,7 +160,10 @@ class TtsScriptReuseTest {
                     )
                 )
             }
-            segments.forEach { onSegment(it) }
+            segments.forEachIndexed { index, segment ->
+                onSegment(segment)
+                if (index == 0 && produceCalls == 1) afterFirstSegment()
+            }
             return SpeechPlanner.PlanSummary("plan-$produceCalls", 1, "克制", SpeechStyle.TEACHER, segments.size)
         }
     }
@@ -167,7 +188,8 @@ class TtsScriptReuseTest {
             beforeAutoSave()
             val existing = rows.values.firstOrNull {
                 it.owner == record.owner && it.targetType == record.targetType &&
-                    it.targetId == record.targetId && it.status == SpeechScriptStatus.AUTO
+                    it.targetId == record.targetId && it.mode == record.mode &&
+                    it.status == SpeechScriptStatus.AUTO
             }
             // Same contract as the SQL update: the body is replaced, the row's identity and the
             // metadata outside `writeBody` (favourite, play counter) are kept.
@@ -183,7 +205,26 @@ class TtsScriptReuseTest {
                 )
             }
             rows[stored.id] = stored
+            afterAutoWrite(stored)
             return stored
+        }
+
+        override suspend fun saveAbandoned(record: SpeechScriptRecord): Boolean {
+            val existing = rows[record.id]
+            val applied = existing != null &&
+                existing.owner == record.owner &&
+                existing.status == SpeechScriptStatus.AUTO &&
+                existing.generationStatus == SpeechScriptGenerationStatus.IN_PROGRESS
+            if (applied && existing != null) {
+                rows[record.id] = record.copy(
+                    isFavorite = existing.isFavorite,
+                    playCount = existing.playCount,
+                    lastPlayedAt = existing.lastPlayedAt,
+                    createdAt = existing.createdAt
+                )
+            }
+            afterAutoWrite(record)
+            return applied
         }
 
         override suspend fun savePinned(record: SpeechScriptRecord): SpeechScriptRecord {
@@ -193,11 +234,16 @@ class TtsScriptReuseTest {
             return record
         }
 
-        override suspend fun findAutoId(owner: String, targetType: String, targetId: String?): String? =
+        override suspend fun findAutoId(
+            owner: String,
+            targetType: String,
+            targetId: String?,
+            mode: String
+        ): String? =
             rows.values
                 .filter {
                     it.owner == owner && it.targetType == targetType && it.targetId == targetId &&
-                        it.status == SpeechScriptStatus.AUTO
+                        it.mode == mode && it.status == SpeechScriptStatus.AUTO
                 }
                 .maxByOrNull { it.updatedAt }
                 ?.id
@@ -206,11 +252,14 @@ class TtsScriptReuseTest {
             owner: String,
             targetType: String,
             targetId: String?,
+            mode: String,
             digest: String
         ): SpeechScriptRecord? = rows.values
             .filter {
                 it.owner == owner && it.targetType == targetType && it.targetId == targetId &&
-                    it.sourceDigest == digest && it.status != SpeechScriptStatus.ARCHIVED
+                    it.mode == mode && it.sourceDigest == digest &&
+                    it.status != SpeechScriptStatus.ARCHIVED &&
+                    it.generationStatus == SpeechScriptGenerationStatus.COMPLETED
             }
             .maxByOrNull { it.updatedAt }
 
@@ -282,6 +331,8 @@ class TtsScriptReuseTest {
         var lastPurgeBefore: Long? = null
             private set
         var beforeAutoSave: suspend () -> Unit = {}
+        /** Fires after an auto-save, and after every abandon attempt, applied or not. */
+        var afterAutoWrite: suspend (SpeechScriptRecord) -> Unit = {}
 
         override suspend fun archiveForTarget(targetType: String, targetId: String): Int =
             archiveMatching { it.targetType == targetType && it.targetId == targetId }
@@ -304,7 +355,9 @@ class TtsScriptReuseTest {
 
     private class Harness(
         splitIntoSentences: Boolean = false,
-        refinedText: String? = null
+        refinedText: String? = null,
+        afterFirstSegment: suspend () -> Unit = {},
+        refineFault: RefineOutcome.Unavailable = RefineOutcome.Unavailable(SpeechPlanner.REFINE_UNAVAILABLE)
     ) {
         val store = MemoryStore()
         val planner: FakePlanner
@@ -319,7 +372,7 @@ class TtsScriptReuseTest {
                     voices = listOf(VoiceSpec(voice = "voice-a", name = "A"))
                 )
             )
-            planner = FakePlanner(capabilities, splitIntoSentences, refinedText)
+            planner = FakePlanner(capabilities, splitIntoSentences, refinedText, afterFirstSegment, refineFault)
             coEvery { resolver.resolveConfig(any<Collection<String>>(), AuxModelTask.TTS) } returns ModelProviderConfig(
                 id = "tts-row",
                 name = "Qwen TTS",
@@ -388,6 +441,29 @@ class TtsScriptReuseTest {
         }
 
         @Test
+        fun `legacy incomplete cancelled and failed rows are planned again`() = runTest {
+            val statuses = listOf<SpeechScriptGenerationStatus?>(
+                null,
+                SpeechScriptGenerationStatus.IN_PROGRESS,
+                SpeechScriptGenerationStatus.CANCELLED,
+                SpeechScriptGenerationStatus.FAILED
+            )
+
+            for (status in statuses) {
+                val harness = Harness()
+                val text = "只有完整剧本才能复用。"
+                harness.service.planScript(listOf("alice"), text, target())
+                val row = harness.store.rows.values.single()
+                harness.store.rows[row.id] = row.copy(generationStatus = status)
+
+                val second = harness.serviceWithFreshPlans().planScript(listOf("alice"), text, target())
+
+                assertFalse(second.reused, "generation status $status must not be reused")
+                assertEquals(2, harness.planner.produceCalls, "generation status $status must plan again")
+            }
+        }
+
+        @Test
         fun `manual text never shares a script with a message`() = runTest {
             val harness = Harness()
             val text = "同一段文字。"
@@ -397,6 +473,39 @@ class TtsScriptReuseTest {
 
             assertFalse(manual.reused)
             assertEquals(2, harness.planner.produceCalls)
+        }
+
+        @Test
+        fun `a refined read and a directed plan of one reply keep two rows`() = runTest {
+            val harness = Harness(refinedText = "润色后的朗读文本。")
+            val text = "今天杭州有雨，出门记得带伞。"
+
+            harness.service.speak(listOf("alice"), text, "refine", target())
+            val planned = harness.service.planScript(listOf("alice"), text, target())
+
+            // The mode is part of the archive's identity: the refined read must survive as its own
+            // row instead of being relabelled Directed by the plan that follows it.
+            assertEquals(2, harness.store.rows.size)
+            assertFalse(planned.reused, "a directed plan must not be answered with the refined read")
+            assertEquals(1, harness.planner.quickRefineCalls)
+            assertEquals(1, harness.planner.produceCalls)
+            assertEquals("director", harness.store.rows.getValue(planned.script.scriptId).mode)
+            assertEquals(setOf("refine", "director"), harness.store.rows.values.map { it.mode }.toSet())
+        }
+
+        @Test
+        fun `a directed plan does not satisfy a later refined read`() = runTest {
+            val harness = Harness(refinedText = "润色后的朗读文本。")
+            val text = "今天杭州有雨，出门记得带伞。"
+
+            harness.service.planScript(listOf("alice"), text, target())
+            harness.service.speak(listOf("alice"), text, "refine", target())
+
+            // A one-segment director plan is a legal plan, so only the mode filter keeps it from
+            // being played back as "the refined version" the user just asked for.
+            assertEquals(2, harness.store.rows.size)
+            assertEquals(1, harness.planner.quickRefineCalls)
+            assertEquals(1, harness.planner.produceCalls)
         }
     }
 
@@ -455,6 +564,29 @@ class TtsScriptReuseTest {
             assertEquals("原始回复文本。", record.sourceText)
             assertEquals("原始回复文本。", record.script.segments.single().spokenText)
             assertEquals(TtsService.FALLBACK_UNAVAILABLE, record.script.warnings.single().code)
+        }
+
+        @Test
+        fun `a refine timeout reports the budget it was given, on the play and on the replay`() = runTest {
+            // "Unavailable" is the same sentence for a timeout, a missing model and a rejected
+            // rewrite, and each is fixed somewhere else. The reason — with the seconds it was
+            // allowed — reaches the client, and the archived fallback remembers it for the next play.
+            val harness = Harness(
+                refinedText = null,
+                refineFault = RefineOutcome.Unavailable(SpeechPlanner.REFINE_TIMEOUT, 5)
+            )
+
+            val prepared = harness.service.openSpeak(listOf("alice"), "原始回复文本。", "refine", target())
+            harness.service.speakStream(prepared).asFlow().toList()
+
+            assertEquals("refine-timeout:5", prepared.fallbackReason)
+            assertEquals("refine-timeout:5", harness.store.rows.values.single().script.warnings.single().code)
+
+            val replayed = harness.serviceWithFreshPlans()
+                .openSpeak(listOf("alice"), "原始回复文本。", "refine", target())
+
+            assertEquals("refine-timeout:5", replayed.fallbackReason)
+            assertEquals(1, harness.planner.quickRefineCalls)
         }
 
         @Test
@@ -636,6 +768,161 @@ class TtsScriptReuseTest {
             val record = assertNotNull(harness.store.rows.values.singleOrNull())
             assertEquals(text, record.sourceText)
             assertTrue(record.script.segments.isNotEmpty())
+        }
+
+        @Test
+        fun `cancelling an incremental plan forces the next read to direct again`() = runTest {
+            val harness = Harness(splitIntoSentences = true, afterFirstSegment = { awaitCancellation() })
+            val cancelled = CompletableDeferred<Unit>()
+            harness.store.afterAutoWrite = { record ->
+                if (record.generationStatus == SpeechScriptGenerationStatus.CANCELLED) cancelled.complete(Unit)
+            }
+            val text = "第一句。第二句。第三句。"
+
+            harness.service.renderStream(
+                harness.service.openRender(listOf("alice"), text, null, target()),
+                incremental = true
+            ).asFlow().take(1).toList()
+            cancelled.await()
+            assertEquals(
+                SpeechScriptGenerationStatus.CANCELLED,
+                harness.store.rows.values.single().generationStatus
+            )
+
+            val restarted = harness.serviceWithFreshPlans()
+            restarted.renderStream(
+                restarted.openRender(listOf("alice"), text, null, target()),
+                incremental = false
+            ).asFlow().toList()
+
+            assertEquals(2, harness.planner.produceCalls)
+            assertEquals(
+                SpeechScriptGenerationStatus.COMPLETED,
+                harness.store.rows.values.single().generationStatus
+            )
+        }
+
+        @Test
+        fun `stopping a read never overwrites a plan completed by another request`() = runTest {
+            val harness = Harness(splitIntoSentences = false, afterFirstSegment = { awaitCancellation() })
+            val abandoned = CompletableDeferred<Unit>()
+            val text = "第一句。第二句。第三句。"
+            // The script panel plans the same reply without taking the playback slot, so by the time
+            // the reader stops this render the row already belongs to that complete plan.
+            harness.store.afterAutoWrite = { record ->
+                when (record.generationStatus) {
+                    SpeechScriptGenerationStatus.IN_PROGRESS ->
+                        harness.store.rows[record.id] = record.copy(
+                            generationStatus = SpeechScriptGenerationStatus.COMPLETED,
+                            script = record.script.copy(
+                                segments = listOf(
+                                    SpeechSegment(
+                                        id = "seg_panel",
+                                        index = 0,
+                                        sourceText = text,
+                                        spokenText = text,
+                                        voice = "voice-a"
+                                    )
+                                )
+                            )
+                        )
+                    SpeechScriptGenerationStatus.CANCELLED -> abandoned.complete(Unit)
+                    else -> Unit
+                }
+            }
+
+            harness.service.renderStream(
+                harness.service.openRender(listOf("alice"), text, null, target()),
+                incremental = true
+            ).asFlow().take(1).toList()
+            abandoned.await()
+
+            val row = harness.store.rows.values.single()
+            assertEquals(SpeechScriptGenerationStatus.COMPLETED, row.generationStatus)
+            assertEquals("seg_panel", row.script.segments.single().id)
+            val second = harness.serviceWithFreshPlans().planScript(listOf("alice"), text, target())
+            assertTrue(second.reused)
+            assertEquals(1, harness.planner.produceCalls)
+        }
+
+        @Test
+        fun `a director failure after the first segment is marked failed and retried`() = runTest {
+            val harness = Harness(
+                splitIntoSentences = true,
+                afterFirstSegment = { throw IllegalStateException("director failed") }
+            )
+            val text = "第一句。第二句。第三句。"
+
+            harness.service.renderStream(
+                harness.service.openRender(listOf("alice"), text, null, target()),
+                incremental = true
+            ).asFlow().toList()
+            assertEquals(
+                SpeechScriptGenerationStatus.FAILED,
+                harness.store.rows.values.single().generationStatus
+            )
+
+            val restarted = harness.serviceWithFreshPlans()
+            restarted.renderStream(
+                restarted.openRender(listOf("alice"), text, null, target()),
+                incremental = false
+            ).asFlow().toList()
+
+            assertEquals(2, harness.planner.produceCalls)
+            assertEquals(
+                SpeechScriptGenerationStatus.COMPLETED,
+                harness.store.rows.values.single().generationStatus
+            )
+        }
+
+        @Test
+        fun `rendering a cancelled archive id regenerates from its stored source`() = runTest {
+            val harness = Harness()
+            val text = "取消后按存档编号重新导演。"
+            val planned = harness.service.planScript(listOf("alice"), text, target())
+            val cancelled = harness.store.rows.values.single()
+            harness.store.rows[cancelled.id] = cancelled.copy(
+                generationStatus = SpeechScriptGenerationStatus.CANCELLED
+            )
+
+            // Keep the old COMPLETED plan in the hot cache on purpose: the durable CANCELLED state
+            // must win over that stale entry, not only over an empty cache after a restart.
+            harness.service.renderStream(
+                harness.service.openRender(listOf("alice"), "", planned.script.scriptId, SpeechTarget.manual()),
+                incremental = false
+            ).asFlow().toList()
+
+            assertEquals(2, harness.planner.produceCalls)
+            val regenerated = harness.store.rows.values.single()
+            assertEquals(text, regenerated.sourceText)
+            assertEquals("session_message", regenerated.targetType)
+            assertEquals(SpeechScriptGenerationStatus.COMPLETED, regenerated.generationStatus)
+        }
+
+        @Test
+        fun `stopping playback after planning keeps the complete script reusable`() = runTest {
+            val harness = Harness(splitIntoSentences = true)
+            val text = "第一句。第二句。第三句。"
+
+            // Whole-plan mode completes the director before Meta and the first clip. Cancelling
+            // after that clip is a playback stop, not a cancellation of script generation.
+            harness.service.renderStream(
+                harness.service.openRender(listOf("alice"), text, null, target()),
+                incremental = false
+            ).asFlow().take(2).toList()
+            val stopped = harness.store.rows.values.single()
+            assertEquals(SpeechScriptGenerationStatus.COMPLETED, stopped.generationStatus)
+            assertEquals(3, stopped.script.segments.size)
+
+            val restarted = harness.serviceWithFreshPlans()
+            val second = restarted.renderStream(
+                restarted.openRender(listOf("alice"), text, null, target()),
+                incremental = false
+            ).asFlow().toList()
+
+            assertEquals(1, harness.planner.produceCalls)
+            assertEquals(3, second.filterIsInstance<SpeechRenderEvent.Meta>().single().segmentCount)
+            assertEquals(3, harness.store.rows.values.single().script.segments.size)
         }
 
         @Test

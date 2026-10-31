@@ -1,14 +1,20 @@
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import { ttsPlayback, type TtsPlaybackSnapshot } from '@/services/tts-playback-controller';
 import type { RenderSpeechRequest, SpeechTargetRef } from '@/services/tts-service';
-import type { ReadAloudMode } from '@/types/settings';
+import type { ReadAloudMode, ReadAloudTone } from '@/types/settings';
 
 export interface TtsPlaybackControls extends TtsPlaybackSnapshot {
   /**
    * One click handler for every read-aloud button: starts the clip, stops it when the same message
    * is playing or loading, and resumes it when the browser blocked autoplay.
    */
-  toggle(key: string, text: string, mode?: ReadAloudMode, target?: SpeechTargetRef): void;
+  toggle(
+    key: string,
+    text: string,
+    mode?: ReadAloudMode,
+    target?: SpeechTargetRef,
+    tone?: ReadAloudTone
+  ): void;
   /** Play a specific plan — the script panel uses this to render what the user just edited. */
   speakScript(key: string, request: RenderSpeechRequest): void;
   /** Play the parked clip again without paying for a second synthesis (autoplay was blocked). */
@@ -28,7 +34,8 @@ export function useTtsPlayback(): TtsPlaybackControls {
     key: string,
     text: string,
     mode: ReadAloudMode = 'direct',
-    target?: SpeechTargetRef
+    target?: SpeechTargetRef,
+    tone: ReadAloudTone = 'default'
   ) => {
     const current = ttsPlayback.getSnapshot();
     if (current.activeKey === key) {
@@ -41,7 +48,7 @@ export function useTtsPlayback(): TtsPlaybackControls {
         return;
       }
     }
-    void ttsPlayback.speak(key, text, mode, target);
+    void ttsPlayback.speak(key, text, mode, target, tone);
   }, []);
 
   const speakScript = useCallback((key: string, request: RenderSpeechRequest) => {

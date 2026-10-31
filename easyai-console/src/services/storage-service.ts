@@ -1,4 +1,4 @@
-import type { Settings, SessionMetadata, ModelOverrides, ReadAloudMode } from '../types/settings';
+import type { Settings, SessionMetadata, ModelOverrides, ReadAloudMode, ReadAloudTone } from '../types/settings';
 import type { Message } from '../types/message';
 import type { Artifact } from '../types/artifact';
 
@@ -10,7 +10,20 @@ const STORAGE_KEYS = {
   SELECTED_MODEL: 'easyai_selected_model',
   MODEL_OVERRIDES: 'easyai_model_overrides',
   READ_ALOUD_MODE: 'easyai_read_aloud_mode',
+  READ_ALOUD_TONE: 'easyai_read_aloud_tone',
 };
+
+/** Stored as a plain key; an unknown one falls back rather than reaching the planner. */
+const READ_ALOUD_TONES: readonly ReadAloudTone[] = [
+  'default',
+  'professional',
+  'friendly',
+  'blunt',
+  'imaginative',
+  'efficient',
+  'sarcastic',
+  'socratic',
+];
 
 export class StorageService {
   getSettings(): Settings {
@@ -54,6 +67,24 @@ export class StorageService {
       localStorage.setItem(STORAGE_KEYS.READ_ALOUD_MODE, mode);
     } catch {
       // Storage can be unavailable in private mode; the in-memory preference still works.
+    }
+  }
+
+  getReadAloudTone(): ReadAloudTone {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.READ_ALOUD_TONE);
+      // Same reasoning as the mode: a stale key from an older build must not reach the planner.
+      return READ_ALOUD_TONES.find((tone) => tone === stored) ?? 'default';
+    } catch {
+      return 'default';
+    }
+  }
+
+  saveReadAloudTone(tone: ReadAloudTone): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.READ_ALOUD_TONE, tone);
+    } catch {
+      // Private mode: the in-memory preference still works for this session.
     }
   }
 

@@ -66,9 +66,39 @@ describe('stripMarkdownForSpeech', () => {
     expect(stripMarkdownForSpeech('before\n---\n[1]: https://example.com\nafter')).toBe('before\nafter');
   });
 
-  it('reads a table as its cells and skips the divider row', () => {
+  it('reads a table as a column legend plus one row per record', () => {
     const markdown = ['| Model | Voices |', '| --- | --- |', '| 3.1-flash | 139 |'].join('\n');
-    expect(stripMarkdownForSpeech(markdown)).toBe('Model，Voices\n3.1-flash，139');
+    expect(stripMarkdownForSpeech(markdown)).toBe('【表格，列：Model、Voices】\n3.1-flash，139');
+  });
+
+  it('keeps every record of a multi-row table and returns to prose afterwards', () => {
+    const markdown = [
+      'Intro',
+      '| Model | Voices |',
+      '| --- | --- |',
+      '| 3.1-flash | 139 |',
+      '| qwen3-tts | 62 |',
+      'Outro',
+    ].join('\n');
+    expect(stripMarkdownForSpeech(markdown)).toBe(
+      'Intro\n【表格，列：Model、Voices】\n3.1-flash，139\nqwen3-tts，62\nOutro'
+    );
+  });
+
+  it('strips inline markup inside cells and never emits a pipe', () => {
+    const markdown = [
+      '| **Name** | [Docs](https://x.test) |',
+      '| --- | --- |',
+      '| 3.1-flash | ok |',
+    ].join('\n');
+    const spoken = stripMarkdownForSpeech(markdown);
+    expect(spoken).toBe('【表格，列：Name、Docs】\n3.1-flash，ok');
+    expect(spoken).not.toContain('|');
+  });
+
+  it('falls back to bare cells when the header is empty', () => {
+    const markdown = ['|  |  |', '| --- | --- |', '| 3.1-flash | 139 |'].join('\n');
+    expect(stripMarkdownForSpeech(markdown)).toBe('3.1-flash，139');
   });
 
   it('drops HTML tags but keeps the text between them', () => {

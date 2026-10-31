@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ModelProviderConfig, ReadAloudMode, Settings } from '@/types/settings';
+import type { ModelProviderConfig, ReadAloudMode, ReadAloudTone, Settings } from '@/types/settings';
 import { storageService } from '@/services/storage-service';
 import { setLanguage } from '@/utils/i18n';
 import { setTheme } from '@/utils/theme';
@@ -10,6 +10,8 @@ interface SettingsState extends Settings {
   /** Snapshot of the enabled model configs, shared by the selector and the send path. */
   modelConfigs: ModelProviderConfig[];
   readAloudMode: ReadAloudMode;
+  /** How a rewrite should sound; meaningless for `direct`, which never plans. */
+  readAloudTone: ReadAloudTone;
   loadSettings: () => void;
   updateSettings: (updates: Partial<Settings>) => void;
   saveSettings: () => void;
@@ -18,6 +20,7 @@ interface SettingsState extends Settings {
   setSelectedModelConfig: (configId: string) => void;
   setModelConfigs: (configs: ModelProviderConfig[]) => void;
   setReadAloudMode: (mode: ReadAloudMode) => void;
+  setReadAloudTone: (tone: ReadAloudTone) => void;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -30,6 +33,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   selectedModelConfigId: '',
   modelConfigs: [],
   readAloudMode: storageService.getReadAloudMode(),
+  readAloudTone: storageService.getReadAloudTone(),
 
   loadSettings: () => {
     const settings = storageService.getSettings();
@@ -78,5 +82,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setReadAloudMode: (mode) => {
     set({ readAloudMode: mode });
     storageService.saveReadAloudMode(mode);
+  },
+
+  setReadAloudTone: (tone) => {
+    set({ readAloudTone: tone });
+    storageService.saveReadAloudTone(tone);
   },
 }));

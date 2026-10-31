@@ -19,6 +19,7 @@ import com.easy.easyai.core.model.aux.AuxModelResolver
 import com.easy.easyai.core.model.aux.AuxModelTask
 import com.easy.easyai.core.model.aux.ResolvedAuxModel
 import com.easy.easyai.speech.SpeechRole
+import com.easy.easyai.speech.SpeechScript
 import com.easy.easyai.speech.SpeechSegment
 import com.easy.easyai.speech.SpeechStyle
 import io.mockk.coEvery
@@ -29,15 +30,17 @@ import io.mockk.slot
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Test
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 class SpeechDirectorTest {
 
@@ -75,7 +78,7 @@ class SpeechDirectorTest {
         source = "test"
     )
 
-    private fun output(source: String, spoken: String): String = SharedObjectMapper.instance.writeValueAsString(
+    private fun output(source: String, spoken: String, voice: String = "voice-a"): String = SharedObjectMapper.instance.writeValueAsString(
         SpeechDirectionOutput(
             mood = "克制",
             style = SpeechStyle.TEACHER,
@@ -85,7 +88,7 @@ class SpeechDirectorTest {
                     index = 0,
                     sourceText = source,
                     spokenText = spoken,
-                    voice = "voice-a",
+                    voice = voice,
                     emotion = "serious",
                     styleNote = "温和讲述",
                     rate = 0.95,
@@ -117,11 +120,22 @@ class SpeechDirectorTest {
         return catalog
     }
 
+    /** The script a successful refine produced; a different outcome fails loudly instead of NPE-ing. */
+    private fun RefineOutcome.planned(): SpeechScript =
+        (this as? RefineOutcome.Planned)?.script ?: fail("expected a plan, got $this")
+
+    /** The refusal of a failed refine; a plan here means the test is asserting the wrong thing. */
+    private fun RefineOutcome.unavailable(): RefineOutcome.Unavailable =
+        this as? RefineOutcome.Unavailable ?: fail("expected a refusal, got $this")
+
     @Test
-    fun `unconfigured director returns null without a model call`() = runBlocking {
+    fun `unconfigured director reports why without a model call`() = runBlocking {
         val resolver = mockk<AuxModelResolver>()
         coEvery { resolver.resolve(listOf("alice"), AuxModelTask.SPEECH_DIRECTION) } returns null
-        assertNull(SpeechDirector(resolver).quickRefine(listOf("alice"), "你好", ttsConfig, 20_000))
+        assertEquals(
+            SpeechPlanner.REFINE_NOT_CONFIGURED,
+            SpeechDirector(resolver).quickRefine(listOf("alice"), "你好", ttsConfig, 20_000).unavailable().reason
+        )
     }
 
     @Test
@@ -139,11 +153,28 @@ class SpeechDirectorTest {
 
         val script = SpeechDirector(resolver(chatModel), listOf(factory), catalog())
             .quickRefine(listOf("alice"), source, ttsConfig, 20_000)
+            .planned()
 
-        assertEquals("上限二十。", script?.segments?.single()?.spokenText)
+        assertEquals("上限二十。", script.segments.single().spokenText)
         assertEquals(false, configSlot.captured.options?.thinking)
         assertTrue(schemaSlot.captured.contains("segments"))
         assertTrue(promptSlot.captured.options === options)
+    }
+
+    @Test
+    fun `a voice copied with its display label is stored as the bare id`() = runBlocking {
+        // The refined script goes straight into synthesis, so the label form would be sent to the
+        // provider verbatim. Validation alone cannot fix that: it only answers "is this allowed?".
+        val source = "上限20。"
+        val model = mockk<ChatModel>()
+        coEvery { model.callAsync(any<Prompt>()) } returns
+            response(output(source, "上限二十。", voice = "voice-a｜A"))
+
+        val script = SpeechDirector(resolver(model), catalog = catalog())
+            .quickRefine(listOf("alice"), source, ttsConfig, 20_000)
+            .planned()
+
+        assertEquals("voice-a", script.segments.single().voice)
     }
 
     @Test
@@ -154,16 +185,42 @@ class SpeechDirectorTest {
         coEvery { model.callAsync(any<Prompt>()) } returns response(output("很长。", "很长。"))
         val text = "很".repeat(SpeechDirector.REFINE_MAX_CHARS + 1)
 
-        assertNull(SpeechDirector(resolver(model), catalog = catalog()).quickRefine(listOf("alice"), text, ttsConfig, 20_000))
+        val outcome = SpeechDirector(resolver(model), catalog = catalog())
+            .quickRefine(listOf("alice"), text, ttsConfig, 20_000)
+
+        assertEquals(SpeechPlanner.REFINE_LENGTH_LIMIT, outcome.unavailable().reason)
         coVerify(exactly = 0) { model.callAsync(any<Prompt>()) }
     }
 
     @Test
     fun `the refine budget grows with the text and stays inside the skip limit`() {
         assertEquals(4, SpeechDirector.refineBudgetSeconds(10))
-        assertEquals(4, SpeechDirector.refineBudgetSeconds(600))
-        assertEquals(5, SpeechDirector.refineBudgetSeconds(750))
-        assertEquals(8, SpeechDirector.refineBudgetSeconds(SpeechDirector.REFINE_MAX_CHARS))
+        // 600 chars is exactly 5 s of writing at 120 chars/s — the last size the 4 s floor cannot serve.
+        assertEquals(5, SpeechDirector.refineBudgetSeconds(600))
+        // 679 chars is 5.7 s at this rate: floor division would hand back 5 s of a 5.7 s job.
+        assertEquals(6, SpeechDirector.refineBudgetSeconds(679))
+        assertEquals(7, SpeechDirector.refineBudgetSeconds(750))
+        assertEquals(10, SpeechDirector.refineBudgetSeconds(SpeechDirector.REFINE_MAX_CHARS))
+    }
+
+    @Test
+    fun `a timeout reports the budget it was given, not just that it failed`() = runTest {
+        // The listener's notice has to say *why*: "timed out" and "no direction model is configured"
+        // are fixed in different places. Virtual time, so waiting out the budget costs nothing.
+        val slow = mockk<ChatModel>()
+        coEvery { slow.callAsync(any<Prompt>()) } coAnswers {
+            delay(30_000)
+            response(output("你好", "你好。"))
+        }
+
+        val outcome = SpeechDirector(resolver(slow), catalog = catalog())
+            .quickRefine(listOf("alice"), "你好", ttsConfig, 20_000)
+            .unavailable()
+
+        assertEquals(SpeechPlanner.REFINE_TIMEOUT, outcome.reason)
+        // Two characters are below the floor, so the attempt was allowed the 4-second minimum.
+        assertEquals(4, outcome.budgetSeconds)
+        assertEquals("refine-timeout:4", outcome.code())
     }
 
     @Test
@@ -171,13 +228,21 @@ class SpeechDirectorTest {
         val source = "上限20。"
         val malformed = mockk<ChatModel>()
         coEvery { malformed.callAsync(any<Prompt>()) } returns response("not json")
-        assertNull(SpeechDirector(resolver(malformed), catalog = catalog())
-            .quickRefine(listOf("alice"), source, ttsConfig, 20_000))
+        assertEquals(
+            SpeechPlanner.REFINE_UNAVAILABLE,
+            SpeechDirector(resolver(malformed), catalog = catalog())
+                .quickRefine(listOf("alice"), source, ttsConfig, 20_000)
+                .unavailable().reason
+        )
 
         val loss = mockk<ChatModel>()
         coEvery { loss.callAsync(any<Prompt>()) } returns response(output(source, "上限很高。"))
-        assertNull(SpeechDirector(resolver(loss), catalog = catalog())
-            .quickRefine(listOf("alice"), source, ttsConfig, 20_000))
+        assertEquals(
+            SpeechPlanner.REFINE_REJECTED,
+            SpeechDirector(resolver(loss), catalog = catalog())
+                .quickRefine(listOf("alice"), source, ttsConfig, 20_000)
+                .unavailable().reason
+        )
     }
 
     @Test
@@ -186,8 +251,12 @@ class SpeechDirectorTest {
     fun `provider failures fall back but real cancellation propagates`() = runBlocking<Unit> {
         val failure = mockk<ChatModel>()
         coEvery { failure.callAsync(any<Prompt>()) } throws IllegalStateException("boom")
-        assertNull(SpeechDirector(resolver(failure), catalog = catalog())
-            .quickRefine(listOf("alice"), "你好", ttsConfig, 20_000))
+        assertEquals(
+            SpeechPlanner.REFINE_UNAVAILABLE,
+            SpeechDirector(resolver(failure), catalog = catalog())
+                .quickRefine(listOf("alice"), "你好", ttsConfig, 20_000)
+                .unavailable().reason
+        )
 
         val cancelled = mockk<ChatModel>()
         coEvery { cancelled.callAsync(any<Prompt>()) } throws CancellationException("client stopped")

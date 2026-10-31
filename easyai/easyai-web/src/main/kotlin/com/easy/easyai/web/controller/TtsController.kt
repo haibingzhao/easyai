@@ -5,6 +5,7 @@ import com.easy.easyai.speech.SpeechRenderEvent
 import com.easy.easyai.speech.SpeechRole
 import com.easy.easyai.speech.SpeechScript
 import com.easy.easyai.speech.SpeechSegment
+import com.easy.easyai.speech.SpeechTone
 import com.easy.easyai.speech.SpeechWarning
 import com.easy.easyai.speech.TimedWord
 import com.easy.easyai.web.security.currentGroupOwners
@@ -63,7 +64,13 @@ class TtsController(
         // a `200 OK` whose audio body is already dead.
         val prepared = AtomicReference<TtsService.PreparedSpeech?>(null)
         return mono {
-            val claimed = ttsService.openSpeak(currentGroupOwners(), request.text, request.mode, request.target())
+            val claimed = ttsService.openSpeak(
+                owners = currentGroupOwners(),
+                text = request.text,
+                mode = request.mode,
+                target = request.target(),
+                tone = SpeechTone.fromKey(request.tone)
+            )
             prepared.set(claimed)
             val response = ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("audio/mpeg"))
@@ -94,7 +101,8 @@ class TtsController(
                 owners = currentGroupOwners(),
                 text = request.text,
                 scriptId = request.scriptId,
-                target = request.target()
+                target = request.target(),
+                tone = SpeechTone.fromKey(request.tone)
             )
             claimed.set(handle)
             val events = ttsService.renderStream(
@@ -120,7 +128,12 @@ class TtsController(
         produces = [MediaType.APPLICATION_JSON_VALUE]
     )
     fun script(@RequestBody request: SpeakRequest): Mono<SpeechScriptDto> = mono {
-        val planned = ttsService.planScript(currentGroupOwners(), request.text, request.target())
+        val planned = ttsService.planScript(
+            owners = currentGroupOwners(),
+            text = request.text,
+            target = request.target(),
+            tone = SpeechTone.fromKey(request.tone)
+        )
         SpeechScriptDto.from(planned, planned.reused)
     }
 
@@ -182,6 +195,11 @@ data class SpeakRequest(
     val text: String = "",
     /** `direct` preserves the legacy behavior; `refine` plans one validated single-task script. */
     val mode: String = "direct",
+    /**
+     * How the rewrite should sound (see `SpeechTone`). Null and unknown keys both mean the default,
+     * which is also the only tone that may reuse a stored plan — a tone is not recorded with it.
+     */
+    val tone: String? = null,
     val targetType: String? = null,
     val targetId: String? = null,
     val sessionId: String? = null
@@ -204,6 +222,8 @@ data class RenderRequest(
     val text: String = "",
     val scriptId: String? = null,
     val segments: List<SpeechSegmentDto>? = null,
+    /** Only used when this request has to plan; a stored plan keeps the wording it was made with. */
+    val tone: String? = null,
     val targetType: String? = null,
     val targetId: String? = null,
     val sessionId: String? = null,

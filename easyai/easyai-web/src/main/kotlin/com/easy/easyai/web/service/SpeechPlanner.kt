@@ -5,6 +5,7 @@ import com.easy.easyai.speech.ResolvedSpeechCapabilities
 import com.easy.easyai.speech.SpeechScript
 import com.easy.easyai.speech.SpeechSegment
 import com.easy.easyai.speech.SpeechStyle
+import com.easy.easyai.speech.SpeechTone
 import com.easy.easyai.speech.SpeechWarning
 
 /**
@@ -33,15 +34,18 @@ interface SpeechPlanner {
     suspend fun capabilitiesFor(ttsConfig: ModelProviderConfig): ResolvedSpeechCapabilities?
 
     /**
-     * Build and validate one single-task rewrite, or null when no usable plan was produced.
+     * Build and validate one single-task rewrite, or say why there is none.
      * Used by the `refine` mode, which must never fail a request that direct read-aloud could serve.
+     *
+     * [tone] only shapes the wording; fidelity gates still decide whether the rewrite is speakable.
      */
     suspend fun quickRefine(
         owners: Collection<String>,
         text: String,
         ttsConfig: ModelProviderConfig,
-        maxChars: Int
-    ): SpeechScript?
+        maxChars: Int,
+        tone: SpeechTone = SpeechTone.DEFAULT
+    ): RefineOutcome
 
     /**
      * Produce a multi-segment plan, handing each validated segment to [onSegment] in order.
@@ -56,6 +60,7 @@ interface SpeechPlanner {
         maxChars: Int,
         incremental: Boolean,
         firstSegmentBudgetMs: Long? = null,
+        tone: SpeechTone = SpeechTone.DEFAULT,
         onSegment: suspend (SpeechSegment) -> Unit
     ): PlanSummary
 
@@ -75,5 +80,60 @@ interface SpeechPlanner {
         const val CODE_NOT_CONFIGURED = "NOT_CONFIGURED"
         const val CODE_TIMEOUT = "DIRECTOR_TIMEOUT"
         const val CODE_INVALID_PLAN = "INVALID_PLAN"
+
+        // Refine fallback reasons. These are wire values — the `X-Speech-Fallback` header and the
+        // warning code stored on a fallback script — so they are lower-kebab and never localized:
+        // the client owns the sentence the listener reads.
+        const val REFINE_LENGTH_LIMIT = "length-limit"
+        const val REFINE_TIMEOUT = "refine-timeout"
+        const val REFINE_NOT_CONFIGURED = "refine-not-configured"
+        const val REFINE_NO_VOICE = "refine-no-voice"
+        const val REFINE_REJECTED = "refine-rejected"
+
+        /** The reason reported when the attempt failed for none of the specific causes above. */
+        const val REFINE_UNAVAILABLE = "unavailable"
+
+        /**
+         * Whether [code] — possibly `reason:seconds` — is a refine fallback reason.
+         *
+         * Used when a stored fallback script is replayed: its warnings carry the reason, and only a
+         * known one may be turned back into a notice. A blank or stale code must not become one.
+         */
+        fun isRefineReason(code: String): Boolean = code.substringBefore(':') in REFINE_REASONS
+
+        private val REFINE_REASONS = setOf(
+            REFINE_LENGTH_LIMIT,
+            REFINE_TIMEOUT,
+            REFINE_NOT_CONFIGURED,
+            REFINE_NO_VOICE,
+            REFINE_REJECTED,
+            REFINE_UNAVAILABLE
+        )
+    }
+}
+
+/**
+ * What one refine attempt produced.
+ *
+ * The plan is either usable or absent — and an absent plan is not a diagnosis. "Reading the original"
+ * is the same sentence whether the director timed out, was never configured, or wrote a rewrite the
+ * fidelity gate threw away; those have different fixes, so the reason travels to the client and is
+ * shown next to the message. It stays a *notice*, never an error: the audio still plays.
+ */
+sealed interface RefineOutcome {
+    data class Planned(val script: SpeechScript) : RefineOutcome
+
+    /**
+     * No plan, because of [reason] (one of the `SpeechPlanner.REFINE_*` codes).
+     *
+     * [budgetSeconds] is set only for [SpeechPlanner.REFINE_TIMEOUT]: "it was given 6 s for 679
+     * characters" is what turns a timeout from mysterious into actionable.
+     */
+    data class Unavailable(
+        val reason: String,
+        val budgetSeconds: Long? = null
+    ) : RefineOutcome {
+        /** Wire form: `reason`, or `reason:seconds` when a budget explains it. */
+        fun code(): String = budgetSeconds?.let { "$reason:$it" } ?: reason
     }
 }
