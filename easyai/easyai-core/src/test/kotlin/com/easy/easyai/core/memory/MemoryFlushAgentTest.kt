@@ -48,7 +48,7 @@ class MemoryFlushAgentTest {
 
     private fun chatModelReturning(text: String): ChatModel {
         val chatModel = mockk<ChatModel>()
-        every { chatModel.call(any<Prompt>()) } returns chatResponse(text)
+        coEvery { chatModel.callAsync(any<Prompt>()) } returns chatResponse(text)
         return chatModel
     }
 
@@ -215,7 +215,7 @@ class MemoryFlushAgentTest {
     fun `an unparsable answer earns exactly one re-ask with the correction appended`() = runTest {
         val promptSlot = slot<Prompt>()
         val chatModel = mockk<ChatModel>()
-        every { chatModel.call(capture(promptSlot)) } returns chatResponse("prose again")
+        coEvery { chatModel.callAsync(capture(promptSlot)) } returns chatResponse("prose again")
 
         val result = MemoryFlushAgent(store, memoryCategories).maybeFlush(
             agentContext = agentContext,
@@ -226,7 +226,7 @@ class MemoryFlushAgentTest {
         )
 
         assertNull(result)
-        coVerify(exactly = 2) { chatModel.call(any()) }
+        coVerify(exactly = 2) { chatModel.callAsync(any()) }
         val lastPrompt = promptSlot.captured.instructions.joinToString("\n") { it.text.orEmpty() }
         assertContains(lastPrompt, "could not be read as the required JSON object")
     }
@@ -247,7 +247,7 @@ class MemoryFlushAgentTest {
         )
 
         assertNull(result)
-        coVerify(exactly = 1) { chatModel.call(any()) }
+        coVerify(exactly = 1) { chatModel.callAsync(any()) }
         coVerify(exactly = 0) { store.write(any(), any(), any()) }
     }
 
@@ -416,7 +416,7 @@ class MemoryFlushAgentTest {
             coEvery { store.list(any(), any(), any()) } returns listOf(storedEntry("frp-tunnel-setup"))
             val promptSlot = slot<Prompt>()
             val chatModel = mockk<ChatModel>()
-            every { chatModel.call(capture(promptSlot)) } returns chatResponse("""{"memories": []}""")
+            coEvery { chatModel.callAsync(capture(promptSlot)) } returns chatResponse("""{"memories": []}""")
 
             MemoryFlushAgent(store, memoryCategories).maybeFlush(
                 agentContext = agentContext,
@@ -486,7 +486,7 @@ class MemoryFlushAgentTest {
         fun `the prompt offers the active domain's categories and none other`() = runTest {
             val promptSlot = slot<Prompt>()
             val chatModel = mockk<ChatModel>()
-            every { chatModel.call(capture(promptSlot)) } returns chatResponse("""{"memories": []}""")
+            coEvery { chatModel.callAsync(capture(promptSlot)) } returns chatResponse("""{"memories": []}""")
 
             MemoryFlushAgent(store, homeCategories).maybeFlush(
                 agentContext = agentContext,

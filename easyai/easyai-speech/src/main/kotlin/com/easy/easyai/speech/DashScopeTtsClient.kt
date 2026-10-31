@@ -8,7 +8,7 @@ import io.netty.channel.ChannelOption
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.coroutines.reactor.mono
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpHeaders
 import org.springframework.web.reactive.socket.WebSocketMessage
@@ -21,7 +21,9 @@ import reactor.netty.http.client.WebsocketClientSpec
 import tools.jackson.databind.JsonNode
 import java.io.ByteArrayOutputStream
 import java.net.URI
+import java.time.Duration
 import java.util.*
+import java.util.concurrent.TimeoutException
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -61,10 +63,33 @@ internal class DashScopeTtsClient(
         voice: String?,
         format: String?,
         plainTextOnly: Boolean = false
+    ): Pair<ByteArray, String> = synthesize(
+        text = text,
+        overrides = SpeechOverrides(
+            voice = voice,
+            inputMode = if (plainTextOnly) SpeechInputMode.PLAIN_TEXT else SpeechInputMode.PROVIDER_GENERATED_MARKUP
+        ),
+        format = format
+    )
+
+    suspend fun synthesize(
+        text: String,
+        overrides: SpeechOverrides,
+        format: String?
     ): Pair<ByteArray, String> {
-        val prepared = prepare(text, voice, format, plainTextOnly)
-        val bytes = try {
-            transport.run(
+        val audio = synthesizeResult(text, overrides, format)
+        return audio.bytes to audio.mimeType
+    }
+
+    /** Same round-trip, keeping the word timings the provider reported for the clip. */
+    suspend fun synthesizeResult(
+        text: String,
+        overrides: SpeechOverrides,
+        format: String?
+    ): SpeechAudio {
+        val prepared = prepare(text, overrides, format)
+        val result = try {
+            transport.runWithWords(
                 DashScopeTtsProtocol.endpoint(settings.baseUrl),
                 settings.apiKey,
                 prepared.exchange,
@@ -75,8 +100,8 @@ internal class DashScopeTtsClient(
         } catch (e: Exception) {
             throw IllegalStateException("DashScope speech synthesis failed: ${e.message}", e)
         }
-        require(bytes.isNotEmpty()) { "provider returned empty audio" }
-        return bytes to mimeOf(prepared.format)
+        require(result.bytes.isNotEmpty()) { "provider returned empty audio" }
+        return SpeechAudio(result.bytes, mimeOf(prepared.format), result.words)
     }
 
     /** Emit native audio frames immediately; WAV keeps the one-shot path because its header needs final sizes. */
@@ -85,8 +110,21 @@ internal class DashScopeTtsClient(
         voice: String?,
         format: String?,
         plainTextOnly: Boolean = false
+    ): Flux<SpeechAudio> = stream(
+        text = text,
+        overrides = SpeechOverrides(
+            voice = voice,
+            inputMode = if (plainTextOnly) SpeechInputMode.PLAIN_TEXT else SpeechInputMode.PROVIDER_GENERATED_MARKUP
+        ),
+        format = format
+    )
+
+    fun stream(
+        text: String,
+        overrides: SpeechOverrides,
+        format: String?
     ): Flux<SpeechAudio> = Flux.defer {
-        val prepared = prepare(text, voice, format, plainTextOnly)
+        val prepared = prepare(text, overrides, format)
         val uri = DashScopeTtsProtocol.endpoint(settings.baseUrl)
         val chunks = if (prepared.format == "wav") {
             mono { transport.run(uri, settings.apiKey, prepared.exchange, settings.timeoutSeconds) }.flux()
@@ -102,9 +140,8 @@ internal class DashScopeTtsClient(
 
     private fun prepare(
         text: String,
-        voice: String?,
-        format: String?,
-        plainTextOnly: Boolean
+        overrides: SpeechOverrides,
+        format: String?
     ): PreparedSpeech {
         val model = settings.defaultModel.trim()
         require(model.isNotBlank()) { "DashScope speech needs a model id (e.g. qwen-audio-3.1-tts-flash)" }
@@ -113,7 +150,7 @@ internal class DashScopeTtsClient(
         }
 
         val options = parseOptions(settings.options)
-        val resolvedVoice = voice?.takeIf { it.isNotBlank() }
+        val resolvedVoice = overrides.voice?.takeIf { it.isNotBlank() }
             ?: options?.string("voice")
             ?: DEFAULT_VOICES[model]
             ?: throw IllegalStateException(
@@ -121,23 +158,31 @@ internal class DashScopeTtsClient(
                     "or pass a system voice from the Qwen-Audio-TTS voice list"
             )
         val resolvedFormat = supportedFormat(format?.takeIf { it.isNotBlank() } ?: options?.string("format"))
-        val ssml = !plainTextOnly && options?.boolean("enable_ssml") == true
-
+        val ssml = overrides.inputMode == SpeechInputMode.PROVIDER_GENERATED_MARKUP &&
+            options?.boolean("enable_ssml") == true
         require(text.isNotBlank()) { "nothing to synthesize: the text is blank" }
-        require(text.length <= DashScopeTtsProtocol.MAX_TOTAL_CHARS) {
-            "text is ${text.length} characters, over the ${DashScopeTtsProtocol.MAX_TOTAL_CHARS}-character limit of one speech task"
+        // A segment emotion is a control tag prepended to the whole segment; the text may already
+        // open with one the planner wrote itself, in which case prefixing would override it.
+        val taggedText = overrides.emotionTag?.takeIf { it.isNotBlank() }?.takeIf { opensWithPlainText(text) }
+            ?.let { tag ->
+                require(EMOTION_TAG_PATTERN.matches(tag)) { "invalid emotion tag" }
+                "$tag$text"
+            } ?: text
+
+        require(taggedText.length <= DashScopeTtsProtocol.MAX_TOTAL_CHARS) {
+            "text is ${taggedText.length} characters, over the ${DashScopeTtsProtocol.MAX_TOTAL_CHARS}-character limit of one speech task"
         }
         // SSML mode accepts exactly one continue-task, so an over-limit SSML document cannot be split.
-        if (ssml && text.length > DashScopeTtsProtocol.MAX_CHARS_PER_FRAME) {
+        if (ssml && taggedText.length > DashScopeTtsProtocol.MAX_CHARS_PER_FRAME) {
             throw IllegalStateException(
-                "SSML is enabled and this text is ${text.length} characters; SSML allows a single frame of at most " +
+                "SSML is enabled and this text is ${taggedText.length} characters; SSML allows a single frame of at most " +
                     "${DashScopeTtsProtocol.MAX_CHARS_PER_FRAME} characters. Shorten it or disable enable_ssml."
             )
         }
 
         val taskId = UUID.randomUUID().toString()
-        val parameters = buildParameters(resolvedVoice, resolvedFormat, options, ssml)
-        val chunks = DashScopeTtsProtocol.chunkText(text, singleFrame = ssml)
+        val parameters = buildParameters(resolvedVoice, resolvedFormat, overrides, options, ssml)
+        val chunks = DashScopeTtsProtocol.chunkText(taggedText, singleFrame = ssml)
         val exchange = TtsExchange(
             runTask = DashScopeTtsProtocol.runTask(taskId, model, parameters),
             continueTasks = chunks.map { DashScopeTtsProtocol.continueTask(taskId, it) },
@@ -160,6 +205,7 @@ internal class DashScopeTtsClient(
     private fun buildParameters(
         voice: String,
         format: String,
+        overrides: SpeechOverrides,
         options: JsonNode?,
         ssml: Boolean
     ): Map<String, Any> = linkedMapOf<String, Any>().apply {
@@ -167,14 +213,16 @@ internal class DashScopeTtsClient(
         put("format", format)
         put("sample_rate", options?.int("sample_rate")?.takeIf { it in DashScopeTtsProtocol.SAMPLE_RATES } ?: DEFAULT_SAMPLE_RATE)
         options?.int("volume")?.takeIf { it in 0..100 }?.let { put("volume", it) }
-        options?.double("rate")?.takeIf { it in 0.5..2.0 }?.let { put("rate", it) }
-        options?.double("pitch")?.takeIf { it in 0.5..2.0 }?.let { put("pitch", it) }
+        (overrides.rate ?: options?.double("rate"))?.takeIf { it in 0.5..2.0 }?.let { put("rate", it) }
+        (overrides.pitch ?: options?.double("pitch"))?.takeIf { it in 0.5..2.0 }?.let { put("pitch", it) }
         // Bit rate only exists for the compressed formats; sending it with pcm/wav would be ignored at best.
         if (format == "mp3" || format == "opus") {
             options?.int("bit_rate")?.takeIf { it in 6..510 }?.let { put("bit_rate", it) }
         }
         options?.boolean("enable_ssml")?.let { put("enable_ssml", ssml) }
-        options?.string("instruction")?.takeIf { it.isNotBlank() }?.let { put("instruction", it) }
+        (overrides.instruction ?: options?.string("instruction"))?.takeIf { it.isNotBlank() }?.let {
+            put("instruction", it)
+        }
         // The service reads only the first element; the row and every other consumer write an array.
         options?.strings("language_hints")?.takeIf { it.isNotEmpty() }?.let { put("language_hints", it) }
         options?.boolean("word_timestamp_enabled")?.let { put("word_timestamp_enabled", it) }
@@ -253,6 +301,19 @@ internal class DashScopeTtsClient(
         private const val DEFAULT_FORMAT = "mp3"
 
         /**
+         * A control tag as the vendor publishes it, including the multi-word ones:
+         * `[serious]`, `[very slowly]`, `[deep and loud shouting]`.
+         */
+        private val EMOTION_TAG_PATTERN = Regex("\\[[A-Za-z][A-Za-z0-9 _-]{0,39}]")
+
+        /**
+         * False when [text] already opens with an inline tag, which a prepended emotion would
+         * override. Deliberately coarse: treating a leading `[1]` as a tag costs one dropped
+         * prefix, while missing a real leading tag would silently discard the planner's choice.
+         */
+        private fun opensWithPlainText(text: String): Boolean = !text.trimStart().startsWith("[")
+
+        /**
          * Sent explicitly rather than leaning on the server default (22050), so the same row produces
          * the same audio whether it is synthesised over this channel or another one.
          */
@@ -297,9 +358,31 @@ internal data class TtsExchange(
     val format: String
 )
 
+/** One duplex round-trip's result: the assembled clip plus any word timings the provider sent. */
+internal data class TtsResult(
+    val bytes: ByteArray,
+    val words: List<TimedWord> = emptyList()
+) {
+    override fun equals(other: Any?): Boolean =
+        this === other || (other is TtsResult && bytes.contentEquals(other.bytes) && words == other.words)
+
+    override fun hashCode(): Int = bytes.contentHashCode() * 31 + words.hashCode()
+}
+
 /** One duplex round-trip, isolated so the protocol shapes can be tested without a socket. */
 internal fun interface TtsTransport {
     suspend fun run(uri: String, apiKey: String, exchange: TtsExchange, timeoutSeconds: Long): ByteArray
+
+    /**
+     * Metadata-aware variant. The default reports no timings, so a one-line fake transport in a test
+     * stays a one-liner; the real socket overrides it and collects what the provider sent.
+     */
+    suspend fun runWithWords(
+        uri: String,
+        apiKey: String,
+        exchange: TtsExchange,
+        timeoutSeconds: Long
+    ): TtsResult = TtsResult(run(uri, apiKey, exchange, timeoutSeconds))
 
     /** One-shot fallback for test/fake transports; the real socket overrides this with live frames. */
     fun stream(uri: String, apiKey: String, exchange: TtsExchange, timeoutSeconds: Long): Flux<ByteArray> =
@@ -355,15 +438,29 @@ internal object WebSocketTransport : TtsTransport {
         apiKey: String,
         exchange: TtsExchange,
         timeoutSeconds: Long
-    ): ByteArray {
+    ): ByteArray = runWithWords(uri, apiKey, exchange, timeoutSeconds).bytes
+
+    override suspend fun runWithWords(
+        uri: String,
+        apiKey: String,
+        exchange: TtsExchange,
+        timeoutSeconds: Long
+    ): TtsResult {
         require(apiKey.isNotBlank()) { "DashScope speech needs an API key" }
         val headers = HttpHeaders()
         headers.set(HttpHeaders.AUTHORIZATION, "bearer $apiKey")
         headers.set("X-DashScope-DataInspection", "enable")
 
         val audio = ByteArrayOutputStream()
+        val words = mutableListOf<TimedWord>()
         val state = TaskState()
-        withTimeout(timeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS).seconds) {
+        val limit = timeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS).seconds
+        // `withTimeoutOrNull` plus an explicit exception, not `withTimeout`: the latter throws a
+        // `TimeoutCancellationException`, which *is* a CancellationException, so every caller above
+        // treats a slow provider as "the user navigated away" — no retry, no error, no `Failed` event.
+        // The distinction matters: a real cancellation still propagates from `withTimeoutOrNull`, while
+        // only an expired budget comes back as null.
+        val completed = withTimeoutOrNull(limit) {
             client.execute(URI.create(uri), headers) { session ->
                 session.send(Mono.just(session.textMessage(exchange.runTask)))
                     .then(
@@ -374,10 +471,15 @@ internal object WebSocketTransport : TtsTransport {
                             },
                             exchange = exchange,
                             audio = audio,
-                            state = state
+                            state = state,
+                            onWords = { incoming -> words += incoming }
                         )
                     )
             }.awaitSingleOrNull()
+            true
+        }
+        if (completed == null) {
+            throw TimeoutException("speech synthesis produced no result within ${limit.inWholeSeconds}s")
         }
 
         if (!state.finished) {
@@ -388,13 +490,20 @@ internal object WebSocketTransport : TtsTransport {
         }
         val bytes = DashScopeTtsProtocol.finalizeAudio(audio.toByteArray(), exchange.format)
         logger.debug(
-            "DashScope TTS done: {} bytes in {} frame(s), first audio at {} ms, total {} ms",
+            "DashScope TTS done: {} bytes in {} frame(s), {} words, first audio at {} ms, total {} ms",
             bytes.size,
             state.binaryFrames,
+            words.size,
             state.firstAudioNanos?.let { (it - state.startedAtNanos) / 1_000_000 } ?: -1,
             (System.nanoTime() - state.startedAtNanos) / 1_000_000
         )
-        return bytes
+        // Frames may repeat a word while its sentence is still being synthesized. Dropping *only* an
+        // immediate exact repeat keeps that fix without erasing a word that legitimately recurs later:
+        // `distinctBy(beginMs, text)` would also collapse two sentences whose timings restart at 0.
+        val deduped = ArrayList<TimedWord>(words.size).apply {
+            for (word in words) if (lastOrNull() != word) add(word)
+        }
+        return TtsResult(bytes, deduped)
     }
 
     /** Live variant of [run]: publish each binary frame and never retain the whole clip. */
@@ -453,7 +562,7 @@ internal object WebSocketTransport : TtsTransport {
             // HTTP disconnect or server timeout disposes the socket, which is the provider cancel path.
             sink.onDispose { disposable.dispose() }
         }, FluxSink.OverflowStrategy.BUFFER).timeout(
-            java.time.Duration.ofSeconds(timeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS))
+            Duration.ofSeconds(timeoutSeconds.coerceIn(1, MAX_TIMEOUT_SECONDS))
         )
     }
 
@@ -469,11 +578,12 @@ internal object WebSocketTransport : TtsTransport {
         exchange: TtsExchange,
         audio: ByteArrayOutputStream?,
         state: TaskState,
-        onAudio: (ByteArray) -> Unit = {}
+        onAudio: (ByteArray) -> Unit = {},
+        onWords: (List<TimedWord>) -> Unit = {}
     ): Mono<Void> =
         messages
             .concatMap { message ->
-                handle(message, exchange, audio, state, sendFrames, onAudio)
+                handle(message, exchange, audio, state, sendFrames, onAudio, onWords)
                     // Deferred on purpose: `thenReturn(state.terminal)` evaluates its argument when
                     // the inner Mono is *assembled*, i.e. before this frame is handled, so the value
                     // would always be the pre-frame one and `takeUntil` would never fire. That left
@@ -489,7 +599,8 @@ internal object WebSocketTransport : TtsTransport {
         audio: ByteArrayOutputStream?,
         state: TaskState,
         sendFrames: (List<String>) -> Mono<Void>,
-        onAudio: (ByteArray) -> Unit
+        onAudio: (ByteArray) -> Unit,
+        onWords: (List<TimedWord>) -> Unit
     ): Mono<Void> = when (message.type) {
         WebSocketMessage.Type.TEXT -> {
             // Reactor Netty releases each inbound frame after receive().onNext returns. Only copy
@@ -509,6 +620,7 @@ internal object WebSocketTransport : TtsTransport {
                     // Only now may text be sent: the protocol rejects continue-task before task-started.
                     sendFrames(exchange.continueTasks + exchange.finishTask)
                 }
+                event.words.isNotEmpty() -> Mono.fromRunnable { onWords(event.words) }
                 else -> Mono.empty()
             }
         }

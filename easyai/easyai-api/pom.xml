@@ -51,6 +51,13 @@
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-core</artifactId>
         </dependency>
+        <!-- ChatModel.callAsync bridges the provider stream into a coroutine: Flow collection is
+             what makes cancelling the caller cancel the provider request (the subscription is
+             disposed, which closes the HTTP response). Version comes from the coroutines BOM. -->
+        <dependency>
+            <groupId>org.jetbrains.kotlinx</groupId>
+            <artifactId>kotlinx-coroutines-reactive</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

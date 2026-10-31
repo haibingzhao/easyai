@@ -59,6 +59,7 @@ class WatchServiceTest {
         until: LocalDate? = null,
         tags: List<WatchTag> = emptyList(),
         notifyTags: Set<String> = emptySet(),
+        completeOnMet: Boolean? = null,
         timezone: ZoneId? = null,
         mode: WatchMode = WatchMode.CHECK,
         reminder: String? = null
@@ -71,7 +72,8 @@ class WatchServiceTest {
         timezone = timezone,
         until = until,
         tags = tags,
-        notifyTags = notifyTags
+        notifyTags = notifyTags,
+        completeOnMet = completeOnMet
     )
 
     private fun service(
@@ -110,6 +112,33 @@ class WatchServiceTest {
             assertEquals(1, watch.version)
             assertEquals("alice", watch.userId)
             assertTrue(result.created)
+        }
+
+        @Test
+        fun `a recurring watch keeps monitoring after a met verdict by default`() = runTest {
+            val result = service().create(
+                origin(),
+                input(schedule = WatchScheduleInput.Every(WatchScheduleKind.DAILY, LocalTime.of(8, 0)))
+            )
+            assertFalse(result.watch.completeOnMet)
+        }
+
+        @Test
+        fun `a one-shot watch completes after a met verdict by default`() = runTest {
+            val result = service().create(origin(), input())
+            assertTrue(result.watch.completeOnMet)
+        }
+
+        @Test
+        fun `an explicit completion policy overrides the recurring default`() = runTest {
+            val result = service().create(
+                origin(),
+                input(
+                    schedule = WatchScheduleInput.Every(WatchScheduleKind.DAILY, LocalTime.of(8, 0)),
+                    completeOnMet = true
+                )
+            )
+            assertTrue(result.watch.completeOnMet)
         }
 
         @Test
@@ -361,6 +390,23 @@ class WatchServiceTest {
                 service(store).update("alice", watch.id, WatchUpdateInput(title = "x"))
             }
             assertTrue(error.message!!.contains("schedule"))
+        }
+
+        @Test
+        fun `renewing a one-shot as a recurring watch keeps monitoring after met`() = runTest {
+            val store = FakeWatchStore()
+            val watch = service(store).create(origin(), input()).watch
+            assertTrue(watch.completeOnMet)
+            store.forceStatus(watch.id, WatchStatus.COMPLETED)
+
+            val result = service(store).update(
+                "alice",
+                watch.id,
+                WatchUpdateInput(schedule = WatchScheduleInput.Every(WatchScheduleKind.DAILY, LocalTime.of(8, 0)))
+            )
+
+            // The one-shot lifecycle default does not survive a switch to a recurrence.
+            assertFalse(result.watch.completeOnMet)
         }
 
         @Test

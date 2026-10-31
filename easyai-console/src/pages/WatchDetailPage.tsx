@@ -13,6 +13,7 @@ import {
   TriangleAlert,
   XCircle,
 } from 'lucide-react';
+import { DatePicker } from '@/components/ui/DatePicker';
 import { Dialog } from '@/components/ui/Dialog';
 import {
   formatInZone,
@@ -588,13 +589,19 @@ export const WatchDetailPage: React.FC = () => {
             <div className={LABEL_CLASS}>{i18n('Schedule')}</div>
             <div>{scheduleSummary(watch)}</div>
             <div className="mt-2 text-xs text-muted-foreground">
-              {i18n('Next check')}: {formatInZone(watch.nextDueAt, watch.schedule.timezone)}
+              {i18n('Next check')}:{' '}
+              {watch.status === 'active'
+                ? formatInZone(watch.nextDueAt, watch.schedule.timezone)
+                : '—'}
             </div>
             <div className="text-xs text-muted-foreground">
               {i18n('Until')}:{' '}
               {watch.untilAt ? formatInZone(watch.untilAt, watch.schedule.timezone) : i18n('No deadline')}
             </div>
             <div className="mt-2 text-xs text-muted-foreground">
+              {i18n('Complete when met')}: {i18n(watch.completeOnMet ? 'Enabled' : 'Disabled')}
+            </div>
+            <div className="text-xs text-muted-foreground">
               {i18n('Notify policy')}: {i18n(NOTIFY_OPTIONS.find((o) => o.value === watch.notifyPolicy)?.label ?? watch.notifyPolicy)}
             </div>
             <div className="text-xs text-muted-foreground">
@@ -813,12 +820,12 @@ export const WatchDetailPage: React.FC = () => {
               </div>
 
               <div>
-                <label className={LABEL_CLASS}>{i18n('Until')}</label>
-                <input
-                  type="date"
-                  className={INPUT_CLASS}
+                <label htmlFor="watch-until" className={LABEL_CLASS}>{i18n('Until')}</label>
+                <DatePicker
+                  id="watch-until"
+                  aria-label={i18n('Until')}
                   value={edit.until}
-                  onChange={(event) => setEdit({ ...edit, until: event.target.value })}
+                  onChange={(until) => setEdit({ ...edit, until })}
                 />
               </div>
 

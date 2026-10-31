@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -139,6 +140,18 @@ class DashScopeTtsClientTest {
                 DashScopeTtsClient(settings(), RecordingTransport()).synthesize("   ", null, null)
             }
         }
+
+        @Test
+        fun `blank text is refused even when an emotion tag is prepended`() = runTest {
+            // The tag would otherwise make the payload non-blank and send "[serious]" alone to be spoken.
+            assertFailsWith<IllegalArgumentException> {
+                DashScopeTtsClient(settings(), RecordingTransport()).synthesize(
+                    "   ",
+                    SpeechOverrides(emotionTag = "[serious]"),
+                    null
+                )
+            }
+        }
     }
 
     @Nested
@@ -198,6 +211,59 @@ class DashScopeTtsClientTest {
                 .synthesize("你好", "xunanchuan_v3.1", null)
 
             assertEquals("xunanchuan_v3.1", transport.parameterValues()["voice"])
+        }
+
+        @Test
+        fun `request overrides control prosody without enabling arbitrary markup`() = runTest {
+            val transport = RecordingTransport()
+            val client = DashScopeTtsClient(
+                settings(options = """{"voice":"row-voice","instruction":"row instruction","rate":1.2,"enable_ssml":true}"""),
+                transport
+            )
+            client.synthesize(
+                "你好",
+                SpeechOverrides(
+                    voice = "request-voice",
+                    instruction = "温和讲述",
+                    emotionTag = "[serious]",
+                    rate = 0.95,
+                    inputMode = SpeechInputMode.PLAIN_TEXT
+                ),
+                "mp3"
+            )
+            val values = transport.parameterValues()
+            assertEquals("request-voice", values["voice"])
+            assertEquals("温和讲述", values["instruction"])
+            assertEquals(0.95, values["rate"])
+            assertEquals(false, values["enable_ssml"])
+            assertTrue(transport.exchange!!.continueTasks.single().contains("[serious]你好"))
+        }
+
+        @Test
+        fun `a segment emotion is not prefixed over a tag the text already opens with`() = runTest {
+            // The planner wrote `[excited]` itself; prepending `[serious]` would silently override it.
+            val transport = RecordingTransport()
+            DashScopeTtsClient(settings(), transport).synthesize(
+                "[excited]你好",
+                SpeechOverrides(emotionTag = "[serious]", inputMode = SpeechInputMode.PLAIN_TEXT),
+                "mp3"
+            )
+
+            val frame = transport.exchange!!.continueTasks.single()
+            assertTrue(frame.contains("[excited]你好"), "frame was $frame")
+            assertFalse(frame.contains("[serious]"), "frame was $frame")
+        }
+
+        @Test
+        fun `a multi-word control tag is accepted as an emotion`() = runTest {
+            val transport = RecordingTransport()
+            DashScopeTtsClient(settings(), transport).synthesize(
+                "我们开始吧",
+                SpeechOverrides(emotionTag = "[very slowly]", inputMode = SpeechInputMode.PLAIN_TEXT),
+                "mp3"
+            )
+
+            assertTrue(transport.exchange!!.continueTasks.single().contains("[very slowly]我们开始吧"))
         }
 
         @Test

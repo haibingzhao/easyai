@@ -18,7 +18,6 @@ import com.easy.easyai.core.knowledge.KnowledgeStore
 import com.easy.easyai.core.knowledge.KnowledgeTree
 import com.easy.easyai.core.storage.ObjectStorageResolver
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -948,10 +947,9 @@ $guidance$styleHint
             UserMessage(userPrompt) as Message
         )
 
-        return withContext(Dispatchers.IO) {
-            val response = chatModel.call(Prompt(messages))
-            response.result?.output?.text ?: ""
-        }
+        // Cancellable: an abandoned generation request must not keep billing the model.
+        val response = chatModel.callAsync(Prompt(messages))
+        return response.result?.output?.text ?: ""
     }
 
     private fun knowledgeNotEnabled(): ResponseStatusException =

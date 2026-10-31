@@ -230,8 +230,24 @@ export const SpeechModelFields: React.FC<SpeechModelFieldsProps> = ({ capabiliti
                 <button
                   key={tag}
                   type="button"
+                  title={i18n('Changes the delivery of everything written after it')}
                   onClick={() => update({ instruction: `${instruction}${tag}` })}
                   className="text-xs px-1.5 py-0.5 rounded border border-border hover:bg-muted"
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+          )}
+          {capabilities.supportsEmotionTags && (capabilities.paralinguisticTags?.length ?? 0) > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1">
+              {(capabilities.paralinguisticTags ?? []).map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  title={i18n('Inserts one sound at this point in the text')}
+                  onClick={() => update({ instruction: `${instruction}${tag}` })}
+                  className="text-xs px-1.5 py-0.5 rounded border border-dashed border-border hover:bg-muted"
                 >
                   {tag}
                 </button>

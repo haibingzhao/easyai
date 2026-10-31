@@ -48,12 +48,14 @@ import com.easy.easyai.repository.push.PushSubscriptionStore
 import com.easy.easyai.repository.push.R2dbcPushSubscriptionStore
 import com.easy.easyai.repository.session.*
 import com.easy.easyai.repository.skill.R2dbcAsyncSkillCatalogStore
+import com.easy.easyai.repository.speech.R2dbcSpeechScriptStore
 import com.easy.easyai.repository.storage.R2dbcStorageSettingsStore
 import com.easy.easyai.repository.swarm.R2dbcSwarmPresetStore
 import com.easy.easyai.repository.swarm.R2dbcSwarmRunStore
 import com.easy.easyai.repository.task.R2dbcAsyncTaskStore
 import com.easy.easyai.repository.task.R2dbcScheduledTaskSettingStore
 import com.easy.easyai.repository.watch.R2dbcWatchStore
+import com.easy.easyai.speech.SpeechScriptStore
 import com.easy.easyai.repository.todo.AsyncTodoStore
 import com.easy.easyai.repository.todo.R2dbcAsyncTodoStore
 import com.easy.easyai.repository.todo.TodoCompletionCheck
@@ -397,6 +399,17 @@ class R2dbcRepositoryAutoConfiguration(
             host = host,
             onChanged = eventPublisher::publishEvent
         )
+    }
+
+    /**
+     * Persisted read-aloud scripts. Plain persistence, so it lives here rather than in a speech
+     * auto-configuration: `/api/tts` treats a missing bean as "no archive", which keeps read-aloud
+     * working (memory-only, as before) on a deployment without R2DBC.
+     */
+    @Bean
+    @ConditionalOnMissingBean(SpeechScriptStore::class)
+    fun speechScriptStore(initializer: R2dbcDatabaseInitializer): SpeechScriptStore {
+        return R2dbcSpeechScriptStore(initializer.getDatabase())
     }
 
     @Bean

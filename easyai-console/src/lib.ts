@@ -126,6 +126,11 @@ export { watchService } from './services/watch-service';
 export { useWatchStore } from './services/stores/watch-store';
 export { WatchesPage } from './pages/WatchesPage';
 export { WatchDetailPage } from './pages/WatchDetailPage';
+
+// Read-aloud script library. Like Watches, the entry stays hidden until the host mounts
+// `/read-aloud` and calls `enableReadAloudNav()`.
+export { enableReadAloudNav } from './constants/navigation';
+export { ReadAloudPage } from './pages/ReadAloudPage';
 export {
   formatInZone,
   scheduleSummary,

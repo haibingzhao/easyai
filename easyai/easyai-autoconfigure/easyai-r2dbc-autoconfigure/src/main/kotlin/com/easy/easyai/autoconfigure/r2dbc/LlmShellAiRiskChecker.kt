@@ -16,9 +16,7 @@ import org.slf4j.LoggerFactory
 import com.easy.easyai.api.llm.SystemMessage
 import com.easy.easyai.api.llm.UserMessage
 import com.easy.easyai.api.llm.Prompt
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
@@ -154,9 +152,8 @@ class LlmShellAiRiskChecker(
             ),
             options
         )
-        val response = withContext(Dispatchers.IO) {
-            chatModel.call(prompt)
-        }
+        // Cancellable: the round budget above must also stop a verdict that will never be used.
+        val response = chatModel.callAsync(prompt)
         val json = JsonExtractor.extract(response.result?.output?.text ?: "") ?: return null
         return try {
             parseVerdictJson(json)

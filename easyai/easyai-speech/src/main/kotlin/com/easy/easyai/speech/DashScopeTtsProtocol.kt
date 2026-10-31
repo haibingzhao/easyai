@@ -1,6 +1,11 @@
 package com.easy.easyai.speech
 
 import com.easy.easyai.common.util.SharedObjectMapper
+import com.easy.easyai.speech.DashScopeTtsProtocol.LOOKBACK_CHARS
+import com.easy.easyai.speech.DashScopeTtsProtocol.MAX_TOTAL_CHARS
+import com.easy.easyai.speech.DashScopeTtsProtocol.finalizeAudio
+import com.easy.easyai.speech.DashScopeTtsProtocol.parseEvent
+import tools.jackson.databind.JsonNode
 import java.io.ByteArrayOutputStream
 
 /**
@@ -94,7 +99,7 @@ internal object DashScopeTtsProtocol {
         return SharedObjectMapper.instance.writeValueAsString(body)
     }
 
-    /** One server event, flattened to the three fields the client acts on. */
+    /** One server event, flattened to the fields the client acts on. */
     data class Event(
         /** `task-started` / `result-generated` / `task-finished` / `task-failed`, or null if unrecognised. */
         val type: String?,
@@ -103,7 +108,12 @@ internal object DashScopeTtsProtocol {
         /** Present on `task-failed` only, e.g. `[tts:]Engine return error code: 418`. */
         val errorMessage: String? = null,
         /** For `result-generated`: `sentence-begin` / `sentence-synthesis` / `sentence-end`. */
-        val sentenceType: String? = null
+        val sentenceType: String? = null,
+        /**
+         * Word timings carried by a `result-generated` frame, present only when the task asked for
+         * `word_timestamp_enabled`. Empty is the normal case, not an error.
+         */
+        val words: List<TimedWord> = emptyList()
     ) {
         val isFailure: Boolean get() = type == "task-failed"
         val isFinished: Boolean get() = type == "task-finished"
@@ -128,8 +138,40 @@ internal object DashScopeTtsProtocol {
             type = header.path("event").asString(null),
             errorCode = header.path("error_code").asString(null),
             errorMessage = header.path("error_message").asString(null),
-            sentenceType = output.path("type").asString(null)
+            sentenceType = output.path("type").asString(null),
+            words = parseWords(output)
         )
+    }
+
+    /**
+     * Read `output.sentence.words[]`, the only documented place for timings, with `output.words[]`
+     * as a fallback for a flattened variant.
+     *
+     * A word is only accepted when it carries a usable millisecond range: an entry with character
+     * indices instead of times cannot be turned into a seek position without knowing the clip's
+     * duration, so it is dropped rather than guessed at. Dropping is safe — the feature degrades to
+     * "no highlighting", which the client already handles.
+     */
+    private fun parseWords(output: JsonNode): List<TimedWord> {
+        val array = listOf(output.path("sentence").path("words"), output.path("words"))
+            .firstOrNull { it.isArray } ?: return emptyList()
+        return array.mapNotNull { entry ->
+            val text = entry.path("text").asString(null)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val begin = intOrNull(entry, "begin_time") ?: return@mapNotNull null
+            val end = intOrNull(entry, "end_time") ?: begin
+            if (begin !in 0..end) return@mapNotNull null
+            TimedWord(text, begin, end)
+        }
+    }
+
+    private fun intOrNull(node: JsonNode, field: String): Int? {
+        val value = node.path(field)
+        return when {
+            value.isNumber -> value.intValue()
+            // Some deployments quote numbers; an unusable value simply yields no timestamp.
+            value.isString -> value.asString(null)?.trim()?.toIntOrNull()
+            else -> null
+        }
     }
 
     /** True for a frame carrying an event [parseEvent] recognised. */
@@ -163,6 +205,10 @@ internal object DashScopeTtsProtocol {
                 val window = text.substring(from, end)
                 val breakAt = window.indexOfLast { it in SENTENCE_ENDS }
                 if (breakAt >= 0) end = from + breakAt + 1
+                // A cut inside `[clears throat]` would speak "[clears" and then a bare "throat]",
+                // and the second frame's tag would no longer parse at either end.
+                val beforeTag = avoidSplittingTag(text, start, end)
+                if (beforeTag > start) end = beforeTag
                 // Never split a surrogate pair: end-1 being a high surrogate means the pair straddles the cut.
                 if (end > start + 1 && Character.isHighSurrogate(text[end - 1])) end--
                 if (end <= start) end = minOf(start + limit, text.length)
@@ -171,6 +217,26 @@ internal object DashScopeTtsProtocol {
             start = end
         }
         return out
+    }
+
+    /**
+     * The largest cut at or before [end] that does not land inside a `[...]` tag.
+     *
+     * Tags are short and never nested, so only the nearest `[` before [end] can matter: if a `]`
+     * follows it on the far side of the cut, the cut is inside the tag and [end] moves back to that
+     * bracket. A `[` with no `]` after it is literal text (an arrow, a subscript), not a tag.
+     *
+     * Returns [end] unchanged when the bracket opens before [start] — that tag was already split by
+     * the previous frame and cannot be repaired here. The one case that overruns the limit is a tag
+     * longer than [limit] starting exactly at [start]: a slightly oversized frame is recoverable,
+     * a spoken "[clears" is not.
+     */
+    private fun avoidSplittingTag(text: String, start: Int, end: Int): Int {
+        val open = text.lastIndexOf('[', end - 1)
+        if (open < start) return end
+        val close = text.indexOf(']', open + 1)
+        if (close < 0 || close < end) return end
+        return if (open > start) open else close + 1
     }
 
     /**

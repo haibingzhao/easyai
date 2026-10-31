@@ -1,3 +1,13 @@
+/**
+ * How a reply is turned into speech.
+ *
+ * - `direct` reads the text as written, one clip — fastest, and the right default for code.
+ * - `refine` plans one validated single-voice script, so numbers and terms survive intact.
+ * - `director` plans several segments and plays them back to back — better for long explanations,
+ *   at the cost of waiting for a plan.
+ */
+export type ReadAloudMode = 'direct' | 'refine' | 'director';
+
 export interface Settings {
   language: string;
   theme: 'light' | 'dark' | 'system';
@@ -272,7 +282,10 @@ export interface SpeechCapabilities {
   /** Protocol ceiling for one task across all frames. */
   maxCharsPerTask: number;
   docsUrl?: string;
+  /** Control tags: they change the delivery of everything after them, e.g. `[excited]`. */
   emotionTags: string[];
+  /** Paralinguistic tags: one inserted sound at their position, e.g. `[laughing]`. */
+  paralinguisticTags?: string[];
   voiceGroups: VoiceGroup[];
   defaultVoice?: string;
   voices: VoiceSpec[];
@@ -375,7 +388,7 @@ export interface ModelConfigTestResult {
 // Auxiliary (per-task) model settings types (Settings → Task Models)
 
 /** A background purpose that can be backed by its own model. Mirrors the backend AuxModelTask enum. */
-export type AuxModelTaskKey = 'compaction' | 'session_title' | 'skill_selection' | 'asr' | 'dictation_refine' | 'memory_curation' | 'tts';
+export type AuxModelTaskKey = 'compaction' | 'session_title' | 'skill_selection' | 'asr' | 'dictation_refine' | 'memory_curation' | 'tts' | 'speech_direction';
 
 /** Which layer is in force for a task: the user's choice, or the default (chat-session model). */
 export type AuxModelEffectiveSource = 'user' | 'default';

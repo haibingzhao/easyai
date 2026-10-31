@@ -125,6 +125,7 @@ class AuxModelConfigController(
             AuxModelTask.SKILL_SELECTION to ModelType.CHAT,
             AuxModelTask.DICTATION_REFINE to ModelType.CHAT,
             AuxModelTask.MEMORY_CURATION to ModelType.CHAT,
+            AuxModelTask.SPEECH_DIRECTION to ModelType.CHAT,
             AuxModelTask.ASR to ModelType.ASR,
             AuxModelTask.TTS to ModelType.SPEECH
         )

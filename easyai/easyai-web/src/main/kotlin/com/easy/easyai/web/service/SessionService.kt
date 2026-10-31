@@ -15,6 +15,7 @@ import com.easy.easyai.repository.session.MessageWithTimestamp
 import com.easy.easyai.skills.team.TeamCoordinationStateRegistry
 import com.easy.easyai.snapshot.SnapshotService
 import com.easy.easyai.snapshot.model.FileDiff
+import com.easy.easyai.speech.SpeechScriptStore
 import com.easy.easyai.tools.background.BackgroundTaskManagerRegistry
 import com.easy.easyai.web.model.*
 import kotlinx.coroutines.CancellationException
@@ -40,7 +41,9 @@ class SessionService(
     /** Optional: cleans up background task manager on session deletion. */
     private val backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null,
     /** Optional: releases the temporary workspace a project-less session was given. */
-    private val workspaceService: DefaultWorkspaceService? = null
+    private val workspaceService: DefaultWorkspaceService? = null,
+    /** Optional: retires the read-aloud scripts captured from a session when that session goes away. */
+    private val speechScriptStore: SpeechScriptStore? = null
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper = SharedObjectMapper.instance
@@ -758,6 +761,9 @@ class SessionService(
         // Resolve project context once for all file-based cleanups
         val context = resolveSessionContext(id, userId, owners)
         val projectPath = context?.projectPath
+        // The context lookup is the ownership check for everything below: a session id that belongs
+        // to someone else resolves to null, and `archiveForSession` is deliberately not owner-scoped.
+        val ownedByCaller = context != null
 
         // Clean up snapshot session files before closing
         try {
@@ -815,11 +821,15 @@ class SessionService(
                 teamExecutionStore.deleteByTeamSession(id)
                 memberSessionIds.forEach { memberSessionId ->
                     sessionStore.delete(memberSessionId, userId)
+                    if (ownedByCaller) archiveScriptsFor(memberSessionId)
                 }
             }
         } catch (e: Exception) {
             logger.warn("Failed to clean up team records for session {}: {}", id, e.message)
         }
+        // Retire the read-aloud scripts captured from this transcript. Last among the record
+        // cleanups so a failure here cannot leave a half-deleted session behind.
+        if (ownedByCaller) archiveScriptsFor(id)
         // Release the temporary workspace last: forks and team member sessions deleted above
         // may still share it, and the sibling check needs their rows to be gone. The id prefix is
         // the marker here because a scratch directory already deleted out from under the DB leaves
@@ -833,6 +843,27 @@ class SessionService(
             }
         }
         logger.info("Deleted session: {}", id)
+    }
+
+    /**
+     * Retire the read-aloud scripts captured from a deleted session.
+     *
+     * Kept, not deleted: the audio may be someone's favourite and the row is the only record of
+     * what was said. Archiving still does the two things that matter — a script whose transcript is
+     * gone can never be reused over a regenerated reply, and it leaves the library's default list.
+     *
+     * Swallows its own failure: losing a convenience must never fail a delete.
+     */
+    private suspend fun archiveScriptsFor(sessionId: String) {
+        val store = speechScriptStore ?: return
+        try {
+            val archived = store.archiveForSession(sessionId)
+            if (archived > 0) {
+                logger.info("Archived {} read-aloud script(s) of deleted session {}", archived, sessionId)
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to archive read-aloud scripts of session {}: {}", sessionId, e.message)
+        }
     }
 
     private suspend fun loadPendingPermission(sessionId: String): Map<String, Any?>? {

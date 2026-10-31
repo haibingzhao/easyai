@@ -143,7 +143,7 @@ class WatchService(
             version = 1,
             extensionCount = 0,
             tags = tags,
-            completeOnMet = input.completeOnMet,
+            completeOnMet = input.completeOnMet ?: (schedule.kind == WatchScheduleKind.AT),
             notifyPolicy = input.notifyPolicy,
             notifyTags = notifyTags,
             sourceAgentId = origin.sourceAgentId,
@@ -271,6 +271,13 @@ class WatchService(
             WatchPendingAction.CHECK
         }
         val status = if (renewing) WatchStatus.ACTIVE else watch.status
+        // A schedule change carries the new lifecycle's default: re-arming a one-shot as a recurring
+        // watch must keep monitoring after MET instead of finishing on the first hit.
+        val completeOnMet = input.completeOnMet ?: if (schedule.kind == watch.schedule.kind) {
+            watch.completeOnMet
+        } else {
+            schedule.kind == WatchScheduleKind.AT
+        }
         val updated = watch.copy(
             title = title,
             condition = condition,
@@ -284,7 +291,7 @@ class WatchService(
             version = watch.version + 1,
             extensionCount = if (renewing) 0 else watch.extensionCount,
             tags = tags,
-            completeOnMet = input.completeOnMet ?: watch.completeOnMet,
+            completeOnMet = completeOnMet,
             notifyPolicy = input.notifyPolicy ?: watch.notifyPolicy,
             notifyTags = notifyTags,
             allowedTools = input.allowedTools?.map { it.trim() }?.filter { it.isNotEmpty() }?.distinct()

@@ -1065,4 +1065,66 @@ object Tables {
         }
     }
 
+    /**
+     * Persisted read-aloud plans (see V48).
+     *
+     * Polymorphic by design: `target_type` says what the text came from and `target_id` points at
+     * it; `session_id` is a query-only denormalization for the per-session list. No foreign keys —
+     * a deleted target archives its scripts instead of blocking the delete.
+     *
+     * `segments_json` is never selected by list queries; every list column is a summary so a
+     * 20 000-character plan does not travel with the page.
+     */
+    object SpeechScriptTable : Table("speech_script") {
+        val id = varchar("id", 255)
+        val userId = varchar("user_id", 255)
+        val owners = text("owners_json").nullable()
+
+        val targetType = varchar("target_type", 32)
+        val targetId = varchar("target_id", 255).nullable()
+        val sessionId = varchar("session_id", 255).nullable()
+
+        val title = varchar("title", 200)
+        val sourceText = text("source_text")
+        // 80, not 64: `SpokenTextNormalizer.sourceDigest` writes `sha256:` + 64 hex = 71 chars, and a
+        // 64-wide column rejected every archive write (see V49).
+        val sourceDigest = varchar("source_digest", 80)
+        val sourceChars = integer("source_chars")
+        val spokenChars = integer("spoken_chars")
+
+        val mode = varchar("mode", 16)
+        val status = varchar("status", 16)
+        val revision = integer("revision")
+        val segmentCount = integer("segment_count")
+
+        val style = varchar("style", 32)
+        val mood = varchar("mood", 200).nullable()
+        val segments = text("segments_json")
+        val warnings = text("warnings_json").nullable()
+
+        val ttsParams = text("tts_params_json")
+        val directionParams = text("direction_params_json").nullable()
+
+        val audioKey = varchar("audio_key", 512).nullable()
+        val audioMime = varchar("audio_mime", 64).nullable()
+        val audioBytes = long("audio_bytes").nullable()
+        val audioDurationMs = integer("audio_duration_ms").nullable()
+
+        val isFavorite = bool("is_favorite")
+        val playCount = integer("play_count")
+        val lastPlayedAt = long("last_played_at").nullable()
+
+        val createdAt = long("created_at")
+        val updatedAt = long("updated_at")
+
+        override val primaryKey = PrimaryKey(id)
+
+        init {
+            index(false, userId, updatedAt)
+            index(false, targetType, targetId)
+            index(false, userId, sessionId)
+            index(false, sourceDigest)
+        }
+    }
+
 }
