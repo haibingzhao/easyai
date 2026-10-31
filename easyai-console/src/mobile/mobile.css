@@ -193,6 +193,23 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+.mobile-app [data-meta-tts-mode] {
+  min-width: 88px;
+  min-height: 44px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The script-panel entry point only exists in director mode; on touch it needs the same 44pt
+   target as the speaker beside it, or it reads as a decoration rather than a control. */
+.mobile-app [data-meta-tts-script] {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+
 /* ===== Message density ===== */
 
 .mobile-app .user-message-container {

@@ -166,7 +166,8 @@ data class WatchCreateInput(
     /** Calendar date in the watch's zone; the store receives the end of that day. */
     val until: LocalDate? = null,
     val tags: List<WatchTag> = emptyList(),
-    val completeOnMet: Boolean = true,
+    /** Null selects the lifecycle default: one-shot watches complete on met; recurring ones continue. */
+    val completeOnMet: Boolean? = null,
     val notifyPolicy: WatchNotifyPolicy = WatchNotifyPolicy.ON_CHANGE,
     val notifyTags: Set<String> = emptySet(),
     val sourceHints: String? = null,

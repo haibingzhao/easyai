@@ -1,11 +1,15 @@
 import React, { useMemo, useState } from 'react';
-import { GitBranch, Bookmark, Volume2 } from 'lucide-react';
+import { GitBranch, Bookmark, Volume2, SlidersHorizontal } from 'lucide-react';
 import type { AssistantMessage } from '../../types/message';
+import type { ReadAloudMode } from '../../types/settings';
 import { useChatStore } from '@/services/stores/chat-store';
+import { useSettingsStore } from '@/services/stores/settings-store';
 import { sessionService } from '@/services/session-service';
 import { switchToSession } from '@/services/session-switch';
 import { SaveToKnowledgeDialog } from '@/components/knowledge/SaveToKnowledgeDialog';
 import { VolumeLoadingIcon } from '@/components/icons/VolumeLoadingIcon';
+import { TtsScriptPanel } from '@/components/chat/TtsScriptPanel';
+import type { SpeechTargetRef } from '@/services/tts-service';
 import { useTtsAvailability } from '@/hooks/useTtsAvailability';
 import { useTtsPlayback } from '@/hooks/useTtsPlayback';
 import { MAX_SPEECH_CHARS, stripMarkdownForSpeech } from '@/utils/speech-text';
@@ -29,6 +33,7 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
   const [forking, setForking] = useState(false);
   const [forkConfirmOpen, setForkConfirmOpen] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [scriptPanelOpen, setScriptPanelOpen] = useState(false);
 
   const forkTarget = [...messages].reverse().find((m) => m.messageId);
   // Forking branches into a new editable session; on a read-only background-task transcript there is
@@ -42,6 +47,8 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
   // The clip is shared conversation-wide, so this bar only reports the slice that belongs to it.
   const ttsAvailability = useTtsAvailability();
   const tts = useTtsPlayback();
+  const readAloudMode = useSettingsStore((state) => state.readAloudMode);
+  const setReadAloudMode = useSettingsStore((state) => state.setReadAloudMode);
   // Cleaning is not free on a long answer and the list re-renders while streaming; cache it and
   // reuse the same string on click instead of cleaning twice.
   const speechText = useMemo(() => stripMarkdownForSpeech(saveContent), [saveContent]);
@@ -54,18 +61,40 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
   /** Stable per-message identity: an unsaved message still needs a key of its own. */
   const lastMessage = messages[messages.length - 1];
   const speechKey = saveMessageId ?? `ts:${lastMessage?.timestamp ?? 0}:${speechText.length}`;
+  /**
+   * Where the speech comes from, so the server can file the plan under this reply and hand it back
+   * on the next preview instead of paying for a second planning call. A message that was never
+   * persisted has no id to file under, and then the plan simply is not archived.
+   */
+  const speechTarget = useMemo<SpeechTargetRef | undefined>(
+    () =>
+      saveMessageId && sessionId
+        ? { type: 'session_message', id: saveMessageId, sessionId }
+        : undefined,
+    [saveMessageId, sessionId]
+  );
   const speaking = tts.activeKey === speechKey;
+  /** Present only while a directed plan owns this message; one clip has no segments to count. */
+  const ttsProgress = speaking ? tts.progress : undefined;
   const ttsError = speaking ? tts.error : null;
+  /** Not a failure: today, that the reply is being read plainly because no plan was produced. */
+  const ttsNotice = speaking ? tts.notice : null;
   /** A clip this message owns is loaded: playing, or parked because the browser blocked autoplay. */
   const ttsLoaded = speaking && (tts.state === 'playing' || tts.state === 'ready');
   const ttsLoading = speaking && tts.state === 'loading';
   const ttsPlaying = speaking && tts.state === 'playing';
   /**
+   * A loaded clip the browser refused to autoplay. One more tap finishes it, so this stays
+   * clickable even when availability has since turned `ready: false` — otherwise a parked clip
+   * becomes unreachable and the paid synthesis behind it is stranded.
+   */
+  const ttsResumable = speaking && tts.state === 'ready';
+  /**
    * The clip is still waiting for its audio — either the request is in flight, or the browser parked
    * a loaded clip behind the autoplay policy and one more tap is needed. Both show the same "not
    * speaking yet" speaker.
    */
-  const ttsPending = ttsLoading || (speaking && tts.state === 'ready');
+  const ttsPending = ttsLoading || ttsResumable;
   /** Loading cancels synthesis; playing stops audio and any body still streaming. */
   const ttsActive = ttsLoading || ttsPlaying;
   const speakTitle = !ttsAvailability.ready
@@ -136,7 +165,8 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
         信息栏直接展开，而不必把 variant 参数钻到 MessageList 底下。
         行内各 `data-meta-*` 钩子供 mobile.css 在窄屏裁剪条目（见 mobile.css）。
       */}
-      <div data-meta-bar className="max-h-0 overflow-hidden group-hover:max-h-8 transition-[max-height] duration-200 ease-out">
+      {/* `focus-within` matters too: tabbing into the controls must not land on a permanently hidden row. */}
+      <div data-meta-bar className="max-h-0 overflow-hidden group-hover:max-h-8 group-focus-within:max-h-8 transition-[max-height] duration-200 ease-out">
         <div data-meta-row className="flex items-center gap-2 text-[11px] text-muted-foreground/60 tabular-nums pt-1">
           {showUsage && (
             <>
@@ -181,11 +211,11 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
           {showSpeak && (
             // Disabled buttons do not consistently dispatch mouse events across browsers; the
             // wrapper keeps the explanatory tooltip available when synthesis cannot be started.
-            <span className="inline-flex" title={speakTitle}>
+            <span className="inline-flex items-center" title={speakTitle}>
               <button
                 data-meta-tts
-                onClick={() => tts.toggle(speechKey, speechText)}
-                disabled={!speakEnabled && !ttsActive}
+                onClick={() => tts.toggle(speechKey, speechText, readAloudMode, speechTarget)}
+                disabled={!speakEnabled && !ttsActive && !ttsResumable}
                 className={`p-1 -my-1 rounded transition-colors disabled:opacity-40 disabled:hover:bg-transparent ${
                   ttsActive
                     ? 'bg-muted text-foreground'
@@ -205,6 +235,48 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
                   <Volume2 className="w-3 h-3" />
                 )}
               </button>
+              <select
+                data-meta-tts-mode
+                value={readAloudMode}
+                onChange={(event) => setReadAloudMode(event.target.value as ReadAloudMode)}
+                // The mode is one saved preference for the whole conversation, so it must not be
+                // disabled by this reply's length or by a temporarily unavailable server: that would
+                // hide the setting behind whichever message happens to be in view.
+                className="h-6 max-w-24 rounded border-0 bg-transparent px-1 text-[11px] text-muted-foreground outline-none hover:bg-muted hover:text-foreground disabled:opacity-40"
+                title={i18n('Read-aloud mode')}
+                aria-label={i18n('Read-aloud mode')}
+              >
+                <option value="direct">{i18n('Direct read-aloud')}</option>
+                <option value="refine">{i18n('Refine read-aloud')}</option>
+                <option value="director">{i18n('Directed read-aloud')}</option>
+              </select>
+              {/* Only the directed mode has a plan to show; offering the panel under the other two
+                  would promise an edit that they would ignore. */}
+              {readAloudMode === 'director' && (
+                <button
+                  data-meta-tts-script
+                  onClick={() => setScriptPanelOpen(true)}
+                  disabled={!speakEnabled}
+                  className="p-1 -my-1 rounded hover:bg-muted hover:text-foreground transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
+                  title={i18n('Edit read-aloud script')}
+                  aria-label={i18n('Edit read-aloud script')}
+                >
+                  <SlidersHorizontal className="w-3 h-3" />
+                </button>
+              )}
+            </span>
+          )}
+          {/* Which segment: a directed read has gaps of silence between segments, and this is what
+              makes them read as progress rather than as a stall. An incrementally planned script
+              reports no total (-1) until it finishes, so the count is shown on its own rather than
+              hidden — "Segment 3" is still the answer to "is this thing alive?". */}
+          {speaking && ttsProgress && (
+            <span data-meta-tts-progress className="text-muted-foreground/60">
+              {ttsProgress.total > 0
+                ? i18n('Segment {index}/{total}')
+                    .replace('{index}', String(ttsProgress.index))
+                    .replace('{total}', String(ttsProgress.total))
+                : i18n('Segment {index}').replace('{index}', String(ttsProgress.index))}
             </span>
           )}
           {ttsError && (
@@ -214,6 +286,13 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
           )}
         </div>
       </div>
+
+      {/* A fallback changes what the user asked for, so it must not hide inside the hover-only bar. */}
+      {ttsNotice && (
+        <div role="status" className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+          {ttsNotice}
+        </div>
+      )}
 
       <ConfirmDialog
         open={forkConfirmOpen}
@@ -232,6 +311,14 @@ export const MessageMetaBar: React.FC<MessageMetaBarProps> = ({ messages, isStre
         content={saveContent}
         sessionId={sessionId ?? undefined}
         messageId={saveMessageId}
+      />
+
+      <TtsScriptPanel
+        open={scriptPanelOpen}
+        onClose={() => setScriptPanelOpen(false)}
+        text={speechText}
+        speechKey={speechKey}
+        target={speechTarget}
       />
     </>
   );

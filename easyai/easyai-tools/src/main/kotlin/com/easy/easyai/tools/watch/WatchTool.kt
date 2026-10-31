@@ -117,7 +117,7 @@ class WatchTool(
             timezone = zone,
             until = parseUntil(params.until),
             tags = parseTags(params.tags),
-            completeOnMet = params.completeOnMet ?: true,
+            completeOnMet = params.completeOnMet,
             notifyPolicy = parseNotifyPolicy(params.notify),
             notifyTags = params.notifyTags?.map { it.trim().lowercase() }?.toSet() ?: emptySet(),
             sourceHints = params.sourceHints,
@@ -147,6 +147,7 @@ class WatchTool(
             appendLine("Watch id: ${watch.id}")
             appendLine("Next run: ${format(watch.nextDueAt, watch.schedule.zone)}")
             appendLine("Schedule: ${WatchPrompts.describeSchedule(watch)}")
+            appendLine("Complete when met: ${watch.completeOnMet}")
             watch.untilAt?.let { appendLine("Until: ${format(it, watch.schedule.zone)}") }
             if (watch.tags.isNotEmpty()) {
                 appendLine("Tags: ${watch.tags.joinToString(", ") { "${it.key} (${it.label})" }}")
@@ -226,6 +227,7 @@ class WatchTool(
             appendLine("Updated watch \"${watch.title}\" (${watch.status.name.lowercase()}).")
             appendLine("Next run: ${format(watch.nextDueAt, watch.schedule.zone)}")
             appendLine("Schedule: ${WatchPrompts.describeSchedule(watch)}")
+            appendLine("Complete when met: ${watch.completeOnMet}")
             watch.untilAt?.let { appendLine("Until: ${format(it, watch.schedule.zone)}") }
             warnings.forEach { appendLine("Note: $it") }
             appendLine("Tell the user the next run time above.")
@@ -399,8 +401,11 @@ class WatchTool(
     private fun watchSummary(watch: Watch, detailed: Boolean): String = buildString {
         appendLine("${watch.title} (${watch.id})")
         appendLine("Status: ${watch.status.name.lowercase()}")
-        appendLine("Next run: ${format(watch.nextDueAt, watch.schedule.zone)}")
+        if (watch.status == WatchStatus.ACTIVE) {
+            appendLine("Next run: ${format(watch.nextDueAt, watch.schedule.zone)}")
+        }
         appendLine("Schedule: ${WatchPrompts.describeSchedule(watch)}")
+        appendLine("Complete when met: ${watch.completeOnMet}")
         if (watch.pendingAction == WatchPendingAction.EXPIRY_REVIEW) {
             appendLine("Expiry review is pending for this watch.")
         }
@@ -433,6 +438,7 @@ class WatchTool(
         put("scheduleKind", watch.schedule.kind.name.lowercase())
         put("timezone", watch.schedule.zone.id)
         put("schedule", WatchPrompts.describeSchedule(watch))
+        put("completeOnMet", watch.completeOnMet)
         put("nextRunAt", watch.nextDueAt.toEpochMilli())
         put("nextRunLocal", format(watch.nextDueAt, watch.schedule.zone))
         watch.untilAt?.let {
@@ -551,7 +557,10 @@ data class WatchToolParameter(
     )
     val tags: List<WatchToolTag>? = null,
 
-    @param:JsonPropertyDescription("Mark the watch completed when the verdict is met (default true)")
+    @param:JsonPropertyDescription(
+        "Mark the watch completed when the verdict is met. If omitted, one-shot watches default " +
+            "to true and recurring watches default to false so monitoring continues."
+    )
     val completeOnMet: Boolean? = null,
 
     @param:JsonPropertyDescription("When to notify: on_change (default), on_complete, every or never")

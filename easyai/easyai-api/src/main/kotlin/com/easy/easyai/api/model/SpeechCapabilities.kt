@@ -37,8 +37,19 @@ data class SpeechCapabilities(
     /** Protocol ceiling for one task across all frames. */
     val maxCharsPerTask: Int = 0,
     val docsUrl: String? = null,
-    /** The representative control tags, for a quick-insert row in the form. */
+    /**
+     * Control tags: they switch the delivery of everything that follows, until the next control tag
+     * or until the engine splits the sentence. Written inline as `[excited]`, and also usable as a
+     * segment-level emotion (a control tag prepended to one segment is a whole-segment style).
+     */
     val emotionTags: List<String> = emptyList(),
+    /**
+     * Paralinguistic tags: they insert one sound at their own position and leave the surrounding
+     * style alone (`[laughing]`, `[clears throat]`). Kept apart from [emotionTags] because they are
+     * position-sensitive — a paralinguistic tag prepended to a segment means "make that noise
+     * before saying anything", which is almost never what a writer intended.
+     */
+    val paralinguisticTags: List<String> = emptyList(),
     /** Group order and labels as published, so a picker renders `optgroup`s without grouping itself. */
     val voiceGroups: List<VoiceGroup> = emptyList(),
     /** The voice a caller should use when it does not choose one. */

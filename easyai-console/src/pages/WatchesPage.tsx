@@ -69,8 +69,10 @@ const WatchCard: React.FC<{ watch: Watch; onOpen: () => void }> = ({ watch, onOp
 
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <span>
-          {i18n('Next check')}: {formatInZone(watch.nextDueAt, watch.schedule.timezone)}
-          {watch.status === 'active' ? ` (${relativeTime(watch.nextDueAt)})` : ''}
+          {i18n('Next check')}:{' '}
+          {watch.status === 'active'
+            ? `${formatInZone(watch.nextDueAt, watch.schedule.timezone)} (${relativeTime(watch.nextDueAt)})`
+            : '—'}
         </span>
         <span>{scheduleSummary(watch)}</span>
       </div>

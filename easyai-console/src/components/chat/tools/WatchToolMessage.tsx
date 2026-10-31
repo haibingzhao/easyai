@@ -24,6 +24,7 @@ interface WatchToolView {
   schedule?: string;
   timezone?: string;
   untilLocal?: string;
+  completeOnMet?: boolean;
   allowedTools: string[];
   tags: Array<{ key: string; label: string }>;
   warnings: string[];
@@ -83,6 +84,7 @@ function parseDetails(details: Record<string, unknown> | undefined): WatchToolVi
     schedule: stringValue(record.schedule),
     timezone: stringValue(record.timezone),
     untilLocal: stringValue(record.untilLocal),
+    completeOnMet: typeof record.completeOnMet === 'boolean' ? record.completeOnMet : undefined,
     allowedTools: stringList(record.allowedTools),
     tags,
     warnings: stringList(record.warnings),
@@ -205,13 +207,18 @@ export function WatchToolMessage({ toolCall, result, status, compact }: ToolMess
             </div>
           )}
 
-          {view.nextRunLocal && (
+          {view.nextRunLocal && view.status === 'active' && (
             <div className="text-xs text-muted-foreground">
               {i18n('Next check')}: <span className="text-foreground">{view.nextRunLocal}</span>
               {view.timezone ? ` · ${view.timezone}` : ''}
             </div>
           )}
           {view.schedule && <div className="text-xs text-muted-foreground">{view.schedule}</div>}
+          {view.completeOnMet !== undefined && (
+            <div className="text-xs text-muted-foreground">
+              {i18n('Complete when met')}: {i18n(view.completeOnMet ? 'Enabled' : 'Disabled')}
+            </div>
+          )}
           {view.untilLocal && (
             <div className="text-xs text-muted-foreground">
               {i18n('Until')}: {view.untilLocal}
@@ -272,7 +279,7 @@ export function WatchToolMessage({ toolCall, result, status, compact }: ToolMess
                       </span>
                     )}
                   </div>
-                  {item.nextRunLocal && (
+                  {item.nextRunLocal && item.status === 'active' && (
                     <div className="mt-1 text-xs text-muted-foreground">
                       {i18n('Next check')}: {item.nextRunLocal}
                     </div>

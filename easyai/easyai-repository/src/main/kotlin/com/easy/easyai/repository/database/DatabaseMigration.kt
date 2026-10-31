@@ -71,7 +71,8 @@ class DatabaseMigration(
                 Tables.TeamRoundRecordTable,
                 Tables.SwarmPresetTable,
                 Tables.KnowledgeFolderTable,
-                Tables.KnowledgeArticleTable
+                Tables.KnowledgeArticleTable,
+                Tables.SpeechScriptTable
             )
         )
     }

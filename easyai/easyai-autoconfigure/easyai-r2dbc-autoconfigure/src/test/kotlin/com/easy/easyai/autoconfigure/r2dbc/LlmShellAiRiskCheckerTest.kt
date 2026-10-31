@@ -7,6 +7,7 @@ import com.easy.easyai.api.model.ModelProviderInfo.Protocol
 import com.easy.easyai.api.model.ModelType
 import com.easy.easyai.core.permission.PermissionRule
 import com.easy.easyai.core.permission.PermissionAction
+import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
@@ -73,7 +74,7 @@ class LlmShellAiRiskCheckerTest {
         responseText: (() -> String)? = null
     ): LlmShellAiRiskChecker {
         val chatModel = mockk<ChatModel>()
-        every { chatModel.call(any<Prompt>()) } answers {
+        coEvery { chatModel.callAsync(any<Prompt>()) } answers {
             error?.let { throw it }
             ChatResponse(listOf(Generation(AssistantMessage(responseText!!.invoke()))))
         }
@@ -88,7 +89,7 @@ class LlmShellAiRiskCheckerTest {
         responseText: () -> String
     ): LlmShellAiRiskChecker {
         val chatModel = mockk<ChatModel>()
-        every { chatModel.call(any<Prompt>()) } answers {
+        coEvery { chatModel.callAsync(any<Prompt>()) } answers {
             ChatResponse(listOf(Generation(AssistantMessage(responseText()))))
         }
         val factory = mockk<ChatModelFactory>()

@@ -33,6 +33,7 @@ import com.easy.easyai.snapshot.GitSnapshotService
 import com.easy.easyai.snapshot.RevertService
 import com.easy.easyai.snapshot.SnapshotEventListener
 import com.easy.easyai.snapshot.SnapshotService
+import com.easy.easyai.speech.SpeechScriptStore
 import com.easy.easyai.tools.background.BackgroundTaskManagerRegistry
 import com.easy.easyai.tools.mcp.McpClientManager
 import com.easy.easyai.web.connection.ConnectionProperties
@@ -251,9 +252,11 @@ open class WebAutoConfiguration {
         @Autowired(required = false)
         backgroundTaskManagerRegistry: BackgroundTaskManagerRegistry? = null,
         @Autowired(required = false)
-        defaultWorkspaceService: DefaultWorkspaceService? = null
+        defaultWorkspaceService: DefaultWorkspaceService? = null,
+        @Autowired(required = false)
+        speechScriptStore: SpeechScriptStore? = null
     ): SessionService {
-        return SessionService(sessionManager, sessionStore, snapshotService, fileStorageService, teamStateRegistry, teamExecutionStore, configStore, backgroundTaskManagerRegistry, defaultWorkspaceService)
+        return SessionService(sessionManager, sessionStore, snapshotService, fileStorageService, teamStateRegistry, teamExecutionStore, configStore, backgroundTaskManagerRegistry, defaultWorkspaceService, speechScriptStore)
     }
 
     @Bean

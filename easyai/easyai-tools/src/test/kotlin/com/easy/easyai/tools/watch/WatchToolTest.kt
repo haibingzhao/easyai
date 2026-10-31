@@ -172,6 +172,41 @@ class WatchToolTest {
         }
 
         @Test
+        fun `an omitted completion policy reaches the service unresolved`() {
+            givenCreated()
+            val result = execute(
+                mapOf(
+                    "action" to "create",
+                    "title" to "Daily price watch",
+                    "condition" to "Check the price every day",
+                    "every" to "daily",
+                    "time" to "08:00"
+                )
+            )
+
+            assertFalse(result.isError)
+            assertNull(createInput.captured.completeOnMet)
+        }
+
+        @Test
+        fun `an explicit recurring completion policy is preserved`() {
+            givenCreated()
+            val result = execute(
+                mapOf(
+                    "action" to "create",
+                    "title" to "Daily price watch",
+                    "condition" to "Check the price every day",
+                    "every" to "daily",
+                    "time" to "08:00",
+                    "completeOnMet" to true
+                )
+            )
+
+            assertFalse(result.isError)
+            assertTrue(createInput.captured.completeOnMet == true)
+        }
+
+        @Test
         fun `explicit MCP tools are accepted when the agent binds them`() {
             givenCreated()
             val result = execute(

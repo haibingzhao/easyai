@@ -13,6 +13,7 @@ const TASK_LABEL: Record<AuxModelTaskKey, string> = {
   skill_selection: 'Skill Selection Model',
   asr: 'ASR Model',
   tts: 'TTS Model',
+  speech_direction: 'Speech Direction Model',
   dictation_refine: 'Dictation Refine Model',
   memory_curation: 'Memory Curation Model',
 };
@@ -21,6 +22,7 @@ const TASK_LABEL: Record<AuxModelTaskKey, string> = {
 const OPT_IN_TASKS: Partial<Record<AuxModelTaskKey, string>> = {
   asr: 'Not configured (voice input off)',
   tts: 'Not configured (read-aloud off)',
+  speech_direction: 'Not configured (direct read-aloud)',
   dictation_refine: 'Not configured (no rewrite)',
   memory_curation: 'Not configured (consolidation off)',
 };
@@ -33,6 +35,7 @@ const TASK_HINT: Partial<Record<AuxModelTaskKey, string>> = {
     'Powers the microphone button in the chat composer. The referenced model must expose an OpenAI-compatible audio transcriptions endpoint.',
   tts:
     'Powers the speaker button on assistant replies. Pick a SPEECH model — the picker only lists those, and the backend rejects a model of any other type. Read-aloud always speaks plain text as MP3, using the voice stored in that model row.',
+  speech_direction: 'Plans spoken phrasing, voice and prosody for refined read-aloud. Leave unset to keep direct read-aloud; if planning is unavailable or fails, the server reads the original text instead.',
   dictation_refine:
     'Rewrites a finished dictation round against its surrounding context to fix homophones and punctuation. Leave unset to keep raw transcriptions.',
   memory_curation:

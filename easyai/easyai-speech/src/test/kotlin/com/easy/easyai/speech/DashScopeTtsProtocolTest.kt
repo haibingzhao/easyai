@@ -184,6 +184,32 @@ class DashScopeTtsProtocolTest {
             val text = "<speak>你好</speak>".repeat(5)
             assertEquals(listOf(text), DashScopeTtsProtocol.chunkText(text, limit = 10, singleFrame = true))
         }
+
+        @Test
+        fun `never cuts inside an inline tag`() {
+            // A split tag is spoken as "[clears" and then a bare "throat]": both halves lose the
+            // marker that made the engine treat them as a sound instead of words.
+            val text = "aaaaaaaaa[clears throat]bbbbb"
+            val chunks = DashScopeTtsProtocol.chunkText(text, limit = 10)
+            assertEquals(text, chunks.joinToString(""))
+            chunks.forEach { chunk ->
+                assertEquals(
+                    chunk.count { it == '[' },
+                    chunk.count { it == ']' },
+                    "unbalanced brackets in frame: $chunk"
+                )
+            }
+            assertTrue(chunks.any { it == "[clears throat]" }, "chunks were $chunks")
+        }
+
+        @Test
+        fun `a tag straddling the real limit is moved to the next frame intact`() {
+            val tag = "[clears throat]"
+            val text = "a".repeat(19_995) + tag + "b".repeat(10)
+            val chunks = DashScopeTtsProtocol.chunkText(text, limit = 20_000)
+            assertEquals(text, chunks.joinToString(""))
+            assertTrue(chunks.any { it.contains(tag) }, "chunks were ${chunks.map { it.takeLast(20) }}")
+        }
     }
 
     @Nested

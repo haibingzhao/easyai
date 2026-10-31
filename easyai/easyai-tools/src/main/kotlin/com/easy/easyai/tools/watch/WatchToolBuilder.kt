@@ -35,10 +35,11 @@ run. "allowedTools" narrows the read-only tools; omit it for the agent's default
 explicitly if they are needed. The sandboxed `calc` tool is always available so a large result can be
 analyzed later; do not list it.
 
-Lifecycle: action="list" shows watches and their last finding; "update" edits or renews one (pass
-"watchId" plus the fields to change; a completed or expired watch needs a new schedule); "pause",
-"resume" and "cancel" take "watchId". When the user changes a time, edit the existing watch instead
-of creating a duplicate."""
+Lifecycle: by default a one-shot watch completes when its verdict is met, while a recurring watch
+keeps monitoring; set "completeOnMet" explicitly only to override that behavior. action="list" shows
+watches and their last finding; "update" edits or renews one (pass "watchId" plus the fields to
+change; a completed or expired watch needs a new schedule); "pause", "resume" and "cancel" take
+"watchId". When the user changes a time, edit the existing watch instead of creating a duplicate."""
 
 private const val WATCH_PROMPT_SEGMENT = """Future commitments: never end a reply with a promise to check
 something later. Either do it now or create a watch. Create one only when the user asked to follow up

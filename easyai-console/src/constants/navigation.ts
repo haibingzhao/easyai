@@ -2,6 +2,7 @@ import type React from 'react';
 import type { NavItem } from '@/types/layout';
 
 let watchesNavVisible = false;
+let readAloudNavVisible = false;
 
 /**
  * Show the Watches entry in the sidebar.
@@ -12,6 +13,16 @@ let watchesNavVisible = false;
  */
 export function enableWatchesNav(): void {
   watchesNavVisible = true;
+}
+
+/**
+ * Show the Read Aloud library entry in the sidebar.
+ *
+ * Off by default for the same reason as Watches: the host has to mount `/read-aloud` itself, and an
+ * entry the host did not mount is a dead link. The console's own `App` opts in.
+ */
+export function enableReadAloudNav(): void {
+  readAloudNavVisible = true;
 }
 
 export const NAV_ITEMS: NavItem[] = [
@@ -30,6 +41,14 @@ export const NAV_ITEMS: NavItem[] = [
     visible: () => watchesNavVisible,
   },
   { id: 'knowledge', label: 'Knowledge', labelKey: 'Knowledge', icon: 'BookOpen', path: '/knowledge' },
+  {
+    id: 'read-aloud',
+    label: 'Read Aloud',
+    labelKey: 'Read Aloud',
+    icon: 'AudioLines',
+    path: '/read-aloud',
+    visible: () => readAloudNavVisible,
+  },
   { id: 'mcp', label: 'MCP', labelKey: 'MCP', icon: 'Blocks', path: '/mcp' },
   { id: 'models', label: 'Models', labelKey: 'Models', icon: 'Cpu', path: '/models' },
   { id: 'config', label: 'Config', labelKey: 'Config', icon: 'Settings', path: '/settings' },

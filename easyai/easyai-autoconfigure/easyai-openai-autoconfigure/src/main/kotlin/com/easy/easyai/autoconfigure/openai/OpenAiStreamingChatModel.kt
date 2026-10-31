@@ -42,7 +42,7 @@ internal class OpenAiStreamingChatModel(
         // Aggregate the stream into a single response: concat text, keep accumulated tool calls,
         // take the last non-empty usage. `call` is legitimately blocking.
         val chunks = stream(prompt).collectList().block() ?: emptyList()
-        return aggregate(chunks)
+        return ChatResponseAggregator.aggregate(chunks)
     }
 
     override fun stream(prompt: Prompt): Flux<ChatResponse> = Flux.defer {
@@ -392,40 +392,6 @@ internal class OpenAiStreamingChatModel(
         val arguments = StringBuilder()
     }
 
-    private fun aggregate(chunks: List<ChatResponse>): ChatResponse {
-        if (chunks.isEmpty()) return ChatResponse(emptyList())
-        val text = StringBuilder()
-        val thinking = StringBuilder()
-        var toolCalls: List<AssistantMessage.ToolCall> = emptyList()
-        var usage = Usage()
-        var finishReason: String? = null
-        var id = ""
-        var model = ""
-        for (chunk in chunks) {
-            if (chunk.metadata.id.isNotEmpty()) id = chunk.metadata.id
-            if (chunk.metadata.model.isNotEmpty()) model = chunk.metadata.model
-            val u = chunk.metadata.usage
-            if (u.promptTokens > 0 || u.completionTokens > 0 || u.totalTokens > 0) usage = u
-            for (generation in chunk.results) {
-                val output = generation.output
-                if (output.metadata.containsKey(THINKING_METADATA_KEY)) thinking.append(output.content.orEmpty())
-                else text.append(output.content.orEmpty())
-                if (output.toolCalls.isNotEmpty()) toolCalls = output.toolCalls
-                generation.metadata.finishReason?.let { finishReason = it }
-            }
-        }
-        val metadata = ChatResponseMetadata(id = id, model = model, usage = usage)
-        val assistant = AssistantMessage(
-            content = text.toString(),
-            toolCalls = toolCalls,
-            metadata = if (thinking.isNotEmpty()) mapOf(THINKING_METADATA_KEY to true, REASONING_ACCUMULATED to thinking.toString()) else emptyMap()
-        )
-        return ChatResponse(
-            listOf(Generation(assistant, ChatGenerationMetadata(finishReason = finishReason))),
-            metadata
-        )
-    }
-
     /**
      * Maps SDK errors to the retry-classification exceptions the agent loop understands.
      *
@@ -452,7 +418,6 @@ internal class OpenAiStreamingChatModel(
 
     companion object {
         private const val THINKING_METADATA_KEY = "thinking"
-        private const val REASONING_ACCUMULATED = "reasoningContent"
         private const val JSON_SCHEMA_NAME = "json_schema"
         private const val DEFAULT_TIMEOUT_SECONDS = 600L
         private val objectMapper: ObjectMapper = JsonMapper.builder().build()

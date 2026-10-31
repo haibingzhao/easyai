@@ -7,7 +7,15 @@ import com.easy.easyai.core.media.MediaProviderSettings
 import com.easy.easyai.core.model.aux.AuxModelResolver
 import com.easy.easyai.core.model.aux.AuxModelTask
 import com.easy.easyai.speech.SpeechAudio
+import com.easy.easyai.speech.SpeechInputMode
+import com.easy.easyai.speech.SpeechMode
+import com.easy.easyai.speech.SpeechOverrides
+import com.easy.easyai.speech.SpeechRole
+import com.easy.easyai.speech.SpeechScript
+import com.easy.easyai.speech.SpeechSegment
+import com.easy.easyai.speech.SpeechStyle
 import com.easy.easyai.speech.SpeechSynthesizer
+import com.easy.easyai.speech.SpokenTextNormalizer
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.CancellationException
@@ -70,6 +78,26 @@ class TtsServiceTest {
         return resolver
     }
 
+    private fun refineScript(source: String, spoken: String): SpeechScript = SpeechScript(
+        scriptId = "script-1",
+        sourceDigest = SpokenTextNormalizer.sourceDigest(source),
+        mood = "克制",
+        style = SpeechStyle.TEACHER,
+        segments = listOf(
+            SpeechSegment(
+                id = "seg-0",
+                index = 0,
+                sourceText = source,
+                spokenText = spoken,
+                voice = "longanhuan_v3.1",
+                emotion = "serious",
+                styleNote = "温和但清晰地讲述",
+                rate = 0.95,
+                role = SpeechRole.NARRATION
+            )
+        )
+    )
+
     private class RecordingSynthesizer(
         private val audio: ByteArray = byteArrayOf(1, 2, 3),
         private val onCall: (suspend () -> Unit)? = null
@@ -79,7 +107,8 @@ class TtsServiceTest {
             val text: String,
             val voice: String?,
             val format: String?,
-            val plainTextOnly: Boolean
+            val plainTextOnly: Boolean,
+            val overrides: SpeechOverrides
         )
 
         val calls = mutableListOf<Call>()
@@ -99,8 +128,30 @@ class TtsServiceTest {
             voice: String?,
             format: String?,
             plainTextOnly: Boolean
+        ): SpeechAudio = synthesize(
+            settings = settings,
+            text = text,
+            overrides = SpeechOverrides(
+                voice = voice,
+                inputMode = if (plainTextOnly) SpeechInputMode.PLAIN_TEXT else SpeechInputMode.PROVIDER_GENERATED_MARKUP
+            ),
+            format = format
+        )
+
+        override suspend fun synthesize(
+            settings: MediaProviderSettings,
+            text: String,
+            overrides: SpeechOverrides,
+            format: String?
         ): SpeechAudio {
-            calls += Call(settings, text, voice, format, plainTextOnly)
+            calls += Call(
+                settings,
+                text,
+                overrides.voice,
+                format,
+                overrides.inputMode == SpeechInputMode.PLAIN_TEXT,
+                overrides
+            )
             hang?.await()
             timeoutAfterMs?.let { budget -> withTimeout(budget) { delay(budget + 1_000) } }
             onCall?.invoke()
@@ -108,14 +159,16 @@ class TtsServiceTest {
             return SpeechAudio(audio, "audio/mpeg")
         }
 
+        // The service streams through the overrides overload, so the fake has to intercept that one:
+        // overriding only the five-argument shape leaves the default implementation in place and the
+        // test would pass a one-shot clip off as a stream.
         override fun synthesizeStream(
             settings: MediaProviderSettings,
             text: String,
-            voice: String?,
-            format: String?,
-            plainTextOnly: Boolean
+            overrides: SpeechOverrides,
+            format: String?
         ): Flux<SpeechAudio> = streamFactory?.invoke()
-            ?: super.synthesizeStream(settings, text, voice, format, plainTextOnly)
+            ?: super.synthesizeStream(settings, text, overrides, format)
     }
 
     @Nested
@@ -187,6 +240,16 @@ class TtsServiceTest {
         }
 
         @Test
+        fun `an unknown read-aloud mode is a bad request`() = runTest {
+            val synthesizer = RecordingSynthesizer()
+            val error = assertFailsWith<ResponseStatusException> {
+                TtsService(resolverReturning(config()), synthesizer).speak(listOf("alice"), "你好", "directed")
+            }
+            assertEquals(HttpStatus.BAD_REQUEST, error.statusCode)
+            assertTrue(synthesizer.calls.isEmpty())
+        }
+
+        @Test
         fun `text over the product limit is refused instead of truncated`() = runTest {
             val synthesizer = RecordingSynthesizer()
             val error = assertFailsWith<ResponseStatusException> {
@@ -214,8 +277,49 @@ class TtsServiceTest {
             val first = async { service.speak(listOf("alice", "g_fam"), "你好") }
             runCurrent()
 
+            // The guard waits out a replacement first, so this refusal is what is left after the
+            // grace period — a second read-aloud, not a superseded one.
             val error = assertFailsWith<ResponseStatusException> { service.speak(listOf("alice", "g_fam"), "你好") }
             assertEquals(HttpStatus.TOO_MANY_REQUESTS, error.statusCode)
+
+            synthesizer.hang!!.complete(Unit)
+            assertEquals("audio/mpeg", first.await().mimeType)
+        }
+
+        @Test
+        fun `a replacement read-aloud waits for the request it is replacing`() = runTest {
+            // Clicking another reply aborts the old request and fires the new one at once, but the
+            // abort reaches the server a round-trip later. Refusing on arrival turned that normal
+            // sequence into a 429 for a request that was never concurrent with anything.
+            val synthesizer = RecordingSynthesizer().apply { hang = CompletableDeferred() }
+            val service = TtsService(resolverReturning(config()), synthesizer)
+
+            val first = async { service.speak(listOf("alice"), "你好") }
+            runCurrent()
+            val second = async { service.speak(listOf("alice"), "下一段") }
+            runCurrent()
+            synthesizer.hang!!.complete(Unit)
+
+            assertEquals("audio/mpeg", first.await().mimeType)
+            assertEquals("audio/mpeg", second.await().mimeType)
+            assertEquals(listOf("你好", "下一段"), synthesizer.calls.map { it.text })
+        }
+
+        @Test
+        fun `a plan preview does not take the read-aloud slot`() = runTest {
+            // A script preview is a full LLM plan that can run for a minute and logs nothing while it
+            // does. Taking the synthesis slot for it refused the speaker button on the very reply the
+            // panel had been opened for — a 429 with no synthesis anywhere in the server log.
+            val synthesizer = RecordingSynthesizer().apply { hang = CompletableDeferred() }
+            val service = TtsService(resolverReturning(config()), synthesizer)
+
+            val first = async { service.speak(listOf("alice"), "你好") }
+            runCurrent()
+
+            // No director on purpose: the point is that this fails on configuration (409), which can
+            // only happen if it never asked for the slot the running read-aloud is holding.
+            val error = assertFailsWith<ResponseStatusException> { service.planScript(listOf("alice"), "你好") }
+            assertEquals(HttpStatus.CONFLICT, error.statusCode)
 
             synthesizer.hang!!.complete(Unit)
             assertEquals("audio/mpeg", first.await().mimeType)
@@ -251,6 +355,64 @@ class TtsServiceTest {
             assertEquals("mp3", call.format)
             assertNull(call.voice)
             assertTrue(call.plainTextOnly)
+        }
+
+        @Test
+        fun `refine uses the validated text and request overrides`() = runTest {
+            val director = mockk<SpeechDirector>()
+            coEvery { director.quickRefine(listOf("alice"), "你好", any(), TtsService.MAX_CHARS) } returns
+                refineScript("你好", "你好呀")
+            val synthesizer = RecordingSynthesizer()
+            TtsService(resolverReturning(config()), synthesizer, director)
+                .speak(listOf("alice"), "你好", SpeechMode.REFINE.key)
+
+            val call = synthesizer.calls.single()
+            assertEquals("你好呀", call.text)
+            assertEquals("longanhuan_v3.1", call.overrides.voice)
+            assertEquals("温和但清晰地讲述", call.overrides.instruction)
+            assertEquals("[serious]", call.overrides.emotionTag)
+            assertEquals(0.95, call.overrides.rate)
+            assertEquals(SpeechInputMode.PLAIN_TEXT, call.overrides.inputMode)
+            assertEquals("mp3", call.format)
+        }
+
+        @Test
+        fun `missing or invalid direction falls back to the original text`() = runTest {
+            val director = mockk<SpeechDirector>()
+            coEvery { director.quickRefine(any(), any(), any(), any()) } returns null
+            val synthesizer = RecordingSynthesizer()
+            TtsService(resolverReturning(config()), synthesizer, director)
+                .speak(listOf("alice"), "你好", SpeechMode.REFINE.key)
+
+            val call = synthesizer.calls.single()
+            assertEquals("你好", call.text)
+            assertNull(call.overrides.voice)
+            assertEquals(SpeechInputMode.PLAIN_TEXT, call.overrides.inputMode)
+        }
+
+        @Test
+        fun `a planning exception releases single flight and does not block the next request`() = runTest {
+            val director = mockk<SpeechDirector>()
+            coEvery { director.quickRefine(any(), any(), any(), any()) } throws IllegalStateException("planner down")
+            val synthesizer = RecordingSynthesizer()
+            val service = TtsService(resolverReturning(config()), synthesizer, director)
+
+            assertEquals("audio/mpeg", service.speak(listOf("alice"), "你好", SpeechMode.REFINE.key).mimeType)
+            assertEquals("audio/mpeg", service.speak(listOf("alice"), "下一段").mimeType)
+            assertEquals(listOf("你好", "下一段"), synthesizer.calls.map { it.text })
+        }
+
+        @Test
+        fun `an oversized planner result falls back instead of bypassing the limit`() = runTest {
+            val director = mockk<SpeechDirector>()
+            coEvery { director.quickRefine(any(), any(), any(), any()) } answers {
+                val source = secondArg<String>()
+                refineScript(source, "a".repeat(TtsService.MAX_CHARS + 1))
+            }
+            val synthesizer = RecordingSynthesizer()
+            TtsService(resolverReturning(config()), synthesizer, director)
+                .speak(listOf("alice"), "你好", SpeechMode.REFINE.key)
+            assertEquals("你好", synthesizer.calls.single().text)
         }
 
         @Test
@@ -294,7 +456,7 @@ class TtsServiceTest {
             }
             val service = TtsService(resolverReturning(config()), synthesizer)
 
-            StepVerifier.create(service.speakStream(listOf("alice"), "你好"))
+            StepVerifier.create(service.speakStream(service.openSpeak(listOf("alice"), "你好")))
                 .expectNextCount(2)
                 .verifyComplete()
             assertEquals("audio/mpeg", service.speak(listOf("alice"), "下一段").mimeType)
@@ -316,7 +478,7 @@ class TtsServiceTest {
             // Cancellation propagates through the coroutine bridge and the timeout operator before it
             // reaches the engine subscription, so every wait here is a bounded poll rather than an
             // instantaneous assertion; a slow shared CI runner must not turn this into a flake.
-            StepVerifier.create(service.speakStream(listOf("alice"), "你好"))
+            StepVerifier.create(service.speakStream(service.openSpeak(listOf("alice"), "你好")))
                 .expectSubscription()
                 .then { assertTrue(upstreamSubscribed.await(AWAIT_SECONDS, TimeUnit.SECONDS), "upstream never subscribed") }
                 .thenCancel()

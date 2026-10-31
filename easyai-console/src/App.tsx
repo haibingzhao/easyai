@@ -13,6 +13,7 @@ import { TaskTranscriptPage } from './pages/TaskTranscriptPage';
 import { WatchesPage } from './pages/WatchesPage';
 import { WatchDetailPage } from './pages/WatchDetailPage';
 import { KnowledgePage } from './pages/KnowledgePage';
+import { ReadAloudPage } from './pages/ReadAloudPage';
 import { ArticleEditorPage } from './pages/ArticleEditorPageLazy';
 import { CommandsPage } from './pages/CommandsPage';
 import { NotificationsPage } from './pages/NotificationsPage';
@@ -31,7 +32,7 @@ import { useCategoryStore } from '@/services/stores/category-store';
 import { setupService } from '@/services/setup-service';
 import { storageService } from '@/services/storage-service';
 import { setTheme } from '@/utils/theme';
-import { enableWatchesNav, TOPBAR_EXTRA_ITEMS } from '@/constants/navigation';
+import { enableReadAloudNav, enableWatchesNav, TOPBAR_EXTRA_ITEMS } from '@/constants/navigation';
 import { ConnectionPill } from '@/plugins/connection/ConnectionPill';
 import { Loader2 } from 'lucide-react';
 import './index.css';
@@ -43,6 +44,9 @@ if (!TOPBAR_EXTRA_ITEMS.includes(ConnectionPill)) TOPBAR_EXTRA_ITEMS.push(Connec
 // The console's own deployment ships the watch plane (routes below plus the API); a host opts in
 // explicitly when its backend enables the scheduler.
 enableWatchesNav();
+
+// Same opt-in for the read-aloud library: this App mounts its route, a host must do the same.
+enableReadAloudNav();
 
 // Remount the editor when the article changes so per-article state (content,
 // title, dirty flag) never leaks between routes.
@@ -198,6 +202,10 @@ function App() {
           <Route
             path="/knowledge/editor/:articleId"
             element={<ArticleEditorRoute />}
+          />
+          <Route
+            path="/read-aloud"
+            element={<ReadAloudPage />}
           />
           <Route
             path="/commands"

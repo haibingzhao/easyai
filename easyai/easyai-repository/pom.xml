@@ -36,6 +36,12 @@
             <groupId>com.easy</groupId>
             <artifactId>easyai-swarm</artifactId>
         </dependency>
+        <!-- Read-aloud script persistence: the store speaks easyai-speech types. No cycle:
+             easyai-speech depends only on easyai-core and WebFlux. -->
+        <dependency>
+            <groupId>com.easy</groupId>
+            <artifactId>easyai-speech</artifactId>
+        </dependency>
 
         <!-- Exposed R2DBC -->
         <dependency>

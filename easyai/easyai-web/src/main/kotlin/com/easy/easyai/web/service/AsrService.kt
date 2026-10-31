@@ -10,9 +10,7 @@ import com.easy.easyai.core.model.aux.AuxModelTask
 import com.easy.easyai.core.model.aux.ResolvedAuxModel
 import com.easy.easyai.tools.media.OpenAiCompatibleClient
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.slf4j.LoggerFactory
 import com.easy.easyai.api.llm.Message
@@ -127,8 +125,9 @@ class AsrService(
             UserMessage(buildRefineUserPrompt(target, contextBefore, contextAfter))
         )
         val output = try {
+            // `callAsync`: the budget must stop the provider request, not just stop waiting for it.
             withTimeout(REFINE_TIMEOUT_SECONDS.seconds) {
-                withContext(Dispatchers.IO) { resolved.chatModel.call(refinePrompt(resolved, messages)) }
+                resolved.chatModel.callAsync(refinePrompt(resolved, messages))
             }
         } catch (e: TimeoutCancellationException) {
             throw ResponseStatusException(HttpStatus.GATEWAY_TIMEOUT, "Refine timed out after ${REFINE_TIMEOUT_SECONDS}s")

@@ -40,6 +40,9 @@ enum class AuxModelTask(val key: String) {
      */
     TTS("tts"),
 
+    /** Optional read-aloud planning. Unset or failed planning falls back to direct synthesis. */
+    SPEECH_DIRECTION("speech_direction"),
+
     /**
      * Post-dictation context-aware rewrite of the dictated text. Unset means the refinement step
      * is skipped and raw transcriptions stand.

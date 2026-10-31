@@ -77,9 +77,8 @@ class InternalLlmService(
 
         val prompt = if (options != null) Prompt(llmMessages, options) else Prompt(llmMessages)
 
-        val response = withContext(Dispatchers.IO) {
-            chatModel.call(prompt)
-        }
+        // Cancellable: when the caller goes away the provider request is dropped with it.
+        val response = chatModel.callAsync(prompt)
 
         val content = response.result?.output?.text ?: ""
         val usage = response.metadata.usage

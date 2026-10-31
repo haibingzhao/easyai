@@ -145,7 +145,7 @@ class AsrServiceTest {
             }
             val generation = mockk<Generation> { every { output } returns assistant }
             val response = mockk<ChatResponse> { every { result } returns generation }
-            coEvery { chatModel.call(any<Prompt>()) } returns response
+            coEvery { chatModel.callAsync(any<Prompt>()) } returns response
             val resolver = mockk<AuxModelResolver>()
             coEvery { resolver.resolve(listOf("alice"), AuxModelTask.DICTATION_REFINE) } returns
                 ResolvedAuxModel(chatModel, sampleConfig)
@@ -159,7 +159,7 @@ class AsrServiceTest {
         @Test
         fun `answers 502 when the model call fails`() = runBlocking {
             val chatModel = mockk<ChatModel>()
-            coEvery { chatModel.call(any<Prompt>()) } throws
+            coEvery { chatModel.callAsync(any<Prompt>()) } throws
                 IllegalStateException("boom")
             val resolver = mockk<AuxModelResolver>()
             coEvery { resolver.resolve(listOf("alice"), AuxModelTask.DICTATION_REFINE) } returns
@@ -177,7 +177,7 @@ class AsrServiceTest {
             val generation = mockk<Generation> { every { output } returns assistant }
             val response = mockk<ChatResponse> { every { result } returns generation }
             val prompts = slot<Prompt>()
-            coEvery { chatModel.call(capture(prompts)) } returns response
+            coEvery { chatModel.callAsync(capture(prompts)) } returns response
             val resolver = mockk<AuxModelResolver>()
             coEvery { resolver.resolve(listOf("alice"), AuxModelTask.DICTATION_REFINE) } returns
                 ResolvedAuxModel(chatModel, sampleConfig.copy(options = ModelOptions(thinking = true)))

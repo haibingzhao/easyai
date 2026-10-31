@@ -1,4 +1,4 @@
-import type { Settings, SessionMetadata, ModelOverrides } from '../types/settings';
+import type { Settings, SessionMetadata, ModelOverrides, ReadAloudMode } from '../types/settings';
 import type { Message } from '../types/message';
 import type { Artifact } from '../types/artifact';
 
@@ -9,6 +9,7 @@ const STORAGE_KEYS = {
   ARTIFACTS: 'easyai_artifacts_',
   SELECTED_MODEL: 'easyai_selected_model',
   MODEL_OVERRIDES: 'easyai_model_overrides',
+  READ_ALOUD_MODE: 'easyai_read_aloud_mode',
 };
 
 export class StorageService {
@@ -35,6 +36,25 @@ export class StorageService {
 
   saveSelectedModelConfigId(configId: string): void {
     localStorage.setItem(STORAGE_KEYS.SELECTED_MODEL, configId);
+  }
+
+  getReadAloudMode(): ReadAloudMode {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.READ_ALOUD_MODE);
+      // Unknown values (an older build's mode, a hand-edited key) fall back rather than reaching a
+      // request the server would refuse.
+      return stored === 'refine' || stored === 'director' ? stored : 'direct';
+    } catch {
+      return 'direct';
+    }
+  }
+
+  saveReadAloudMode(mode: ReadAloudMode): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.READ_ALOUD_MODE, mode);
+    } catch {
+      // Storage can be unavailable in private mode; the in-memory preference still works.
+    }
   }
 
   /** Effort/context-window override saved from the model picker, or null when none is set. */

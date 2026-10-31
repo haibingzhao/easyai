@@ -12,7 +12,8 @@ the generated files, whose single JSON literal per model is 35 KB wide and impos
 Artifacts (all generated, never edited by hand):
 
     seed-tts-catalog.sql            manual hot-patch for a running database (psql / H2 shell)
-    V45__seed_qwen_audio_tts_catalog.sql   Flyway migration — the normal upgrade path
+    V47__expand_qwen_audio_speech_tags.sql Flyway migration — the normal upgrade path
+    (V45 is frozen; this one rewrites the same rows)
     tts-voices-appendix.md          the human-readable voice tables for the plan document
 
 Voice object fields (see the header of the generated SQL for the full contract):
@@ -31,10 +32,12 @@ MD_OUT = os.path.join(HERE, 'tts-voices-appendix.md')
 PROTOCOL_KT = os.path.join(
     HERE, '..', 'easyai-speech', 'src', 'main', 'kotlin',
     'com', 'easy', 'easyai', 'speech', 'DashScopeTtsProtocol.kt')
+# V45 already shipped and is frozen: Flyway rejects a changed checksum, so the tag vocabulary
+# expansion goes out as a new version that rewrites the same four rows.
 MIGRATION_OUT = os.path.join(
     HERE, '..', 'easyai-autoconfigure', 'easyai-r2dbc-autoconfigure',
     'src', 'main', 'resources', 'db', 'migration',
-    'V45__seed_qwen_audio_tts_catalog.sql')
+    'V47__expand_qwen_audio_speech_tags.sql')
 
 META = {
     'qwen-audio-3.1-tts-plus': dict(
@@ -75,7 +78,25 @@ BASE = {
     'docsUrl': 'https://docs.bailian.console.aliyun.com/zh/model-studio/qwen-audio-tts-voice-list',
 }
 
-EMOTION = ['[excited]', '[serious]', '[whispers]', '[sad]', '[laughing]', '[sighing]', '[angry]']
+# Emotion and paralinguistic tags, as published in 《情感与副语言标签》
+# (non-realtime-tts-user-guide). They are plain text written straight into `input.text` — no
+# request parameter switches them on, and they are unrelated to `enable_ssml`.
+#
+# Control tags change the delivery from where they appear until the next control tag or until the
+# engine splits the sentence, so they are also usable as a whole-segment style.
+CONTROL_TAGS = [
+    '[sad]', '[amazed]', '[deep and loud shouting]', '[trembling]', '[angry]', '[excited]',
+    '[sarcastic]', '[curious]', '[like dracula]', '[bored]', '[tired]', '[scornful]', '[shouting]',
+    '[asmr]', '[panicked]', '[mischievously]', '[empathetic]', '[whispers]', '[reluctantly]',
+    '[crying]', '[serious]', '[very slowly]', '[very fast]',
+]
+
+# Paralinguistic tags insert one sound at their position and leave the surrounding style alone.
+# Kept in a separate field because they must not be used as a segment-level prefix: `[laughing]`
+# at the head of a segment means "laugh, then say everything", not "laugh here".
+PARALINGUISTIC_TAGS = [
+    '[gasp]', '[sighing]', '[clears throat]', '[giggles]', '[laughing]', '[cough]', '[snorts]',
+]
 
 GROUPS = {'flagship', 'multilingual', 'premium-zh', 'premium-en', 'other', 'minor', 'legacy'}
 
@@ -100,11 +121,15 @@ HEADER_BODY = '''-- GENERATED FILE — do not edit by hand. Change tts-voices.js
 -- store preserves the column when the incoming entry carries none — so re-running Refresh
 -- cannot wipe the voice lists below.
 --
--- Data provenance (2026-10-29):
+-- Data provenance (2026-10-29, tags expanded 2026-10-31):
 --   models/voices/traits/scenarios/languages : qwen-audio-tts-voice-list
---   instruction / emotion tags               : realtime-tts-user-guide
+--   instruction / emotion tags               : realtime-tts-user-guide, 情感与副语言标签
 --   SSML support                             : ssml-latex-user-guide (all four models listed)
 --   LaTeX                                    : contradictory across docs -> false, flip after the probe in the plan
+--
+-- Tag fields:
+--   emotionTags[]        控制类标签，改变其后文本的语气，直到下一个控制类标签或句子被切开
+--   paralinguisticTags[] 副语言标签，只在原位插一声，不改变前后语气；不可用作段首前缀
 --
 -- Voice object shape (consumed by the console form and, later, by the model itself):
 --   voice           API 参数值，必须原样传给 input.voice
@@ -126,16 +151,17 @@ SQL_HEADER = '''-- =============================================
 -- Seed Qwen-Audio-TTS speech capabilities into the model catalog.
 --
 -- Hot-patch copy: run this against a live database when a redeploy is not possible.
--- The same statements ship as V45__seed_qwen_audio_tts_catalog.sql, which is the normal path.
+-- The same statements ship as V47__expand_qwen_audio_speech_tags.sql, which is the normal path.
 --
 ''' + HEADER_BODY + '''--
 -- Usage:
 --   psql "$DATABASE_URL" -f seed-tts-catalog.sql
---   H2 (desktop server) has no psql; restart to run V45, or paste this into
+--   H2 (desktop server) has no psql; restart to run the migration, or paste this into
 --   `java -cp h2.jar org.h2.tools.Shell`.
 -- =============================================
 
 -- The hot-patch script must bring its own DDL: a database that never ran V45 has no such column.
+-- V47 carries the same ALTER, so a database that starts at V47 gets it too.
 ALTER TABLE model_catalog ADD COLUMN IF NOT EXISTS speech_capabilities TEXT;
 '''
 
@@ -146,7 +172,7 @@ MIGRATION_HEADER = '''-- =============================================
 --
 ''' + HEADER_BODY + '''--
 -- IMMUTABLE ONCE APPLIED. Flyway rejects a changed checksum, so a voice fix after this version has
--- run anywhere must ship as a new migration (V46, V47, …) plus a regenerated hot-patch script.
+-- run anywhere must ship as a new migration (V48, V49, …) plus a regenerated hot-patch script.
 -- =============================================
 
 ALTER TABLE model_catalog ADD COLUMN IF NOT EXISTS speech_capabilities TEXT;
@@ -247,7 +273,8 @@ def caps(model_id, model):
         'voiceGroups': [{'key': g['group'], 'label': g['label'], 'count': len(g['voices'])}
                         for g in model['groups']],
         'defaultVoice': META[model_id]['default'],
-        'emotionTags': EMOTION,
+        'emotionTags': CONTROL_TAGS,
+        'paralinguisticTags': PARALINGUISTIC_TAGS,
         'voices': model['voices'],
     })
     return payload

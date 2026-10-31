@@ -12,14 +12,17 @@ import reactor.core.publisher.Flux
  */
 data class SpeechAudio(
     val bytes: ByteArray,
-    val mimeType: String
+    val mimeType: String,
+    /** Empty unless the row enables word timestamps and the provider reports them. */
+    val words: List<TimedWord> = emptyList()
 ) {
     // Array equality is identity, so the generated members would treat equal clips as different;
     // compare contents instead (same contract as ImageContent / ObjectContent).
     override fun equals(other: Any?): Boolean =
-        this === other || (other is SpeechAudio && bytes.contentEquals(other.bytes) && mimeType == other.mimeType)
+        this === other ||
+            (other is SpeechAudio && bytes.contentEquals(other.bytes) && mimeType == other.mimeType && words == other.words)
 
-    override fun hashCode(): Int = bytes.contentHashCode() * 31 + mimeType.hashCode()
+    override fun hashCode(): Int = (bytes.contentHashCode() * 31 + mimeType.hashCode()) * 31 + words.hashCode()
 }
 
 /**
@@ -59,6 +62,20 @@ interface SpeechSynthesizer {
         plainTextOnly: Boolean = false
     ): SpeechAudio
 
+    /** Request-level controls; the default keeps third-party implementations source compatible. */
+    suspend fun synthesize(
+        settings: MediaProviderSettings,
+        text: String,
+        overrides: SpeechOverrides,
+        format: String? = null
+    ): SpeechAudio = synthesize(
+        settings = settings,
+        text = text,
+        voice = overrides.voice,
+        format = format,
+        plainTextOnly = overrides.inputMode == SpeechInputMode.PLAIN_TEXT
+    )
+
     /**
      * Stream audio chunks as the provider produces them. The default keeps existing engines
      * compatible by emitting their one-shot result; native transports override it for low latency.
@@ -72,6 +89,16 @@ interface SpeechSynthesizer {
         plainTextOnly: Boolean = false
     ): Flux<SpeechAudio> = mono {
         synthesize(settings, text, voice, format, plainTextOnly)
+    }.flux()
+
+    /** Streaming counterpart of the overrides overload; cancellation semantics stay unchanged. */
+    fun synthesizeStream(
+        settings: MediaProviderSettings,
+        text: String,
+        overrides: SpeechOverrides,
+        format: String? = null
+    ): Flux<SpeechAudio> = mono {
+        synthesize(settings, text, overrides, format)
     }.flux()
 
     companion object {
@@ -96,12 +123,27 @@ internal object DashScopeSpeechSynthesizer : SpeechSynthesizer {
         voice: String?,
         format: String?,
         plainTextOnly: Boolean
+    ): SpeechAudio = synthesize(
+        settings = settings,
+        text = text,
+        overrides = SpeechOverrides(
+            voice = voice,
+            inputMode = if (plainTextOnly) SpeechInputMode.PLAIN_TEXT else SpeechInputMode.PROVIDER_GENERATED_MARKUP
+        ),
+        format = format
+    )
+
+    override suspend fun synthesize(
+        settings: MediaProviderSettings,
+        text: String,
+        overrides: SpeechOverrides,
+        format: String?
     ): SpeechAudio {
         require(supports(settings)) {
             "speech provider '${settings.providerType}' is not supported by this synthesizer"
         }
-        val (bytes, mime) = DashScopeTtsClient(settings).synthesize(text, voice, format, plainTextOnly)
-        return SpeechAudio(bytes, mime)
+        // The metadata-aware call, so word timings survive on every path that returns a whole clip.
+        return DashScopeTtsClient(settings).synthesizeResult(text, overrides, format)
     }
 
     override fun synthesizeStream(
@@ -110,11 +152,26 @@ internal object DashScopeSpeechSynthesizer : SpeechSynthesizer {
         voice: String?,
         format: String?,
         plainTextOnly: Boolean
+    ): Flux<SpeechAudio> = synthesizeStream(
+        settings = settings,
+        text = text,
+        overrides = SpeechOverrides(
+            voice = voice,
+            inputMode = if (plainTextOnly) SpeechInputMode.PLAIN_TEXT else SpeechInputMode.PROVIDER_GENERATED_MARKUP
+        ),
+        format = format
+    )
+
+    override fun synthesizeStream(
+        settings: MediaProviderSettings,
+        text: String,
+        overrides: SpeechOverrides,
+        format: String?
     ): Flux<SpeechAudio> {
         require(supports(settings)) {
             "speech provider '${settings.providerType}' is not supported by this synthesizer"
         }
-        return DashScopeTtsClient(settings).stream(text, voice, format, plainTextOnly)
+        return DashScopeTtsClient(settings).stream(text, overrides, format)
     }
 
     /**

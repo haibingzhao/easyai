@@ -11,8 +11,7 @@ import com.easy.easyai.core.agent.AgentContext
 import com.easy.easyai.core.domain.MemoryCategorySpec
 import com.easy.easyai.core.model.*
 import com.easy.easyai.core.validation.JsonExtractor
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 import org.slf4j.LoggerFactory
 import java.security.MessageDigest
 import java.time.LocalDate
@@ -358,9 +357,10 @@ class MemoryFlushAgent(
         promptText: String,
         options: ChatOptions?
     ): String? = try {
-        withContext(Dispatchers.IO) {
-            chatModel.call(Prompt(promptText, options)).result?.output?.text
-        }
+        chatModel.callAsync(Prompt(promptText, options)).result?.output?.text
+    } catch (e: CancellationException) {
+        // The flush coroutine was cancelled; re-asking it would only burn a cancelled call.
+        throw e
     } catch (e: Exception) {
         logger.warn("Memory flush LLM call failed: {}", e.message)
         null
